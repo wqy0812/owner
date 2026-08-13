@@ -535,18 +535,18 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 
 ### 8.2 Kubernetes 1.17.5 SUSE Template
 
-用途：展示证书、etcd、master 和 node 三阶段四步骤编排。当前场景保持 Draft，所有步骤均为 destructive。
+用途：展示最小逻辑组件编排。核心和 Extended 两条场景均保持 Draft；Host Preflight 只读，其余写主机或集群状态的动作均为 destructive。同一 Release 可重复加入，并通过节点 `hostGroup` 分别部署控制节点和工作节点。
 
 正式测试前必须：
 
 - 替换 Inventory 占位地址并核对主机组。
 - 核对 Docker 等前置条件。
-- 核对 1.17.5 介质路径和校验和。
+- 为每个外部压缩包/二进制填写 SHA256，为每个容器镜像填写 digest；未知值不得伪造。
 - 设置并复核加密密钥环境变量。
 - 检查网络、仓库和介质服务地址。
 - 明确备份、变更窗口和回退流程。
 
-该快照尚未在真实 Kubernetes 1.17.5 目标环境完成安装验收。
+核心场景只含 PKI、Docker、etcd、Kubernetes 核心进程、Flannel 和 CoreDNS；Extended 场景再加入日志、监控、HAProxy、AMC、GlusterFS、pprof 和 RBAC 附加能力。恢复、清理、卸载、Housekeeping 不属于任何安装 Action。该快照尚未在真实 Kubernetes 1.17.5 SUSE 三控制节点加工作节点环境完成安装和收敛验收。
 
 ## 9. 常见问题排查
 

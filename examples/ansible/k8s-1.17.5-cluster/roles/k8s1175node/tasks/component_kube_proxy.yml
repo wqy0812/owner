@@ -1,0 +1,49 @@
+---
+- name: Fetch kube-proxy kubeconfig from the first master
+  ansible.builtin.fetch:
+    src: /approot1/paas/kube/cert/kube-proxy.kubeconfig
+    dest: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/"
+    flat: true
+  delegate_to: "{{ groups['k8smaster'][0] }}"
+  no_log: true
+
+- name: Install kube-proxy kubeconfig on this worker
+  ansible.builtin.copy:
+    src: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy.kubeconfig"
+    dest: /approot1/paas/kube/cert/kube-proxy.kubeconfig
+    owner: sysop
+    group: users
+    mode: '0600'
+  no_log: true
+
+- name: Install kube-proxy service unit
+  ansible.builtin.copy:
+    src: kube-proxy.service
+    dest: /usr/lib/systemd/system/kube-proxy.service
+    owner: root
+    group: users
+    mode: '0644'
+    backup: true
+
+- name: Write kube-proxy configuration
+  ansible.builtin.template:
+    src: kube-proxy.config.yaml.j2
+    dest: /approot1/paas/kube/conf/kube-proxy.config.yaml
+    owner: sysop
+    group: users
+    mode: '0644'
+
+- name: Write kube-proxy parameters
+  ansible.builtin.copy:
+    src: proxy
+    dest: /approot1/paas/kube/conf/proxy
+    owner: sysop
+    group: users
+    mode: '0644'
+
+- name: Enable and start kube-proxy
+  ansible.builtin.systemd:
+    name: kube-proxy
+    enabled: true
+    state: started
+    daemon_reload: true

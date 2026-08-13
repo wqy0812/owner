@@ -67,12 +67,9 @@ func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, rel
 		return domain.Run{}, err
 	}
 
-	primary, found := findAction(release, domain.ActionUpgrade)
+	primary, found := primaryActionForComponentTest(release)
 	if !found {
-		primary, found = findAction(release, domain.ActionInstall)
-	}
-	if !found {
-		return domain.Run{}, fmt.Errorf("%w: component test requires install or upgrade action", domain.ErrInvalid)
+		return domain.Run{}, fmt.Errorf("%w: component test requires an executable primary action", domain.ErrInvalid)
 	}
 	actions := []domain.ActionDefinition{primary}
 	if verify, ok := findAction(release, domain.ActionVerify); ok {
@@ -95,6 +92,15 @@ func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, rel
 		steps = append(steps, step)
 	}
 	return p.createRun(ctx, user, environment, domain.RunComponentTest, release.ID, "", primary.Kind, steps)
+}
+
+func primaryActionForComponentTest(release domain.ComponentRelease) (domain.ActionDefinition, bool) {
+	for _, kind := range []domain.ActionKind{domain.ActionUpgrade, domain.ActionInstall, domain.ActionConfigure, domain.ActionPreflight, domain.ActionInspect} {
+		if action, found := findAction(release, kind); found {
+			return action, true
+		}
+	}
+	return domain.ActionDefinition{}, false
 }
 
 func (p *Platform) StartScenarioTest(ctx context.Context, user domain.User, revisionID, environmentID string, runInput map[string]any) (domain.Run, error) {

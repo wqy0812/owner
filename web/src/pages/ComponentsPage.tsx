@@ -204,7 +204,7 @@ function ClassificationFields({ component }: { component?: Component }) {
   return <>
     <label><span>组件层级</span><select name="layer" value={layer} onChange={(event) => setLayer(event.target.value as ComponentLayer)}>{COMPONENT_LAYERS.map((item) => <option key={item.value} value={item.value}>{item.code} · {item.label}</option>)}</select></label>
     <label><span>能力类别</span><select key={layer} name="category" defaultValue={category}>{definition.categories.map((item) => <option key={item} value={item}>{COMPONENT_CATEGORY_LABELS[item]}</option>)}</select></label>
-    <label><span>组件形态</span><select name="kind" defaultValue={component?.kind ?? 'software'}><option value="software">独立软件</option><option value="software_bundle">软件组合</option><option value="delivery_stage">交付阶段</option></select></label>
+    <label><span>组件形态</span><select name="kind" defaultValue={component?.kind ?? 'software'}><option value="software">独立软件</option><option value="software_bundle">软件组合</option><option value="delivery_stage">交付阶段</option><option value="configuration">配置能力</option><option value="artifact_set">制品集合</option></select></label>
     <label><span>必选性</span><select name="requiredness" defaultValue={component?.requiredness ?? 'profile_required'}><option value="core_required">核心必选</option><option value="profile_required">方案必选</option><option value="optional">可选</option></select></label>
   </>;
 }

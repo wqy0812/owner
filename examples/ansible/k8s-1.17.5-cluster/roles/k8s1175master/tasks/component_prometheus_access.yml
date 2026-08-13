@@ -1,0 +1,14 @@
+---
+- name: Write Prometheus API access RBAC
+  ansible.builtin.template:
+    src: prometheus-rbac.yaml.j2
+    dest: /approot1/paas/kube/conf/prometheus-rbac.yaml
+    owner: kube
+    group: users
+    mode: '0644'
+
+- name: Apply Prometheus API access RBAC
+  ansible.builtin.command:
+    argv: [/approot1/paas/kube/bin/kubectl, --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig, apply, -f, /approot1/paas/kube/conf/prometheus-rbac.yaml]
+  changed_when: true
+

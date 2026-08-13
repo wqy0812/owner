@@ -507,7 +507,7 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		t.Fatalf("unexpected seeded Kubernetes 1.17.5 revision: %#v", scenarioData)
 	}
 	currentRevision, ok := scenarioData["currentRevision"].(map[string]any)
-	if !ok || len(currentRevision["nodes"].([]any)) != 4 || len(currentRevision["edges"].([]any)) != 3 {
+	if !ok || len(currentRevision["nodes"].([]any)) != 21 || len(currentRevision["edges"].([]any)) != 50 {
 		t.Fatalf("unexpected Kubernetes 1.17.5 DAG: %#v", currentRevision)
 	}
 
@@ -532,28 +532,38 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		t.Fatal(err)
 	}
 	lockedSteps, ok := storedRun.InputSnapshot["steps"].([]any)
-	if !ok || len(lockedSteps) != 4 {
+	if !ok || len(lockedSteps) != 42 {
 		t.Fatalf("Kubernetes 1.17.5 locked plan=%#v", storedRun.InputSnapshot)
 	}
-	wantPlaybooks := []string{
-		"k8s-1.17.5-cluster/cert_1175.yml",
-		"k8s-1.17.5-cluster/etcd_serverless.yml",
-		"k8s-1.17.5-cluster/master_1175.yml",
-		"k8s-1.17.5-cluster/node_1175.yml",
-	}
-	wantLimits := []string{"k8s_cert_controller", "k8setcd", "k8smaster", "k8snode"}
+	limitsByPlaybook := map[string]map[string]bool{}
 	for index, rawStep := range lockedSteps {
 		step, ok := rawStep.(map[string]any)
-		if !ok || step["playbook"] != wantPlaybooks[index] || step["limit"] != wantLimits[index] {
+		playbook, _ := step["playbook"].(string)
+		limit, _ := step["limit"].(string)
+		if !ok || !strings.HasPrefix(playbook, "k8s-1.17.5-cluster/components/") || limit == "" {
 			t.Fatalf("locked step %d=%#v", index, rawStep)
 		}
-		tags, ok := step["tags"].([]any)
-		if !ok || len(tags) != 1 || tags[0] != "install" {
-			t.Fatalf("locked step %d has unsafe tags: %#v", index, step["tags"])
+		if strings.Contains(strings.ToLower(playbook), "recovery") || strings.Contains(strings.ToLower(playbook), "housekeeping") || strings.Contains(strings.ToLower(playbook), "uninstall") {
+			t.Fatalf("locked step %d references a forbidden lifecycle path: %s", index, playbook)
 		}
+		if limitsByPlaybook[playbook] == nil {
+			limitsByPlaybook[playbook] = map[string]bool{}
+		}
+		limitsByPlaybook[playbook][limit] = true
 		variables, _ := step["variables"].(map[string]any)
 		if _, leaked := variables["K8S_ENCRYPTION_KEY"]; leaked {
 			t.Fatalf("runtime encryption key leaked into locked step %d", index)
+		}
+	}
+	for _, playbook := range []string{
+		"k8s-1.17.5-cluster/components/docker.yml",
+		"k8s-1.17.5-cluster/components/kubernetes-distribution.yml",
+		"k8s-1.17.5-cluster/components/flannel.yml",
+		"k8s-1.17.5-cluster/components/kubelet.yml",
+		"k8s-1.17.5-cluster/components/kube-proxy.yml",
+	} {
+		if !limitsByPlaybook[playbook]["k8smaster"] || !limitsByPlaybook[playbook]["k8snode"] {
+			t.Fatalf("release playbook %s was not independently locked for both host groups: %#v", playbook, limitsByPlaybook[playbook])
 		}
 	}
 	snapshotJSON, err := json.Marshal(storedRun.InputSnapshot)

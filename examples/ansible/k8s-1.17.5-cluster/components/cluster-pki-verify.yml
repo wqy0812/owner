@@ -1,0 +1,8 @@
+---
+- name: Verify cluster-pki on k8s_cert_controller
+  hosts: k8s_cert_controller
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_component_verify
+      k8s1175_component_task: cluster-pki

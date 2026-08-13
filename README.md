@@ -60,24 +60,24 @@ make build
 
 ## Kubernetes 1.17.5 集群搭建作业
 
-Demo 会幂等写入 `scenario-k8s-1.17.5` 场景及 `environment-k8s-1.17.5-template` 环境模板。场景锁定四个组件版本，并按三阶段四步执行：
+Demo 会幂等写入核心 `scenario-k8s-1.17.5`、扩展 `scenario-k8s-1.17.5-extended` 及 `environment-k8s-1.17.5-template`。旧的 Certificates、Etcd、Control Plane、Worker 四个版本化交付阶段已删除，改为最小逻辑组件和不可变 Release；同一 Release 可在控制节点和工作节点各有一个场景节点，由节点 `hostGroup` 区分。
 
 场景保持 Draft，以免把尚未在真实目标环境验收的快照误标为已发布；在页面切换到“陈晨 · 集群交付”身份即可查看和发起环境测试。
 
-| 阶段 | 步骤 | Playbook |
+| 层 | 核心能力 | 版本 |
 | --- | --- | --- |
-| 证书 | 生成集群证书 | `k8s-1.17.5-cluster/cert_1175.yml` |
-| 控制面 | 安装 etcd | `k8s-1.17.5-cluster/etcd_serverless.yml` |
-| 控制面 | 安装 Kubernetes master | `k8s-1.17.5-cluster/master_1175.yml` |
-| 工作节点 | 安装 Kubernetes node | `k8s-1.17.5-cluster/node_1175.yml` |
+| L1 | Host Preflight、Host Bootstrap、Cluster PKI、Encryption Configuration | `v1.17.5-r1` |
+| L2 | Docker、etcd | `18.09.7`、`3.3.10` |
+| L3 | Distribution、三个控制面进程、Bootstrap RBAC、kubelet、kube-proxy | `1.17.5` |
+| L4 | Flannel、CoreDNS | `0.11.0`、`1.3.1` |
 
-该场景的所有步骤均为 destructive。发起测试或正式运行后，作业会停留在 `awaiting_approval`，只有对应环境 Owner 批准后才会调用 Ansible。四个 Action 固定传入 `--tags install`；快照已断开 Docker 卸载重装、4243 防火墙、journal 清空和会向容器分发 API Server 私钥的历史 Housekeeping 分支，且不会执行仅标记为 recovery 的任务。它也不会改写 zypper 软件源或安装未验签 Docker 包，要求环境预置并显式验真 Docker 版本。环境模板只是脱敏占位，不能直接连接真实主机；正式批准前必须替换并复核 Inventory、主机分组、网络参数和介质服务地址。
+Host Preflight 是只读动作；其余写主机或集群状态的动作均为 destructive，发起后必须由对应环境 Owner 审批。每个组件在 `k8s-1.17.5-cluster/components/` 下都有独立主入口和验证入口，组件测试会自动追加 Verify。恢复、卸载、Housekeeping 以及只有模板没有任务入口的 process-exporter、Event Monitor、CSI 不进入安装场景。
 
 加密密钥值不进入 seed、数据库或作业快照；数据库仅保存非敏感的引用元数据。环境模板通过动态 CredentialRef 将 Ansible 变量 `K8S_ENCRYPTION_KEY` 指向后端进程环境变量 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY`；部署方必须提供一个经审核的 32 字节密钥的 base64 值。Runner 只在批准后的执行阶段解析并注入该值。
 
-原始 1.17.5 role 使用历史变量名 `K8SMASTER_1173_CERT` 和 `K8SNODE_1173_CERT` 下载 master/node 介质，但源仓库没有证明这些值就是目标 1.17.5 包。Demo 不延续这个易误导的名称，已将快照合同安全适配为 `K8SMASTER_1175_CERT` 和 `K8SNODE_1175_CERT`；preflight 要求两个路径显式包含 `1.17.5`，同时要求 `K8S1175_ARTIFACTS_VERIFIED=true`。部署方仍必须独立核对介质版本与校验和；任一条件不满足都应阻断执行。Demo 不携带源 `group_vars` 或内部介质。
+所有外部压缩包/二进制都要求 64 位十六进制 SHA256，容器镜像要求 `sha256:` digest；模板中的未知值保持为空，组件预检会在任何远端写操作前失败。无法从源快照确认软件版本的附加 Release 使用 `source-6909da3` 且 `verified=false`，不推测上游版本。
 
-快照位于 `examples/ansible/k8s-1.17.5-cluster`。它排除了源 Inventory、`group_vars`、私钥、既有 CA 证书与私钥、静态 encryption config 和 JupyterHub 清单；CA 按 `CLUSTER_ID` 在运行时生成，master 的 encryption config 由上述 CredentialRef 动态渲染。为适配现代 Ansible，旧式任务 `include` 已改为静态 `import_tasks`，变量加载仍使用 `include_vars`。这些改动只完成了 Demo 快照与执行入口适配，尚未在真实 Kubernetes 1.17.5 目标环境完成安装验收。
+扩展场景完整包含核心 DAG，并追加 Node Logging、HAProxy、Blackbox/Node Exporter、Metrics Server、AMC、GlusterFS Client、Go/pprof、Prometheus Access 和 Autoscaling RBAC。快照位于 `examples/ansible/k8s-1.17.5-cluster`；本地语法、任务枚举和代码测试通过，不等于真实 SUSE 三控制节点加工作节点的安装、介质验真和集群收敛验收。
 
 ## Ansible 安全边界
 

@@ -2,14 +2,24 @@
 # These tasks are responsible for copying the latest dev/production code from
 # the version control system.
 
-- name: <flannel>download and unarchive {{ FLANNEL_MEDPATH_SERVERLESS }}
+- name: <flannel>download {{ FLANNEL_MEDPATH_SERVERLESS }} with SHA256 verification
   tags:
     - install
     - update
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ FLANNEL_MEDPATH_SERVERLESS }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ FLANNEL_MEDPATH_SERVERLESS }}
+    dest: /var/tmp/flannel-0.11.0.tar.gz
+    checksum: sha256:{{ FLANNEL_MEDPATH_SERVERLESS_SHA256 }}
+    mode: '0600'
+
+- name: <flannel>unarchive verified Flannel 0.11.0
+  tags:
+    - install
+    - update
+  unarchive:
+    src: /var/tmp/flannel-0.11.0.tar.gz
     dest: /usr/bin
-    copy: no
+    remote_src: true
 
 - name: <flannel>upload flannel service file
   tags:

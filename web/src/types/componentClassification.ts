@@ -24,7 +24,11 @@ export const COMPONENT_CATEGORY_LABELS: Record<ComponentCategory, string> = {
 };
 
 export const COMPONENT_KIND_LABELS: Record<ComponentKind, string> = {
-  software: '独立软件', software_bundle: '软件组合', delivery_stage: '交付阶段',
+  software: '独立软件',
+  software_bundle: '软件组合',
+  delivery_stage: '交付阶段',
+  configuration: '配置能力',
+  artifact_set: '制品集合',
 };
 
 export const COMPONENT_REQUIREDNESS_LABELS: Record<ComponentRequiredness, string> = {

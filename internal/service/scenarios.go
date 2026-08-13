@@ -142,7 +142,7 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		return issues, nil
 	}
 
-	nodeByRelease := map[string]string{}
+	nodesByRelease := map[string][]string{}
 	releaseByNode := map[string]domain.ComponentRelease{}
 	for _, node := range revision.Graph.Nodes {
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
@@ -157,7 +157,7 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 			issues = append(issues, domain.ValidationIssue{Code: "action_missing", Message: actionErr.Error(), NodeID: node.ID})
 		}
 		validateRequiredParameters(release.ParameterSchema, node, &issues)
-		nodeByRelease[release.ID] = node.ID
+		nodesByRelease[release.ID] = append(nodesByRelease[release.ID], node.ID)
 		releaseByNode[node.ID] = release
 	}
 
@@ -168,14 +168,14 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 			continue
 		}
 		for _, dependency := range release.Dependencies {
-			upstreamNode, exists := nodeByRelease[dependency.UpstreamReleaseID]
-			if !exists {
+			upstreamNodes := nodesByRelease[dependency.UpstreamReleaseID]
+			if len(upstreamNodes) == 0 {
 				issues = append(issues, domain.ValidationIssue{
 					Code: "missing_dependency_node", Message: "locked upstream component release is absent from the graph", NodeID: node.ID,
 				})
 				continue
 			}
-			if !reachable[upstreamNode][node.ID] {
+			if !anyUpstreamNodeReachable(upstreamNodes, node.ID, reachable) {
 				issues = append(issues, domain.ValidationIssue{
 					Code: "dependency_order", Message: "upstream component must precede the dependent node", NodeID: node.ID,
 				})
@@ -189,6 +189,15 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		return issues[i].NodeID < issues[j].NodeID
 	})
 	return issues, nil
+}
+
+func anyUpstreamNodeReachable(upstreamNodes []string, downstreamNode string, reachable map[string]map[string]bool) bool {
+	for _, upstreamNode := range upstreamNodes {
+		if reachable[upstreamNode][downstreamNode] {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRequiredParameters(schema map[string]any, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {

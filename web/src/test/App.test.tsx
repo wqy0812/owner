@@ -146,6 +146,15 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.queryByRole('option', { name: 'uninstall' })).not.toBeInTheDocument();
   });
 
+  it('allows the same release to be added more than once with independent host groups', async () => {
+    installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    const paletteButton = await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    await userEvent.click(paletteButton);
+    expect(await screen.findByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument();
+    expect(screen.getAllByText('containerd').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('submits only declared scenario run inputs with a test run', async () => {
     const fetchMock = installFetch({ initialUser: carol, withScenario: true });
     renderApp('/scenarios');

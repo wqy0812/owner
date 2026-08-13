@@ -121,7 +121,7 @@ erDiagram
 
 - `layer`：L1-L6 对应的主机基础、运行时与状态、编排核心、集群服务、可观测管理和平台扩展层。
 - `category`：组件的逻辑能力类别；后端校验类别与层级是否匹配，`network` 可用于 L3 kube-proxy 或 L4 CNI。
-- `kind`：`software`、`software_bundle` 或 `delivery_stage`。
+- `kind`：`software`、`software_bundle`、`delivery_stage`、`configuration` 或 `artifact_set`。
 - `requiredness`：`core_required`、`profile_required` 或 `optional`。
 
 `Component.kind` 描述逻辑组件形态，`ComponentRelease.type` 独立表示 `atomic` 或 `bundle` 交付类型。`ComponentRelease` 表示具体版本：
@@ -133,6 +133,8 @@ erDiagram
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
 
 Released Release 不可修改；更新时从已有版本克隆新 Draft。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
+
+场景节点锁定 Release，但 Release 在图中不要求唯一。同一 Docker、Distribution、Flannel、kubelet 或 kube-proxy Release 可以分别用于 `k8smaster` 与 `k8snode`；依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
 
 组件测试优先选择 `upgrade`，不存在时选择 `install`，随后在定义了 `verify` 时追加验证步骤。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
 

@@ -1,13 +1,24 @@
 ---
-- name: download glusterfs rpms
+- name: download glusterfs rpms with SHA256 verification
   tags:
     - install
     - check
     - update
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GLUSTERFS_MEDPATH }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GLUSTERFS_MEDPATH }}
+    dest: /var/tmp/glusterfs-client-3.12.6.tar.gz
+    checksum: sha256:{{ GLUSTERFS_MEDPATH_SHA256 }}
+    mode: '0600'
+
+- name: unarchive verified glusterfs rpms
+  tags:
+    - install
+    - check
+    - update
+  unarchive:
+    src: /var/tmp/glusterfs-client-3.12.6.tar.gz
     dest: /tmp
-    copy: no
+    remote_src: true
 
 - name: install glusterfs rpms
   tags:

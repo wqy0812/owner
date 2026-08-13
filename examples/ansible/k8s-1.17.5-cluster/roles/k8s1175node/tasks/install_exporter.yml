@@ -21,8 +21,9 @@
     - install
     - update
   get_url: 
-    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/file-station/blackbox_exporter
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ BLACKBOX_EXPORTER_MEDPATH }}
     dest: /approot1/paas/exporter/blackbox_exporter
+    checksum: sha256:{{ BLACKBOX_EXPORTER_SHA256 }}
     owner: sysop
     mode: "u=rwx,g=rx,o=rx"
     

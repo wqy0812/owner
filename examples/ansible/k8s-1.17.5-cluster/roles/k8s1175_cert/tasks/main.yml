@@ -28,14 +28,24 @@
     - update
   file: path=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-controller-manager state=directory owner={{ ANSIBLE_USER }}
   
-- name: <k8smaster>download and unarchive {{ CFSSL_MEDPATH }}
+- name: <k8smaster>download {{ CFSSL_MEDPATH }} with SHA256 verification
   tags:
     - install
     - update
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ CFSSL_MEDPATH }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ CFSSL_MEDPATH }}
+    dest: /var/tmp/cfssl-k8s1175.tar.gz
+    checksum: sha256:{{ CFSSL_MEDPATH_SHA256 }}
+    mode: '0600'
+
+- name: <k8smaster>unarchive verified CFSSL tools
+  tags:
+    - install
+    - update
+  unarchive:
+    src: /var/tmp/cfssl-k8s1175.tar.gz
     dest: /approot1/paas/admin/app/ansible/task/cert
-    copy: no
+    remote_src: true
     owner: "{{ ANSIBLE_USER }}"
 
 - name: restrict this cluster's controller certificate workspace

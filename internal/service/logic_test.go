@@ -96,6 +96,34 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	}
 }
 
+func TestComponentTestAcceptsConfigureAndPreflightPrimaryActions(t *testing.T) {
+	for _, kind := range []domain.ActionKind{domain.ActionConfigure, domain.ActionPreflight} {
+		release := domain.ComponentRelease{Actions: []domain.ActionDefinition{{Kind: domain.ActionVerify}, {Kind: kind}}}
+		action, found := primaryActionForComponentTest(release)
+		if !found || action.Kind != kind {
+			t.Fatalf("primary action for %s = %+v, found=%v", kind, action, found)
+		}
+	}
+	release := domain.ComponentRelease{Actions: []domain.ActionDefinition{{Kind: domain.ActionPreflight}, {Kind: domain.ActionConfigure}}}
+	action, _ := primaryActionForComponentTest(release)
+	if action.Kind != domain.ActionConfigure {
+		t.Fatalf("configure should take precedence over preflight: %+v", action)
+	}
+}
+
+func TestDependencyMayUseAnyReachableNodeOfRepeatedRelease(t *testing.T) {
+	reachable := map[string]map[string]bool{
+		"runtime-control": {"kubelet-worker": false},
+		"runtime-worker":  {"kubelet-worker": true},
+	}
+	if !anyUpstreamNodeReachable([]string{"runtime-control", "runtime-worker"}, "kubelet-worker", reachable) {
+		t.Fatal("reachable repeated upstream release node was ignored")
+	}
+	if anyUpstreamNodeReachable([]string{"runtime-control"}, "kubelet-worker", reachable) {
+		t.Fatal("unreachable upstream node was accepted")
+	}
+}
+
 func TestInlineSensitiveMapsAreRejectedBeforePersistence(t *testing.T) {
 	for _, values := range []map[string]any{
 		{"registryPassword": "do-not-store"},

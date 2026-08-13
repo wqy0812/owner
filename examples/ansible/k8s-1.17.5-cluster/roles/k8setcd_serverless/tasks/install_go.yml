@@ -1,15 +1,26 @@
 ---
 
 
-- name: download and unarchive {{ GO_PPROF_PATH }}
+- name: download {{ GO_PPROF_PATH }} with SHA256 verification
   tags:
     - install
     - check
     - update
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GO_PPROF_PATH }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GO_PPROF_PATH }}
+    dest: /var/tmp/go-pprof-k8s1175.tar.gz
+    checksum: sha256:{{ GO_PPROF_SHA256 }}
+    mode: '0600'
+
+- name: unarchive verified Go and pprof toolkit
+  tags:
+    - install
+    - check
+    - update
+  unarchive:
+    src: /var/tmp/go-pprof-k8s1175.tar.gz
     dest: /usr/local
-    copy: no
+    remote_src: true
     owner: sysop
 - name: change permission of pprof
   tags:

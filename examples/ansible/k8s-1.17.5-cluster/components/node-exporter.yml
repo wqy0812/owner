@@ -1,0 +1,17 @@
+---
+- name: Apply node-exporter on k8smaster
+  hosts: k8smaster
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_components
+      k8s1175_component_task: node-exporter
+
+- name: Apply node-exporter on k8snode
+  hosts: k8snode
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_components
+      k8s1175_component_task: node-exporter
+

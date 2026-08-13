@@ -117,7 +117,7 @@ spec:
         node-role.kubernetes.io/master: ""
       containers:
       - name: coredns
-        image: {{ NETWORK_CLASSIFIED_HARBOR_DOMAIN }}/f-paas-subruntime/coredns:1.3.1
+        image: {{ NETWORK_CLASSIFIED_HARBOR_DOMAIN }}/f-paas-subruntime/coredns@{{ COREDNS_IMAGE_DIGEST }}
         imagePullPolicy: IfNotPresent
         resources:
           limits:

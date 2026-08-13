@@ -6,6 +6,18 @@
     - update
   copy: src=metrics-server dest=/approot1/paas/kube/conf/ owner=kube group=users mode="u=rw,g=r,o=r"
 
+- name: render immutable metrics-server image digests
+  tags:
+    - install
+    - check
+    - update
+  template:
+    src: "{{ role_path }}/files/metrics-server/metrics-server-deployment.yaml"
+    dest: /approot1/paas/kube/conf/metrics-server/metrics-server-deployment.yaml
+    owner: kube
+    group: users
+    mode: "u=rw,g=r,o=r"
+
 - name: create metrics-server
   tags:
     - install

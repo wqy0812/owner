@@ -1,0 +1,40 @@
+---
+- name: Select the Kubernetes distribution artifact for this host group
+  ansible.builtin.set_fact:
+    k8s1175_distribution_path: "{{ K8SMASTER_1175_CERT if inventory_hostname in (groups['k8smaster'] | default([])) else K8SNODE_1175_CERT }}"
+    k8s1175_distribution_sha256: "{{ K8SMASTER_1175_CERT_SHA256 if inventory_hostname in (groups['k8smaster'] | default([])) else K8SNODE_1175_CERT_SHA256 }}"
+  changed_when: false
+
+- name: Download Kubernetes 1.17.5 distribution with SHA256 verification
+  ansible.builtin.get_url:
+    url: "http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ k8s1175_distribution_path }}"
+    dest: /var/tmp/kubernetes-1.17.5.tar.gz
+    checksum: "sha256:{{ k8s1175_distribution_sha256 }}"
+    mode: '0600'
+
+- name: Install only Kubernetes public binaries
+  ansible.builtin.unarchive:
+    src: /var/tmp/kubernetes-1.17.5.tar.gz
+    dest: /approot1/paas/kube/bin
+    remote_src: true
+    extra_opts: ['--strip-components=3']
+    owner: kube
+    group: users
+
+- name: Distribute public cluster CA
+  ansible.builtin.copy:
+    src: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem"
+    dest: /approot1/paas/kube/cert/ca.pem
+    owner: kube
+    group: users
+    mode: '0644'
+
+- name: Distribute the complete control-plane certificate tree only to masters
+  ansible.builtin.copy:
+    src: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/"
+    dest: /approot1/paas/kube/cert/
+    owner: kube
+    group: users
+    mode: preserve
+  when: inventory_hostname in (groups['k8smaster'] | default([]))
+  no_log: true

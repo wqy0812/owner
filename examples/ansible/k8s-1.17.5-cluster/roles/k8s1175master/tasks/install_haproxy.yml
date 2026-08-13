@@ -9,14 +9,24 @@
     - check
   file: path=/root/haproxy state=directory mode="u=rwx,g=rx,o=rx"
 
-- name: <haproxy>download and unarchive {{ HAPROXY_MEDPATH }}
+- name: <haproxy>download {{ HAPROXY_MEDPATH }} with SHA256 verification
   tags:
     - install
     - update
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ HAPROXY_MEDPATH }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ HAPROXY_MEDPATH }}
+    dest: /var/tmp/haproxy-k8s1175.tar.gz
+    checksum: sha256:{{ HAPROXY_MEDPATH_SHA256 }}
+    mode: '0600'
+
+- name: <haproxy>unarchive verified HAProxy media
+  tags:
+    - install
+    - update
+  unarchive:
+    src: /var/tmp/haproxy-k8s1175.tar.gz
     dest: /root/haproxy
-    copy: no
+    remote_src: true
     extra_opts: ['--strip-components=1']
 
 - name: <haproxy>unarchive ssl

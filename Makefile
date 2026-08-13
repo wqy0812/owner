@@ -33,6 +33,7 @@ test:
 
 test-ansible:
 	NEWPLATFORM_ANSIBLE_INTEGRATION=1 $(GO) test ./internal/ansible -run TestRunnerWithTemporaryLocalPlaybook -count=1 -v
+	./scripts/test-k8s1175-components.sh
 
 test-e2e:
 	$(PNPM) --dir web test:e2e

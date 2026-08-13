@@ -1,0 +1,37 @@
+---
+- name: Create Node Exporter installation directory
+  ansible.builtin.file:
+    path: /approot1/paas/exporter/bin
+    state: directory
+    owner: sysop
+    group: users
+    mode: '0755'
+
+- name: Download Node Exporter 0.18.0 with SHA256 verification
+  ansible.builtin.get_url:
+    url: "http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ NODE_EXPORTER_MEDPATH_AMD }}"
+    dest: /var/tmp/node-exporter-0.18.0.tar.gz
+    checksum: "sha256:{{ NODE_EXPORTER_MEDPATH_AMD_SHA256 }}"
+    mode: '0600'
+
+- name: Install Node Exporter without recovery or cleanup actions
+  ansible.builtin.unarchive:
+    src: /var/tmp/node-exporter-0.18.0.tar.gz
+    dest: /approot1/paas/exporter/bin
+    remote_src: true
+    extra_opts: ['--strip-components=1']
+
+- name: Install Node Exporter service unit
+  ansible.builtin.copy:
+    src: node-exporter.service
+    dest: /etc/systemd/system/node-exporter.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start Node Exporter
+  ansible.builtin.systemd:
+    name: node-exporter
+    enabled: true
+    state: started
+    daemon_reload: true

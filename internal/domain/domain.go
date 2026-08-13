@@ -80,6 +80,8 @@ const (
 	ComponentSoftware       ComponentKind = "software"
 	ComponentSoftwareBundle ComponentKind = "software_bundle"
 	ComponentDeliveryStage  ComponentKind = "delivery_stage"
+	ComponentConfiguration  ComponentKind = "configuration"
+	ComponentArtifactSet    ComponentKind = "artifact_set"
 )
 
 type ComponentRequiredness string
@@ -107,7 +109,7 @@ func ValidateComponentClassification(component Component) error {
 	if !slices.Contains(categories, component.Category) {
 		return fmt.Errorf("%w: category %q is not valid for layer %q", ErrInvalid, component.Category, component.Layer)
 	}
-	if component.Kind != ComponentSoftware && component.Kind != ComponentSoftwareBundle && component.Kind != ComponentDeliveryStage {
+	if component.Kind != ComponentSoftware && component.Kind != ComponentSoftwareBundle && component.Kind != ComponentDeliveryStage && component.Kind != ComponentConfiguration && component.Kind != ComponentArtifactSet {
 		return fmt.Errorf("%w: invalid component kind %q", ErrInvalid, component.Kind)
 	}
 	if component.Requiredness != RequiredCore && component.Requiredness != RequiredProfile && component.Requiredness != RequiredOptional {
@@ -287,7 +289,6 @@ func ValidateGraph(g ScenarioGraph) []ValidationIssue {
 		return append(issues, ValidationIssue{Code: "empty_graph", Message: "scenario graph must contain at least one node"})
 	}
 	nodes := map[string]ScenarioNode{}
-	releaseNodes := map[string]string{}
 	for _, n := range g.Nodes {
 		if strings.TrimSpace(n.ID) == "" {
 			issues = append(issues, ValidationIssue{Code: "missing_node_id", Message: "node id is required"})
@@ -299,10 +300,6 @@ func ValidateGraph(g ScenarioGraph) []ValidationIssue {
 		nodes[n.ID] = n
 		if n.ReleaseID == "" {
 			issues = append(issues, ValidationIssue{Code: "missing_release", Message: "node must lock a component release", NodeID: n.ID})
-		} else if previous, exists := releaseNodes[n.ReleaseID]; exists {
-			issues = append(issues, ValidationIssue{Code: "duplicate_release_node", Message: "component release is already used by node " + previous, NodeID: n.ID})
-		} else {
-			releaseNodes[n.ReleaseID] = n.ID
 		}
 		if n.Action == "" {
 			issues = append(issues, ValidationIssue{Code: "missing_action", Message: "node action is required", NodeID: n.ID})

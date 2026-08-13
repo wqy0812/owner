@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
 )
 
@@ -35,7 +36,7 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	}
 	viewer, _ := database.GetUser(ctx, ComponentOwnerRuntimeID)
 	components, err := database.ListComponents(ctx, viewer)
-	if err != nil || len(components) != 15 {
+	if err != nil || len(components) != 33 {
 		t.Fatalf("components=%d err=%v", len(components), err)
 	}
 	for _, component := range components {
@@ -44,7 +45,7 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 		}
 	}
 	for id, wantLayer := range map[string]domain.ComponentLayer{
-		"component-bke-cert": domain.LayerHostFoundation, "component-k8s-1.17.5-cert": domain.LayerHostFoundation,
+		"component-bke-cert": domain.LayerHostFoundation, "component-cluster-pki": domain.LayerHostFoundation,
 		"component-containerd": domain.LayerRuntimeState, "component-etcd": domain.LayerRuntimeState,
 		"component-kubernetes": domain.LayerOrchestrationCore, "component-kube-proxy": domain.LayerOrchestrationCore,
 		"component-calico": domain.LayerClusterService, "component-coredns": domain.LayerClusterService,
@@ -75,81 +76,103 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	if err != nil || len(environments) != 2 {
 		t.Fatalf("environments=%d err=%v", len(environments), err)
 	}
-	assertTableCount(t, database, "component_releases", 15)
-	assertTableCount(t, database, "component_dependencies", 7)
-	assertTableCount(t, database, "action_definitions", 9)
-	assertTableCount(t, database, "scenarios", 2)
-	assertTableCount(t, database, "scenario_revisions", 2)
+	assertTableCount(t, database, "component_releases", 36)
+	assertTableCount(t, database, "component_dependencies", 47)
+	assertTableCount(t, database, "action_definitions", 55)
+	assertTableCount(t, database, "scenarios", 3)
+	assertTableCount(t, database, "scenario_revisions", 3)
 	assertTableCount(t, database, "environment_revisions", 2)
 	assertTableCount(t, database, "audit_events", 2)
 }
 
-func TestKubernetes1175SeedRegistersLinearDestructiveJob(t *testing.T) {
+func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) {
 	ctx, database := seededDatabase(t)
-
-	type expectedStage struct {
-		releaseID, upstreamID, playbook, group string
+	for _, legacyID := range []string{"component-k8s-1.17.5-cert", "component-k8s-1.17.5-etcd", "component-k8s-1.17.5-master", "component-k8s-1.17.5-node"} {
+		if _, err := database.GetComponent(ctx, legacyID, false); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("legacy component %s still exists: %v", legacyID, err)
+		}
 	}
-	stages := []expectedStage{
-		{releaseID: "release-k8s-1.17.5-cert", playbook: "k8s-1.17.5-cluster/cert_1175.yml", group: "k8s_cert_controller"},
-		{releaseID: "release-k8s-1.17.5-etcd", upstreamID: "release-k8s-1.17.5-cert", playbook: "k8s-1.17.5-cluster/etcd_serverless.yml", group: "k8setcd"},
-		{releaseID: "release-k8s-1.17.5-master", upstreamID: "release-k8s-1.17.5-etcd", playbook: "k8s-1.17.5-cluster/master_1175.yml", group: "k8smaster"},
-		{releaseID: "release-k8s-1.17.5-node", upstreamID: "release-k8s-1.17.5-master", playbook: "k8s-1.17.5-cluster/node_1175.yml", group: "k8snode"},
+	for _, spec := range kubernetes1175ReleaseSpecs {
+		release, err := database.GetComponentRelease(ctx, spec.releaseID)
+		if err != nil || release.Verified {
+			t.Fatalf("new release %s must exist as unverified: %+v err=%v", spec.releaseID, release, err)
+		}
+		if strings.Contains(spec.releaseID, "source-6909da3") && release.Version != "source-6909da3" {
+			t.Fatalf("unknown source version was fabricated for %s: %s", spec.releaseID, release.Version)
+		}
 	}
-	for _, stage := range stages {
-		release, err := database.GetComponentRelease(ctx, stage.releaseID)
+	for _, releaseID := range []string{
+		"release-host-preflight-k8s-1.17.5", "release-host-bootstrap-k8s-1.17.5", "release-cluster-pki-k8s-1.17.5",
+		"release-docker-18.09.7", "release-etcd-3.3.10", "release-kubernetes-distribution-1.17.5",
+		"release-kubernetes-encryption-config-1.17.5", "release-kube-apiserver-1.17.5",
+		"release-kube-controller-manager-1.17.5", "release-kube-scheduler-1.17.5",
+		"release-kubernetes-bootstrap-rbac-1.17.5", "release-flannel-0.11.0", "release-kubelet-1.17.5",
+		"release-kube-proxy-1.17.5", "release-coredns-1.3.1", "release-node-exporter-0.18.0",
+		"release-metrics-server-0.3.1", "release-glusterfs-client-3.12.6", "release-amc-source-6909da3",
+	} {
+		release, err := database.GetComponentRelease(ctx, releaseID)
 		if err != nil {
-			t.Fatalf("get %s: %v", stage.releaseID, err)
+			t.Fatalf("get %s: %v", releaseID, err)
 		}
-		if release.Version != "v1.17.5" || release.Type != domain.ReleaseAtomic || release.Status != domain.ReleaseReleased || release.Verified {
-			t.Fatalf("unexpected release contract for %s: %+v", stage.releaseID, release)
+		wantType := domain.ReleaseAtomic
+		if releaseID == "release-kubernetes-distribution-1.17.5" {
+			wantType = domain.ReleaseBundle
 		}
-		if release.RiskLevel != domain.RiskDestructive || len(release.Actions) != 1 {
-			t.Fatalf("unexpected actions for %s: %+v", stage.releaseID, release.Actions)
+		if release.Type != wantType || release.Status != domain.ReleaseReleased || release.Verified || len(release.Actions) != 2 {
+			t.Fatalf("unexpected release contract for %s: %+v", releaseID, release)
 		}
-		action := release.Actions[0]
-		if action.Kind != domain.ActionInstall || action.Playbook != stage.playbook || action.Limit != stage.group || action.HostGroup != stage.group || len(action.Tags) != 1 || action.Tags[0] != "install" {
-			t.Fatalf("unexpected action for %s: %+v", stage.releaseID, action)
-		}
-		if !action.Destructive || !action.NeedsApproval() || action.RiskLevel != domain.RiskDestructive {
-			t.Fatalf("action does not require approval for %s: %+v", stage.releaseID, action)
-		}
-		if filepath.IsAbs(action.Playbook) || strings.Contains(action.Playbook, "..") || !strings.HasPrefix(action.Playbook, "k8s-1.17.5-cluster/") {
-			t.Fatalf("unsafe playbook path for %s: %q", stage.releaseID, action.Playbook)
-		}
-		if stage.upstreamID == "" {
-			if len(release.Dependencies) != 0 {
-				t.Fatalf("certificate stage unexpectedly has dependencies: %+v", release.Dependencies)
+		primary, verify := release.Actions[0], release.Actions[1]
+		if primary.Kind == domain.ActionPreflight {
+			if primary.Destructive || primary.NeedsApproval() {
+				t.Fatalf("host preflight unexpectedly destructive: %+v", primary)
 			}
-		} else if len(release.Dependencies) != 1 || release.Dependencies[0].UpstreamReleaseID != stage.upstreamID {
-			t.Fatalf("dependency for %s=%+v, want upstream %s", stage.releaseID, release.Dependencies, stage.upstreamID)
+		} else if !primary.Destructive || !primary.NeedsApproval() {
+			t.Fatalf("writing action does not require approval: %+v", primary)
+		}
+		if verify.Kind != domain.ActionVerify || verify.Destructive || verify.NeedsApproval() {
+			t.Fatalf("invalid verify action for %s: %+v", releaseID, verify)
+		}
+		for _, action := range release.Actions {
+			if filepath.IsAbs(action.Playbook) || strings.Contains(action.Playbook, "..") || !strings.HasPrefix(action.Playbook, "k8s-1.17.5-cluster/components/") {
+				t.Fatalf("unsafe component entrypoint for %s: %q", releaseID, action.Playbook)
+			}
 		}
 		properties, _ := release.ParameterSchema["properties"].(map[string]any)
 		if _, leaked := properties["K8S_ENCRYPTION_KEY"]; leaked {
-			t.Fatalf("sensitive encryption key was persisted in schema for %s", stage.releaseID)
+			t.Fatalf("sensitive encryption key was persisted in schema for %s", releaseID)
 		}
 	}
 
-	revision, err := database.GetScenarioRevision(ctx, "scenario-k8s-1.17.5-r1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if revision.Status != domain.RevisionDraft || len(revision.Graph.Nodes) != 4 || len(revision.Graph.Edges) != 3 {
-		t.Fatalf("scenario revision=%+v", revision)
-	}
-	if issues := domain.ValidateGraph(revision.Graph); len(issues) != 0 {
-		t.Fatalf("scenario graph issues=%+v", issues)
-	}
-	for index, stage := range stages {
-		node := revision.Graph.Nodes[index]
-		if node.ReleaseID != stage.releaseID || node.HostGroup != stage.group || node.Action != domain.ActionInstall || !node.Destructive {
-			t.Fatalf("node %d=%+v", index, node)
+	for _, expectation := range []struct {
+		id    string
+		nodes int
+	}{{"scenario-k8s-1.17.5-r1", 21}, {"scenario-k8s-1.17.5-extended-r1", 39}} {
+		revision, err := database.GetScenarioRevision(ctx, expectation.id)
+		if err != nil || revision.Status != domain.RevisionDraft || len(revision.Graph.Nodes) != expectation.nodes {
+			t.Fatalf("scenario %s nodes=%d status=%s err=%v", expectation.id, len(revision.Graph.Nodes), revision.Status, err)
 		}
-		if index > 0 {
-			edge := revision.Graph.Edges[index-1]
-			if edge.Source != revision.Graph.Nodes[index-1].ID || edge.Target != node.ID {
-				t.Fatalf("edge %d=%+v does not preserve stage order", index-1, edge)
-			}
+		if issues := domain.ValidateGraph(revision.Graph); len(issues) != 0 {
+			t.Fatalf("scenario %s graph issues=%+v", expectation.id, issues)
+		}
+		owner, _ := database.GetUser(ctx, ScenarioOwnerID)
+		platform := service.NewPlatform(database, nil, nil)
+		issues, validateErr := platform.ValidateScenario(ctx, owner, expectation.id)
+		platform.Close()
+		if validateErr != nil || len(issues) != 0 {
+			t.Fatalf("scenario %s dependency validation issues=%+v err=%v", expectation.id, issues, validateErr)
+		}
+	}
+	core, _ := database.GetScenarioRevision(ctx, "scenario-k8s-1.17.5-r1")
+	usage := map[string]map[string]bool{}
+	for _, node := range core.Graph.Nodes {
+		if usage[node.ReleaseID] == nil {
+			usage[node.ReleaseID] = map[string]bool{}
+		}
+		usage[node.ReleaseID][node.HostGroup] = true
+	}
+	for _, releaseID := range []string{"release-host-bootstrap-k8s-1.17.5", "release-docker-18.09.7", "release-kubernetes-distribution-1.17.5", "release-flannel-0.11.0", "release-kubelet-1.17.5", "release-kube-proxy-1.17.5"} {
+		if len(usage[releaseID]) != 2 {
+			t.Fatalf("release %s was not reused across control and worker host groups: %+v", releaseID, usage[releaseID])
 		}
 	}
 }
@@ -197,6 +220,17 @@ func TestKubernetes1175EnvironmentIsSanitizedAndComplete(t *testing.T) {
 			t.Fatalf("unsafe or ambiguous media path %s=%q", key, value)
 		}
 	}
+	for _, key := range []string{"ETCD_MEDPATH_SERVERLESS", "FLANNEL_MEDPATH_SERVERLESS", "NODE_EXPORTER_MEDPATH_AMD"} {
+		value, _ := revision.Parameters[key].(string)
+		if value == "" || strings.Contains(value, "://") || strings.HasPrefix(value, "/") || strings.Contains(value, "..") {
+			t.Fatalf("unsafe or missing media path %s=%q", key, value)
+		}
+	}
+	for _, key := range []string{"K8SMASTER_1175_CERT_SHA256", "K8SNODE_1175_CERT_SHA256", "ETCD_MEDPATH_SERVERLESS_SHA256", "FLANNEL_MEDPATH_SERVERLESS_SHA256", "COREDNS_IMAGE_DIGEST", "METRICS_SERVER_IMAGE_DIGEST"} {
+		if revision.Parameters[key] != "" {
+			t.Fatalf("unknown verification value %s must remain empty, got %v", key, revision.Parameters[key])
+		}
+	}
 	if _, leaked := revision.Parameters["K8S_ENCRYPTION_KEY"]; leaked {
 		t.Fatal("encryption key must not be stored in ordinary parameters")
 	}
@@ -214,7 +248,10 @@ func TestKubernetes1175SnapshotIsSanitizedAndComplete(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 	snapshotRoot := filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster")
 	required := []string{
-		"cert_1175.yml", "etcd_serverless.yml", "master_1175.yml", "node_1175.yml",
+		filepath.Join("components", "host-preflight.yml"), filepath.Join("components", "host-preflight-verify.yml"),
+		filepath.Join("components", "kube-apiserver.yml"), filepath.Join("components", "kube-controller-manager.yml"),
+		filepath.Join("components", "kube-scheduler.yml"), filepath.Join("components", "kubelet.yml"),
+		filepath.Join("components", "kube-proxy.yml"), filepath.Join("components", "node-exporter.yml"),
 		"preflight_1175.yml", "docker_runtime_preflight.yml", "varutil.yml", "vm_check.yml", "vm_check2.yml", "f5_check.yml",
 		filepath.Join("roles", "k8s1175_cert", "tasks", "main.yml"),
 		filepath.Join("roles", "k8setcd_serverless", "tasks", "main.yml"),
@@ -310,11 +347,11 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 15)
-	assertTableCount(t, database, "component_releases", 15)
-	assertTableCount(t, database, "scenarios", 2)
+	assertTableCount(t, database, "components", 33)
+	assertTableCount(t, database, "component_releases", 36)
+	assertTableCount(t, database, "scenarios", 3)
 	assertTableCount(t, database, "environments", 2)
-	if _, err := database.GetComponentRelease(ctx, "release-k8s-1.17.5-node"); err != nil {
+	if _, err := database.GetComponentRelease(ctx, "release-kubelet-1.17.5"); err != nil {
 		t.Fatalf("Kubernetes 1.17.5 seed was not added: %v", err)
 	}
 	preserved, err := database.GetComponent(ctx, containerd.ID, false)
@@ -340,67 +377,11 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("repeat incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 15)
-	assertTableCount(t, database, "component_releases", 15)
-	assertTableCount(t, database, "scenarios", 2)
+	assertTableCount(t, database, "components", 33)
+	assertTableCount(t, database, "component_releases", 36)
+	assertTableCount(t, database, "scenarios", 3)
 	assertTableCount(t, database, "environments", 2)
 	assertTableCount(t, database, "audit_events", 2)
-}
-
-func TestSeederRepairsOnlyEmptyKubernetes1175ActionTags(t *testing.T) {
-	ctx, database := seededDatabase(t)
-	if _, err := database.DB().ExecContext(ctx, `UPDATE action_definitions SET tags_json='null' WHERE id='action-k8s-1-17-5-cert-install'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.DB().ExecContext(ctx, `UPDATE action_definitions SET tags_json='["operator-reviewed"]' WHERE id='action-k8s-1-17-5-etcd-install'`); err != nil {
-		t.Fatal(err)
-	}
-
-	seeder := Seeder{Store: database, Now: func() time.Time { return time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC) }}
-	if err := seeder.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	cert, err := database.GetComponentRelease(ctx, "release-k8s-1.17.5-cert")
-	if err != nil || len(cert.Actions) != 1 || len(cert.Actions[0].Tags) != 1 || cert.Actions[0].Tags[0] != "install" {
-		t.Fatalf("legacy empty tags were not repaired: release=%+v err=%v", cert, err)
-	}
-	etcd, err := database.GetComponentRelease(ctx, "release-k8s-1.17.5-etcd")
-	if err != nil || len(etcd.Actions) != 1 || len(etcd.Actions[0].Tags) != 1 || etcd.Actions[0].Tags[0] != "operator-reviewed" {
-		t.Fatalf("explicit action tags were overwritten: release=%+v err=%v", etcd, err)
-	}
-}
-
-func TestSeederAddsMissingKubernetes1175RuntimeContractWithoutOverwriting(t *testing.T) {
-	ctx, database := seededDatabase(t)
-	legacySchema := `{"type":"object","properties":{"operatorField":{"type":"string"},"K8S1175_DOCKER_VERSION":{"type":"string","default":"operator-reviewed"}}}`
-	if _, err := database.DB().ExecContext(ctx, `UPDATE component_releases SET parameter_schema_json=? WHERE id='release-k8s-1.17.5-master'`, legacySchema); err != nil {
-		t.Fatal(err)
-	}
-	legacyParameters := `{"operatorField":"preserve","K8S1175_DOCKER_VERSION":"operator-reviewed"}`
-	if _, err := database.DB().ExecContext(ctx, `UPDATE environment_revisions SET parameters_json=? WHERE id='environment-k8s-1.17.5-template-r1'`, legacyParameters); err != nil {
-		t.Fatal(err)
-	}
-
-	seeder := Seeder{Store: database, Now: func() time.Time { return time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC) }}
-	if err := seeder.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	release, err := database.GetComponentRelease(ctx, "release-k8s-1.17.5-master")
-	if err != nil {
-		t.Fatal(err)
-	}
-	properties, _ := release.ParameterSchema["properties"].(map[string]any)
-	version, _ := properties["K8S1175_DOCKER_VERSION"].(map[string]any)
-	if _, ok := properties["K8S1175_DOCKER_RUNTIME_VERIFIED"]; !ok || version["default"] != "operator-reviewed" || properties["operatorField"] == nil {
-		t.Fatalf("release runtime contract was not merged safely: %+v", properties)
-	}
-	revision, err := database.GetEnvironmentRevision(ctx, "environment-k8s-1.17.5-template-r1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if revision.Parameters["K8S1175_DOCKER_RUNTIME_VERIFIED"] != false || revision.Parameters["K8S1175_DOCKER_VERSION"] != "operator-reviewed" || revision.Parameters["operatorField"] != "preserve" {
-		t.Fatalf("environment runtime contract was not merged safely: %+v", revision.Parameters)
-	}
 }
 
 func seededDatabase(t *testing.T) (context.Context, *store.Store) {

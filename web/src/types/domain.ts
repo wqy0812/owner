@@ -11,7 +11,7 @@ export type ReleaseState = 'draft' | 'released' | 'deprecated';
 export type VerificationState = 'unverified' | 'testing' | 'passed' | 'failed';
 export type ComponentLayer = 'host_foundation' | 'runtime_state' | 'orchestration_core' | 'cluster_service' | 'observability_management' | 'platform_extension';
 export type ComponentCategory = 'preflight' | 'bootstrap' | 'security' | 'runtime' | 'state_store' | 'control_plane' | 'worker' | 'network' | 'dns' | 'ingress' | 'storage' | 'observability' | 'node_management' | 'platform' | 'autoscaling';
-export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage';
+export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage' | 'configuration' | 'artifact_set';
 export type ComponentRequiredness = 'core_required' | 'profile_required' | 'optional';
 
 export interface ComponentDependency {
@@ -24,7 +24,7 @@ export interface ComponentDependency {
 
 export interface ActionDefinition {
   id?: string;
-  type: 'install' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
+  type: 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
   playbook: string;
   tags?: string[];
   hostGroup?: string;

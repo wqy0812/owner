@@ -44,15 +44,26 @@
     - update
   template: src=startetcd.sh.j2 dest=/approot1/paas/etcd/startetcd.sh owner=etcd group=users mode="u=rwx,g=r,o=r"
 
-- name: download and unarchive {{ ETCD_MEDPATH_SERVERLESS }}
+- name: download {{ ETCD_MEDPATH_SERVERLESS }} with SHA256 verification
   tags:
     - install
   become: yes
   become_user: etcd
-  unarchive: 
-    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ ETCD_MEDPATH_SERVERLESS }}
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ ETCD_MEDPATH_SERVERLESS }}
+    dest: /approot1/paas/etcd/etcd-3.3.10.tar.gz
+    checksum: sha256:{{ ETCD_MEDPATH_SERVERLESS_SHA256 }}
+    mode: '0600'
+
+- name: unarchive verified etcd 3.3.10
+  tags:
+    - install
+  become: yes
+  become_user: etcd
+  unarchive:
+    src: /approot1/paas/etcd/etcd-3.3.10.tar.gz
     dest: /approot1/paas/etcd
-    copy: no
+    remote_src: true
     extra_opts: ['--strip-components=1', '--show-stored-names']
     
 - name: enable etcd service

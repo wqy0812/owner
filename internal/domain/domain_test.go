@@ -14,6 +14,12 @@ func TestValidateComponentClassification(t *testing.T) {
 			}
 		}
 	}
+	for _, kind := range []ComponentKind{ComponentConfiguration, ComponentArtifactSet} {
+		component := Component{Layer: LayerHostFoundation, Category: CategorySecurity, Kind: kind, Requiredness: RequiredCore}
+		if err := ValidateComponentClassification(component); err != nil {
+			t.Fatalf("valid component kind %s: %v", kind, err)
+		}
+	}
 	for _, invalid := range []Component{
 		{Layer: LayerRuntimeState, Category: CategoryNetwork, Kind: ComponentSoftware, Requiredness: RequiredProfile},
 		{Layer: "unknown", Category: CategoryRuntime, Kind: ComponentSoftware, Requiredness: RequiredProfile},
@@ -40,10 +46,13 @@ func TestValidateGraphRejectsCycleAndMissingFields(t *testing.T) {
 	for _, issue := range issues {
 		codes[issue.Code] = true
 	}
-	for _, expected := range []string{"missing_release", "missing_action", "missing_host_group", "duplicate_release_node", "cycle"} {
+	for _, expected := range []string{"missing_release", "missing_action", "missing_host_group", "cycle"} {
 		if !codes[expected] {
 			t.Fatalf("missing %s in %#v", expected, issues)
 		}
+	}
+	if codes["duplicate_release_node"] {
+		t.Fatalf("the same release may be reused by multiple scenario nodes: %#v", issues)
 	}
 }
 

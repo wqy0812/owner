@@ -49,7 +49,7 @@ spec:
       serviceAccountName: metrics-server
       containers:
       - name: metrics-server
-        image: dockerhub.icbc:5000/hzyfzc/metrics-server-amd64:v0.3.1
+        image: dockerhub.icbc:5000/hzyfzc/metrics-server-amd64@{{ METRICS_SERVER_IMAGE_DIGEST }}
         imagePullPolicy: IfNotPresent
         command:
         - /metrics-server
@@ -65,7 +65,7 @@ spec:
           name: https
           protocol: TCP
       - name: metrics-server-nanny
-        image: dockerhub.icbc:5000/hzyfzc/addon-resizer:1.8.3
+        image: dockerhub.icbc:5000/hzyfzc/addon-resizer@{{ METRICS_SERVER_ADDON_RESIZER_IMAGE_DIGEST }}
         imagePullPolicy: IfNotPresent
         resources:
           limits:

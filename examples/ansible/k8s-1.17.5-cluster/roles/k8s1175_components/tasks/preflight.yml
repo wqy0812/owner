@@ -1,0 +1,90 @@
+---
+- name: Define fail-closed artifact contracts
+  ansible.builtin.set_fact:
+    k8s1175_core_artifact_components:
+      - cluster-pki
+      - docker
+      - etcd
+      - kubernetes-distribution
+      - flannel
+      - coredns
+    k8s1175_optional_artifact_components:
+      - haproxy
+      - blackbox-exporter
+      - node-exporter
+      - metrics-server
+      - amc
+      - glusterfs-client
+      - go-pprof-toolkit
+    k8s1175_checksum_contracts:
+      cluster-pki:
+        - { path: CFSSL_MEDPATH, checksum: CFSSL_MEDPATH_SHA256 }
+      docker:
+        - { path: DOCKER_18_09_7_MEDPATH, checksum: DOCKER_18_09_7_SHA256 }
+      etcd:
+        - { path: ETCD_MEDPATH_SERVERLESS, checksum: ETCD_MEDPATH_SERVERLESS_SHA256 }
+      kubernetes-distribution:
+        - { path: K8SMASTER_1175_CERT, checksum: K8SMASTER_1175_CERT_SHA256 }
+        - { path: K8SNODE_1175_CERT, checksum: K8SNODE_1175_CERT_SHA256 }
+      flannel:
+        - { path: FLANNEL_MEDPATH_SERVERLESS, checksum: FLANNEL_MEDPATH_SERVERLESS_SHA256 }
+      haproxy:
+        - { path: HAPROXY_MEDPATH, checksum: HAPROXY_MEDPATH_SHA256 }
+      blackbox-exporter:
+        - { path: BLACKBOX_EXPORTER_MEDPATH, checksum: BLACKBOX_EXPORTER_SHA256 }
+      node-exporter:
+        - { path: NODE_EXPORTER_MEDPATH_AMD, checksum: NODE_EXPORTER_MEDPATH_AMD_SHA256 }
+      glusterfs-client:
+        - { path: GLUSTERFS_MEDPATH, checksum: GLUSTERFS_MEDPATH_SHA256 }
+      go-pprof-toolkit:
+        - { path: GO_PPROF_PATH, checksum: GO_PPROF_SHA256 }
+    k8s1175_digest_contracts:
+      coredns: [COREDNS_IMAGE_DIGEST]
+      metrics-server: [METRICS_SERVER_IMAGE_DIGEST, METRICS_SERVER_ADDON_RESIZER_IMAGE_DIGEST]
+  changed_when: false
+
+- name: Validate the locked Kubernetes and Docker versions
+  ansible.builtin.assert:
+    that:
+      - (K8S_VERSION | default('')) == 'v1.17.5'
+      - (K8S1175_DOCKER_VERSION | default('')) == '18.09.7'
+    fail_msg: Kubernetes 1.17.5 and Docker 18.09.7 must be explicitly locked.
+
+- name: Require verified core artifact inventory
+  ansible.builtin.assert:
+    that:
+      - K8S1175_ARTIFACTS_VERIFIED | default(false) | bool
+    fail_msg: Core artifacts are not verified; no remote write was attempted.
+  when: k8s1175_component_task in k8s1175_core_artifact_components
+
+- name: Require verified Docker runtime inventory
+  ansible.builtin.assert:
+    that:
+      - K8S1175_DOCKER_RUNTIME_VERIFIED | default(false) | bool
+    fail_msg: Docker runtime artifacts are not verified; no remote write was attempted.
+  when: k8s1175_component_task == 'docker'
+
+- name: Require verified optional artifact inventory
+  ansible.builtin.assert:
+    that:
+      - K8S1175_OPTIONAL_ARTIFACTS_VERIFIED | default(false) | bool
+    fail_msg: Optional artifacts are not verified; no remote write was attempted.
+  when: k8s1175_component_task in k8s1175_optional_artifact_components
+
+- name: Require a media path and SHA256 for every external artifact
+  ansible.builtin.assert:
+    that:
+      - (lookup('vars', item.path, default='') | string | length) > 0
+      - lookup('vars', item.path, default='') is not match('^(/|.*\.\./|https?://)')
+      - lookup('vars', item.checksum, default='') is match('^[A-Fa-f0-9]{64}$')
+    fail_msg: "{{ item.path }} and {{ item.checksum }} must be supplied before remote writes."
+  loop: "{{ k8s1175_checksum_contracts[k8s1175_component_task] | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Require immutable digest references for container images
+  ansible.builtin.assert:
+    that:
+      - lookup('vars', item, default='') is match('^sha256:[A-Fa-f0-9]{64}$')
+    fail_msg: "{{ item }} must contain an immutable sha256 digest before remote writes."
+  loop: "{{ k8s1175_digest_contracts[k8s1175_component_task] | default([]) }}"
