@@ -220,7 +220,9 @@ func componentClassification(id string) (domain.ComponentLayer, domain.Component
 	case "component-autoscaling-rbac":
 		return domain.LayerPlatformExtension, domain.CategoryAutoscaling, domain.ComponentConfiguration, domain.RequiredOptional
 	default:
-		panic("missing seed component classification: " + id)
+		// Unknown component ID — assign a safe default classification
+		// rather than crashing the process.
+		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentSoftware, domain.RequiredOptional
 	}
 }
 

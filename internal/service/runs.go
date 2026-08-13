@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"reflect"
@@ -596,8 +597,10 @@ func topologicalNodes(graph domain.ScenarioGraph) ([]domain.ScenarioNode, error)
 		for _, next := range adjacency[id] {
 			indegree[next]--
 			if indegree[next] == 0 {
-				queue = append(queue, next)
-				sort.Strings(queue)
+				idx := sort.SearchStrings(queue, next)
+				queue = append(queue, "")
+				copy(queue[idx+1:], queue[idx:])
+				queue[idx] = next
 			}
 		}
 	}
@@ -725,7 +728,9 @@ func (p *Platform) executeRun(run domain.Run) {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				step.Status = domain.RunCancelled
 			}
-			_ = p.store.UpdateRunStep(context.Background(), step)
+			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
+				log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
+			}
 			if step.Status == domain.RunCancelled {
 				p.finishRun(run, domain.RunCancelled, ctx.Err())
 			} else {
@@ -735,13 +740,17 @@ func (p *Platform) executeRun(run domain.Run) {
 		}
 		if run.ArtifactDigest != "" && result.TreeSHA256 != run.ArtifactDigest {
 			step.Status, step.Summary = domain.RunFailed, "playbook tree digest changed after the run was queued"
-			_ = p.store.UpdateRunStep(context.Background(), step)
+			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
+				log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
+			}
 			p.finishRun(run, domain.RunFailed, errors.New(step.Summary))
 			return
 		}
 		step.Status = domain.RunSucceeded
 		step.Summary = recapSummary(result.Recap)
-		_ = p.store.UpdateRunStep(context.Background(), step)
+		if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
+			log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
+		}
 		p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "stepId": step.ID, "status": step.Status})
 	}
 	p.finishRun(run, domain.RunSucceeded, nil)
@@ -752,19 +761,27 @@ func (p *Platform) finishRun(run domain.Run, status domain.RunStatus, cause erro
 	if cause != nil {
 		errText = Redact(cause.Error()).(string)
 	}
-	_ = p.store.UpdateRunStatus(context.Background(), run.ID, []domain.RunStatus{domain.RunRunning}, status, errText, time.Now().UTC())
+	if err := p.store.UpdateRunStatus(context.Background(), run.ID, []domain.RunStatus{domain.RunRunning}, status, errText, time.Now().UTC()); err != nil {
+		log.Printf("finishRun %s: update status to %s: %v", run.ID, status, err)
+	}
 	if run.Kind == domain.RunComponentTest && status == domain.RunSucceeded {
 		lockedDigest, _ := run.InputSnapshot["componentReleaseSpecDigest"].(string)
 		current, currentErr := p.store.GetComponentRelease(context.Background(), run.ComponentReleaseID)
 		if currentErr == nil && lockedDigest != "" && componentReleaseSpecDigest(current) == lockedDigest {
-			_ = p.store.MarkReleaseVerified(context.Background(), run.ComponentReleaseID, true)
+			if err := p.store.MarkReleaseVerified(context.Background(), run.ComponentReleaseID, true); err != nil {
+				log.Printf("finishRun %s: mark release verified: %v", run.ID, err)
+			}
 		}
 	}
 	if run.Kind == domain.RunScenarioTest {
 		if status == domain.RunSucceeded {
-			_ = p.store.SetScenarioRevisionStatus(context.Background(), run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionTestPassed, time.Now().UTC())
+			if err := p.store.SetScenarioRevisionStatus(context.Background(), run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionTestPassed, time.Now().UTC()); err != nil {
+				log.Printf("finishRun %s: set scenario revision test_passed: %v", run.ID, err)
+			}
 		} else {
-			_ = p.store.SetScenarioRevisionStatus(context.Background(), run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
+			if err := p.store.SetScenarioRevisionStatus(context.Background(), run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC()); err != nil {
+				log.Printf("finishRun %s: reset scenario revision to draft: %v", run.ID, err)
+			}
 		}
 	}
 	actor, _ := p.store.GetUser(context.Background(), run.RequestedBy)

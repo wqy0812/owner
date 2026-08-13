@@ -1,10 +1,9 @@
 package service
 
 import (
-	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -261,12 +260,7 @@ func appendUnique(values []string, value string) []string {
 }
 
 func contains(values []string, value string) bool {
-	for _, candidate := range values {
-		if candidate == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, value)
 }
 
 func namedPath(ids []string, components map[string]domain.Component) domain.ImpactPath {
@@ -281,12 +275,12 @@ func namedPath(ids []string, components map[string]domain.Component) domain.Impa
 }
 
 func appendImpactPath(paths []domain.ImpactPath, path domain.ImpactPath) []domain.ImpactPath {
+	key := strings.Join(path.ComponentIDs, "\x00")
 	for _, existing := range paths {
-		if reflect.DeepEqual(existing.ComponentIDs, path.ComponentIDs) {
+		if strings.Join(existing.ComponentIDs, "\x00") == key {
 			return paths
 		}
 	}
 	return append(paths, path)
 }
 
-func IsDomainError(err, target error) bool { return errors.Is(err, target) }

@@ -80,7 +80,7 @@ func (p *Platform) GetScenario(ctx context.Context, user domain.User, id string)
 	if user.Role == domain.RoleScenarioOwner && scenario.OwnerID == user.ID {
 		return scenario, nil
 	}
-	filtered := scenario.Revisions[:0]
+	filtered := make([]domain.ScenarioRevision, 0, len(scenario.Revisions))
 	for _, revision := range scenario.Revisions {
 		if revision.Status == domain.RevisionReleased {
 			filtered = append(filtered, revision)
@@ -101,8 +101,8 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 	if scenario.CurrentRevisionID != revisionID {
 		return revision, fmt.Errorf("%w: only the current scenario revision can be edited", domain.ErrConflict)
 	}
-	if len(domain.ValidateGraph(graph)) > 0 {
-		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: domain.ValidateGraph(graph)}
+	if issues := domain.ValidateGraph(graph); len(issues) > 0 {
+		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: issues}
 	}
 	if err := rejectSensitiveMap(policy, "scenario execution policy"); err != nil {
 		return revision, err

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -22,7 +21,7 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
 		return component, nil
 	}
-	filtered := component.Releases[:0]
+	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
 		if release.Status == domain.ReleaseReleased {
 			filtered = append(filtered, release)
@@ -412,6 +411,3 @@ func valueOr(value, fallback string) string {
 	return value
 }
 
-func sortImpactReport(report *domain.ImpactReport) {
-	sort.Slice(report.Recipients, func(i, j int) bool { return report.Recipients[i].UserID < report.Recipients[j].UserID })
-}

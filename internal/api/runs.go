@@ -15,11 +15,12 @@ func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	output := make([]map[string]any, 0, len(runs))
-	for _, run := range runs {
-		if detailed, getErr := h.platform.Store().GetRun(r.Context(), run.ID); getErr == nil {
-			run = detailed
+	for i := range runs {
+		runs[i].Steps, _ = h.platform.Store().ListRunSteps(r.Context(), runs[i].ID)
+		if a, aErr := h.platform.Store().GetApprovalByRun(r.Context(), runs[i].ID); aErr == nil {
+			runs[i].Approval = &a
 		}
-		output = append(output, h.runDTO(r, run))
+		output = append(output, h.runDTO(r, runs[i]))
 	}
 	writeItems(w, output)
 }
@@ -209,6 +210,3 @@ func lockedStepMetadata(snapshot map[string]any) map[string]map[string]any {
 	return output
 }
 
-func safeError(value any) string {
-	return strings.TrimSpace(fmt.Sprint(value))
-}
