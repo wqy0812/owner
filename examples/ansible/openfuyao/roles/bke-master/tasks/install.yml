@@ -1,0 +1,11 @@
+---
+
+- include_tasks: "manager/install.yml"
+  when:
+    - cluster_role == 'manager'
+
+- include_tasks: "work/install.yml"
+  when:
+    - cluster_role == 'work'
+
+

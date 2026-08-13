@@ -1,0 +1,6 @@
+---
+
+- name: set global facts
+  set_fact:
+    admin_cert_path: '{{ certOutputPath }}/{{ cluster_id }}/'
+    cluster_id_lower: '{{ cluster_id | lower }}'

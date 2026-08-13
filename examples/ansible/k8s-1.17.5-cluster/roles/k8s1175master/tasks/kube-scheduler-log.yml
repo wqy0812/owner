@@ -1,0 +1,21 @@
+
+---
+
+- name: <k8smaster>upload  kube-scheduler.config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-scheduler.config.j2 dest=/approot1/paas/kube/conf/kube-scheduler.config owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: create /var/log/scheduler.log
+  shell: "touch /var/log/scheduler.log && chmod +x /var/log/scheduler.log"
+
+- name: <k8smaster>upload  scheduler.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=scheduler.conf.j2 dest=/etc/rsyslog.d/scheduler.conf owner=sysop group=root mode="u=rw,g=r,o=r"
+
+

@@ -1,0 +1,292 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"codex/platform-demo/internal/domain"
+)
+
+func (s *Store) CreateScenario(ctx context.Context, sc domain.Scenario, rev domain.ScenarioRevision) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO scenarios(id,slug,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, sc.ID, sc.Slug, sc.Name, sc.Description, sc.OwnerID, rev.ID, timeText(sc.CreatedAt), timeText(sc.UpdatedAt))
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if err = insertScenarioRevision(ctx, tx, rev); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRevision) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.ExecutionPolicy), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	return mapSQLError(err)
+}
+
+func (s *Store) CreateScenarioRevision(ctx context.Context, r domain.ScenarioRevision) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = insertScenarioRevision(ctx, tx, r); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE scenarios SET current_revision_id=?,updated_at=? WHERE id=?`, r.ID, timeText(r.CreatedAt), r.ScenarioID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *Store) UpdateScenario(ctx context.Context, sc domain.Scenario) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE scenarios SET slug=?,name=?,description=?,updated_at=? WHERE id=?`, sc.Slug, sc.Name, sc.Description, timeText(sc.UpdatedAt), sc.ID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) GetScenario(ctx context.Context, id string, includeRevisions bool) (domain.Scenario, error) {
+	var sc domain.Scenario
+	var current sql.NullString
+	var cr, up string
+	err := s.db.QueryRowContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios WHERE id=?`, id).Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up)
+	if err != nil {
+		return sc, mapSQLError(err)
+	}
+	sc.CurrentRevisionID = current.String
+	sc.CreatedAt = parseTime(cr)
+	sc.UpdatedAt = parseTime(up)
+	if includeRevisions {
+		sc.Revisions, err = s.ListScenarioRevisions(ctx, id, false)
+	}
+	return sc, err
+}
+
+func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain.Scenario, error) {
+	q := `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios`
+	args := []any{}
+	if viewer.Role == domain.RoleScenarioOwner {
+		q += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM scenario_revisions r WHERE r.scenario_id=scenarios.id AND r.status='released')`
+		args = append(args, viewer.ID)
+	} else {
+		q += ` WHERE EXISTS (SELECT 1 FROM scenario_revisions r WHERE r.scenario_id=scenarios.id AND r.status='released')`
+	}
+	q += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Scenario
+	for rows.Next() {
+		var sc domain.Scenario
+		var current sql.NullString
+		var cr, up string
+		if err := rows.Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up); err != nil {
+			return nil, err
+		}
+		sc.CurrentRevisionID = current.String
+		sc.CreatedAt = parseTime(cr)
+		sc.UpdatedAt = parseTime(up)
+		out = append(out, sc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		releasedOnly := viewer.Role != domain.RoleScenarioOwner || out[i].OwnerID != viewer.ID
+		out[i].Revisions, err = s.ListScenarioRevisions(ctx, out[i].ID, releasedOnly)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// ListScenariosForImpact is an internal routing query. Unlike user-facing
+// scenario listing it includes mutable revisions, because owners of draft or
+// testing scenarios still need notification when a locked upstream component
+// publishes a new version. Callers must not expose these revisions through
+// ordinary read APIs.
+func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Scenario
+	for rows.Next() {
+		var scenario domain.Scenario
+		var current sql.NullString
+		var created, updated string
+		if err := rows.Scan(&scenario.ID, &scenario.Slug, &scenario.Name, &scenario.Description, &scenario.OwnerID, &current, &created, &updated); err != nil {
+			return nil, err
+		}
+		scenario.CurrentRevisionID = current.String
+		scenario.CreatedAt = parseTime(created)
+		scenario.UpdatedAt = parseTime(updated)
+		out = append(out, scenario)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Revisions, err = s.ListScenarioRevisions(ctx, out[i].ID, false)
+		if err != nil {
+			return nil, err
+		}
+		active := out[i].Revisions[:0]
+		for _, revision := range out[i].Revisions {
+			if revision.Status != domain.RevisionDeprecated {
+				active = append(active, revision)
+			}
+		}
+		out[i].Revisions = active
+	}
+	return out, nil
+}
+
+func scanScenarioRevision(row scanner) (domain.ScenarioRevision, error) {
+	var r domain.ScenarioRevision
+	var graph, policy, created string
+	var tested, released, deprecated sql.NullString
+	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &graph, &policy, &created, &tested, &released, &deprecated)
+	r.Graph = decodeJSON(graph, domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}})
+	r.ExecutionPolicy = decodeJSON(policy, map[string]any{})
+	r.CreatedAt = parseTime(created)
+	r.TestPassedAt = parseNullTime(tested)
+	r.ReleasedAt = parseNullTime(released)
+	r.DeprecatedAt = parseNullTime(deprecated)
+	return r, err
+}
+
+func (s *Store) GetScenarioRevision(ctx context.Context, id string) (domain.ScenarioRevision, error) {
+	r, err := scanScenarioRevision(s.db.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at FROM scenario_revisions WHERE id=?`, id))
+	return r, mapSQLError(err)
+}
+
+func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, releasedOnly bool) ([]domain.ScenarioRevision, error) {
+	q := `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at FROM scenario_revisions WHERE scenario_id=?`
+	if releasedOnly {
+		q += ` AND status='released'`
+	}
+	q += ` ORDER BY revision DESC`
+	rows, err := s.db.QueryContext(ctx, q, scenarioID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ScenarioRevision
+	for rows.Next() {
+		r, err := scanScenarioRevision(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.ScenarioGraph, policy map[string]any) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,execution_policy_json=?,status='draft',test_passed_at=NULL WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), jsonText(policy), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("%w: released revisions are immutable", domain.ErrConflict)
+	}
+	return nil
+}
+
+func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from []domain.RevisionStatus, to domain.RevisionStatus, at time.Time) error {
+	if len(from) == 0 {
+		return domain.ErrInvalid
+	}
+	placeholders := ""
+	testPassed, released := any(nil), any(nil)
+	if to == domain.RevisionTestPassed {
+		testPassed = timeText(at)
+	}
+	if to == domain.RevisionReleased {
+		released = timeText(at)
+	}
+	args := []any{to, testPassed, released, id}
+	for i, v := range from {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, v)
+	}
+	q := fmt.Sprintf(`UPDATE scenario_revisions SET status=?,test_passed_at=COALESCE(?,test_passed_at),released_at=COALESCE(?,released_at) WHERE id=? AND status IN (%s)`, placeholders)
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("%w: invalid scenario revision transition", domain.ErrConflict)
+	}
+	return nil
+}
+
+func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET status='deprecated',deprecated_at=? WHERE id=? AND status='released'`, timeText(at), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("%w: only released scenario revisions can be deprecated", domain.ErrConflict)
+	}
+	return nil
+}
+
+type ScenarioReference struct{ ScenarioID, ScenarioName, OwnerID, RevisionID, ComponentReleaseID string }
+
+func (s *Store) ListReleasedScenarioReferences(ctx context.Context) ([]ScenarioReference, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT s.id,s.name,s.owner_id,r.id,r.graph_json FROM scenarios s JOIN scenario_revisions r ON r.scenario_id=s.id WHERE r.status='released'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ScenarioReference
+	for rows.Next() {
+		var base ScenarioReference
+		var graphRaw string
+		if err := rows.Scan(&base.ScenarioID, &base.ScenarioName, &base.OwnerID, &base.RevisionID, &graphRaw); err != nil {
+			return nil, err
+		}
+		g := decodeJSON(graphRaw, domain.ScenarioGraph{})
+		for _, n := range g.Nodes {
+			x := base
+			x.ComponentReleaseID = n.ReleaseID
+			out = append(out, x)
+		}
+	}
+	return out, rows.Err()
+}

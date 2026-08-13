@@ -1,0 +1,251 @@
+---
+# These tasks are responsible for copying the latest dev/production code from
+# the version control system.
+
+- name: absent kubelet.kubeconfig
+  ignore_errors: yes
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items:
+    - { path: '/approot1/paas/kube/cert/kubelet.kubeconfig'}
+    - { path: '/approot1/paas/kube/cert/kubelet.crt'}
+    - { path: '/approot1/paas/kube/cert/kubelet.key'}
+
+- name: mkdir /approot1/paas/kube/bin
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/bin state=directory owner=sysop mode="u=rwx,g=rx,o=rx"
+  
+- name: mkdir /approot1/paas/kube/conf
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/conf state=directory owner=sysop mode="u=rwx,g=rx,o=rx"
+  
+- name: mkdir /approot1/paas/kube/cert
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/cert state=directory owner=sysop mode="u=rwx,g=,o="
+  
+- name: mkdir /approot1/paas/kube/kubelet
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/kubelet state=directory owner=sysop mode="u=rwx,g=rx,o=rx"
+
+#- name: <k8snode>download and unarchive {{ K8SMASTER_MEDPATH_SERVERLESS }}
+#  tags:
+#    - install
+#    - update
+#  unarchive: 
+#    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ K8SMASTER_MEDPATH_SERVERLESS }}
+#    dest: /approot1/paas/kube/bin
+#    copy: no
+#    extra_opts: ['--strip-components=3']
+        
+- name: fetch kubelet-kubeconfig from master
+  tags:
+    - install
+    - check
+    - update
+  fetch:
+    src: /approot1/paas/kube/cert/kubelet-bootstrap-{{ inventory_hostname }}.kubeconfig
+    dest: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/
+    flat: yes
+  delegate_to: "{{ groups['k8smaster'][0] }}"
+
+- name: restrict fetched kubelet bootstrap kubeconfig on controller
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubelet-bootstrap-{{ inventory_hostname }}.kubeconfig
+    state: file
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rw,g=,o="
+  delegate_to: localhost
+  no_log: true
+
+- name: copy kubelet-kubeconfig to node
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubelet-bootstrap-{{ inventory_hostname }}.kubeconfig
+    dest: /approot1/paas/kube/cert/kubelet-bootstrap.kubeconfig
+    owner: sysop
+    group: users
+    mode: "u=rw,g=,o="
+  no_log: true
+
+  
+- name: upload certificate key for master
+  tags:
+    - install
+    - check
+    - update
+  copy: src=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem dest=/approot1/paas/kube/cert/ca.pem owner=sysop group=users mode="u=rw,g=r,o=r"
+  
+- name: upload kubelet.config.json
+  tags:
+    - install
+    - check
+    - update
+  template: src=kubelet.config.json.j2 dest=/approot1/paas/kube/conf/kubelet.config.json owner=sysop group=users mode="u=rw,g=r,o=r"
+
+- import_tasks: kubelet-log.yml
+
+- import_tasks: kube-proxy-log.yml
+
+- name: <k8snode>restart rsyslog
+  service: name=rsyslog state=restarted
+
+- name: <k8snode>upload kubelet service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kubelet.service dest=/usr/lib/systemd/system/kubelet.service owner=root group=users mode="u=rw,g=r,o=r" backup=yes
+
+- name: <k8snode>upload kubelet parameter file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kubelet.j2 dest=/approot1/paas/kube/conf/kubelet owner=sysop group=users mode="u=rw,g=r,o=r"
+  notify: systemctl daemon-reload
+  
+- meta: flush_handlers
+
+- name: <k8snode>config etc/resolv.conf
+  tags:
+    - install
+    - check
+    - update
+  lineinfile: dest=/etc/resolv.conf insertafter='^nameserver ' line="search icbc"
+    
+- name: <k8snode>enable kubelet service
+  tags:
+    - install
+    - check
+    - update
+  service: name=kubelet enabled=yes
+
+- name: copy kubeproxy-kubeconfig from master
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy.kubeconfig
+    dest: /approot1/paas/kube/cert/kube-proxy.kubeconfig
+    owner: sysop
+    group: users
+    mode: "u=rw,g=,o="
+  no_log: true
+  
+- name: <k8snode>upload kube-proxy service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kube-proxy.service dest=/usr/lib/systemd/system/kube-proxy.service owner=sysop group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: systemctl daemon-reload
+
+- meta: flush_handlers
+  
+- name: <k8snode>upload kube-proxy.config.yaml
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-proxy.config.yaml.j2 dest=/approot1/paas/kube/conf/kube-proxy.config.yaml owner=sysop group=users mode="u=rw,g=r,o=r"
+  
+- name: <k8snode>upload kube-proxy parameter file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=proxy dest=/approot1/paas/kube/conf/proxy owner=sysop group=users mode="u=rw,g=r,o=r"
+    
+- name: <k8snode>enable kube-proxy service
+  tags:
+    - install
+    - check
+    - update
+  service: name=kube-proxy enabled=yes
+  
+# - name: <k8snode>upload journald.conf
+  # tags:
+    # - install
+    # - check
+    # - update
+  # copy: src=journald.conf dest=/etc/systemd/journald.conf owner=root group=root mode="u=rw,g=r,o=r" backup=yes
+  
+# - name: <k8snode>make persistent log dir of journal
+  # tags:
+    # - install
+    # - check
+    # - update
+  # file: path=/var/log/journal state=directory mode="u=rwx,g=rx,o=rx"
+  
+# - name: <k8snode>remove /var/log/journal
+  # tags:
+    # - install
+    # - update
+  # shell: /bin/rm -rf /var/log/journal/*
+
+# - name: <k8snode>upload logrotate conf of syslog
+  # tags:
+    # - install
+    # - check
+    # - update
+  # copy: src=syslog dest=/etc/logrotate.d/syslog owner=root group=root mode="u=rw,g=r,o=r" backup=yes
+  
+# - name: <k8snode>make persistent log dir of journal
+  # tags:
+    # - install
+    # - check
+    # - update
+  # file: path=/var/log/journal state=directory mode="u=rwx,g=rx,o=rx"
+  
+# - name: <k8snode>config SystemMaxUse in /etc/systemd/journald.conf
+  # tags:
+    # - install
+    # - check
+    # - update
+  # lineinfile:
+    # path: /etc/systemd/journald.conf
+    # insertafter: '^#SystemMaxUse='
+    # line: 'SystemMaxUse=5G'
+  # notify: 
+    # - <k8snode>restart systemd-journald
+
+# - name: <k8snode>config SystemKeepFree in /etc/systemd/journald.conf
+  # tags:
+    # - install
+    # - check
+    # - update
+  # lineinfile:
+    # path: /etc/systemd/journald.conf
+    # insertafter: '^#SystemKeepFree='
+    # line: 'SystemKeepFree=1G'
+  # notify: 
+    # - <k8snode>restart systemd-journald
+    
+# - meta: flush_handlers
+
+# - name: <k8snode>clean /var/log/kubernetes
+  # tags:
+    # - install
+    # - update
+  # shell: /bin/rm -rf /var/log/kubernetes/*

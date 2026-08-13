@@ -1,0 +1,21 @@
+#!/bin/sh
+su - kube
+cd /approot1/paas/kube/cert
+/approot1/paas/kube/bin/kubectl config set-cluster kubernetes \
+  --certificate-authority=/approot1/paas/kube/cert/ca.pem \
+  --embed-certs=true \
+  --server=https://{{ groups['k8s_F5'][0] }}:6443 \
+  --kubeconfig=kube-proxy.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config set-credentials system:kube-proxy \
+  --client-certificate=/approot1/paas/kube/cert/kube-proxy.pem \
+  --client-key=/approot1/paas/kube/cert/kube-proxy-key.pem \
+  --embed-certs=true \
+  --kubeconfig=kube-proxy.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config set-context system:kube-proxy \
+  --cluster=kubernetes \
+  --user=system:kube-proxy \
+  --kubeconfig=kube-proxy.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config use-context system:kube-proxy --kubeconfig=kube-proxy.kubeconfig

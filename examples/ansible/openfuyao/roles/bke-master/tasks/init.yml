@@ -1,0 +1,35 @@
+---
+
+- import_tasks: roles/SYSTEM/tasks/gather_facts.yml
+
+- import_tasks: roles/SYSTEM/tasks/authorized_key.yml
+
+- import_tasks: roles/SYSTEM/tasks/install_tools.yml
+  vars:
+    tools:
+      - "{{ JQ_MEDPATH }}"
+
+- import_tasks: roles/SYSTEM/tasks/kill_service.yml
+  vars:
+    service_name: "ds_agent.service"
+  when:
+    - SWITCH_DS_AGENT is defined
+    - ! SWITCH_DS_AGENT
+
+- import_tasks: roles/bke-common/tasks/bke_install.yml
+
+- name: set global facts
+  set_fact:
+    cluster_id_lower: '{{ cluster_id | lower }}'
+
+- name: Check if CLUSTER_DNS_SVC_IP is undefined or empty
+  when: CLUSTER_DNS_SVC_IP is undefined or CLUSTER_DNS_SVC_IP is none or CLUSTER_DNS_SVC_IP | length == 0
+  block:
+    - import_tasks: roles/SYSTEM/tasks/get_ip_from_cidr.yml
+      vars:
+        cidr: "{{ SERVICE_IP_RANGE_IPV4 }}"
+        diff: 10
+
+    - name: set global facts
+      set_fact:
+        CLUSTER_DNS_SVC_IP: "{{ ip_from_cidr }}"

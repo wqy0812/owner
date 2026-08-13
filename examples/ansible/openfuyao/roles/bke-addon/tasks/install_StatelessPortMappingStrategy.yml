@@ -1,0 +1,11 @@
+---
+# 无状态负载端口映射集群策略
+- name: install monit-controller-manager kube-system
+  shell: helm install monitcontrollermanager {{ helm_repo_name }}/monitcontrollermanager --namespace kube-system --set-json='configMap.serverProperties={{ addon_params.monitcontrollermanager | to_json }}' --set image.domain={{ENV_DOCKER_HARBOR_DOMAIN}} --insecure-skip-tls-verify
+  ignore_errors: true
+  run_once: true
+
+- name: install housekeeping default
+  shell: helm install housekeeping {{ helm_repo_name }}/housekeeping --namespace default --set-json='clusterConfig={{ addon_params.housekeeping | to_json }}' --set namespaceOverride=default --insecure-skip-tls-verify
+  ignore_errors: true
+  run_once: true

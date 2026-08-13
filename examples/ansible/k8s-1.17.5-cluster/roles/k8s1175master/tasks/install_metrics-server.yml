@@ -1,0 +1,14 @@
+---
+- name: upload metrics-server config
+  tags:
+    - install
+    - check
+    - update
+  copy: src=metrics-server dest=/approot1/paas/kube/conf/ owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: create metrics-server
+  tags:
+    - install
+    - update
+    - check
+  shell: "/approot1/paas/kube/bin/kubectl apply -f /approot1/paas/kube/conf/metrics-server/. --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig"

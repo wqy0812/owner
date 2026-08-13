@@ -1,0 +1,51 @@
+apiVersion: bke.bocloud.com/v1beta1
+kind: ContainerdConfig
+metadata:
+  generation: 1
+  name: cct-{{ cluster_id_lower }}
+  namespace: default
+spec:
+  configType: combined
+  description: Built-in default containerd configuration
+  main:
+    configPath: /etc/containerd/certs.d
+    metricsAddress: 127.0.0.1:1338
+    root: /var/lib/containerd
+    sandboxImage: {{ ENV_DOCKER_HARBOR_DOMAIN }}/google_containers/pause:{{ pause_tag }}
+    state: /run/containerd
+  registry:
+    configPath: /etc/containerd/certs.d
+    configs:
+      {{ ENV_DOCKER_HARBOR_DOMAIN }}:
+        capabilities:
+        - pull
+        - resolve
+        - push
+        host: {{ ENV_DOCKER_HARBOR_DOMAIN }}:{{ ENV_DOCKER_HARBOR_PORT }}
+        skipVerify: true
+      {{ ENV_DOCKER_HARBOR_DOMAIN }}:{{ ENV_DOCKER_HARBOR_PORT }}:
+        capabilities:
+        - pull
+        - resolve
+        - push
+        host: {{ ENV_DOCKER_HARBOR_DOMAIN }}:{{ ENV_DOCKER_HARBOR_PORT }}
+        skipVerify: true  
+  script:
+    content: |
+      #!/bin/bash
+      mkdir -p /tmp/log
+      echo "Executing containerd setup script" > /tmp/log/test_containerd.log
+    interpreter: /bin/bash
+  service:
+    execStart: /usr/bin/containerd --config /etc/containerd/config.toml
+    killMode: process
+    logging:
+      standardError: journal
+      standardOutput: journal
+      syslogIdentifier: containerd
+    restart: always
+    restartSec: 5s
+    slice: system.slice
+    startLimitBurst: 5
+    startLimitInterval: 30s
+    timeoutStopSec: 90s

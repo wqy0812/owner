@@ -1,0 +1,20 @@
+---
+- name: Verify demo node agent
+  hosts: demo_nodes
+  gather_facts: false
+  vars:
+    agent_root: /tmp/newplatform-demo-agent
+    expected_version: 1.1.0
+  tasks:
+    - name: Read installed version
+      ansible.builtin.slurp:
+        src: "{{ agent_root }}/VERSION"
+      register: installed_version
+
+    - name: Verify installed version
+      ansible.builtin.assert:
+        that:
+          - (installed_version.content | b64decode | trim) == expected_version
+        fail_msg: >-
+          Expected {{ expected_version }}, found
+          {{ installed_version.content | b64decode | trim }}

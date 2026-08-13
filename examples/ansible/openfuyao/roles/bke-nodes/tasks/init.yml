@@ -1,0 +1,28 @@
+---
+
+
+- import_tasks: roles/SYSTEM/tasks/gather_facts.yml
+
+- import_tasks: roles/SYSTEM/tasks/authorized_key.yml
+
+- import_tasks: roles/SYSTEM/tasks/modify_kernel.yml
+
+- import_tasks: roles/SYSTEM/tasks/install_tools.yml
+  vars:
+    tools:
+      - "{{ JQ_MEDPATH }}"
+
+- import_tasks: roles/SYSTEM/tasks/kill_service.yml
+  vars:
+    service_name: "ds_agent.service"
+  when:
+    - SWITCH_DS_AGENT is defined
+    - ! SWITCH_DS_AGENT
+
+- import_tasks: roles/bke-common/tasks/bke_install.yml
+
+- name: set global facts
+  set_fact:
+    cluster_id_lower: '{{ cluster_id | lower }}'
+    nodes_string: "{{ groups['work_cluster_k8snode'] | join(' ') }}"
+    nodes_length: "{{ groups['work_cluster_k8snode'] | length }}"

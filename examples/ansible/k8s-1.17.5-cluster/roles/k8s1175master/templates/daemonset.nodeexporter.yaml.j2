@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nodeexporter
+spec:
+  selector:
+    matchLabels:
+      app: nodeexporter
+  template:
+    metadata:
+      name: nodeexporter
+      labels:
+        app: nodeexporter
+    spec:
+      dnsPolicy: Default
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - image: {{ NETWORK_CLASSIFIED_HARBOR_DOMAIN }}/f-ucmp-subdocp/node-exporter:v0.15.2
+          name: nodeexporter
+          ports:
+          - containerPort: 9100
+            hostPort: 9100
+            name: scrape
+          volumeMounts:
+          - name: proc
+            mountPath: /root-disk/proc
+            readOnly: true
+          - name: sys
+            mountPath: /root-disk/sys
+            readOnly: true
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      hostPID: true

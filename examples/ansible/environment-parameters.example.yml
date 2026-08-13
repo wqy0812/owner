@@ -1,0 +1,82 @@
+---
+# Safe schema-like example derived from the original deployment's bke_all keys.
+# This file contains no source-environment values or credentials.
+
+facts:
+  operating_system: kylin-v10
+  architecture: amd64
+  ip_family: ipv4
+
+inventory:
+  ansible_user: demo-operator
+  groups:
+    bootstrap_host: []
+    management_cluster_k8smaster: []
+
+artifact_sources:
+  registry:
+    domain: registry.example.invalid
+    ip: 192.0.2.10
+    port: 443
+    project: openfuyao
+    username_ref:
+      envVarRef: DEMO_REGISTRY_USERNAME
+    password_ref:
+      envVarRef: DEMO_REGISTRY_PASSWORD
+  chart_repository:
+    port: 443
+    username_ref:
+      envVarRef: DEMO_CHART_USERNAME
+    password_ref:
+      envVarRef: DEMO_CHART_PASSWORD
+  file_station:
+    domain: files.example.invalid
+    ip: 192.0.2.20
+    port: 443
+    prefix: /file-station
+    url: https://files.example.invalid/file-station
+
+ssh:
+  public_key: ""
+  known_hosts: ""
+  private_key_ref:
+    sshKeyPath: /path/to/demo-only/id_ed25519
+
+operation:
+  strategy: StatelessFlatNetworkStrategy
+  task_id: demo-task
+  timeout_seconds: 3600
+  callback_url: ""
+  callback_token_ref:
+    envVarRef: DEMO_CALLBACK_TOKEN
+  callback_target: ""
+  cluster_id: demo-management-cluster
+  cluster_role: manager
+  management_cluster_id: demo-management-cluster
+
+network:
+  service_ipv4_cidr: 10.96.0.0/12
+  pod_ipv4_cidr: 192.168.0.0/16
+  pod_ipv6_cidr: ""
+  cluster_dns_service_ip: 10.96.0.10
+  kubernetes_service_ip: 10.96.0.1
+  host_port_min: 30000
+  host_port_max: 32767
+  local_port_range: "1024 65535"
+
+versions:
+  openfuyao: v25.12
+  kubernetes: v1.34.3-of.1
+  etcd: v3.6.7-of.1
+  containerd: v2.1.1
+  calico: v3.27.3-icbc
+  coredns: v1.12.2-of.1
+  kube_proxy: v1.34.3-of.1.icbc.harbor
+  openstack_vlan: v0.0.2
+  redis_operator: v1.0.0
+  harbor_secret: v1.0.0
+
+certificates:
+  output_path: /tmp/newplatform-demo-certs
+  output_file: cluster-certs.tar.gz
+  expiry: 8760h

@@ -1,0 +1,27 @@
+---
+- name: Validate the Kubernetes 1.17.5 demo deployment contract
+  assert:
+    that:
+      - (groups.get('k8s_cert_controller', []) | length) == 1
+      - (groups.get('k8setcd', []) | length) == 3
+      - (groups.get('k8smaster', []) | length) == 3
+      - (groups.get('k8snode', []) | length) >= 1
+      - (groups.get('k8s_F5', []) | length) >= 1
+      - (K8S_VERSION | default('')) == 'v1.17.5'
+      - K8S1175_ARTIFACTS_VERIFIED | default(false) | bool
+      - K8S1175_DOCKER_RUNTIME_VERIFIED | default(false) | bool
+      - (K8S1175_DOCKER_VERSION | default('') | string | length) > 0
+      - "'1.17.5' in (K8SMASTER_1175_CERT | default('') | string)"
+      - "'1.17.5' in (K8SNODE_1175_CERT | default('') | string)"
+      - (K8S_ENCRYPTION_KEY | default('') | length) == 44
+      - (K8S_ENCRYPTION_KEY | default('')) is match('^[A-Za-z0-9+/]{43}=$')
+    fail_msg: >-
+      Kubernetes 1.17.5 preflight failed. Check the required inventory groups,
+      version and verified-media/runtime flags, Docker version, 1.17.5 artifact
+      paths, and the runtime encryption key described in SOURCE.md.
+    success_msg: Kubernetes 1.17.5 preflight passed.
+  no_log: true
+  run_once: true
+  delegate_to: "{{ groups['k8s_cert_controller'][0] }}"
+  tags:
+    - always

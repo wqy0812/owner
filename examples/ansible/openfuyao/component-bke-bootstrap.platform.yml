@@ -1,0 +1,8 @@
+---
+- name: OpenFuyao bootstrap component
+  hosts: bootstrap_host
+  remote_user: sysop
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: bke-bootstrap

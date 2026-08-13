@@ -1,0 +1,139 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { App } from '../App';
+import { AppProvider } from '../context/AppContext';
+import { parseRunInput, uniqueRunInputs } from '../components/RunInputFields';
+
+const alice = { id: 'component-alice', name: 'Alice Component', role: 'component_owner' };
+const dave = { id: 'environment-dave', name: 'Dave Environment', role: 'environment_owner' };
+const carol = { id: 'scenario-carol', name: 'Carol Scenario', role: 'scenario_owner' };
+
+const components = [{
+  id: 'component-containerd',
+  name: 'containerd',
+  slug: 'containerd',
+  ownerId: alice.id,
+  description: 'CRI runtime',
+  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] },
+  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
+}];
+
+function json(data: unknown, status = 200) {
+  return Promise.resolve(new Response(JSON.stringify(status >= 400 ? data : { data }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+}
+
+function installFetch(options: { componentCreateForbidden?: boolean; initialUser?: typeof alice | typeof dave | typeof carol; withScenario?: boolean } = {}) {
+  let current = options.initialUser ?? alice;
+  const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/session/me')) return json(current);
+    if (url.endsWith('/session/switch')) {
+      const id = JSON.parse(String(init?.body)).userId;
+      current = id === dave.id ? dave : id === carol.id ? carol : alice;
+      return json(current);
+    }
+    if (url.endsWith('/components') && init?.method === 'POST') {
+      if (options.componentCreateForbidden) return json({ error: { code: 'FORBIDDEN', message: '只有资源 Owner 可以修改组件' } }, 403);
+      return json(components[0]);
+    }
+    if (url.endsWith('/components')) return json(components);
+    if (url.endsWith('/scenarios')) return json(options.withScenario ? [{
+      id: 'scenario-openfuyao',
+      name: 'OpenFuyao Management Cluster Build',
+      ownerId: carol.id,
+      currentRevisionId: 'scenario-openfuyao-r1',
+      revisions: [{
+        id: 'scenario-openfuyao-r1',
+        scenarioId: 'scenario-openfuyao',
+        revision: 1,
+        status: 'draft',
+        graph: {
+          nodes: [{ id: 'bke-cert', name: 'bke-cert', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'], position: { x: 80, y: 80 } }],
+          edges: [],
+        },
+      }],
+    }] : []);
+    if (url.endsWith('/environments')) return json([{ id: 'environment-local', name: 'Localhost Safe Lab', ownerId: dave.id, currentRevision: { id: 'environment-local-r1', revision: 1, hosts: [] } }]);
+    if (url.endsWith('/runs')) return json([]);
+    if (url.endsWith('/notifications')) return json([]);
+    return json({});
+  });
+  vi.stubGlobal('fetch', mock);
+  return mock;
+}
+
+function renderApp(path = '/') {
+  return render(<MemoryRouter initialEntries={[path]}><AppProvider><App /></AppProvider></MemoryRouter>);
+}
+
+describe('platform shell and RBAC UI', () => {
+  beforeEach(() => installFetch());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows the dashboard summary and all primary navigation entries', async () => {
+    renderApp();
+    expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
+    for (const label of ['概览', '组件', '场景', '环境', '运行', '通知']) {
+      expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByText(/无密码身份模式/)).toBeInTheDocument();
+  });
+
+  it('changes visible owner actions after a server-backed identity switch', async () => {
+    renderApp('/components');
+    expect(await screen.findByRole('button', { name: '新建组件' })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
+    await waitFor(() => expect(screen.queryByRole('button', { name: '新建组件' })).not.toBeInTheDocument());
+    expect(screen.getByText('环境 Owner')).toBeInTheDocument();
+  });
+
+  it('surfaces a backend 403 instead of silently accepting a forbidden write', async () => {
+    installFetch({ componentCreateForbidden: true });
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建组件' }));
+    await userEvent.type(screen.getByPlaceholderText('例如 containerd'), 'demo');
+    await userEvent.type(screen.getByPlaceholderText('containerd'), 'demo');
+    await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
+    expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
+  });
+
+  it('adapts the backend graph DTO into an editable React Flow node', async () => {
+    installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    const node = await screen.findByText('bke-cert');
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeInTheDocument();
+    fireEvent.click(node);
+    expect(screen.getByDisplayValue('bootstrap_host')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'rollback' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'uninstall' })).not.toBeInTheDocument();
+  });
+
+  it('submits only declared scenario run inputs with a test run', async () => {
+    const fetchMock = installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    await userEvent.click(await screen.findByRole('button', { name: '环境测试' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-local');
+    await userEvent.type(screen.getByLabelText('运行参数 rollback_version'), '1.0.0');
+    await userEvent.click(screen.getByRole('button', { name: '开始完整测试' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/scenario-revisions/scenario-openfuyao-r1/test-runs'));
+      expect(call).toBeDefined();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-local', runInput: { rollback_version: '1.0.0' } });
+    });
+  });
+});
+
+describe('declared run input conversion', () => {
+  it('keeps only declarations and preserves JSON scalar/object types', () => {
+    expect(uniqueRunInputs(['replicas', 'mode', 'replicas', undefined])).toEqual(['mode', 'replicas']);
+    expect(parseRunInput(['replicas', 'enabled', 'settings', 'version', 'empty'], {
+      replicas: '3', enabled: 'true', settings: '{"strategy":"safe"}', version: '1.0.0', empty: ' ', ignored: 'no',
+    })).toEqual({ replicas: 3, enabled: true, settings: { strategy: 'safe' }, version: '1.0.0' });
+  });
+});

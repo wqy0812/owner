@@ -1,0 +1,101 @@
+---
+# These tasks are responsible for copying the latest dev/production code from
+# the version control system.
+
+- name: <docker>config TasksMax of system
+  tags:
+    - install
+    - check
+    - update
+  lineinfile:
+    path: /etc/systemd/system.conf
+    insertafter: '^#DefaultTasksMax=512'
+    line: 'DefaultTasksMax=infinity'
+
+- import_tasks: docker-log.yml
+
+- name: <docker>config LimitNOFILE of docker service
+  tags:
+    - install
+    - check
+    - update
+  lineinfile: dest=/usr/lib/systemd/system/docker.service regexp='^LimitNOFILE' line="LimitNOFILE=infinity"
+  
+- name: <docker>config TasksMax of docker service
+  tags:
+    - install
+    - check
+    - update
+  lineinfile:
+    path: /usr/lib/systemd/system/docker.service
+    insertafter: '^#TasksMax=infinity'
+    line: 'TasksMax=infinity'
+
+- name: <containerd>upload containerd service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=containerd.service dest=/usr/lib/systemd/system/containerd.service owner=root group=users mode="u=rw,g=r,o=r" backup=yes
+
+- name: <docker>config TasksMax of containerd service
+  tags:
+    - install
+    - check
+    - update
+  lineinfile:
+    path: /usr/lib/systemd/system/containerd.service
+    insertafter: '^LimitCORE=infinity'
+    line: 'TasksMax=infinity'
+  
+- name: <docker>config docker parameter
+  tags:
+    - install
+    - check
+    - update
+  template: src=docker.j2 dest=/etc/sysconfig/docker owner=root group=users mode="u=rw,g=r,o=r"
+
+- name: <docker>config hosts for docker registry
+  tags:
+    - install
+    - check
+    - update
+  lineinfile: dest=/etc/hosts line="{{ DOCKERHUB_IP }}   {{ DOCKERHUB_HOST }}"
+  
+- name: <docker>config pam limit
+  tags:
+    - install
+    - update
+  pam_limits: domain=* limit_type=- limit_item=nofile value=65536
+  
+- name: <docker>enable docker service
+  tags:
+    - install
+    - check
+    - update
+  service: name=docker enabled=yes
+
+- name: <docker>add ip_conntrack module
+  tags:
+    - install
+    - check
+    - update
+  modprobe:
+    name: ip_conntrack
+    state: present
+  
+- name: <docker>modify kernel parameter
+  tags:
+    - install
+    - check
+    - update
+  sysctl:
+    name: '{{ item.key }}'
+    value: '{{ item.value }}'
+    state: present
+  with_items:
+    - { key: 'vm.swappiness', value: '0' }
+    - { key: 'net.ipv4.ip_forward', value: '1' }
+    - { key: 'fs.aio-max-nr', value: '1048576' }
+    - { key: 'fs.inotify.max_user_instances', value: '1024' }
+    - { key: 'net.ipv4.ip_local_port_range', value: '35000	60000' }

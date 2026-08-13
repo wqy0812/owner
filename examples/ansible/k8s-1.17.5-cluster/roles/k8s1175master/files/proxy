@@ -1,0 +1,1 @@
+KUBE_PROXY_ARGS="--config=/approot1/paas/kube/conf/kube-proxy.config.yaml"

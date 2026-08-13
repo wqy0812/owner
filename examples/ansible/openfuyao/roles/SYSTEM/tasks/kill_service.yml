@@ -1,0 +1,29 @@
+---
+
+# Ansible gather server information
+- name: Gather service facts
+  service_facts:
+
+- block:
+
+  - name: Check service status
+    debug:
+      msg: |
+        Service '{{ service_name }}' state: {{ ansible_facts.services[service_name].state }}
+        Details: {{ ansible_facts.services[service_name] | to_nice_json }}
+
+  - name: Stop ds_agent controller
+    shell: |
+      /opt/ds_agent/dsa_control -r
+    when: service_name == "ds_agent"
+
+  - name: Stop service
+    systemd:
+      name: "{{ service_name }}"
+      state: stopped
+      enabled: no
+      daemon_reload: yes
+    ignore_errors: yes
+
+  when:
+    - service_name in ansible_facts.services

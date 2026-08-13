@@ -1,0 +1,35 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: autoscale-operator
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale","deployments"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["extensions"]
+  resources: ["deployments/scale","deployments"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autoscale-sa
+  namespace: f-paas-subruntime
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autoscale-operator
+subjects:
+- kind: ServiceAccount
+  name: autoscale-sa
+  namespace: f-paas-subruntime
+roleRef:
+  kind: ClusterRole
+  name: autoscale-operator  
+  apiGroup: rbac.authorization.k8s.io

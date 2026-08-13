@@ -1,0 +1,17 @@
+[Unit]
+Description=networkcontroller
+After=network.target
+
+[Service]
+EnvironmentFile=-/approot1/paas/kube/cni/conf/networkcontroller
+User=kube
+ExecStart=/approot1/paas/kube/cni/bin/networkcontroller \
+	    $NETWORKCONTROLLER_LOGTOSTDERR \
+	    $NETWORKCONTROLLER_LOG_LEVEL \
+		$K8SMASTER_ADDR &
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

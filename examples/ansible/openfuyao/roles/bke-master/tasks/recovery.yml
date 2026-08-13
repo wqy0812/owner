@@ -1,0 +1,11 @@
+---
+
+- include_tasks: "manager/recovery.yml"
+  tags: manager
+  when:
+    - cluster_role == 'manager'
+
+- include_tasks: "work/recovery.yml"
+  tags: work
+  when:
+    - cluster_role == 'work'

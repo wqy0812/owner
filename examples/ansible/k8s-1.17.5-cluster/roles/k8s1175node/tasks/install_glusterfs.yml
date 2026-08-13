@@ -1,0 +1,33 @@
+---
+- name: download glusterfs rpms
+  tags:
+    - install
+    - check
+    - update
+  unarchive: 
+    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GLUSTERFS_MEDPATH }}
+    dest: /tmp
+    copy: no
+
+- name: install glusterfs rpms
+  tags:
+    - install
+    - check
+    - update
+  zypper:
+    name: "/tmp/glusterrpms/{{ item }}"
+    state: present
+    disable_gpg_check: yes
+  with_items:
+    - glusterfs-3.12.6-100.1.x86_64.rpm
+    - libgfapi0-3.12.6-100.1.x86_64.rpm
+    - libgfchangelog0-3.12.6-100.1.x86_64.rpm
+    - libgfrpc0-3.12.6-100.1.x86_64.rpm
+    - libgfxdr0-3.12.6-100.1.x86_64.rpm
+    - libglusterfs0-3.12.6-100.1.x86_64.rpm
+    - libibverbs-14-6.7.x86_64.rpm
+    - libibverbs1-14-6.7.x86_64.rpm
+    - libmlx5-1-14-6.7.x86_64.rpm
+    - librdmacm1-14-6.7.x86_64.rpm
+    - rdma-core-14-6.7.x86_64.rpm
+  

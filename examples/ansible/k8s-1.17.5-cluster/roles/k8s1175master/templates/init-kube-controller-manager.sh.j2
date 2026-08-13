@@ -1,0 +1,21 @@
+#!/bin/sh
+su - kube
+cd /approot1/paas/kube/cert/kube-controller-manager
+/approot1/paas/kube/bin/kubectl config set-cluster kubernetes \
+  --certificate-authority=/approot1/paas/kube/cert/ca.pem \
+  --embed-certs=true \
+  --server=https://{{ groups['k8s_F5'][0] }}:6443/ \
+  --kubeconfig=kube-controller-manager.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config set-credentials system:kube-controller-manager \
+  --client-certificate=kube-controller-manager.pem \
+  --client-key=kube-controller-manager-key.pem \
+  --embed-certs=true \
+  --kubeconfig=kube-controller-manager.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config set-context system:kube-controller-manager \
+  --cluster=kubernetes \
+  --user=system:kube-controller-manager \
+  --kubeconfig=kube-controller-manager.kubeconfig
+
+/approot1/paas/kube/bin/kubectl config use-context system:kube-controller-manager --kubeconfig=kube-controller-manager.kubeconfig

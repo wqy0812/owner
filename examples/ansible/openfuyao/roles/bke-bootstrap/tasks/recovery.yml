@@ -1,0 +1,17 @@
+---
+
+- name: clean amc contexts
+  shell: "{{ item.cmd }}"
+  ignore_errors: yes
+  with_items:
+    - { cmd: "/home/sysop/amc/amc_stop.sh"}
+    - { cmd: "pkill -f 'amc'"}
+    - { cmd: "rm -rf /home/sysop/amc/*"}
+
+- import_tasks: roles/bke-common/tasks/bke_reset.yml
+
+- name: remove bke files
+  file:
+    path: "/bke"
+    state: absent
+    force: yes

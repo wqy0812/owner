@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nodeexporter1
+  labels:
+      app: nodeexporter1
+spec:
+  selector:
+    matchLabels:
+      app: nodeexporter1
+  template:
+    metadata:
+      name: nodeexporter1
+      labels:
+        app: nodeexporter1
+    spec:
+      dnsPolicy: Default
+      imagePullSecrets:
+        - name: harbor-secret
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      containers:
+        - image: {{ NETWORK_CLASSIFIED_HARBOR_DOMAIN }}/f-ucmp-subdocp/node-exporter:v0.15.2
+          name: nodeexporter
+          ports:
+          - containerPort: 9100
+            hostPort: 9100
+            name: scrape
+          volumeMounts:
+          - name: proc
+            mountPath: /root-disk/proc
+            readOnly: true
+          - name: sys
+            mountPath: /root-disk/sys
+            readOnly: true
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      hostNetwork: true
+      hostPID: true

@@ -1,0 +1,33 @@
+---
+
+- name: get ip from cidr
+  shell: |
+    cidr="{{ cidr }}"
+    diff="{{ diff }}"
+    IFS='/' read -r ip bits <<< "$cidr"
+    
+    # 将IP地址转换为整数
+    IFS='.' read -r i1 i2 i3 i4 <<< "$ip"
+    ip_int=$((i1 * 256**3 + i2 * 256**2 + i3 * 256 + i4))
+    
+    # 计算网络掩码和网络地址
+    mask_int=$((0xffffffff << (32 - bits) & 0xffffffff))
+    net_int=$((ip_int & mask_int))
+    
+    # 第一个可用IP是网络地址+1
+    first_int=$((net_int + $diff))
+    
+    # 将整数转换回IP地址
+    ip=$(printf "%d.%d.%d.%d" \
+        $(( (first_int >> 24) & 0xff )) \
+        $(( (first_int >> 16) & 0xff )) \
+        $(( (first_int >> 8) & 0xff )) \
+        $(( first_int & 0xff )) )
+    
+    echo "$ip"
+  register: script_run
+
+- name: set ip
+  set_fact:
+    ip_from_cidr: script_run.output
+  failed_when: script_run.rc != 0 or script_run.stdout == ""

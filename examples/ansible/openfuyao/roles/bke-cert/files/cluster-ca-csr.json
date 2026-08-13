@@ -1,0 +1,12 @@
+{
+     "CN": "kubernetes",
+     "C": "CN",
+     "ST": "Hangzhou",
+     "L": "Hangzhou",
+     "OU": "Kubernetes",
+     "key": {
+       "algo": "rsa",
+       "size": 2048
+     },
+     "hosts": ["kubernetes", "kubernetes.default"]
+}

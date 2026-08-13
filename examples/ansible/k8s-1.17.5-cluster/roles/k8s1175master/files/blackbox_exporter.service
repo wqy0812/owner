@@ -1,0 +1,10 @@
+[Unit]
+Description=Blackbox_exporter Service
+After=multi-user.target
+
+[Service]
+Type=idle
+ExecStart=/approot1/paas/exporter/blackbox_exporter --web.listen-address=:9115 --log.level=info --config.file=/approot1/paas/exporter/blackbox.yml
+Restart=always
+[Install]
+WantedBy=multi-user.target

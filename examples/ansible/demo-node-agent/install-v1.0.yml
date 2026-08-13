@@ -1,0 +1,18 @@
+---
+- name: Install demo node agent 1.0.0
+  hosts: demo_nodes
+  gather_facts: false
+  vars:
+    agent_root: /tmp/newplatform-demo-agent
+  tasks:
+    - name: Create isolated agent directory
+      ansible.builtin.file:
+        path: "{{ agent_root }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write agent version 1.0.0
+      ansible.builtin.copy:
+        dest: "{{ agent_root }}/VERSION"
+        content: "1.0.0\n"
+        mode: "0600"

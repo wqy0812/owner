@@ -1,0 +1,152 @@
+---
+
+- name: mkdir workspace
+  file:
+    path: "{{ default_workspace }}"
+    state: directory
+    owner: sysop
+    mode: 0755
+
+#  bke init \
+#  # chart 库访问端口
+#  --chartRepoPort {{ ENV_CHART_REPO_PORT }} \
+#  # 自定义镜像仓库地址（如：Helm Chart、容器镜像等），示例：xxx.xxx.xx.xx:xxx/openfuyao
+#  --otherRepo {{ ENV_DOCKER_HARBOR_IP }}:{{ ENV_DOCKER_HARBOR_PORT }}/{{ ENV_DOCKER_HARBOR_PORJECT }} \  [目前必须是IP]
+#  # 镜像仓库域名。示例：fydockerhub.xxxx.sdc.cs.icbc
+#  --domain {{ ENV_DOCKER_HARBOR_DOMAIN }} \  [必须域名]
+#  # 镜像仓库端口。示例：xxx
+#  --imageRepoPort {{ ENV_DOCKER_HARBOR_PORT }} \
+#  # 自定义系统软件包的私有源地址，示例：http://xxx.xxx.xx.xx:xxx
+#  --otherSource {{ ENV_FILESTATION_URL }} \  [目前必须是IP]
+#  # 是否安装控制台
+#  --installConsole=false \
+#  # 是否安装NTP服务
+#  --enableNTP=false \
+#  # openFuyao版本信息，示例：v25.12
+#  --oFVersion {{ openFuyao_version }} \
+#  # openFuyao版本配置文件，与oFVersion对应。示例：http://xxx:xxx/files/
+#  --versionUrl {{ ENV_FILESTATION_URL }}/bke_config/ \
+#  # 离线镜像文件路径，示例：/bke/cluster/image_amd64.tar.gz，image_amd64.tar.gz 解压文件名称与 BOOTSTRAP_IMAGE 变量一致
+#  --imageFilePath {{ default_workspace }}/{{ BOOTSTRAP_IMAGE }}
+#  # 证书配置目录，目前固定为：/etc/openFuyao/certs/cert_config,变量未 cert_config
+
+- name: install bootstrap
+  shell: |
+    set -ex
+    # 定义超时时间（单位：秒）
+    TIMEOUT=1800
+    # 定义日志文件路径
+    LOG_FILE="/var/log/bke_init.log"
+
+    # 记录开始时间
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行 bke init 命令" >> "$LOG_FILE"
+
+    if [ "{{ ansible_machine }}" = "x86_64" ]; then
+      soft_arch="amd64"
+    elif [ "{{ ansible_machine }}" = "aarch64" ]; then
+      soft_arch="arm64"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')]系统不支持{{ ansible_machine }}架构，异常退出 " >> "$LOG_FILE"
+      exit 1
+    fi
+    wget -q --tries=2 --timeout=330 --connect-timeout=30 --read-timeout=300 \
+       "{{ ENV_FILESTATION_URL }}/{{ BOOTSTRAP_IMAGE }}_${soft_arch}.tar.gz" \
+       -O "{{ default_workspace }}/{{ BOOTSTRAP_IMAGE }}_${soft_arch}.tar.gz"
+  
+    if [ $? -eq 0 ] && [ -f "{{ default_workspace }}/{{ BOOTSTRAP_IMAGE }}_${soft_arch}.tar.gz" ]; then
+       echo "介质下载成功"
+      if tar -tzf "{{ default_workspace }}/{{ BOOTSTRAP_IMAGE }}_${soft_arch}.tar.gz" &>/dev/null; then
+        echo "压缩包有效"
+      else
+        echo "警告：压缩包可能损坏"
+        exit 1
+      fi
+    else
+      echo "下载失败"
+      exit 1
+    fi
+    # 构造命令
+    CMD="bke init \
+       --chartRepoPort {{ ENV_CHART_REPO_PORT }} \
+       --otherRepo {{ ENV_DOCKER_HARBOR_DOMAIN }}:{{ ENV_DOCKER_HARBOR_PORT }}/{{ ENV_DOCKER_HARBOR_PORJECT }} \
+       --domain {{ ENV_DOCKER_HARBOR_DOMAIN }} \
+       --imageRepoPort {{ ENV_DOCKER_HARBOR_PORT }} \
+       --otherSource {{ ENV_FILESTATION_URL }} \
+       --installConsole=false \
+       --enableNTP=false \
+       --imageFilePath {{ default_workspace }}/{{ BOOTSTRAP_IMAGE }}_${{ "{" }}soft_arch{{ "}" }}.tar.gz \
+       --confirm"
+
+     echo "[$(date '+%Y-%m-%d %H:%M:%S')] bke 命令：$CMD" >> "$LOG_FILE"
+
+    # 执行命令并处理超时
+    if ! timeout $TIMEOUT bash -c "$CMD" >> "$LOG_FILE" 2>&1; then
+      # 检查是否超时
+      if [[ $? -eq 124 ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] bke init 命令执行超时（${TIMEOUT}秒）" >> "$LOG_FILE"
+        echo "bke init 命令执行超时（${TIMEOUT}秒）"
+        exit 124
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] bke init 命令执行失败" >> "$LOG_FILE"
+        echo "bke init 命令执行失败"
+        exit 1
+      fi
+    fi
+    set +ex 
+    # 记录成功日志
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] bke init 命令执行成功" >> "$LOG_FILE"
+  async: "1800"
+  poll: 0
+  register: script_result
+
+- name: check tasks is complete
+  async_status:
+    jid: "{{ script_result.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished
+  retries: "181"
+  delay: 10
+
+- name: Check if the bootstrap process is complete
+  command: kubectl wait --for=condition=Ready --all pods --all-namespaces --timeout=30s
+  register: cluster_complete
+  run_once: true
+  failed_when: cluster_complete.rc != 0
+
+- name: exec manager builder amc
+  block:
+    - name: mkdir base directory amc
+      file: path='{{ item.path }}' state={{ item.state }} owner=sysop group=users mode="u=rwx,g=rwx,o=rwx"
+      with_items:
+        - { path: '/home/sysop/amc/checkList',state: 'directory'}
+
+    - name: <amc>upload program
+      copy:
+        src: '{{ item.src }}'
+        dest: '{{ item.dest }}'
+        owner: sysop
+        group: users
+        mode: "u=rwx,g=rx,o=rx"
+        backup: yes
+      with_items:
+        - { src: 'amc_monitor.sh', dest: '/home/sysop/amc/amc_monitor.sh' }
+        - { src: 'amc_shadow.sh', dest: '/home/sysop/amc/amc_shadow.sh' }
+        - { src: 'amc.sh', dest: '/home/sysop/amc/amc.sh' }
+        - { src: 'amc_stop.sh', dest: '/home/sysop/amc/amc_stop.sh' }
+        - { src: 'check_containerd.sh', dest: '/home/sysop/amc/checkList/check_containerd.sh' }
+
+    - name: <amc> upload and template amc.properties
+      template:
+        src: 'amc.properties.j2'
+        dest: '/home/sysop/amc/amc.properties'
+        owner: sysop
+        group: users
+        mode: "u=rw,g=r,o=r"
+        backup: yes
+
+    - name: start amc
+      shell: |
+        sh /home/sysop/amc/amc.sh
+
+  delegate_to: "{{ groups['bootstrap_host'][0] }}"
+  run_once: true

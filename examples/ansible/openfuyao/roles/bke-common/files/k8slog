@@ -1,0 +1,27 @@
+#
+# Please note, that changing of log file permissions in this
+# file is not sufficient if syslog-ng is used as log daemon.
+#
+# It is required to specify the permissions in the syslog-ng
+# configuration file /etc/syslog-ng/syslog-ng.conf as well.
+#
+
+/approot1/paas/log/kubelet.log
+/approot1/paas/log/containerd.log
+{
+    su root root
+    compress
+    compresscmd /usr/bin/xz
+    dateext
+    dateformat -%Y%m%d-%H%M%S
+    maxage 30
+    rotate 300
+    missingok
+    notifempty
+    size 700M
+    create 644 root root
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true
+    endscript
+}

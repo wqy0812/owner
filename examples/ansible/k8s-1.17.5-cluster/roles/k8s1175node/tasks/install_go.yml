@@ -1,0 +1,25 @@
+---
+
+
+- name: download and unarchive {{ GO_PPROF_PATH }}
+  tags:
+    - install
+    - check
+    - update
+  unarchive: 
+    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ GO_PPROF_PATH }}
+    dest: /usr/local
+    copy: no
+    owner: sysop
+- name: change permission of pprof
+  tags:
+    - install
+    - check
+    - update
+  shell: "chmod +x /usr/local/go/pkg/tool/linux_amd64/pprof"
+- name: change permission of go
+  tags:
+    - install
+    - check
+    - update
+  shell: "chmod +x /usr/local/bin/go"

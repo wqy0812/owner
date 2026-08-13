@@ -1,0 +1,7 @@
+---
+- block:
+  - include_vars: "{{ item }}"
+    with_items: "{{ VAR_FILES }}"
+    when: VAR_FILES is defined
+  tags:
+    - always

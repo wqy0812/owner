@@ -1,0 +1,7 @@
+KUBE_LOGTOSTDERR="--logtostderr=true"
+
+KUBELET_LOG_LEVEL="--v=3"
+
+KUBELET_ALLOW_PRIV="--allow-privileged=true"
+
+KUBE_MASTER="--master=https://{{ groups['k8s_F5'][0] }}:6443"

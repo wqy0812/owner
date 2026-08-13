@@ -1,0 +1,8 @@
+---
+- name: OpenFuyao management cluster component
+  hosts: management_cluster_k8smaster
+  remote_user: sysop
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: bke-master

@@ -1,0 +1,14 @@
+---
+- name: upload config
+  tags:
+    - install
+    - check
+    - update
+  template: src=coredns.yaml.j2 dest=/approot1/paas/kube/conf/coredns.yaml owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: create coredns
+  tags:
+    - install
+    - update
+    - check
+  shell: "/approot1/paas/kube/bin/kubectl apply -f /approot1/paas/kube/conf/coredns.yaml --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig"

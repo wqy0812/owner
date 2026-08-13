@@ -1,0 +1,19 @@
+
+---
+
+- name: <k8smaster>upload  kube-controller-manager.config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-controller-manager.config.j2 dest=/approot1/paas/kube/conf/kube-controller-manager.config owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: create /var/log/controller-manager.log
+  shell: "touch /var/log/controller-manager.log && chmod +x /var/log/controller-manager.log"
+
+- name: <k8smaster>upload  controller-manager.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=controller-manager.conf.j2 dest=/etc/rsyslog.d/controller-manager.conf owner=sysop group=root mode="u=rw,g=r,o=r"

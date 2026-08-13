@@ -1,0 +1,21 @@
+
+---
+
+- name: create /var/log/docker.log
+  shell: "touch /var/log/docker.log && chmod +x /var/log/docker.log"
+
+- name: <k8smaster>upload  docker.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=docker.conf.j2 dest=/etc/rsyslog.d/docker.conf owner=sysop group=root mode="u=rw,g=r,o=r"
+
+- name: <k8snode>upload docker service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=docker.service dest=/usr/lib/systemd/system/docker.service owner=root group=users mode="u=rw,g=r,o=r" backup=yes
+
+- import_tasks: install-rsyslog.yml

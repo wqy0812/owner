@@ -1,0 +1,461 @@
+package domain
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+)
+
+type Role string
+
+const (
+	RoleComponentOwner   Role = "component_owner"
+	RoleScenarioOwner    Role = "scenario_owner"
+	RoleEnvironmentOwner Role = "environment_owner"
+)
+
+func (r Role) Valid() bool {
+	return r == RoleComponentOwner || r == RoleScenarioOwner || r == RoleEnvironmentOwner
+}
+
+type User struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Role      Role      `json:"role"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type ReleaseStatus string
+
+const (
+	ReleaseDraft      ReleaseStatus = "draft"
+	ReleaseReleased   ReleaseStatus = "released"
+	ReleaseDeprecated ReleaseStatus = "deprecated"
+)
+
+type ReleaseType string
+
+const (
+	ReleaseAtomic ReleaseType = "atomic"
+	ReleaseBundle ReleaseType = "bundle"
+)
+
+type RiskLevel string
+
+const (
+	RiskLow         RiskLevel = "low"
+	RiskMedium      RiskLevel = "medium"
+	RiskHigh        RiskLevel = "high"
+	RiskDestructive RiskLevel = "destructive"
+)
+
+type Component struct {
+	ID          string             `json:"id"`
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	OwnerID     string             `json:"ownerId"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
+	Releases    []ComponentRelease `json:"releases,omitempty"`
+}
+
+type ComponentRelease struct {
+	ID                     string                `json:"id"`
+	ComponentID            string                `json:"componentId"`
+	Version                string                `json:"version"`
+	Type                   ReleaseType           `json:"type"`
+	Status                 ReleaseStatus         `json:"status"`
+	ReleaseNotes           string                `json:"releaseNotes"`
+	Breaking               bool                  `json:"breaking"`
+	Verified               bool                  `json:"verified"`
+	RiskLevel              RiskLevel             `json:"riskLevel"`
+	EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
+	ParameterSchema        map[string]any        `json:"parameterSchema"`
+	Dependencies           []ComponentDependency `json:"dependencies"`
+	Actions                []ActionDefinition    `json:"actions"`
+	CreatedAt              time.Time             `json:"createdAt"`
+	ReleasedAt             *time.Time            `json:"releasedAt,omitempty"`
+	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
+}
+
+type ComponentDependency struct {
+	ID                    string `json:"id"`
+	ReleaseID             string `json:"releaseId"`
+	UpstreamComponentID   string `json:"upstreamComponentId"`
+	UpstreamReleaseID     string `json:"upstreamReleaseId"`
+	UpstreamComponentName string `json:"upstreamComponentName,omitempty"`
+	Purpose               string `json:"purpose"`
+}
+
+type ActionKind string
+
+const (
+	ActionInspect   ActionKind = "inspect"
+	ActionPreflight ActionKind = "preflight"
+	ActionInstall   ActionKind = "install"
+	ActionConfigure ActionKind = "configure"
+	ActionVerify    ActionKind = "verify"
+	ActionUpgrade   ActionKind = "upgrade"
+	ActionRollback  ActionKind = "rollback"
+	ActionUninstall ActionKind = "uninstall"
+)
+
+type ActionDefinition struct {
+	ID                string     `json:"id"`
+	ReleaseID         string     `json:"releaseId"`
+	Name              string     `json:"name"`
+	Kind              ActionKind `json:"kind"`
+	Playbook          string     `json:"playbook"`
+	Tags              []string   `json:"tags"`
+	Limit             string     `json:"limit"`
+	HostGroup         string     `json:"hostGroup"`
+	AllowedParameters []string   `json:"allowedParameters"`
+	TimeoutSeconds    int        `json:"timeoutSeconds"`
+	RiskLevel         RiskLevel  `json:"riskLevel"`
+	Destructive       bool       `json:"destructive"`
+	FromReleaseID     string     `json:"fromReleaseId,omitempty"`
+	ToReleaseID       string     `json:"toReleaseId,omitempty"`
+}
+
+func (a ActionDefinition) NeedsApproval() bool {
+	if a.Destructive || a.RiskLevel == RiskDestructive {
+		return true
+	}
+	s := strings.ToLower(string(a.Kind) + " " + a.Name + " " + a.Playbook)
+	for _, marker := range []string{"recovery", "clean", "destroy", "uninstall", " rcv", "rcv_"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+type RevisionStatus string
+
+const (
+	RevisionDraft      RevisionStatus = "draft"
+	RevisionTesting    RevisionStatus = "testing"
+	RevisionTestPassed RevisionStatus = "test_passed"
+	RevisionReleased   RevisionStatus = "released"
+	RevisionDeprecated RevisionStatus = "deprecated"
+)
+
+type Scenario struct {
+	ID                string             `json:"id"`
+	Slug              string             `json:"slug"`
+	Name              string             `json:"name"`
+	Description       string             `json:"description"`
+	OwnerID           string             `json:"ownerId"`
+	CurrentRevisionID string             `json:"currentRevisionId,omitempty"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	UpdatedAt         time.Time          `json:"updatedAt"`
+	Revisions         []ScenarioRevision `json:"revisions,omitempty"`
+}
+
+type ScenarioRevision struct {
+	ID              string         `json:"id"`
+	ScenarioID      string         `json:"scenarioId"`
+	Revision        int            `json:"revision"`
+	Status          RevisionStatus `json:"status"`
+	Graph           ScenarioGraph  `json:"graph"`
+	ExecutionPolicy map[string]any `json:"executionPolicy"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	TestPassedAt    *time.Time     `json:"testPassedAt,omitempty"`
+	ReleasedAt      *time.Time     `json:"releasedAt,omitempty"`
+	DeprecatedAt    *time.Time     `json:"deprecatedAt,omitempty"`
+}
+
+type ScenarioGraph struct {
+	Nodes []ScenarioNode `json:"nodes"`
+	Edges []ScenarioEdge `json:"edges"`
+}
+
+type ScenarioNode struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	ReleaseID   string            `json:"releaseId"`
+	Action      ActionKind        `json:"action"`
+	HostGroup   string            `json:"hostGroup"`
+	Values      map[string]any    `json:"values"`
+	Bindings    map[string]string `json:"bindings"`
+	RunInputs   []string          `json:"runInputs"`
+	Position    GraphPosition     `json:"position"`
+	Destructive bool              `json:"destructive,omitempty"`
+}
+
+type GraphPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type ScenarioEdge struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+type ValidationIssue struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	NodeID  string `json:"nodeId,omitempty"`
+}
+
+func ValidateGraph(g ScenarioGraph) []ValidationIssue {
+	issues := make([]ValidationIssue, 0)
+	if len(g.Nodes) == 0 {
+		return append(issues, ValidationIssue{Code: "empty_graph", Message: "scenario graph must contain at least one node"})
+	}
+	nodes := map[string]ScenarioNode{}
+	releaseNodes := map[string]string{}
+	for _, n := range g.Nodes {
+		if strings.TrimSpace(n.ID) == "" {
+			issues = append(issues, ValidationIssue{Code: "missing_node_id", Message: "node id is required"})
+			continue
+		}
+		if _, ok := nodes[n.ID]; ok {
+			issues = append(issues, ValidationIssue{Code: "duplicate_node", Message: "duplicate node id", NodeID: n.ID})
+		}
+		nodes[n.ID] = n
+		if n.ReleaseID == "" {
+			issues = append(issues, ValidationIssue{Code: "missing_release", Message: "node must lock a component release", NodeID: n.ID})
+		} else if previous, exists := releaseNodes[n.ReleaseID]; exists {
+			issues = append(issues, ValidationIssue{Code: "duplicate_release_node", Message: "component release is already used by node " + previous, NodeID: n.ID})
+		} else {
+			releaseNodes[n.ReleaseID] = n.ID
+		}
+		if n.Action == "" {
+			issues = append(issues, ValidationIssue{Code: "missing_action", Message: "node action is required", NodeID: n.ID})
+		}
+		if n.HostGroup == "" {
+			issues = append(issues, ValidationIssue{Code: "missing_host_group", Message: "node hostGroup is required", NodeID: n.ID})
+		}
+	}
+	adj := map[string][]string{}
+	indegree := map[string]int{}
+	for id := range nodes {
+		indegree[id] = 0
+	}
+	edgeIDs := map[string]bool{}
+	for _, e := range g.Edges {
+		if e.ID != "" && edgeIDs[e.ID] {
+			issues = append(issues, ValidationIssue{Code: "duplicate_edge", Message: "duplicate edge id"})
+		}
+		edgeIDs[e.ID] = true
+		if _, ok := nodes[e.Source]; !ok {
+			issues = append(issues, ValidationIssue{Code: "missing_edge_source", Message: "edge source does not exist", NodeID: e.Source})
+			continue
+		}
+		if _, ok := nodes[e.Target]; !ok {
+			issues = append(issues, ValidationIssue{Code: "missing_edge_target", Message: "edge target does not exist", NodeID: e.Target})
+			continue
+		}
+		adj[e.Source] = append(adj[e.Source], e.Target)
+		indegree[e.Target]++
+	}
+	queue := make([]string, 0)
+	for id, degree := range indegree {
+		if degree == 0 {
+			queue = append(queue, id)
+		}
+	}
+	visited := 0
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		visited++
+		for _, next := range adj[id] {
+			indegree[next]--
+			if indegree[next] == 0 {
+				queue = append(queue, next)
+			}
+		}
+	}
+	if visited != len(nodes) {
+		issues = append(issues, ValidationIssue{Code: "cycle", Message: "scenario graph contains a cycle"})
+	}
+	return issues
+}
+
+type Environment struct {
+	ID                string                `json:"id"`
+	Name              string                `json:"name"`
+	Description       string                `json:"description"`
+	OwnerID           string                `json:"ownerId"`
+	CurrentRevisionID string                `json:"currentRevisionId,omitempty"`
+	CreatedAt         time.Time             `json:"createdAt"`
+	UpdatedAt         time.Time             `json:"updatedAt"`
+	Revision          *EnvironmentRevision  `json:"revision,omitempty"`
+	Revisions         []EnvironmentRevision `json:"revisions,omitempty"`
+}
+
+type EnvironmentRevision struct {
+	ID             string          `json:"id"`
+	EnvironmentID  string          `json:"environmentId"`
+	Revision       int             `json:"revision"`
+	Facts          map[string]any  `json:"facts"`
+	Inventory      json.RawMessage `json:"inventory"`
+	Parameters     map[string]any  `json:"parameters"`
+	CredentialRefs []CredentialRef `json:"credentialRefs"`
+	MaxConcurrent  int             `json:"maxConcurrent"`
+	CreatedAt      time.Time       `json:"createdAt"`
+}
+
+type CredentialRef struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"` // sshKeyPath | envVarRef
+	Reference  string `json:"reference,omitempty"`
+	Configured bool   `json:"configured"`
+}
+
+func (c CredentialRef) Valid() bool { return c.Kind == "sshKeyPath" || c.Kind == "envVarRef" }
+
+func RedactCredentialRefs(refs []CredentialRef, privileged bool) []CredentialRef {
+	out := slices.Clone(refs)
+	for i := range out {
+		out[i].Configured = out[i].Reference != ""
+		if !privileged {
+			out[i].Reference = ""
+		}
+	}
+	return out
+}
+
+type RunStatus string
+
+const (
+	RunAwaitingApproval RunStatus = "awaiting_approval"
+	RunQueued           RunStatus = "queued"
+	RunRunning          RunStatus = "running"
+	RunSucceeded        RunStatus = "succeeded"
+	RunFailed           RunStatus = "failed"
+	RunCancelled        RunStatus = "cancelled"
+	RunRejected         RunStatus = "rejected"
+	RunInterrupted      RunStatus = "interrupted"
+)
+
+type RunKind string
+
+const (
+	RunComponentTest RunKind = "component_test"
+	RunScenarioTest  RunKind = "scenario_test"
+	RunScenario      RunKind = "scenario_run"
+)
+
+type Run struct {
+	ID                    string         `json:"id"`
+	Kind                  RunKind        `json:"kind"`
+	Status                RunStatus      `json:"status"`
+	RequestedBy           string         `json:"requestedBy"`
+	EnvironmentID         string         `json:"environmentId"`
+	EnvironmentRevisionID string         `json:"environmentRevisionId"`
+	ComponentReleaseID    string         `json:"componentReleaseId,omitempty"`
+	ScenarioRevisionID    string         `json:"scenarioRevisionId,omitempty"`
+	Action                ActionKind     `json:"action,omitempty"`
+	Destructive           bool           `json:"destructive"`
+	InputSnapshot         map[string]any `json:"inputSnapshot"`
+	ArtifactDigest        string         `json:"artifactDigest"`
+	Error                 string         `json:"error,omitempty"`
+	CreatedAt             time.Time      `json:"createdAt"`
+	StartedAt             *time.Time     `json:"startedAt,omitempty"`
+	FinishedAt            *time.Time     `json:"finishedAt,omitempty"`
+	Steps                 []RunStep      `json:"steps,omitempty"`
+	Approval              *Approval      `json:"approval,omitempty"`
+}
+
+type RunStep struct {
+	ID         string     `json:"id"`
+	RunID      string     `json:"runId"`
+	NodeID     string     `json:"nodeId"`
+	Name       string     `json:"name"`
+	Status     RunStatus  `json:"status"`
+	ExitCode   *int       `json:"exitCode,omitempty"`
+	Summary    string     `json:"summary,omitempty"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+}
+
+type RunLog struct {
+	ID        int64     `json:"id"`
+	RunID     string    `json:"runId"`
+	StepID    string    `json:"stepId,omitempty"`
+	Stream    string    `json:"stream"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type Approval struct {
+	ID          string     `json:"id"`
+	RunID       string     `json:"runId"`
+	Status      string     `json:"status"`
+	RequestedAt time.Time  `json:"requestedAt"`
+	DecidedBy   string     `json:"decidedBy,omitempty"`
+	Decision    string     `json:"decision,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	DecidedAt   *time.Time `json:"decidedAt,omitempty"`
+}
+
+type Notification struct {
+	ID          string         `json:"id"`
+	UserID      string         `json:"userId"`
+	Type        string         `json:"type"`
+	Title       string         `json:"title"`
+	Body        string         `json:"body"`
+	ResourceURL string         `json:"resourceUrl,omitempty"`
+	Payload     map[string]any `json:"payload"`
+	ReadAt      *time.Time     `json:"readAt,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+}
+
+type AuditEvent struct {
+	ID           string         `json:"id"`
+	ActorID      string         `json:"actorId"`
+	Action       string         `json:"action"`
+	ResourceType string         `json:"resourceType"`
+	ResourceID   string         `json:"resourceId"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    time.Time      `json:"createdAt"`
+}
+
+type ImpactPath struct {
+	ComponentIDs   []string `json:"componentIds"`
+	ComponentNames []string `json:"componentNames"`
+}
+
+type ImpactRecipient struct {
+	UserID      string       `json:"userId"`
+	Role        Role         `json:"role"`
+	Paths       []ImpactPath `json:"paths"`
+	ScenarioIDs []string     `json:"scenarioIds,omitempty"`
+}
+
+type ImpactReport struct {
+	ComponentID string            `json:"componentId"`
+	Recipients  []ImpactRecipient `json:"recipients"`
+}
+
+var (
+	ErrNotFound     = errors.New("not found")
+	ErrForbidden    = errors.New("forbidden")
+	ErrConflict     = errors.New("conflict")
+	ErrInvalid      = errors.New("invalid")
+	ErrUnauthorized = errors.New("unauthorized")
+)
+
+type ValidationError struct {
+	Message string
+	Details any
+}
+
+func (e *ValidationError) Error() string { return e.Message }
+func (e *ValidationError) Unwrap() error { return ErrInvalid }
+
+func ValidateRole(user User, role Role) error {
+	if user.Role != role {
+		return fmt.Errorf("%w: requires %s role", ErrForbidden, role)
+	}
+	return nil
+}

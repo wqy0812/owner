@@ -1,0 +1,4 @@
+KUBE_SCHEDULER_ARGS="--leader-elect=true \
+                     --address=127.0.0.1 \
+                     --kubeconfig=/approot1/paas/kube/cert/kube-scheduler/kube-scheduler.kubeconfig \
+                     --policy-config-file=/approot1/paas/kube/conf/scheduler-policy-config.json"

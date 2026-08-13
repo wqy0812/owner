@@ -1,0 +1,97 @@
+---
+# These tasks are responsible for copying the latest dev/production code from
+# the version control system.
+
+- name: <flannel>download and unarchive {{ FLANNEL_MEDPATH_SERVERLESS }}
+  tags:
+    - install
+    - update
+  unarchive: 
+    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ FLANNEL_MEDPATH_SERVERLESS }}
+    dest: /usr/bin
+    copy: no
+
+- name: <flannel>upload flannel service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=flanneld.service dest=/usr/lib/systemd/system/flanneld.service owner=root group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: 
+    - systemctl daemon-reload
+    - <k8snode>restart flanneld
+  
+- name: <flannel>upload flannel parameter file
+  tags:
+    - install
+    - check
+    - update
+  template: src=flanneld.j2 dest=/etc/sysconfig/flanneld owner=root group=users mode="u=rw,g=r,o=r"
+  notify: <k8snode>restart flanneld
+
+- name: <flannel>upload flannel registry file
+  tags:
+    - install
+    - check
+    - update
+  template: src=flanneld-network-registry.sh.j2 dest=/approot1/paas/kube/conf/flanneld-network-registry.sh owner=root group=users mode="u=rwx,g=rx,o=rx"
+
+- name: <flannel>registry network to etcd
+  tags:
+    - install
+  shell: "/approot1/paas/kube/conf/flanneld-network-registry.sh"
+  
+#check subnet.env是否已生成
+- name: copy check check_env.sh
+  tags:
+    - install
+    - check
+    - update
+  template: src=check_env.sh.j2 dest=/tmp/check_env.sh owner=sysop group=users mode="u=rwx,g=rx,o=rx"
+
+- name: check file /run/flannel/subnet.env
+  tags:
+    - install
+    - check
+    - update
+  shell: bash /tmp/check_env.sh
+  ignore_errors: yes
+  register: check_res
+
+- name: print check_res
+  tags:
+    - install
+    - check
+    - update
+  debug: var=check_res.stdout_lines
+
+- name: <flannel>config docker service file -1
+  tags:
+    - install
+    - check
+    - update
+  lineinfile: dest=/usr/lib/systemd/system/docker.service insertafter='^EnvironmentFile=' line="EnvironmentFile=/run/flannel/subnet.env"
+  notify: systemctl daemon-reload
+
+- name: <flannel>config docker service file -2
+  tags:
+    - install
+    - check
+    - update
+  replace: dest=/usr/lib/systemd/system/docker.service regexp='\$DOCKER_NETWORK_OPTIONS' replace='--bip=${FLANNEL_SUBNET} --mtu=${FLANNEL_MTU}' backup=yes
+  notify: systemctl daemon-reload
+
+- name: <flannel>config docker service file -3
+  tags:
+    - install
+    - check
+    - update
+  lineinfile: dest=/usr/lib/systemd/system/docker.service regexp='^Requires' line="Requires=containerd.socket flanneld.service"
+  notify: systemctl daemon-reload
+
+- name: <flannel>enable flannel service
+  tags:
+    - install
+    - check
+    - update
+  service: name=flanneld enabled=yes
