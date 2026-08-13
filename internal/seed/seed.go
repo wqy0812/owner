@@ -46,7 +46,7 @@ func (s Seeder) Run(ctx context.Context) error {
 	if err := s.appendAuditIfMissing(ctx, domain.AuditEvent{
 		ID: "audit-demo-seeded", ActorID: "system", Action: "demo.seeded",
 		ResourceType: "platform", ResourceID: "newplatform-demo",
-		Metadata: map[string]any{"openFuyaoSnapshot": "examples/ansible/openfuyao", "safeExample": "examples/ansible/demo-node-agent"}, CreatedAt: now,
+		Metadata: map[string]any{"openFuyaoSnapshot": "examples/ansible/openfuyao"}, CreatedAt: now,
 	}); err != nil {
 		return err
 	}
@@ -193,8 +193,12 @@ type seededComponent struct {
 func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 	constraints := map[string]any{"architecture": []any{"amd64"}, "ipFamily": []any{"ipv4"}, "operatingSystem": []any{"Kylin V10"}}
 	plainRelease := func(id, componentID, version string) domain.ComponentRelease {
+		releaseType := domain.ReleaseAtomic
+		if componentID == "component-kubernetes" {
+			releaseType = domain.ReleaseBundle
+		}
 		return domain.ComponentRelease{
-			ID: id, ComponentID: componentID, Version: version, Type: domain.ReleaseAtomic, Status: domain.ReleaseReleased,
+			ID: id, ComponentID: componentID, Version: version, Type: releaseType, Status: domain.ReleaseReleased,
 			Verified: true, RiskLevel: domain.RiskLow, EnvironmentConstraints: constraints, ParameterSchema: map[string]any{}, CreatedAt: now, ReleasedAt: ptr(now),
 		}
 	}
@@ -232,33 +236,8 @@ func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 	common := stage("component-bke-common", "bke-common", "BKE Common", ComponentOwnerRuntimeID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: bootstrap.component.ID, UpstreamReleaseID: bootstrap.releases[0].ID, Purpose: "bootstrap endpoint"}})
 	addon := stage("component-bke-addon", "bke-addon", "BKE Addons", ComponentOwnerK8sID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: common.component.ID, UpstreamReleaseID: common.releases[0].ID, Purpose: "cluster prerequisites"}})
 	master := stage("component-bke-master", "bke-master", "BKE Management Cluster", ComponentOwnerK8sID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: addon.component.ID, UpstreamReleaseID: addon.releases[0].ID, Purpose: "management addons"}})
+	addon.releases[0].Type = domain.ReleaseBundle
 	components = append(components, cert, bootstrap, common, addon, master)
-
-	agentV1 := domain.ComponentRelease{
-		ID: "release-demo-agent-1.0.0", ComponentID: "component-demo-agent", Version: "v1.0.0", Type: domain.ReleaseAtomic,
-		Status: domain.ReleaseReleased, ReleaseNotes: "localhost 安全安装基线。", Verified: true, RiskLevel: domain.RiskLow,
-		EnvironmentConstraints: map[string]any{"demoOnly": true}, ParameterSchema: agentSchema("1.0.0"), CreatedAt: now, ReleasedAt: ptr(now),
-		Actions: []domain.ActionDefinition{
-			action("action-agent-install-1.0", "release-demo-agent-1.0.0", domain.ActionInstall, "demo-node-agent/install-v1.0.yml", "demo_nodes", false, 120),
-			action("action-agent-verify-1.0", "release-demo-agent-1.0.0", domain.ActionVerify, "demo-node-agent/verify.yml", "demo_nodes", false, 120),
-		},
-	}
-	agentV11 := domain.ComponentRelease{
-		ID: "release-demo-agent-1.1.0", ComponentID: "component-demo-agent", Version: "v1.1.0", Type: domain.ReleaseAtomic,
-		Status: domain.ReleaseDraft, ReleaseNotes: "加入 checkpoint，可显式回退到 v1.0.0。", Breaking: false, Verified: false, RiskLevel: domain.RiskLow,
-		EnvironmentConstraints: map[string]any{"demoOnly": true}, ParameterSchema: agentSchema("1.1.0"), CreatedAt: now.Add(time.Second),
-		Actions: []domain.ActionDefinition{
-			upgradeAction(),
-			action("action-agent-verify-1.1", "release-demo-agent-1.1.0", domain.ActionVerify, "demo-node-agent/verify.yml", "demo_nodes", false, 120),
-			{ID: "action-agent-rollback-1.0", ReleaseID: "release-demo-agent-1.1.0", Name: "rollback", Kind: domain.ActionRollback, Playbook: "demo-node-agent/rollback-v1.0.yml", Limit: "demo_nodes", HostGroup: "demo_nodes", AllowedParameters: []string{"agent_root", "rollback_version"}, TimeoutSeconds: 120, RiskLevel: domain.RiskLow, FromReleaseID: "release-demo-agent-1.1.0", ToReleaseID: "release-demo-agent-1.0.0"},
-		},
-	}
-	components = append(components, seededComponent{component: component("component-demo-agent", "demo-node-agent", "Demo Node Agent", "只操作 /tmp/newplatform-demo-agent 的安全真实升级样例。", ComponentOwnerRuntimeID, now), releases: []domain.ComponentRelease{agentV1, agentV11}})
-
-	bundleRelease := plainRelease("release-demo-policy-bundle-1.0", "component-demo-policy-bundle", "v1.0.0")
-	bundleRelease.Type = domain.ReleaseBundle
-	bundleRelease.Dependencies = []domain.ComponentDependency{{ID: "dependency-demo-bundle-agent", ReleaseID: bundleRelease.ID, UpstreamComponentID: "component-demo-agent", UpstreamReleaseID: agentV1.ID, Purpose: "node agent policy"}}
-	components = append(components, seededComponent{component: component("component-demo-policy-bundle", "demo-policy-bundle", "Demo Policy Bundle", "由另一个组件 Owner 维护，用于演示传递影响通知。", ComponentOwnerK8sID, now), releases: []domain.ComponentRelease{bundleRelease}})
 
 	for _, item := range components {
 		if err := s.createComponentIfMissing(ctx, item.component); err != nil {
@@ -274,33 +253,44 @@ func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 }
 
 func component(id, slug, name, description, owner string, now time.Time) domain.Component {
-	return domain.Component{ID: id, Slug: slug, Name: name, Description: description, OwnerID: owner, CreatedAt: now, UpdatedAt: now}
-}
-
-func action(id, releaseID string, kind domain.ActionKind, playbook, group string, destructive bool, timeout int) domain.ActionDefinition {
-	risk := domain.RiskLow
-	if destructive {
-		risk = domain.RiskDestructive
+	layer, category, kind, requiredness := componentClassification(id)
+	return domain.Component{
+		ID: id, Slug: slug, Name: name, Description: description,
+		Layer: layer, Category: category, Kind: kind, Requiredness: requiredness,
+		OwnerID: owner, CreatedAt: now, UpdatedAt: now,
 	}
-	return domain.ActionDefinition{ID: id, ReleaseID: releaseID, Name: string(kind), Kind: kind, Playbook: playbook, Limit: group, HostGroup: group, AllowedParameters: []string{"agent_root", "expected_version"}, TimeoutSeconds: timeout, RiskLevel: risk, Destructive: destructive}
 }
 
-func upgradeAction() domain.ActionDefinition {
-	a := action("action-agent-upgrade-1.1", "release-demo-agent-1.1.0", domain.ActionUpgrade, "demo-node-agent/upgrade-v1.1.yml", "demo_nodes", false, 120)
-	a.AllowedParameters = []string{"agent_root", "from_version", "to_version"}
-	a.FromReleaseID, a.ToReleaseID = "release-demo-agent-1.0.0", "release-demo-agent-1.1.0"
-	return a
-}
-
-func agentSchema(expected string) map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"agent_root":       map[string]any{"type": "string", "default": "/tmp/newplatform-demo-agent"},
-			"expected_version": map[string]any{"type": "string", "default": expected},
-			"from_version":     map[string]any{"type": "string", "default": "1.0.0"},
-			"to_version":       map[string]any{"type": "string", "default": "1.1.0"},
-		},
+func componentClassification(id string) (domain.ComponentLayer, domain.ComponentCategory, domain.ComponentKind, domain.ComponentRequiredness) {
+	switch id {
+	case "component-bke-cert", "component-k8s-1.17.5-cert":
+		return domain.LayerHostFoundation, domain.CategorySecurity, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-bke-bootstrap":
+		return domain.LayerHostFoundation, domain.CategoryBootstrap, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-containerd":
+		return domain.LayerRuntimeState, domain.CategoryRuntime, domain.ComponentSoftware, domain.RequiredProfile
+	case "component-etcd":
+		return domain.LayerRuntimeState, domain.CategoryStateStore, domain.ComponentSoftware, domain.RequiredCore
+	case "component-k8s-1.17.5-etcd":
+		return domain.LayerRuntimeState, domain.CategoryStateStore, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-kubernetes":
+		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentSoftwareBundle, domain.RequiredCore
+	case "component-kube-proxy":
+		return domain.LayerOrchestrationCore, domain.CategoryNetwork, domain.ComponentSoftware, domain.RequiredProfile
+	case "component-k8s-1.17.5-master":
+		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-k8s-1.17.5-node":
+		return domain.LayerOrchestrationCore, domain.CategoryWorker, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-calico":
+		return domain.LayerClusterService, domain.CategoryNetwork, domain.ComponentSoftware, domain.RequiredProfile
+	case "component-coredns":
+		return domain.LayerClusterService, domain.CategoryDNS, domain.ComponentSoftware, domain.RequiredCore
+	case "component-bke-common", "component-bke-master":
+		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentDeliveryStage, domain.RequiredProfile
+	case "component-bke-addon":
+		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentSoftwareBundle, domain.RequiredProfile
+	default:
+		panic("missing seed component classification: " + id)
 	}
 }
 
@@ -476,43 +466,14 @@ func (s Seeder) seedScenarios(ctx context.Context, now time.Time) error {
 	if _, err := s.createScenarioIfMissing(ctx, openScenario, openRevision); err != nil {
 		return fmt.Errorf("seed OpenFuyao scenario: %w", err)
 	}
-
-	safeScenario := domain.Scenario{ID: "scenario-demo-agent", Slug: "demo-node-agent-upgrade", Name: "Demo Node Agent Upgrade", Description: "localhost 安全升级与显式 rollback 演示。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now.Add(time.Second)}
-	releasedAt := now
-	testedAt := now
-	oldRevision := domain.ScenarioRevision{
-		ID: "scenario-demo-agent-r1", ScenarioID: safeScenario.ID, Revision: 1, Status: domain.RevisionReleased,
-		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{scenarioNodeWithAction("agent-install", "Install agent v1.0.0", "release-demo-agent-1.0.0", domain.ActionInstall, "demo_nodes", 180, 100)}, Edges: []domain.ScenarioEdge{}},
-		ExecutionPolicy: map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "rollback"}, CreatedAt: now, TestPassedAt: &testedAt, ReleasedAt: &releasedAt,
-	}
-	safeScenarioCreated, err := s.createScenarioIfMissing(ctx, safeScenario, oldRevision)
-	if err != nil {
-		return fmt.Errorf("seed demo scenario: %w", err)
-	}
-	draft := domain.ScenarioRevision{
-		ID: "scenario-demo-agent-r2", ScenarioID: safeScenario.ID, Revision: 2, Status: domain.RevisionDraft,
-		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{scenarioNodeWithAction("agent-upgrade", "Upgrade agent to v1.1.0", "release-demo-agent-1.1.0", domain.ActionUpgrade, "demo_nodes", 180, 100)}, Edges: []domain.ScenarioEdge{}},
-		ExecutionPolicy: map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "rollback"}, CreatedAt: now.Add(time.Second),
-	}
-	return s.createScenarioRevisionIfMissing(ctx, draft, safeScenarioCreated)
+	return nil
 }
 
 func scenarioNode(id, name, releaseID, group string, x, y float64) domain.ScenarioNode {
-	return scenarioNodeWithAction(id, name, releaseID, domain.ActionInstall, group, x, y)
-}
-
-func scenarioNodeWithAction(id, name, releaseID string, kind domain.ActionKind, group string, x, y float64) domain.ScenarioNode {
-	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: kind, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{"agent_root"}, Position: domain.GraphPosition{X: x, Y: y}}
+	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}}
 }
 
 func (s Seeder) seedEnvironments(ctx context.Context, now time.Time) error {
-	localInventory, _ := json.Marshal(map[string]any{"hosts": []any{map[string]any{"name": "localhost", "address": "127.0.0.1", "groups": []any{"all", "demo_nodes"}}}})
-	local := domain.Environment{ID: "environment-local", Name: "Localhost Safe Lab", Description: "仅供 demo-node-agent 安全样例使用。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	localRevision := domain.EnvironmentRevision{ID: "environment-local-r1", EnvironmentID: local.ID, Revision: 1, Facts: map[string]any{"architecture": "arm64", "os": "macOS", "network": "IPv4", "demoOnly": true}, Inventory: localInventory, Parameters: map[string]any{"agent_root": "/tmp/newplatform-demo-agent"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
-	if err := s.createEnvironmentIfMissing(ctx, local, localRevision); err != nil {
-		return fmt.Errorf("seed local environment: %w", err)
-	}
-
 	openInventory, _ := json.Marshal(map[string]any{"hosts": []any{
 		map[string]any{"name": "bootstrap-1", "address": "192.0.2.10", "groups": []any{"bootstrap_host"}, "port": 22, "user": "sysop"},
 		map[string]any{"name": "manager-1", "address": "192.0.2.20", "groups": []any{"management_cluster_k8smaster"}, "port": 22, "user": "sysop"},

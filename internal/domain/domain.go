@@ -43,6 +43,79 @@ const (
 	ReleaseBundle ReleaseType = "bundle"
 )
 
+type ComponentLayer string
+
+const (
+	LayerHostFoundation          ComponentLayer = "host_foundation"
+	LayerRuntimeState            ComponentLayer = "runtime_state"
+	LayerOrchestrationCore       ComponentLayer = "orchestration_core"
+	LayerClusterService          ComponentLayer = "cluster_service"
+	LayerObservabilityManagement ComponentLayer = "observability_management"
+	LayerPlatformExtension       ComponentLayer = "platform_extension"
+)
+
+type ComponentCategory string
+
+const (
+	CategoryPreflight      ComponentCategory = "preflight"
+	CategoryBootstrap      ComponentCategory = "bootstrap"
+	CategorySecurity       ComponentCategory = "security"
+	CategoryRuntime        ComponentCategory = "runtime"
+	CategoryStateStore     ComponentCategory = "state_store"
+	CategoryControlPlane   ComponentCategory = "control_plane"
+	CategoryWorker         ComponentCategory = "worker"
+	CategoryNetwork        ComponentCategory = "network"
+	CategoryDNS            ComponentCategory = "dns"
+	CategoryIngress        ComponentCategory = "ingress"
+	CategoryStorage        ComponentCategory = "storage"
+	CategoryObservability  ComponentCategory = "observability"
+	CategoryNodeManagement ComponentCategory = "node_management"
+	CategoryPlatform       ComponentCategory = "platform"
+	CategoryAutoscaling    ComponentCategory = "autoscaling"
+)
+
+type ComponentKind string
+
+const (
+	ComponentSoftware       ComponentKind = "software"
+	ComponentSoftwareBundle ComponentKind = "software_bundle"
+	ComponentDeliveryStage  ComponentKind = "delivery_stage"
+)
+
+type ComponentRequiredness string
+
+const (
+	RequiredCore     ComponentRequiredness = "core_required"
+	RequiredProfile  ComponentRequiredness = "profile_required"
+	RequiredOptional ComponentRequiredness = "optional"
+)
+
+var componentCategoriesByLayer = map[ComponentLayer][]ComponentCategory{
+	LayerHostFoundation:          {CategoryPreflight, CategoryBootstrap, CategorySecurity},
+	LayerRuntimeState:            {CategoryRuntime, CategoryStateStore},
+	LayerOrchestrationCore:       {CategoryControlPlane, CategoryWorker, CategoryNetwork},
+	LayerClusterService:          {CategoryNetwork, CategoryDNS, CategoryIngress, CategoryStorage},
+	LayerObservabilityManagement: {CategoryObservability, CategoryNodeManagement},
+	LayerPlatformExtension:       {CategoryPlatform, CategoryAutoscaling},
+}
+
+func ValidateComponentClassification(component Component) error {
+	categories, layerValid := componentCategoriesByLayer[component.Layer]
+	if !layerValid {
+		return fmt.Errorf("%w: invalid component layer %q", ErrInvalid, component.Layer)
+	}
+	if !slices.Contains(categories, component.Category) {
+		return fmt.Errorf("%w: category %q is not valid for layer %q", ErrInvalid, component.Category, component.Layer)
+	}
+	if component.Kind != ComponentSoftware && component.Kind != ComponentSoftwareBundle && component.Kind != ComponentDeliveryStage {
+		return fmt.Errorf("%w: invalid component kind %q", ErrInvalid, component.Kind)
+	}
+	if component.Requiredness != RequiredCore && component.Requiredness != RequiredProfile && component.Requiredness != RequiredOptional {
+		return fmt.Errorf("%w: invalid component requiredness %q", ErrInvalid, component.Requiredness)
+	}
+	return nil
+}
+
 type RiskLevel string
 
 const (
@@ -53,14 +126,18 @@ const (
 )
 
 type Component struct {
-	ID          string             `json:"id"`
-	Slug        string             `json:"slug"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	OwnerID     string             `json:"ownerId"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
-	Releases    []ComponentRelease `json:"releases,omitempty"`
+	ID           string                `json:"id"`
+	Slug         string                `json:"slug"`
+	Name         string                `json:"name"`
+	Description  string                `json:"description"`
+	Layer        ComponentLayer        `json:"layer"`
+	Category     ComponentCategory     `json:"category"`
+	Kind         ComponentKind         `json:"kind"`
+	Requiredness ComponentRequiredness `json:"requiredness"`
+	OwnerID      string                `json:"ownerId"`
+	CreatedAt    time.Time             `json:"createdAt"`
+	UpdatedAt    time.Time             `json:"updatedAt"`
+	Releases     []ComponentRelease    `json:"releases,omitempty"`
 }
 
 type ComponentRelease struct {

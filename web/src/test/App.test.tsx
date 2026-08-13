@@ -16,6 +16,10 @@ const components = [{
   slug: 'containerd',
   ownerId: alice.id,
   description: 'CRI runtime',
+  layer: 'runtime_state',
+  category: 'runtime',
+  kind: 'software',
+  requiredness: 'profile_required',
   latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] },
   releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
 }];
@@ -58,7 +62,7 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         },
       }],
     }] : []);
-    if (url.endsWith('/environments')) return json([{ id: 'environment-local', name: 'Localhost Safe Lab', ownerId: dave.id, currentRevision: { id: 'environment-local-r1', revision: 1, hosts: [] } }]);
+    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', revision: 1, hosts: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
     return json({});
@@ -92,6 +96,35 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('环境 Owner')).toBeInTheDocument();
   });
 
+  it('renders all six component layers including an empty L5', async () => {
+    renderApp('/components');
+    expect((await screen.findAllByText('containerd')).length).toBeGreaterThan(0);
+    for (const label of ['L1', 'L2', 'L3', 'L4', 'L5', 'L6']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByText('可观测与节点管理层')).toBeInTheDocument();
+    expect(screen.getAllByText('本层暂无组件').length).toBeGreaterThan(0);
+  });
+
+  it('submits the complete component classification contract', async () => {
+    const fetchMock = installFetch();
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建组件' }));
+    await userEvent.type(screen.getByPlaceholderText('例如 containerd'), 'storage driver');
+    await userEvent.type(screen.getByPlaceholderText('containerd'), 'storage-driver');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '组件层级' }), 'cluster_service');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '能力类别' }), 'storage');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '组件形态' }), 'software');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '必选性' }), 'optional');
+    await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components') && init?.method === 'POST');
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        layer: 'cluster_service', category: 'storage', kind: 'software', requiredness: 'optional',
+      });
+    });
+  });
+
   it('surfaces a backend 403 instead of silently accepting a forbidden write', async () => {
     installFetch({ componentCreateForbidden: true });
     renderApp('/components');
@@ -117,14 +150,14 @@ describe('platform shell and RBAC UI', () => {
     const fetchMock = installFetch({ initialUser: carol, withScenario: true });
     renderApp('/scenarios');
     await userEvent.click(await screen.findByRole('button', { name: '环境测试' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-local');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-test');
     await userEvent.type(screen.getByLabelText('运行参数 rollback_version'), '1.0.0');
     await userEvent.click(screen.getByRole('button', { name: '开始完整测试' }));
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/scenario-revisions/scenario-openfuyao-r1/test-runs'));
       expect(call).toBeDefined();
-      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-local', runInput: { rollback_version: '1.0.0' } });
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-test', runInput: { rollback_version: '1.0.0' } });
     });
   });
 });

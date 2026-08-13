@@ -10,7 +10,6 @@ import (
 type componentDTO struct {
 	domain.Component
 	OwnerName     string                   `json:"ownerName"`
-	Kind          domain.ReleaseType       `json:"kind,omitempty"`
 	LatestRelease *domain.ComponentRelease `json:"latestRelease,omitempty"`
 	ReleaseCount  int                      `json:"releaseCount"`
 }
@@ -244,7 +243,7 @@ func (h *Handler) componentDTO(r *http.Request, component domain.Component) comp
 	output := componentDTO{Component: component, OwnerName: user.Name, ReleaseCount: len(component.Releases)}
 	if len(component.Releases) > 0 {
 		latest := component.Releases[0]
-		output.LatestRelease, output.Kind = &latest, latest.Type
+		output.LatestRelease = &latest
 	}
 	return output
 }

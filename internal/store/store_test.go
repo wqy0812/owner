@@ -34,7 +34,11 @@ func newTestStore(t *testing.T) *Store {
 }
 
 func componentFixture(id, owner string) domain.Component {
-	return domain.Component{ID: id, Slug: id, Name: id, OwnerID: owner, CreatedAt: testNow, UpdatedAt: testNow}
+	return domain.Component{
+		ID: id, Slug: id, Name: id, Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime,
+		Kind: domain.ComponentSoftware, Requiredness: domain.RequiredProfile,
+		OwnerID: owner, CreatedAt: testNow, UpdatedAt: testNow,
+	}
 }
 
 func releaseFixture(id, component, version string, status domain.ReleaseStatus) domain.ComponentRelease {
@@ -98,6 +102,15 @@ func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 	draft.ReleaseNotes = "illegal mutation"
 	if err := s.UpdateDraftRelease(ctx, draft); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("released update = %v, want conflict", err)
+	}
+}
+
+func TestComponentClassificationDatabaseConstraint(t *testing.T) {
+	s := newTestStore(t)
+	component := componentFixture("invalid-classification", "component-alice")
+	component.Category = domain.CategoryDNS
+	if err := s.CreateComponent(context.Background(), component); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("invalid layer/category insert=%v, want conflict", err)
 	}
 }
 

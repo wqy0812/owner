@@ -4,12 +4,17 @@
 
 ## 能力
 
-- 组件 Owner：维护组件和不可变发布版本、依赖、动作与影响通知。
+- 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知。
 - 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
 - 环境 Owner：管理 Inventory、环境参数与凭据引用，审批高风险作业。
 - 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
-- 示例：OpenFuyao 管理集群、Kubernetes 1.17.5 集群搭建作业快照，以及可在 localhost 安全执行的 Demo Agent 安装/升级/校验/回退。
+- 示例：OpenFuyao 管理集群和 Kubernetes 1.17.5 集群搭建作业快照。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
+
+## 文档
+
+- [平台设计文档（后端为主）](docs/backend-design.md)
+- [平台操作手册（分角色）](docs/operation-manual.md)
 
 > 这是本地 Demo，不是生产控制面。身份切换不包含密码认证；凭据仅允许保存文件路径或环境变量引用。
 
@@ -45,7 +50,13 @@ make build
 
 `make build` 先构建前端，再将静态资源嵌入 `bin/newplatform`。
 
-`make test` 会执行 Go/React 测试，并在 localhost 真正运行 Demo Agent 的 install → upgrade → verify → rollback → verify → cleanup 生命周期。它只写入测试专用临时目录。
+`make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
+
+## 组件分层
+
+组件按 L1 主机基础与安全、L2 运行时与状态存储、L3 Kubernetes 编排核心、L4 集群网络/服务发现/存储、L5 可观测与节点管理、L6 平台扩展分组。每个组件同时记录能力类别、组件形态和必选性；环境架构、操作系统、IP 协议族等仍属于 Release 的环境约束。
+
+分层用于目录展示、检索和编排提示，不代表精确执行顺序。Release 依赖锁定精确上游版本，场景 DAG 的边决定实际拓扑和执行顺序。
 
 ## Kubernetes 1.17.5 集群搭建作业
 
@@ -76,8 +87,6 @@ Demo 会幂等写入 `scenario-k8s-1.17.5` 场景及 `environment-k8s-1.17.5-tem
 - 每个环境同时只有一个活动执行；其他请求 FIFO 排队。
 - `recovery`、`clean`、`destroy`、`uninstall` 以及显式 destructive 动作必须由环境 Owner 审批。
 - OpenFuyao build 包含 `rcv`，因此默认被视为 destructive；没有合格主机、内部介质和仓库时不要批准执行。
-
-安全升级样例默认只修改目标机 `/tmp/newplatform-demo-agent`，详见 `examples/ansible/demo-node-agent/README.md`。
 
 ## 主要配置
 

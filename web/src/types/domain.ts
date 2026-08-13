@@ -9,6 +9,10 @@ export interface User {
 
 export type ReleaseState = 'draft' | 'released' | 'deprecated';
 export type VerificationState = 'unverified' | 'testing' | 'passed' | 'failed';
+export type ComponentLayer = 'host_foundation' | 'runtime_state' | 'orchestration_core' | 'cluster_service' | 'observability_management' | 'platform_extension';
+export type ComponentCategory = 'preflight' | 'bootstrap' | 'security' | 'runtime' | 'state_store' | 'control_plane' | 'worker' | 'network' | 'dns' | 'ingress' | 'storage' | 'observability' | 'node_management' | 'platform' | 'autoscaling';
+export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage';
+export type ComponentRequiredness = 'core_required' | 'profile_required' | 'optional';
 
 export interface ComponentDependency {
   componentId: string;
@@ -57,7 +61,10 @@ export interface Component {
   description?: string;
   ownerId: string;
   ownerName?: string;
-  kind?: 'atomic' | 'bundle';
+  layer: ComponentLayer;
+  category: ComponentCategory;
+  kind: ComponentKind;
+  requiredness: ComponentRequiredness;
   latestRelease?: ComponentRelease;
   releases?: ComponentRelease[];
   releaseCount?: number;
@@ -76,7 +83,7 @@ export interface ScenarioNodeData extends Record<string, unknown> {
   values?: Record<string, unknown>;
   bindings?: Record<string, string>;
   runInputs?: string[];
-  phase?: string;
+  layer?: ComponentLayer;
 }
 
 export interface ScenarioNode {

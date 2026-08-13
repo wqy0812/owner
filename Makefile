@@ -32,7 +32,7 @@ test:
 	$(MAKE) test-ansible
 
 test-ansible:
-	NEWPLATFORM_ANSIBLE_INTEGRATION=1 $(GO) test ./internal/ansible -run TestDemoNodeAgentLifecycleWithAnsible -count=1 -v
+	NEWPLATFORM_ANSIBLE_INTEGRATION=1 $(GO) test ./internal/ansible -run TestRunnerWithTemporaryLocalPlaybook -count=1 -v
 
 test-e2e:
 	$(PNPM) --dir web test:e2e

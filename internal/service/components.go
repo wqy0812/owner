@@ -45,6 +45,9 @@ func (p *Platform) CreateComponent(ctx context.Context, user domain.User, compon
 	if component.Name == "" {
 		return component, fmt.Errorf("%w: component name is required", domain.ErrInvalid)
 	}
+	if err := domain.ValidateComponentClassification(component); err != nil {
+		return component, err
+	}
 	now := time.Now().UTC()
 	component.ID = newID("component")
 	component.OwnerID = user.ID
@@ -52,7 +55,10 @@ func (p *Platform) CreateComponent(ctx context.Context, user domain.User, compon
 	if err := p.store.CreateComponent(ctx, component); err != nil {
 		return component, err
 	}
-	p.audit(ctx, user, "component.created", "component", component.ID, map[string]any{"slug": component.Slug})
+	p.audit(ctx, user, "component.created", "component", component.ID, map[string]any{
+		"slug": component.Slug, "layer": component.Layer, "category": component.Category,
+		"kind": component.Kind, "requiredness": component.Requiredness,
+	})
 	return component, nil
 }
 
@@ -62,6 +68,9 @@ func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id str
 		return component, err
 	}
 	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+		return component, err
+	}
+	if err := domain.ValidateComponentClassification(patch); err != nil {
 		return component, err
 	}
 	if patch.Name != "" {
@@ -74,11 +83,18 @@ func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id str
 		component.Slug = patch.Slug
 	}
 	component.Description = patch.Description
+	component.Layer = patch.Layer
+	component.Category = patch.Category
+	component.Kind = patch.Kind
+	component.Requiredness = patch.Requiredness
 	component.UpdatedAt = time.Now().UTC()
 	if err := p.store.UpdateComponent(ctx, component); err != nil {
 		return component, err
 	}
-	p.audit(ctx, user, "component.updated", "component", component.ID, map[string]any{"slug": component.Slug})
+	p.audit(ctx, user, "component.updated", "component", component.ID, map[string]any{
+		"slug": component.Slug, "layer": component.Layer, "category": component.Category,
+		"kind": component.Kind, "requiredness": component.Requiredness,
+	})
 	return component, nil
 }
 

@@ -10,12 +10,12 @@ import (
 )
 
 func (s *Store) CreateComponent(ctx context.Context, c domain.Component) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO components(id,slug,name,description,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, c.ID, c.Slug, c.Name, c.Description, c.OwnerID, timeText(c.CreatedAt), timeText(c.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO components(id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, c.ID, c.Slug, c.Name, c.Description, c.Layer, c.Category, c.Kind, c.Requiredness, c.OwnerID, timeText(c.CreatedAt), timeText(c.UpdatedAt))
 	return mapSQLError(err)
 }
 
 func (s *Store) UpdateComponent(ctx context.Context, c domain.Component) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE components SET slug=?,name=?,description=?,updated_at=? WHERE id=?`, c.Slug, c.Name, c.Description, timeText(c.UpdatedAt), c.ID)
+	res, err := s.db.ExecContext(ctx, `UPDATE components SET slug=?,name=?,description=?,layer=?,category=?,component_kind=?,requiredness=?,updated_at=? WHERE id=?`, c.Slug, c.Name, c.Description, c.Layer, c.Category, c.Kind, c.Requiredness, timeText(c.UpdatedAt), c.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -29,7 +29,7 @@ func (s *Store) UpdateComponent(ctx context.Context, c domain.Component) error {
 func (s *Store) GetComponent(ctx context.Context, id string, includeReleases bool) (domain.Component, error) {
 	var c domain.Component
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,slug,name,description,owner_id,created_at,updated_at FROM components WHERE id=?`, id).Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.OwnerID, &created, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at FROM components WHERE id=?`, id).Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.Layer, &c.Category, &c.Kind, &c.Requiredness, &c.OwnerID, &created, &updated)
 	if err != nil {
 		return c, mapSQLError(err)
 	}
@@ -42,7 +42,7 @@ func (s *Store) GetComponent(ctx context.Context, id string, includeReleases boo
 }
 
 func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domain.Component, error) {
-	query := `SELECT id,slug,name,description,owner_id,created_at,updated_at FROM components`
+	query := `SELECT id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at FROM components`
 	var args []any
 	if viewer.Role == domain.RoleComponentOwner {
 		query += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND r.status='released')`
@@ -50,7 +50,7 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 	} else {
 		query += ` WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND r.status='released')`
 	}
-	query += ` ORDER BY name`
+	query += ` ORDER BY CASE layer WHEN 'host_foundation' THEN 1 WHEN 'runtime_state' THEN 2 WHEN 'orchestration_core' THEN 3 WHEN 'cluster_service' THEN 4 WHEN 'observability_management' THEN 5 WHEN 'platform_extension' THEN 6 ELSE 7 END, category, name`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 	for rows.Next() {
 		var c domain.Component
 		var cr, up string
-		if err := rows.Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.OwnerID, &cr, &up); err != nil {
+		if err := rows.Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.Layer, &c.Category, &c.Kind, &c.Requiredness, &c.OwnerID, &cr, &up); err != nil {
 			return nil, err
 		}
 		c.CreatedAt = parseTime(cr)

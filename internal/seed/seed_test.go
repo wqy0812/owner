@@ -15,7 +15,7 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func TestSeederIsIdempotentAndRegistersDemoModel(t *testing.T) {
+func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -35,15 +35,25 @@ func TestSeederIsIdempotentAndRegistersDemoModel(t *testing.T) {
 	}
 	viewer, _ := database.GetUser(ctx, ComponentOwnerRuntimeID)
 	components, err := database.ListComponents(ctx, viewer)
-	if err != nil || len(components) != 17 {
+	if err != nil || len(components) != 15 {
 		t.Fatalf("components=%d err=%v", len(components), err)
 	}
-	agent, err := database.GetComponent(ctx, "component-demo-agent", true)
-	if err != nil || len(agent.Releases) != 2 {
-		t.Fatalf("agent releases=%d err=%v", len(agent.Releases), err)
+	for _, component := range components {
+		if err := domain.ValidateComponentClassification(component); err != nil {
+			t.Fatalf("component %s classification: %v", component.ID, err)
+		}
 	}
-	if draft, err := database.GetComponentRelease(ctx, "release-demo-agent-1.1.0"); err != nil || draft.Status != domain.ReleaseDraft || len(draft.Actions) != 3 {
-		t.Fatalf("upgrade draft=%+v err=%v", draft, err)
+	for id, wantLayer := range map[string]domain.ComponentLayer{
+		"component-bke-cert": domain.LayerHostFoundation, "component-k8s-1.17.5-cert": domain.LayerHostFoundation,
+		"component-containerd": domain.LayerRuntimeState, "component-etcd": domain.LayerRuntimeState,
+		"component-kubernetes": domain.LayerOrchestrationCore, "component-kube-proxy": domain.LayerOrchestrationCore,
+		"component-calico": domain.LayerClusterService, "component-coredns": domain.LayerClusterService,
+		"component-bke-common": domain.LayerPlatformExtension, "component-bke-master": domain.LayerPlatformExtension,
+	} {
+		component, getErr := database.GetComponent(ctx, id, false)
+		if getErr != nil || component.Layer != wantLayer {
+			t.Fatalf("component %s layer=%s want=%s err=%v", id, component.Layer, wantLayer, getErr)
+		}
 	}
 	open, err := database.GetScenarioRevision(ctx, "scenario-openfuyao-r1")
 	if err != nil || len(open.Graph.Nodes) != 5 || len(open.Graph.Edges) != 4 {
@@ -62,15 +72,15 @@ func TestSeederIsIdempotentAndRegistersDemoModel(t *testing.T) {
 		stagePlaybooks[playbook] = true
 	}
 	environments, err := database.ListEnvironments(ctx)
-	if err != nil || len(environments) != 3 {
+	if err != nil || len(environments) != 2 {
 		t.Fatalf("environments=%d err=%v", len(environments), err)
 	}
-	assertTableCount(t, database, "component_releases", 18)
-	assertTableCount(t, database, "component_dependencies", 8)
-	assertTableCount(t, database, "action_definitions", 14)
-	assertTableCount(t, database, "scenarios", 3)
-	assertTableCount(t, database, "scenario_revisions", 4)
-	assertTableCount(t, database, "environment_revisions", 3)
+	assertTableCount(t, database, "component_releases", 15)
+	assertTableCount(t, database, "component_dependencies", 7)
+	assertTableCount(t, database, "action_definitions", 9)
+	assertTableCount(t, database, "scenarios", 2)
+	assertTableCount(t, database, "scenario_revisions", 2)
+	assertTableCount(t, database, "environment_revisions", 2)
 	assertTableCount(t, database, "audit_events", 2)
 }
 
@@ -300,10 +310,10 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 17)
-	assertTableCount(t, database, "component_releases", 18)
-	assertTableCount(t, database, "scenarios", 3)
-	assertTableCount(t, database, "environments", 3)
+	assertTableCount(t, database, "components", 15)
+	assertTableCount(t, database, "component_releases", 15)
+	assertTableCount(t, database, "scenarios", 2)
+	assertTableCount(t, database, "environments", 2)
 	if _, err := database.GetComponentRelease(ctx, "release-k8s-1.17.5-node"); err != nil {
 		t.Fatalf("Kubernetes 1.17.5 seed was not added: %v", err)
 	}
@@ -330,10 +340,10 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("repeat incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 17)
-	assertTableCount(t, database, "component_releases", 18)
-	assertTableCount(t, database, "scenarios", 3)
-	assertTableCount(t, database, "environments", 3)
+	assertTableCount(t, database, "components", 15)
+	assertTableCount(t, database, "component_releases", 15)
+	assertTableCount(t, database, "scenarios", 2)
+	assertTableCount(t, database, "environments", 2)
 	assertTableCount(t, database, "audit_events", 2)
 }
 
@@ -446,8 +456,6 @@ func TestOpenFuyaoSnapshotAndJobReferences(t *testing.T) {
 		filepath.Join(snapshotRoot, "component-bke-common.platform.yml"),
 		filepath.Join(snapshotRoot, "component-bke-addon.platform.yml"),
 		filepath.Join(snapshotRoot, "component-bke-master.platform.yml"),
-		filepath.Join(repositoryRoot, "examples", "ansible", "demo-node-agent", "upgrade-v1.1.yml"),
-		filepath.Join(repositoryRoot, "examples", "ansible", "demo-node-agent", "rollback-v1.0.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "cert_1175.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "etcd_serverless.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "master_1175.yml"),

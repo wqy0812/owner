@@ -6,7 +6,14 @@ import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, StatusPill, fo
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { Component, ComponentRelease, Environment, ImpactPreview } from '../types/domain';
+import {
+  COMPONENT_CATEGORY_LABELS,
+  COMPONENT_KIND_LABELS,
+  COMPONENT_LAYERS,
+  COMPONENT_REQUIREDNESS_LABELS,
+  componentLayer,
+} from '../types/componentClassification';
+import type { Component, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, Environment, ImpactPreview } from '../types/domain';
 
 export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
@@ -29,6 +36,10 @@ export function ComponentsPage() {
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
   const mine = selected?.ownerId === user.id && user.role === 'component_owner';
   const canTest = mine || user.role === 'environment_owner';
+  const layeredComponents = COMPONENT_LAYERS.map((layer) => ({
+    layer,
+    components: components?.filter((component) => component.layer === layer.value) ?? [],
+  }));
 
   async function previewPublish(release: ComponentRelease) {
     setPublishRelease(release);
@@ -73,20 +84,23 @@ export function ComponentsPage() {
         <div className="catalog-layout">
           <aside className="catalog-list panel">
             <div className="catalog-list__header"><strong>组件目录</strong><span>{components?.length ?? 0}</span></div>
-            {components?.length ? components.map((component) => (
-              <button key={component.id} className={`catalog-item${selected?.id === component.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: component.id })}>
-                <span className="catalog-item__icon"><Boxes size={18} /></span>
-                <span><strong>{component.name}</strong><small>{component.latestRelease?.version ?? '尚无发布'} · {component.kind === 'bundle' ? '组合组件' : '原子组件'}</small></span>
-                {component.ownerId === user.id && <span className="mine-dot" title="我负责的组件" />}
-              </button>
-            )) : <EmptyState title="暂无组件" description="组件 Owner 可以创建第一个组件。" />}
+            {components?.length ? layeredComponents.map(({ layer, components: layerComponents }) => <section className="catalog-layer" key={layer.value}>
+              <header><span>{layer.code}</span><div><strong>{layer.label}</strong><small>{layerComponents.length} 个组件</small></div></header>
+              {layerComponents.length ? layerComponents.map((component) => (
+                <button key={component.id} className={`catalog-item${selected?.id === component.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: component.id })}>
+                  <span className="catalog-item__icon"><Boxes size={18} /></span>
+                  <span><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {COMPONENT_KIND_LABELS[component.kind]}</small></span>
+                  {component.ownerId === user.id && <span className="mine-dot" title="我负责的组件" />}
+                </button>
+              )) : <div className="catalog-layer__empty">本层暂无组件</div>}
+            </section>) : <EmptyState title="暂无组件" description="组件 Owner 可以创建第一个组件。" />}
           </aside>
 
           {selected ? <section className="detail-stack">
             <article className="panel component-hero">
               <div className="component-hero__title">
                 <span className="component-logo"><Boxes size={26} /></span>
-                <div><div className="eyebrow">{selected.slug ?? selected.kind ?? 'component'}</div><h2>{selected.name}</h2><p>{selected.description ?? '暂无组件说明'}</p></div>
+                <div><div className="eyebrow">{componentLayer(selected.layer).code} · {selected.slug ?? 'component'}</div><h2>{selected.name}</h2><p>{selected.description ?? '暂无组件说明'}</p><div className="classification-badges"><span>{componentLayer(selected.layer).label}</span><span>{COMPONENT_CATEGORY_LABELS[selected.category]}</span><span>{COMPONENT_KIND_LABELS[selected.kind]}</span><span>{COMPONENT_REQUIREDNESS_LABELS[selected.requiredness]}</span></div></div>
               </div>
               <div className="component-hero__meta">
                 <span><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}</span>
@@ -152,11 +166,11 @@ function EditComponentModal({ component, onClose, onDone }: { component: Compone
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget);
     try {
-      await api.updateComponent(component.id, { name: String(form.get('name')), slug: String(form.get('slug')), description: String(form.get('description')) });
+      await api.updateComponent(component.id, componentInput(form));
       notify('success', '组件信息已更新'); onDone();
     } catch (reason) { notify('error', '更新组件失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={`编辑 ${component.name}`} description="修改组件元数据不会改变任何已发布 Release。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9-]+" /></label><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
+  return <Modal title={`编辑 ${component.name}`} description="分类用于展示和编排提示，不改变 Release 依赖或 DAG 顺序。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9-]+" /></label><ClassificationFields component={component} /><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
 }
 
 function CreateComponentModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -165,16 +179,40 @@ function CreateComponentModal({ onClose, onDone }: { onClose: () => void; onDone
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true);
     const form = new FormData(event.currentTarget);
-    try { await api.createComponent({ name: String(form.get('name')), slug: String(form.get('slug')), description: String(form.get('description')) }); notify('success', '组件已创建', '现在可以创建首个 Draft 版本。'); onDone(); }
+    try { await api.createComponent(componentInput(form)); notify('success', '组件已创建', '现在可以创建首个 Draft 版本。'); onDone(); }
     catch (reason) { notify('error', '创建失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title="新建组件" description="组件归属于当前 Component Owner；atomic / bundle 类型在版本层定义。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" required placeholder="例如 containerd" /></label><label><span>标识</span><input name="slug" required pattern="[a-z0-9-]+" placeholder="containerd" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建组件'}</button></footer></form></Modal>;
+  return <Modal title="新建组件" description="组件分类与 Release 的 atomic / bundle 交付类型相互独立。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" required placeholder="例如 containerd" /></label><label><span>标识</span><input name="slug" required pattern="[a-z0-9-]+" placeholder="containerd" /></label><ClassificationFields /><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建组件'}</button></footer></form></Modal>;
+}
+
+function componentInput(form: FormData): Partial<Component> {
+  return {
+    name: String(form.get('name')),
+    slug: String(form.get('slug')),
+    description: String(form.get('description')),
+    layer: String(form.get('layer')) as ComponentLayer,
+    category: String(form.get('category')) as Component['category'],
+    kind: String(form.get('kind')) as ComponentKind,
+    requiredness: String(form.get('requiredness')) as ComponentRequiredness,
+  };
+}
+
+function ClassificationFields({ component }: { component?: Component }) {
+  const [layer, setLayer] = useState<ComponentLayer>(component?.layer ?? COMPONENT_LAYERS[0].value);
+  const definition = componentLayer(layer);
+  const category = definition.categories.includes(component?.category ?? definition.categories[0]) ? component?.category : definition.categories[0];
+  return <>
+    <label><span>组件层级</span><select name="layer" value={layer} onChange={(event) => setLayer(event.target.value as ComponentLayer)}>{COMPONENT_LAYERS.map((item) => <option key={item.value} value={item.value}>{item.code} · {item.label}</option>)}</select></label>
+    <label><span>能力类别</span><select key={layer} name="category" defaultValue={category}>{definition.categories.map((item) => <option key={item} value={item}>{COMPONENT_CATEGORY_LABELS[item]}</option>)}</select></label>
+    <label><span>组件形态</span><select name="kind" defaultValue={component?.kind ?? 'software'}><option value="software">独立软件</option><option value="software_bundle">软件组合</option><option value="delivery_stage">交付阶段</option></select></label>
+    <label><span>必选性</span><select name="requiredness" defaultValue={component?.requiredness ?? 'profile_required'}><option value="core_required">核心必选</option><option value="profile_required">方案必选</option><option value="optional">可选</option></select></label>
+  </>;
 }
 
 function NewVersionModal({ component, onClose, onDone }: { component: Component; onClose: () => void; onDone: () => void }) {
   const { notify } = useApp(); const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget); const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on' }; try { if (component.latestRelease) await api.cloneRelease(component.latestRelease.id, input); else await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' }); notify('success', 'Draft 已创建', component.latestRelease ? '依赖、类型和动作已从上一版本复制。' : '请继续配置依赖和 Ansible 动作。'); onDone(); } catch (reason) { notify('error', '创建版本失败', displayError(reason)); } finally { setBusy(false); } }
-  return <Modal title={`更新 ${component.name}`} description={component.latestRelease ? '从当前版本克隆为新 Draft，Released 版本保持不变。' : '创建组件的首个 Draft Release。'} onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={component.latestRelease?.type ?? component.kind ?? 'atomic'} disabled={Boolean(component.latestRelease)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer></form></Modal>;
+  return <Modal title={`更新 ${component.name}`} description={component.latestRelease ? '从当前版本克隆为新 Draft，Released 版本保持不变。' : '创建组件的首个 Draft Release。'} onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={component.latestRelease?.type ?? (component.kind === 'software_bundle' ? 'bundle' : 'atomic')} disabled={Boolean(component.latestRelease)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer></form></Modal>;
 }
 
 function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {

@@ -1,6 +1,30 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+func TestValidateComponentClassification(t *testing.T) {
+	for layer, categories := range componentCategoriesByLayer {
+		for _, category := range categories {
+			component := Component{Layer: layer, Category: category, Kind: ComponentSoftware, Requiredness: RequiredProfile}
+			if err := ValidateComponentClassification(component); err != nil {
+				t.Fatalf("valid classification %s/%s: %v", layer, category, err)
+			}
+		}
+	}
+	for _, invalid := range []Component{
+		{Layer: LayerRuntimeState, Category: CategoryNetwork, Kind: ComponentSoftware, Requiredness: RequiredProfile},
+		{Layer: "unknown", Category: CategoryRuntime, Kind: ComponentSoftware, Requiredness: RequiredProfile},
+		{Layer: LayerRuntimeState, Category: CategoryRuntime, Kind: "unknown", Requiredness: RequiredProfile},
+		{Layer: LayerRuntimeState, Category: CategoryRuntime, Kind: ComponentSoftware, Requiredness: "unknown"},
+	} {
+		if err := ValidateComponentClassification(invalid); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid classification %+v returned %v", invalid, err)
+		}
+	}
+}
 
 func TestValidateGraphRejectsCycleAndMissingFields(t *testing.T) {
 	graph := ScenarioGraph{

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -221,11 +220,6 @@ func (h *Handler) revisionDTO(r *http.Request, revision domain.ScenarioRevision)
 			if component, componentErr := h.platform.Store().GetComponent(r.Context(), release.ComponentID, false); componentErr == nil && node.Name == "" {
 				data["label"] = component.Name
 			}
-		}
-		if strings.Contains(node.HostGroup, "bootstrap") {
-			data["phase"] = "BOOTSTRAP"
-		} else {
-			data["phase"] = "MANAGEMENT"
 		}
 		nodes = append(nodes, map[string]any{"id": node.ID, "type": "component", "position": node.Position, "data": data})
 	}
