@@ -59,6 +59,44 @@ func (s *Store) GetRun(ctx context.Context, id string) (domain.Run, error) {
 	return r, nil
 }
 
+// CanViewRun answers the run authorization question without loading steps or
+// approval details. Keep this query aligned with ListRuns so SSE filtering and
+// the runs API enforce the same ownership rules.
+func (s *Store) CanViewRun(ctx context.Context, viewer domain.User, runID string) (bool, error) {
+	var visible int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM runs r
+  WHERE r.id=? AND (
+    r.requested_by=?
+    OR (?='environment_owner' AND EXISTS (
+      SELECT 1 FROM environments e WHERE e.id=r.environment_id AND e.owner_id=?
+    ))
+    OR (?='component_owner' AND (
+      EXISTS (
+        SELECT 1 FROM component_releases cr JOIN components c ON c.id=cr.component_id
+        WHERE cr.id=r.component_release_id AND c.owner_id=?
+      )
+      OR EXISTS (
+        SELECT 1 FROM json_each(r.input_snapshot_json, '$.steps') locked_step
+        JOIN component_releases cr ON cr.id=json_extract(locked_step.value, '$.releaseId')
+        JOIN components c ON c.id=cr.component_id
+        WHERE c.owner_id=?
+      )
+    ))
+    OR (?='scenario_owner' AND EXISTS (
+      SELECT 1 FROM scenario_revisions sr JOIN scenarios s ON s.id=sr.scenario_id
+      WHERE sr.id=r.scenario_revision_id AND s.owner_id=?
+    ))
+  )
+)`, runID, viewer.ID,
+		viewer.Role, viewer.ID,
+		viewer.Role, viewer.ID, viewer.ID,
+		viewer.Role, viewer.ID,
+	).Scan(&visible)
+	return visible != 0, err
+}
+
 func (s *Store) ListRuns(ctx context.Context, viewer domain.User) ([]domain.Run, error) {
 	q := runSelect
 	args := []any{}

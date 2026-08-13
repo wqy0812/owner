@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/store"
 )
 
 type graphInput struct {
@@ -60,9 +61,14 @@ func (h *Handler) listScenarios(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	releases, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	output := make([]map[string]any, 0, len(scenarios))
 	for _, scenario := range scenarios {
-		output = append(output, h.scenarioDTO(r, scenario))
+		output = append(output, h.scenarioDTO(r, scenario, releases))
 	}
 	writeItems(w, output)
 }
@@ -78,7 +84,7 @@ func (h *Handler) createScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusCreated, h.scenarioDTO(r, scenario))
+	h.writeScenarioDTO(w, r, http.StatusCreated, scenario)
 }
 
 func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +93,7 @@ func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusCreated, h.revisionDTO(r, revision))
+	h.writeRevisionDTO(w, r, http.StatusCreated, revision)
 }
 
 func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +102,7 @@ func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, h.scenarioDTO(r, scenario))
+	h.writeScenarioDTO(w, r, http.StatusOK, scenario)
 }
 
 func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +126,7 @@ func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, h.revisionDTO(r, revision))
+	h.writeRevisionDTO(w, r, http.StatusOK, revision)
 }
 
 func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +180,7 @@ func (h *Handler) publishScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, h.revisionDTO(r, revision))
+	h.writeRevisionDTO(w, r, http.StatusOK, revision)
 }
 
 func (h *Handler) deprecateScenario(w http.ResponseWriter, r *http.Request) {
@@ -183,16 +189,34 @@ func (h *Handler) deprecateScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, h.revisionDTO(r, revision))
+	h.writeRevisionDTO(w, r, http.StatusOK, revision)
 }
 
-func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario) map[string]any {
+func (h *Handler) writeScenarioDTO(w http.ResponseWriter, r *http.Request, status int, scenario domain.Scenario) {
+	metadata, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, status, h.scenarioDTO(r, scenario, metadata))
+}
+
+func (h *Handler) writeRevisionDTO(w http.ResponseWriter, r *http.Request, status int, revision domain.ScenarioRevision) {
+	metadata, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, status, h.revisionDTO(revision, metadata))
+}
+
+func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
 	owner, _ := h.platform.Store().GetUser(r.Context(), scenario.OwnerID)
 	sort.SliceStable(scenario.Revisions, func(i, j int) bool { return scenario.Revisions[i].Revision > scenario.Revisions[j].Revision })
 	revisions := make([]map[string]any, 0, len(scenario.Revisions))
 	var current map[string]any
 	for _, revision := range scenario.Revisions {
-		dto := h.revisionDTO(r, revision)
+		dto := h.revisionDTO(revision, releases)
 		revisions = append(revisions, dto)
 		if revision.ID == scenario.CurrentRevisionID {
 			current = dto
@@ -208,17 +232,17 @@ func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario) map[str
 	}
 }
 
-func (h *Handler) revisionDTO(r *http.Request, revision domain.ScenarioRevision) map[string]any {
+func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
 	nodes := make([]map[string]any, 0, len(revision.Graph.Nodes))
 	for _, node := range revision.Graph.Nodes {
 		data := map[string]any{
 			"label": node.Name, "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
 			"values": node.Values, "bindings": node.Bindings, "runInputs": node.RunInputs,
 		}
-		if release, err := h.platform.Store().GetComponentRelease(r.Context(), node.ReleaseID); err == nil {
+		if release, ok := releases[node.ReleaseID]; ok {
 			data["componentId"], data["version"] = release.ComponentID, release.Version
-			if component, componentErr := h.platform.Store().GetComponent(r.Context(), release.ComponentID, false); componentErr == nil && node.Name == "" {
-				data["label"] = component.Name
+			if node.Name == "" {
+				data["label"] = release.ComponentName
 			}
 		}
 		nodes = append(nodes, map[string]any{"id": node.ID, "type": "component", "position": node.Position, "data": data})

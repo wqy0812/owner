@@ -29,6 +29,14 @@ func (f *fakeRunner) Digest(playbook string) (string, string, error) {
 	return "playbook:" + playbook, "fixed-tree-digest", nil
 }
 
+func (f *fakeRunner) DigestPlan(playbooks []string) (map[string]string, string, error) {
+	digests := make(map[string]string, len(playbooks))
+	for _, playbook := range playbooks {
+		digests[playbook] = "playbook:" + playbook
+	}
+	return digests, "fixed-tree-digest", nil
+}
+
 func (f *fakeRunner) Run(_ context.Context, request ansiblerunner.Request) (ansiblerunner.Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, request.Playbook)
@@ -536,6 +544,7 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		t.Fatalf("Kubernetes 1.17.5 locked plan=%#v", storedRun.InputSnapshot)
 	}
 	limitsByPlaybook := map[string]map[string]bool{}
+	approvalLocked := false
 	for index, rawStep := range lockedSteps {
 		step, ok := rawStep.(map[string]any)
 		playbook, _ := step["playbook"].(string)
@@ -554,6 +563,12 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		if _, leaked := variables["K8S_ENCRYPTION_KEY"]; leaked {
 			t.Fatalf("runtime encryption key leaked into locked step %d", index)
 		}
+		if needsApproval, _ := step["needsApproval"].(bool); needsApproval {
+			approvalLocked = true
+		}
+	}
+	if !approvalLocked {
+		t.Fatal("Kubernetes 1.17.5 plan did not lock destructive approval metadata")
 	}
 	for _, playbook := range []string{
 		"k8s-1.17.5-cluster/components/docker.yml",

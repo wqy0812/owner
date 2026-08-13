@@ -74,47 +74,8 @@ func (h *Handler) decideRun(w http.ResponseWriter, r *http.Request, decision str
 }
 
 func (h *Handler) canViewRun(r *http.Request, user domain.User, runID string) bool {
-	run, err := h.platform.Store().GetRun(r.Context(), runID)
-	if err != nil {
-		return false
-	}
-	if run.RequestedBy == user.ID {
-		return true
-	}
-	if environment, getErr := h.platform.Store().GetEnvironment(r.Context(), run.EnvironmentID, false); getErr == nil && user.Role == domain.RoleEnvironmentOwner && environment.OwnerID == user.ID {
-		return true
-	}
-	if run.ComponentReleaseID != "" && user.Role == domain.RoleComponentOwner {
-		if release, getErr := h.platform.Store().GetComponentRelease(r.Context(), run.ComponentReleaseID); getErr == nil {
-			if component, componentErr := h.platform.Store().GetComponent(r.Context(), release.ComponentID, false); componentErr == nil && component.OwnerID == user.ID {
-				return true
-			}
-		}
-	}
-	if user.Role == domain.RoleComponentOwner {
-		for _, metadata := range lockedStepMetadata(run.InputSnapshot) {
-			releaseID, _ := metadata["releaseId"].(string)
-			if releaseID == "" {
-				continue
-			}
-			release, releaseErr := h.platform.Store().GetComponentRelease(r.Context(), releaseID)
-			if releaseErr != nil {
-				continue
-			}
-			component, componentErr := h.platform.Store().GetComponent(r.Context(), release.ComponentID, false)
-			if componentErr == nil && component.OwnerID == user.ID {
-				return true
-			}
-		}
-	}
-	if run.ScenarioRevisionID != "" && user.Role == domain.RoleScenarioOwner {
-		if revision, getErr := h.platform.Store().GetScenarioRevision(r.Context(), run.ScenarioRevisionID); getErr == nil {
-			if scenario, scenarioErr := h.platform.Store().GetScenario(r.Context(), revision.ScenarioID, false); scenarioErr == nil && scenario.OwnerID == user.ID {
-				return true
-			}
-		}
-	}
-	return false
+	visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+	return err == nil && visible
 }
 
 func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
@@ -209,4 +170,3 @@ func lockedStepMetadata(snapshot map[string]any) map[string]map[string]any {
 	}
 	return output
 }
-

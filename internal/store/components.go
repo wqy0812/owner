@@ -162,6 +162,34 @@ func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.Comp
 	return r, err
 }
 
+type ReleaseDisplayMetadata struct {
+	ComponentID   string
+	ComponentName string
+	Version       string
+}
+
+// ListReleaseDisplayMetadata provides the release/component fields needed by
+// scenario graph DTOs in one query, without loading release child records.
+func (s *Store) ListReleaseDisplayMetadata(ctx context.Context) (map[string]ReleaseDisplayMetadata, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT r.id,r.component_id,c.name,r.version
+FROM component_releases r JOIN components c ON c.id=r.component_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	output := make(map[string]ReleaseDisplayMetadata)
+	for rows.Next() {
+		var id string
+		var metadata ReleaseDisplayMetadata
+		if err := rows.Scan(&id, &metadata.ComponentID, &metadata.ComponentName, &metadata.Version); err != nil {
+			return nil, err
+		}
+		output[id] = metadata
+	}
+	return output, rows.Err()
+}
+
 type scanner interface{ Scan(...any) error }
 
 func scanRelease(row scanner) (domain.ComponentRelease, error) {

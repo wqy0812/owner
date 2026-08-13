@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -23,13 +24,20 @@ type contextKey string
 const userContextKey contextKey = "authenticated-user"
 
 type Handler struct {
-	platform *service.Platform
-	router   *http.ServeMux
-	static   http.Handler
+	platform        *service.Platform
+	router          *http.ServeMux
+	static          http.Handler
+	visibilityMu    sync.Mutex
+	visibilityCache map[string]runVisibility
+}
+
+type runVisibility struct {
+	visible   bool
+	expiresAt time.Time
 }
 
 func NewHandler(platform *service.Platform, static http.Handler) *Handler {
-	h := &Handler{platform: platform, router: http.NewServeMux(), static: static}
+	h := &Handler{platform: platform, router: http.NewServeMux(), static: static, visibilityCache: make(map[string]runVisibility)}
 	h.routes()
 	return h
 }

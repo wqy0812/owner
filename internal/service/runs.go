@@ -23,6 +23,15 @@ type digestRunner interface {
 	Digest(string) (playbookSHA256, treeSHA256 string, err error)
 }
 
+type planDigestRunner interface {
+	DigestPlan([]string) (playbookSHA256 map[string]string, treeSHA256 string, err error)
+}
+
+type workspaceRunner interface {
+	PrepareWorkspace(expectedTreeSHA256 string) (*ansiblerunner.Workspace, error)
+	RunInWorkspace(context.Context, *ansiblerunner.Workspace, ansiblerunner.Request) (ansiblerunner.Result, error)
+}
+
 type lockedStep struct {
 	ID             string            `json:"id"`
 	NodeID         string            `json:"nodeId"`
@@ -36,6 +45,7 @@ type lockedStep struct {
 	Limit          string            `json:"limit"`
 	Variables      map[string]any    `json:"variables"`
 	TimeoutSeconds int               `json:"timeoutSeconds"`
+	NeedsApproval  bool              `json:"needsApproval"`
 }
 
 type lockedPlan struct {
@@ -441,13 +451,7 @@ func (p *Platform) lockAction(componentName, nodeID string, release domain.Compo
 		ID: newID("locked-step"), NodeID: nodeID, Name: componentName + " · " + string(action.Kind), ComponentName: componentName,
 		ReleaseID: release.ID, Action: action.Kind, Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
 		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables), TimeoutSeconds: action.TimeoutSeconds,
-	}
-	if digester, ok := p.runner.(digestRunner); ok {
-		playbookDigest, _, err := digester.Digest(action.Playbook)
-		if err != nil {
-			return step, err
-		}
-		step.PlaybookDigest = playbookDigest
+		NeedsApproval: action.NeedsApproval(),
 	}
 	return step, nil
 }
@@ -467,17 +471,31 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 	if err := validatePlanHostGroups(environment.Revision.Inventory, steps); err != nil {
 		return domain.Run{}, err
 	}
-	plan := lockedPlan{Steps: steps}
-	for _, step := range steps {
-		if digester, ok := p.runner.(digestRunner); ok {
-			_, digest, err := digester.Digest(step.Playbook)
+	plan := lockedPlan{Steps: append([]lockedStep(nil), steps...)}
+	if digester, ok := p.runner.(planDigestRunner); ok {
+		playbooks := make([]string, 0, len(plan.Steps))
+		for _, step := range plan.Steps {
+			playbooks = append(playbooks, step.Playbook)
+		}
+		digests, treeDigest, err := digester.DigestPlan(playbooks)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		plan.TreeDigest = treeDigest
+		for i := range plan.Steps {
+			plan.Steps[i].PlaybookDigest = digests[plan.Steps[i].Playbook]
+		}
+	} else if digester, ok := p.runner.(digestRunner); ok {
+		for i := range plan.Steps {
+			playbookDigest, treeDigest, err := digester.Digest(plan.Steps[i].Playbook)
 			if err != nil {
 				return domain.Run{}, err
 			}
-			if plan.TreeDigest != "" && plan.TreeDigest != digest {
+			if plan.TreeDigest != "" && plan.TreeDigest != treeDigest {
 				return domain.Run{}, fmt.Errorf("%w: playbooks resolved to different executable trees", domain.ErrConflict)
 			}
-			plan.TreeDigest = digest
+			plan.Steps[i].PlaybookDigest = playbookDigest
+			plan.TreeDigest = treeDigest
 		}
 	}
 	snapshot := structToMap(plan)
@@ -495,10 +513,10 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 	snapshot["environmentRevisionId"] = environment.CurrentRevisionID
 	snapshot["credentialRefs"] = redactedRefs
 	destructive := false
-	for _, step := range steps {
-		release, _ := p.store.GetComponentRelease(ctx, step.ReleaseID)
-		if definition, ok := findAction(release, step.Action); ok && definition.NeedsApproval() {
+	for _, step := range plan.Steps {
+		if step.NeedsApproval {
 			destructive = true
+			break
 		}
 	}
 	status := domain.RunQueued
@@ -690,6 +708,16 @@ func (p *Platform) executeRun(run domain.Run) {
 		p.finishRun(run, domain.RunFailed, err)
 		return
 	}
+	var sharedWorkspace *ansiblerunner.Workspace
+	preparedRunner, supportsSharedWorkspace := p.runner.(workspaceRunner)
+	if supportsSharedWorkspace {
+		sharedWorkspace, err = preparedRunner.PrepareWorkspace(run.ArtifactDigest)
+		if err != nil {
+			p.finishRun(run, domain.RunFailed, err)
+			return
+		}
+		defer sharedWorkspace.Close()
+	}
 
 	for _, locked := range plan.Steps {
 		if ctx.Err() != nil {
@@ -704,7 +732,7 @@ func (p *Platform) executeRun(run domain.Run) {
 		}
 		variables := cloneMap(locked.Variables)
 		mergeMap(variables, credentialVariables)
-		result, runErr := p.runner.Run(ctx, ansiblerunner.Request{
+		request := ansiblerunner.Request{
 			Playbook: locked.Playbook, Inventory: inventory, Variables: variables, SecretValues: secrets,
 			Limit: locked.Limit, Tags: locked.Tags, Timeout: time.Duration(locked.TimeoutSeconds) * time.Second,
 			ExpectedPlaybookSHA256: locked.PlaybookDigest, ExpectedTreeSHA256: run.ArtifactDigest,
@@ -714,7 +742,14 @@ func (p *Platform) executeRun(run domain.Run) {
 				})
 				p.hub.Publish("run.log", map[string]any{"runId": run.ID, "stepId": step.ID, "stream": event.Stream, "line": event.Line})
 			},
-		})
+		}
+		var result ansiblerunner.Result
+		var runErr error
+		if supportsSharedWorkspace {
+			result, runErr = preparedRunner.RunInWorkspace(ctx, sharedWorkspace, request)
+		} else {
+			result, runErr = p.runner.Run(ctx, request)
+		}
 		exitCode := 0
 		if len(result.Phases) > 0 {
 			exitCode = result.Phases[len(result.Phases)-1].ExitCode

@@ -173,9 +173,24 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 
 	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
-	run1 := domain.Run{ID: "run-1", Kind: domain.RunScenarioTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ScenarioRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+	run1 := domain.Run{ID: "run-1", Kind: domain.RunScenarioTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ScenarioRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run1, &approval); err != nil {
 		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		userID string
+		want   bool
+	}{
+		{userID: "scenario-carol", want: true},
+		{userID: "environment-dave", want: true},
+		{userID: "component-alice", want: true},
+		{userID: "component-bob", want: false},
+	} {
+		viewer, _ := s.GetUser(ctx, test.userID)
+		visible, err := s.CanViewRun(ctx, viewer, run1.ID)
+		if err != nil || visible != test.want {
+			t.Fatalf("CanViewRun(%s)=%v err=%v, want %v", test.userID, visible, err, test.want)
+		}
 	}
 	if err := s.DecideApproval(ctx, approval.ID, "environment-dave", "approved", "safe lab", testNow.Add(time.Second)); err != nil {
 		t.Fatal(err)

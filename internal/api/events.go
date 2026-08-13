@@ -61,5 +61,56 @@ func (h *Handler) eventVisible(r *http.Request, user domain.User, event service.
 	if runID == "" {
 		return event.Type == "run.worker_error" && user.Role == domain.RoleEnvironmentOwner
 	}
-	return h.canViewRun(r, user, runID)
+	forceRefresh := event.Type != "run.log"
+	return h.cachedRunVisibility(r, user, runID, forceRefresh)
+}
+
+const runVisibilityTTL = 2 * time.Second
+
+func (h *Handler) cachedRunVisibility(r *http.Request, user domain.User, runID string, forceRefresh bool) bool {
+	key := user.ID + "\x00" + runID
+	now := time.Now()
+	if !forceRefresh {
+		h.visibilityMu.Lock()
+		cached, ok := h.visibilityCache[key]
+		if ok && now.Before(cached.expiresAt) {
+			h.visibilityMu.Unlock()
+			return cached.visible
+		}
+		// Serialize cache misses so one run.log fan-out performs one visibility
+		// query rather than one query per subscriber.
+		visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+		if err != nil {
+			h.visibilityMu.Unlock()
+			return false
+		}
+		h.storeRunVisibilityLocked(key, visible, now)
+		h.visibilityMu.Unlock()
+		return visible
+	}
+	visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+	if err != nil {
+		return false
+	}
+	h.visibilityMu.Lock()
+	h.storeRunVisibilityLocked(key, visible, now)
+	h.visibilityMu.Unlock()
+	return visible
+}
+
+func (h *Handler) storeRunVisibilityLocked(key string, visible bool, now time.Time) {
+	if len(h.visibilityCache) >= 4096 {
+		for cacheKey, value := range h.visibilityCache {
+			if !now.Before(value.expiresAt) {
+				delete(h.visibilityCache, cacheKey)
+			}
+		}
+		if len(h.visibilityCache) >= 4096 {
+			for cacheKey := range h.visibilityCache {
+				delete(h.visibilityCache, cacheKey)
+				break
+			}
+		}
+	}
+	h.visibilityCache[key] = runVisibility{visible: visible, expiresAt: now.Add(runVisibilityTTL)}
 }

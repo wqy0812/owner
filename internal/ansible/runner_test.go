@@ -248,6 +248,45 @@ func TestRunnerRejectsChangedLockedArtifactBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestPreparedWorkspaceIsSharedAcrossSteps(t *testing.T) {
+	root := t.TempDir()
+	for _, playbook := range []string{"one.yml", "two.yml"} {
+		writeTestFile(t, filepath.Join(root, playbook), "---\n- hosts: all\n  tasks: []\n", 0o600)
+	}
+	binary := filepath.Join(t.TempDir(), "fake-ansible-playbook")
+	writeTestFile(t, binary, "#!/bin/sh\nexit 0\n", 0o700)
+	runner := &Runner{AllowedRoot: root, WorkRoot: t.TempDir(), Binary: binary}
+	digests, treeDigest, err := runner.DigestPlan([]string{"one.yml", "two.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := runner.PrepareWorkspace(treeDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspacePath := workspace.path
+	defer workspace.Close()
+	// The source is no longer consulted once the Run workspace is prepared.
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, playbook := range []string{"one.yml", "two.yml"} {
+		result, err := runner.RunInWorkspace(context.Background(), workspace, Request{
+			Playbook: playbook, Inventory: []byte("[all]\nlocalhost ansible_connection=local\n"),
+			ExpectedPlaybookSHA256: digests[playbook], ExpectedTreeSHA256: treeDigest,
+		})
+		if err != nil || !result.Successful {
+			t.Fatalf("RunInWorkspace(%s) result=%+v err=%v", playbook, result, err)
+		}
+	}
+	if err := workspace.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workspacePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shared workspace was not cleaned: %v", err)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

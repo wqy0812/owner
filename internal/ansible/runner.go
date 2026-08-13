@@ -23,7 +23,79 @@ const (
 )
 
 func (r *Runner) run(parent context.Context, req Request) (result Result, runErr error) {
-	root, sourcePlaybook, cleanPlaybook, err := r.resolvePlaybook(req.Playbook)
+	workspace, err := r.PrepareWorkspace(req.ExpectedTreeSHA256)
+	if err != nil {
+		return Result{}, err
+	}
+	defer workspace.Close()
+	return r.RunInWorkspace(parent, workspace, req)
+}
+
+// Workspace is a Run-scoped locked copy of the allowed executable tree.
+// Input files are replaced between sequential steps; the tree itself is copied
+// and verified only once.
+type Workspace struct {
+	path       string
+	jobRoot    string
+	inputDir   string
+	localTemp  string
+	treeDigest string
+	runner     *Runner
+}
+
+func (w *Workspace) Close() error {
+	if w == nil || w.path == "" {
+		return nil
+	}
+	err := os.RemoveAll(w.path)
+	w.path = ""
+	return err
+}
+
+func (r *Runner) PrepareWorkspace(expectedTreeSHA256 string) (*Workspace, error) {
+	root, err := r.canonicalRoot()
+	if err != nil {
+		return nil, err
+	}
+	path, err := r.createWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*Workspace, error) {
+		_ = os.RemoveAll(path)
+		return nil, err
+	}
+	jobRoot := filepath.Join(path, "job")
+	if err := copyRegularTree(root, jobRoot); err != nil {
+		return fail(fmt.Errorf("snapshot playbook tree: %w", err))
+	}
+	// Hash the completed snapshot, not the mutable source. This both verifies
+	// the queued digest and closes changes that race with the copy.
+	treeDigest, err := TreeDigest(jobRoot)
+	if err != nil {
+		return fail(fmt.Errorf("digest workspace tree: %w", err))
+	}
+	if expectedTreeSHA256 != "" && expectedTreeSHA256 != treeDigest {
+		return fail(fmt.Errorf("%w: executable tree digest mismatch", ErrArtifactChanged))
+	}
+	inputDir := filepath.Join(path, "input")
+	localTemp := filepath.Join(path, "ansible-local-tmp")
+	if err := os.MkdirAll(inputDir, 0o700); err != nil {
+		return fail(fmt.Errorf("create input directory: %w", err))
+	}
+	if err := os.MkdirAll(localTemp, 0o700); err != nil {
+		return fail(fmt.Errorf("create Ansible local temp: %w", err))
+	}
+	return &Workspace{path: path, jobRoot: jobRoot, inputDir: inputDir, localTemp: localTemp, treeDigest: treeDigest, runner: r}, nil
+}
+
+func (r *Runner) RunInWorkspace(parent context.Context, workspace *Workspace, req Request) (result Result, runErr error) {
+	if workspace == nil || workspace.runner != r || workspace.path == "" {
+		return Result{}, fmt.Errorf("%w: invalid or closed workspace", ErrInvalidRequest)
+	}
+	resolver := *r
+	resolver.AllowedRoot = workspace.jobRoot
+	_, playbook, cleanPlaybook, err := resolver.resolvePlaybook(req.Playbook)
 	if err != nil {
 		return Result{}, err
 	}
@@ -63,18 +135,11 @@ func (r *Runner) run(parent context.Context, req Request) (result Result, runErr
 		result.Successful = runErr == nil && !result.Canceled && !result.TimedOut
 	}()
 
-	result.TreeSHA256, err = TreeDigest(root)
-	if err != nil {
-		return result, fmt.Errorf("digest allowed tree: %w", err)
-	}
-	result.PlaybookSHA256, err = FileDigest(sourcePlaybook)
+	result.TreeSHA256 = workspace.treeDigest
+	result.PlaybookSHA256, err = FileDigest(playbook)
 	if err != nil {
 		return result, fmt.Errorf("digest playbook: %w", err)
 	}
-	// Refuse a queued job before creating a workspace or starting Ansible when
-	// the allow-listed source no longer matches the immutable Run snapshot.
-	// copyRegularTree's digest check below closes the subsequent copy-time
-	// race, so mutated content is never executed.
 	if req.ExpectedTreeSHA256 != "" && req.ExpectedTreeSHA256 != result.TreeSHA256 {
 		return result, fmt.Errorf("%w: executable tree digest mismatch", ErrArtifactChanged)
 	}
@@ -82,39 +147,8 @@ func (r *Runner) run(parent context.Context, req Request) (result Result, runErr
 		return result, fmt.Errorf("%w: playbook digest mismatch", ErrArtifactChanged)
 	}
 
-	workspace, err := r.createWorkspace()
-	if err != nil {
-		return result, err
-	}
-	defer os.RemoveAll(workspace)
-
-	jobRoot := filepath.Join(workspace, "job")
-	if err := copyRegularTree(root, jobRoot); err != nil {
-		return result, fmt.Errorf("snapshot playbook tree: %w", err)
-	}
-	lockedDigest, err := TreeDigest(jobRoot)
-	if err != nil {
-		return result, fmt.Errorf("digest workspace tree: %w", err)
-	}
-	if lockedDigest != result.TreeSHA256 {
-		return result, errors.New("playbook tree changed while creating the run snapshot")
-	}
-	relPlaybook, err := filepath.Rel(root, sourcePlaybook)
-	if err != nil {
-		return result, fmt.Errorf("locate snapshotted playbook: %w", err)
-	}
-	playbook := filepath.Join(jobRoot, relPlaybook)
-
-	inputDir := filepath.Join(workspace, "input")
-	localTemp := filepath.Join(workspace, "ansible-local-tmp")
-	if err := os.MkdirAll(inputDir, 0o700); err != nil {
-		return result, fmt.Errorf("create input directory: %w", err)
-	}
-	if err := os.MkdirAll(localTemp, 0o700); err != nil {
-		return result, fmt.Errorf("create Ansible local temp: %w", err)
-	}
-	inventoryPath := filepath.Join(inputDir, "inventory.ini")
-	varsPath := filepath.Join(inputDir, "vars.json")
+	inventoryPath := filepath.Join(workspace.inputDir, "inventory.ini")
+	varsPath := filepath.Join(workspace.inputDir, "vars.json")
 	if err := writePrivateFile(inventoryPath, req.Inventory); err != nil {
 		return result, fmt.Errorf("write inventory: %w", err)
 	}
@@ -154,7 +188,7 @@ func (r *Runner) run(parent context.Context, req Request) (result Result, runErr
 			args = append(args, item.flag)
 		}
 		args = append(args, playbook)
-		phaseResult, phaseErr := r.runPhase(ctx, item.phase, args, filepath.Dir(playbook), localTemp, collector)
+		phaseResult, phaseErr := r.runPhase(ctx, item.phase, args, filepath.Dir(playbook), workspace.localTemp, collector)
 		result.Phases = append(result.Phases, phaseResult)
 		if phaseErr != nil {
 			result.Logs, result.LogsTruncated = collector.Snapshot()
