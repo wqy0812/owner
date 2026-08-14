@@ -1,8 +1,33 @@
 ---
 - name: OpenFuyao bootstrap component
-  hosts: bootstrap_host
+  hosts: "{{ target_host_group }}"
   remote_user: sysop
   gather_facts: false
   any_errors_fatal: true
+  pre_tasks:
+    - import_tasks: component-bke-contract.tasks.yml
+      vars:
+        openfuyao_required_vars:
+          - target_host_group
+          - cluster_id
+          - BKE_ADMIN
+          - SSH_KEY_PUB
+          - SSH_KNOWN_HOSTS
+          - ENV_CHART_REPO_PORT
+          - ENV_DOCKER_HARBOR_DOMAIN
+          - ENV_DOCKER_HARBOR_IP
+          - ENV_DOCKER_HARBOR_PORT
+          - ENV_DOCKER_HARBOR_PORJECT
+          - ENV_FILESTATION_URL
+          - BOOTSTRAP_IMAGE
+          - ENV_AMC_USABLITY_ADDR
+          - ENV_AMC_USABLITY_PORT
+          - openFuyao_version
+          - ansible_ssh_pass
+        openfuyao_integer_vars:
+          - ENV_CHART_REPO_PORT
+          - ENV_DOCKER_HARBOR_PORT
+          - ENV_AMC_USABLITY_PORT
+      tags: always
   roles:
     - role: bke-bootstrap

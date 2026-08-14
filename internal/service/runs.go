@@ -33,19 +33,20 @@ type workspaceRunner interface {
 }
 
 type lockedStep struct {
-	ID             string            `json:"id"`
-	NodeID         string            `json:"nodeId"`
-	Name           string            `json:"name"`
-	ComponentName  string            `json:"componentName"`
-	ReleaseID      string            `json:"releaseId"`
-	Action         domain.ActionKind `json:"action"`
-	Playbook       string            `json:"playbook"`
-	PlaybookDigest string            `json:"playbookDigest"`
-	Tags           []string          `json:"tags"`
-	Limit          string            `json:"limit"`
-	Variables      map[string]any    `json:"variables"`
-	TimeoutSeconds int               `json:"timeoutSeconds"`
-	NeedsApproval  bool              `json:"needsApproval"`
+	ID                  string            `json:"id"`
+	NodeID              string            `json:"nodeId"`
+	Name                string            `json:"name"`
+	ComponentName       string            `json:"componentName"`
+	ReleaseID           string            `json:"releaseId"`
+	Action              domain.ActionKind `json:"action"`
+	Playbook            string            `json:"playbook"`
+	PlaybookDigest      string            `json:"playbookDigest"`
+	Tags                []string          `json:"tags"`
+	Limit               string            `json:"limit"`
+	Variables           map[string]any    `json:"variables"`
+	RequiredCredentials []string          `json:"requiredCredentials"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	NeedsApproval       bool              `json:"needsApproval"`
 }
 
 type lockedPlan struct {
@@ -87,7 +88,7 @@ func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, rel
 		actions = append(actions, verify)
 	}
 	defaults := schemaDefaults(release.ParameterSchema)
-	variables, err := ResolveParameters(defaults, nil, environment.Revision.Parameters, runInput, primary.AllowedParameters)
+	variables, err := ResolveParameters(defaults, nil, schemaEnvironmentValues(release.ParameterSchema, environment.Revision.Parameters), runInput, primary.AllowedParameters)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -257,6 +258,22 @@ func schemaDefaults(schema map[string]any) map[string]any {
 	return out
 }
 
+func schemaEnvironmentValues(schema, environment map[string]any) map[string]any {
+	out := cloneMap(environment)
+	properties, _ := schema["properties"].(map[string]any)
+	for name, raw := range properties {
+		definition, _ := raw.(map[string]any)
+		path, _ := definition["x-environmentPath"].(string)
+		if path == "" {
+			continue
+		}
+		if value, ok := resolveEnvironmentBinding(environment, path); ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
 func validateResolvedParameters(schema, resolved map[string]any) error {
 	for _, key := range requiredParameterKeys(schema) {
 		if _, ok := resolved[key]; !ok {
@@ -274,11 +291,31 @@ func validateResolvedParameters(schema, resolved map[string]any) error {
 		if expected != "" && !matchesParameterType(value, expected) {
 			return fmt.Errorf("%w: parameter %q must be of type %s", domain.ErrInvalid, key, expected)
 		}
+		if minimumLength, ok := numericSchemaInt(definition["minLength"]); ok {
+			text, isString := value.(string)
+			if isString && len([]rune(text)) < minimumLength {
+				return fmt.Errorf("%w: parameter %q must contain at least %d characters", domain.ErrInvalid, key, minimumLength)
+			}
+		}
 		if enum, ok := definition["enum"].([]any); ok && !containsParameterValue(enum, value) {
 			return fmt.Errorf("%w: parameter %q is not one of the allowed values", domain.ErrInvalid, key)
 		}
 	}
 	return nil
+}
+
+func numericSchemaInt(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		if math.Trunc(typed) == typed {
+			return int(typed), true
+		}
+	}
+	return 0, false
 }
 
 func matchesParameterType(value any, expected string) bool {
@@ -378,7 +415,7 @@ func runInputForNode(node domain.ScenarioNode, runInput map[string]any) map[stri
 func resolveNodeParameters(release domain.ComponentRelease, node domain.ScenarioNode, environment, runInput map[string]any) (map[string]any, error) {
 	nodeValues := cloneMap(node.Values)
 	for parameter, environmentKey := range node.Bindings {
-		if value, ok := environment[environmentKey]; ok {
+		if value, ok := resolveEnvironmentBinding(environment, environmentKey); ok {
 			nodeValues[parameter] = value
 		}
 	}
@@ -390,6 +427,28 @@ func resolveNodeParameters(release domain.ComponentRelease, node domain.Scenario
 		return nil, err
 	}
 	return variables, nil
+}
+
+func resolveEnvironmentBinding(environment map[string]any, key string) (any, bool) {
+	if value, ok := environment[key]; ok {
+		return value, true
+	}
+	parts := strings.Split(key, ".")
+	if len(parts) < 2 {
+		return nil, false
+	}
+	var current any = environment
+	for _, part := range parts {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return deepCopy(current), true
 }
 
 func validateEnvironmentConstraints(constraints, facts map[string]any) error {
@@ -450,7 +509,8 @@ func (p *Platform) lockAction(componentName, nodeID string, release domain.Compo
 	step := lockedStep{
 		ID: newID("locked-step"), NodeID: nodeID, Name: componentName + " · " + string(action.Kind), ComponentName: componentName,
 		ReleaseID: release.ID, Action: action.Kind, Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
-		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables), TimeoutSeconds: action.TimeoutSeconds,
+		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables),
+		RequiredCredentials: append([]string(nil), action.RequiredCredentials...), TimeoutSeconds: action.TimeoutSeconds,
 		NeedsApproval: action.NeedsApproval(),
 	}
 	return step, nil
@@ -467,6 +527,9 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		if err := rejectSensitiveMap(step.Variables, "run parameter"); err != nil {
 			return domain.Run{}, err
 		}
+	}
+	if err := validateRequiredCredentials(environment.Revision.CredentialRefs, steps); err != nil {
+		return domain.Run{}, err
 	}
 	if err := validatePlanHostGroups(environment.Revision.Inventory, steps); err != nil {
 		return domain.Run{}, err
@@ -545,6 +608,30 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		p.schedule(environment.ID)
 	}
 	return run, nil
+}
+
+func validateRequiredCredentials(refs []domain.CredentialRef, steps []lockedStep) error {
+	configured := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		configured[ref.Name] = struct{}{}
+	}
+	missing := map[string]struct{}{}
+	for _, step := range steps {
+		for _, name := range step.RequiredCredentials {
+			if _, ok := configured[name]; !ok {
+				missing[name] = struct{}{}
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(missing))
+	for name := range missing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return fmt.Errorf("%w: environment is missing required CredentialRefs: %s", domain.ErrInvalid, strings.Join(names, ", "))
 }
 
 func validatePlanHostGroups(raw json.RawMessage, steps []lockedStep) error {
@@ -831,18 +918,19 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		Purpose             string `json:"purpose"`
 	}
 	type actionSpec struct {
-		Name              string            `json:"name"`
-		Kind              domain.ActionKind `json:"kind"`
-		Playbook          string            `json:"playbook"`
-		Tags              []string          `json:"tags"`
-		Limit             string            `json:"limit"`
-		HostGroup         string            `json:"hostGroup"`
-		AllowedParameters []string          `json:"allowedParameters"`
-		TimeoutSeconds    int               `json:"timeoutSeconds"`
-		RiskLevel         domain.RiskLevel  `json:"riskLevel"`
-		Destructive       bool              `json:"destructive"`
-		FromReleaseID     string            `json:"fromReleaseId"`
-		ToReleaseID       string            `json:"toReleaseId"`
+		Name                string            `json:"name"`
+		Kind                domain.ActionKind `json:"kind"`
+		Playbook            string            `json:"playbook"`
+		Tags                []string          `json:"tags"`
+		Limit               string            `json:"limit"`
+		HostGroup           string            `json:"hostGroup"`
+		AllowedParameters   []string          `json:"allowedParameters"`
+		RequiredCredentials []string          `json:"requiredCredentials"`
+		TimeoutSeconds      int               `json:"timeoutSeconds"`
+		RiskLevel           domain.RiskLevel  `json:"riskLevel"`
+		Destructive         bool              `json:"destructive"`
+		FromReleaseID       string            `json:"fromReleaseId"`
+		ToReleaseID         string            `json:"toReleaseId"`
 	}
 	spec := struct {
 		Version                string             `json:"version"`
@@ -868,7 +956,8 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		spec.Actions = append(spec.Actions, actionSpec{
 			Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, Tags: action.Tags,
 			Limit: action.Limit, HostGroup: action.HostGroup, AllowedParameters: action.AllowedParameters,
-			TimeoutSeconds: action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
+			RequiredCredentials: action.RequiredCredentials,
+			TimeoutSeconds:      action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
 			FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,
 		})
 	}

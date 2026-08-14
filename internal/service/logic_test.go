@@ -28,6 +28,60 @@ func TestResolveParametersPrecedenceAndAllowList(t *testing.T) {
 	}
 }
 
+func TestEnvironmentBindingSupportsExactKeysAndDottedPaths(t *testing.T) {
+	environment := map[string]any{
+		"operation.cluster_id": "exact-wins",
+		"operation": map[string]any{
+			"cluster_id": "nested-value",
+			"broken":     "not-an-object",
+		},
+	}
+	for _, test := range []struct {
+		name, key string
+		want      any
+		found     bool
+	}{
+		{"exact key", "operation.cluster_id", "exact-wins", true},
+		{"dotted path", "operation.broken", "not-an-object", true},
+		{"missing path", "operation.missing", nil, false},
+		{"non-object middle", "operation.broken.child", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := resolveEnvironmentBinding(environment, test.key)
+			if ok != test.found || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("resolve %q = %#v, %v; want %#v, %v", test.key, got, ok, test.want, test.found)
+			}
+		})
+	}
+}
+
+func TestSchemaEnvironmentValuesUsesDottedPaths(t *testing.T) {
+	schema := map[string]any{"properties": map[string]any{
+		"cluster_id": map[string]any{"type": "string", "x-environmentPath": "operation.cluster_id"},
+		"plain":      map[string]any{"type": "string"},
+	}}
+	got := schemaEnvironmentValues(schema, map[string]any{
+		"operation": map[string]any{"cluster_id": "work-a"},
+		"plain":     "compatible-flat-value",
+	})
+	if got["cluster_id"] != "work-a" || got["plain"] != "compatible-flat-value" {
+		t.Fatalf("schema environment values=%#v", got)
+	}
+}
+
+func TestRequiredCredentialsAreCheckedByDeclaredName(t *testing.T) {
+	steps := []lockedStep{{RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}}}
+	refs := []domain.CredentialRef{{Name: "ansible_ssh_pass"}}
+	err := validateRequiredCredentials(refs, steps)
+	if err == nil || !strings.Contains(err.Error(), "registry_user") || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("missing credential validation=%v", err)
+	}
+	refs = append(refs, domain.CredentialRef{Name: "registry_user"})
+	if err := validateRequiredCredentials(refs, steps); err != nil {
+		t.Fatalf("configured credentials rejected: %v", err)
+	}
+}
+
 func TestScenarioRunInputIsValidatedGloballyAndScopedPerNode(t *testing.T) {
 	nodes := []domain.ScenarioNode{
 		{ID: "control-plane", RunInputs: []string{"api_endpoint"}},
@@ -51,7 +105,7 @@ func TestResolvedParameterRequiredTypeAndEnumValidation(t *testing.T) {
 	schema := map[string]any{
 		"required": []any{"endpoint", "replicas"},
 		"properties": map[string]any{
-			"endpoint": map[string]any{"type": "string"},
+			"endpoint": map[string]any{"type": "string", "minLength": 1},
 			"replicas": map[string]any{"type": "integer"},
 			"mode":     map[string]any{"type": "string", "enum": []any{"safe", "fast"}},
 		},
@@ -64,10 +118,20 @@ func TestResolvedParameterRequiredTypeAndEnumValidation(t *testing.T) {
 		"fraction": {"endpoint": "localhost", "replicas": 1.5},
 		"type":     {"endpoint": 7, "replicas": 1},
 		"enum":     {"endpoint": "localhost", "replicas": 1, "mode": "unsafe"},
+		"empty":    {"endpoint": "", "replicas": 1, "mode": "safe"},
 	} {
 		if err := validateResolvedParameters(schema, values); err == nil {
 			t.Fatalf("%s invalid values were accepted: %#v", name, values)
 		}
+	}
+}
+
+func TestVersionNamesContainingSecretAreNotTreatedAsCredentials(t *testing.T) {
+	if err := rejectSensitiveMap(map[string]any{"versions": map[string]any{"harbor_secret_version": "v1.0.0"}}, "parameters"); err != nil {
+		t.Fatalf("version metadata rejected as credential: %v", err)
+	}
+	if err := rejectSensitiveMap(map[string]any{"harbor_secret": "actual-secret"}, "parameters"); err == nil {
+		t.Fatal("actual secret field was accepted")
 	}
 }
 
@@ -93,6 +157,11 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release.Actions[0].Playbook = "install-v2.yml"
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not change after action mutation")
+	}
+	before = componentReleaseSpecDigest(release)
+	release.Actions[0].RequiredCredentials = []string{"ansible_ssh_pass"}
+	if after := componentReleaseSpecDigest(release); before == after {
+		t.Fatal("release definition digest did not include required credentials")
 	}
 }
 

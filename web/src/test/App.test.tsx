@@ -21,8 +21,8 @@ const components = [{
   category: 'runtime',
   kind: 'software',
   requiredness: 'profile_required',
-  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }] },
-  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }] }],
+  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { type: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { type: 'rollback', playbook: 'rollback.yml' }] },
+  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { type: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { type: 'rollback', playbook: 'rollback.yml' }] }],
 }];
 
 function json(data: unknown, status = 200) {
@@ -116,6 +116,7 @@ describe('platform shell and RBAC UI', () => {
     }
     expect(screen.getByText('可观测与节点管理层')).toBeInTheDocument();
     expect(screen.getAllByText('本层暂无组件').length).toBeGreaterThan(0);
+		expect(screen.getByText('2 项必需凭据')).toBeInTheDocument();
   });
 
   it('submits the complete component classification contract', async () => {

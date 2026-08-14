@@ -138,6 +138,11 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。修改
 
 组件测试优先选择 `upgrade`，不存在时选择 `install`，随后在定义了 `verify` 时追加验证步骤。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
 
+每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
+CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
+场景运行在创建队列项之前，会汇总锁定动作的列表并确认环境 Revision 已声明
+所有同名 CredentialRef。
+
 ### 4.3 场景与 Revision
 
 `Scenario` 是稳定标识；`ScenarioRevision` 保存 DAG 和执行策略：
@@ -152,12 +157,17 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。修改
 
 - 图不能为空，节点 ID 唯一。
 - 每个节点必须锁定 Release、动作和主机组。
-- 同一 Release 不能在一个图中重复出现。
+- 同一 Release 可以在不同主机组或生命周期动作中重复出现。
 - 边的源和目标必须存在，图中不能有环。
 - 节点只能使用已发布 Release；已发布场景可继续引用已废弃但保留的 Release。
 - 节点动作必须由对应 Release 定义。
 - Release 所需参数必须有默认值、节点值、环境绑定或声明的运行输入。
 - 上游依赖 Release 必须出现在图中，而且在拓扑上先于下游节点。
+
+环境绑定先查找完整顶层键，再把 `operation.cluster_id` 视为点路径逐层读取；
+因此旧的扁平键继续有效，新的环境模板可以保存分组参数。`verify` 节点观察的
+是环境中已存在的 Release，不要求在同一场景中重新执行该 Release 的安装期
+依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
 
 只有当前 Revision 可以编辑和测试。完整测试成功后进入 `test_passed`，再次校验通过才能发布。Released Revision 不可修改，后续变更必须创建新 Revision。
 
@@ -285,9 +295,10 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 - 校验发起权限、Release/Revision 状态、场景 DAG 和环境约束。
 - 按 DAG 拓扑排序生成步骤。
 - 校验目标 Host Group 在当前 Inventory 中存在。
+- 汇总锁定动作的 `requiredCredentials`，缺少任一 CredentialRef 时在排队前失败。
 - 锁定每个步骤的 Release ID、动作、Playbook、tags、limit、变量和超时。
 - 计算 Playbook 文件 SHA-256 和允许目录树摘要。
-- 记录 Component Release 规格摘要、环境 Revision ID 和脱敏 CredentialRefs。
+- 记录 Component Release 规格摘要、环境 Revision ID、步骤所需凭据名称和脱敏 CredentialRefs。
 - 判断是否需要审批并持久化 Run。
 
 ### 7.4 危险动作审批
@@ -346,10 +357,26 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 - `sshKeyPath` 保存绝对路径，执行时校验文件存在。
 - 环境事实、普通参数、场景值、运行输入和审计元数据拒绝名称包含 password、secret、token、private key、encryption key、credential 等敏感键。
 - 实际 secret 不写入数据库 Run 快照；日志写入前按 secret 字面值脱敏。
+- Release 动作的 `requiredCredentials` 只是一组名称。环境中同名引用缺失时，
+  组件运行和场景运行都会在创建 Run 之前 fail-closed。
 
 注意：`sshKeyPath` 的路径本身会保存到数据库，私钥内容不会保存。当前 Runner 将该路径作为同名 Ansible 变量传入，是否由 Playbook 用作连接私钥取决于作业定义。
 
-### 8.4 日志
+### 8.4 OpenFuyao adapter 边界
+
+原始 105 文件作业快照保持不变。平台自有 adapter 负责合同校验、动态
+`target_host_group`、`ansible_user` 到 `ansible_ssh_user` 的兼容桥，以及在
+`bke-master` 前重建跨 Playbook 丢失的 registry facts。Seed 提供 cert、
+bootstrap、common、addon、master、nodes 六个组件和三个独立场景：管理集群
+构建、业务集群控制面构建、业务节点纳管。节点纳管先执行只读 master verify。
+
+管理与业务场景分别固定 `cluster_role=manager|work` 及目标主机组，不开放运行
+输入覆盖。环境使用 `operation`、`network`、`versions`、`artifact_sources`、
+`certificates`、`addon_params` 分组，再由点路径 Bindings 映射到 Ansible 实际
+变量名。callback URL/token、task ID 和旧 wrapper 的
+`management_cluster_id` 不属于 Release Schema。
+
+### 8.5 日志
 
 - stdout、stderr 和 system 日志进入统一采集器。
 - 日志在进入 SQLite 和 SSE 前脱敏。

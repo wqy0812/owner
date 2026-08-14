@@ -11,10 +11,17 @@ import (
 	"testing"
 	"time"
 
+	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
 )
+
+type seedRunner struct{}
+
+func (seedRunner) Run(context.Context, ansiblerunner.Request) (ansiblerunner.Result, error) {
+	return ansiblerunner.Result{}, nil
+}
 
 func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	ctx := context.Background()
@@ -36,7 +43,7 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	}
 	viewer, _ := database.GetUser(ctx, ComponentOwnerRuntimeID)
 	components, err := database.ListComponents(ctx, viewer)
-	if err != nil || len(components) != 33 {
+	if err != nil || len(components) != 34 {
 		t.Fatalf("components=%d err=%v", len(components), err)
 	}
 	for _, component := range components {
@@ -60,29 +67,193 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	if err != nil || len(open.Graph.Nodes) != 5 || len(open.Graph.Edges) != 4 {
 		t.Fatalf("OpenFuyao graph nodes=%d edges=%d err=%v", len(open.Graph.Nodes), len(open.Graph.Edges), err)
 	}
-	stagePlaybooks := map[string]bool{}
 	for _, node := range open.Graph.Nodes {
 		release, releaseErr := database.GetComponentRelease(ctx, node.ReleaseID)
-		if releaseErr != nil || len(release.Actions) != 1 || !release.Actions[0].NeedsApproval() {
+		if releaseErr != nil || len(release.Actions) == 0 || !release.Actions[0].NeedsApproval() {
 			t.Fatalf("OpenFuyao node %s is not destructive: release=%+v err=%v", node.ID, release, releaseErr)
 		}
-		playbook := release.Actions[0].Playbook
-		if stagePlaybooks[playbook] || !strings.HasSuffix(playbook, ".platform.yml") {
-			t.Fatalf("OpenFuyao node %s does not use a unique stage adapter: %s", node.ID, playbook)
+		install := release.Actions[0]
+		for _, action := range release.Actions {
+			if action.Kind == domain.ActionInstall {
+				install = action
+				break
+			}
 		}
-		stagePlaybooks[playbook] = true
+		if len(install.RequiredCredentials) == 0 || !strings.HasSuffix(install.Playbook, ".platform.yml") {
+			t.Fatalf("OpenFuyao node %s has an incomplete action contract: %+v", node.ID, install)
+		}
 	}
 	environments, err := database.ListEnvironments(ctx)
 	if err != nil || len(environments) != 2 {
 		t.Fatalf("environments=%d err=%v", len(environments), err)
 	}
-	assertTableCount(t, database, "component_releases", 36)
+	assertTableCount(t, database, "component_releases", 37)
 	assertTableCount(t, database, "component_dependencies", 47)
-	assertTableCount(t, database, "action_definitions", 55)
-	assertTableCount(t, database, "scenarios", 3)
-	assertTableCount(t, database, "scenario_revisions", 3)
+	assertTableCount(t, database, "action_definitions", 57)
+	assertTableCount(t, database, "scenarios", 5)
+	assertTableCount(t, database, "scenario_revisions", 5)
 	assertTableCount(t, database, "environment_revisions", 2)
 	assertTableCount(t, database, "audit_events", 2)
+}
+
+func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing.T) {
+	ctx, database := seededDatabase(t)
+	owner, _ := database.GetUser(ctx, ScenarioOwnerID)
+	platform := service.NewPlatform(database, seedRunner{}, nil)
+	defer platform.Close()
+	environment, err := database.GetEnvironment(ctx, "environment-openfuyao-template", false)
+	if err != nil || environment.Revision == nil || len(environment.Revision.CredentialRefs) != 5 {
+		t.Fatalf("OpenFuyao environment contract=%+v err=%v", environment.Revision, err)
+	}
+	var inventory struct {
+		Hosts []struct {
+			Address string   `json:"address"`
+			Groups  []string `json:"groups"`
+		} `json:"hosts"`
+	}
+	if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	groups := map[string]bool{}
+	for _, host := range inventory.Hosts {
+		if !strings.HasPrefix(host.Address, "192.0.2.") {
+			t.Fatalf("OpenFuyao inventory contains non-TEST-NET address: %s", host.Address)
+		}
+		for _, group := range host.Groups {
+			groups[group] = true
+		}
+	}
+	for _, group := range []string{"bootstrap_host", "management_cluster_k8smaster", "work_cluster_k8smaster", "work_cluster_k8snode"} {
+		if !groups[group] {
+			t.Fatalf("OpenFuyao inventory is missing group %s", group)
+		}
+	}
+	for _, section := range []string{"operation", "network", "versions", "artifact_sources", "certificates", "addon_params"} {
+		if _, ok := environment.Revision.Parameters[section].(map[string]any); !ok {
+			t.Fatalf("OpenFuyao environment is missing grouped parameter section %s", section)
+		}
+	}
+	parametersJSON, _ := json.Marshal(environment.Revision.Parameters)
+	for _, forbidden := range []string{"callback_url", "callback_token", "task_id", "ENV_DOCKER_SECRET_PASSWORD", "ENV_CHART_PULL_PASSWORD"} {
+		if strings.Contains(string(parametersJSON), forbidden) {
+			t.Fatalf("OpenFuyao environment parameters contain forbidden key %s", forbidden)
+		}
+	}
+
+	scenarios := []struct {
+		revisionID, role, clusterID string
+		nodes, steps                int
+	}{
+		{"scenario-openfuyao-r1", "manager", "demo-management-cluster", 5, 6},
+		{"scenario-openfuyao-work-cluster-r1", "work", "demo-work-cluster", 4, 5},
+		{"scenario-openfuyao-work-nodes-r1", "work", "demo-work-cluster", 2, 2},
+	}
+	for _, expectation := range scenarios {
+		revision, err := database.GetScenarioRevision(ctx, expectation.revisionID)
+		if err != nil || len(revision.Graph.Nodes) != expectation.nodes || len(revision.Graph.Edges) != expectation.nodes-1 {
+			t.Fatalf("scenario %s graph nodes=%d edges=%d err=%v", expectation.revisionID, len(revision.Graph.Nodes), len(revision.Graph.Edges), err)
+		}
+		if issues := domain.ValidateGraph(revision.Graph); len(issues) != 0 {
+			t.Fatalf("scenario %s graph issues=%+v", expectation.revisionID, issues)
+		}
+		issues, err := platform.ValidateScenario(ctx, owner, expectation.revisionID)
+		if err != nil || len(issues) != 0 {
+			t.Fatalf("scenario %s dependency issues=%+v err=%v", expectation.revisionID, issues, err)
+		}
+		for _, node := range revision.Graph.Nodes {
+			if len(node.RunInputs) != 0 {
+				t.Fatalf("scenario %s node %s exposes unsafe run inputs: %v", expectation.revisionID, node.ID, node.RunInputs)
+			}
+		}
+
+		run, err := platform.StartScenarioTest(ctx, owner, expectation.revisionID, "environment-openfuyao-template", nil)
+		if err != nil || run.Status != domain.RunAwaitingApproval {
+			t.Fatalf("scenario %s run=%+v err=%v", expectation.revisionID, run, err)
+		}
+		steps, ok := run.InputSnapshot["steps"].([]any)
+		if !ok || len(steps) != expectation.steps {
+			t.Fatalf("scenario %s locked steps=%#v", expectation.revisionID, run.InputSnapshot["steps"])
+		}
+		snapshotJSON, _ := json.Marshal(run.InputSnapshot)
+		if strings.Contains(string(snapshotJSON), "NEWPLATFORM_OPENFUYAO_") {
+			t.Fatalf("scenario %s snapshot retained a credential reference target", expectation.revisionID)
+		}
+		for _, raw := range steps {
+			step := raw.(map[string]any)
+			variables := step["variables"].(map[string]any)
+			if variables["cluster_role"] != expectation.role || variables["cluster_id"] != expectation.clusterID {
+				t.Fatalf("scenario %s variables role=%v cluster=%v", expectation.revisionID, variables["cluster_role"], variables["cluster_id"])
+			}
+			if variables["target_host_group"] == "" || variables["strategy"] != "StatelessFlatNetworkStrategy" {
+				t.Fatalf("scenario %s incomplete locked variables=%#v", expectation.revisionID, variables)
+			}
+			for credentialName := range map[string]bool{"ansible_ssh_pass": true, "ENV_DOCKER_SECRET_PASSWORD": true, "ENV_CHART_PULL_PASSWORD": true} {
+				if _, leaked := variables[credentialName]; leaked {
+					t.Fatalf("scenario %s leaked credential %s into locked variables", expectation.revisionID, credentialName)
+				}
+			}
+		}
+	}
+
+	enrollment, _ := database.GetScenarioRevision(ctx, "scenario-openfuyao-work-nodes-r1")
+	if enrollment.Graph.Nodes[0].Action != domain.ActionVerify || enrollment.Graph.Nodes[0].ReleaseID != "release-bke-master-25.12" || enrollment.Graph.Nodes[1].ReleaseID != "release-bke-nodes-25.12" {
+		t.Fatalf("work node enrollment boundary=%+v", enrollment.Graph.Nodes)
+	}
+
+	credentialNames := map[string]bool{
+		"ansible_ssh_pass": true, "ENV_DOCKER_SECRET_USERNAME": true, "ENV_DOCKER_SECRET_PASSWORD": true,
+		"ENV_CHART_PULL_USERNAME": true, "ENV_CHART_PULL_PASSWORD": true,
+	}
+	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
+	componentDefaults := map[string]struct{ role, group, clusterID string }{
+		"release-bke-cert-25.12":      {group: "bootstrap_host", clusterID: "demo-management-cluster"},
+		"release-bke-bootstrap-25.12": {group: "bootstrap_host", clusterID: "demo-management-cluster"},
+		"release-bke-common-25.12":    {group: "management_cluster_k8smaster"},
+		"release-bke-addon-25.12":     {group: "management_cluster_k8smaster"},
+		"release-bke-master-25.12":    {role: "manager", group: "management_cluster_k8smaster", clusterID: "demo-management-cluster"},
+		"release-bke-nodes-25.12":     {role: "work", group: "work_cluster_k8snode", clusterID: "demo-work-cluster"},
+	}
+	for _, releaseID := range []string{"release-bke-cert-25.12", "release-bke-bootstrap-25.12", "release-bke-common-25.12", "release-bke-addon-25.12", "release-bke-master-25.12", "release-bke-nodes-25.12"} {
+		release, err := database.GetComponentRelease(ctx, releaseID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		properties, _ := release.ParameterSchema["properties"].(map[string]any)
+		if len(properties) == 0 {
+			t.Fatalf("release %s has empty schema", releaseID)
+		}
+		for name := range credentialNames {
+			if _, leaked := properties[name]; leaked {
+				t.Fatalf("credential %s leaked into release %s schema", name, releaseID)
+			}
+		}
+		for _, action := range release.Actions {
+			if len(action.RequiredCredentials) == 0 {
+				t.Fatalf("release %s action %s has no credential contract", releaseID, action.ID)
+			}
+			for _, name := range action.RequiredCredentials {
+				if !credentialNames[name] {
+					t.Fatalf("release %s action %s declares unknown credential %s", releaseID, action.ID, name)
+				}
+			}
+		}
+		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, environment.ID, nil)
+		if err != nil || componentRun.Status != domain.RunAwaitingApproval {
+			t.Fatalf("component test %s run=%+v err=%v", releaseID, componentRun, err)
+		}
+		steps := componentRun.InputSnapshot["steps"].([]any)
+		variables := steps[0].(map[string]any)["variables"].(map[string]any)
+		defaults := componentDefaults[releaseID]
+		if variables["target_host_group"] != defaults.group {
+			t.Fatalf("component test %s target_host_group=%v want=%s", releaseID, variables["target_host_group"], defaults.group)
+		}
+		if defaults.role != "" && variables["cluster_role"] != defaults.role {
+			t.Fatalf("component test %s cluster_role=%v want=%s", releaseID, variables["cluster_role"], defaults.role)
+		}
+		if defaults.clusterID != "" && variables["cluster_id"] != defaults.clusterID {
+			t.Fatalf("component test %s cluster_id=%v want=%s", releaseID, variables["cluster_id"], defaults.clusterID)
+		}
+	}
 }
 
 func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) {
@@ -347,9 +518,9 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 33)
-	assertTableCount(t, database, "component_releases", 36)
-	assertTableCount(t, database, "scenarios", 3)
+	assertTableCount(t, database, "components", 34)
+	assertTableCount(t, database, "component_releases", 37)
+	assertTableCount(t, database, "scenarios", 5)
 	assertTableCount(t, database, "environments", 2)
 	if _, err := database.GetComponentRelease(ctx, "release-kubelet-1.17.5"); err != nil {
 		t.Fatalf("Kubernetes 1.17.5 seed was not added: %v", err)
@@ -377,9 +548,9 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.Run(ctx); err != nil {
 		t.Fatalf("repeat incremental seed: %v", err)
 	}
-	assertTableCount(t, database, "components", 33)
-	assertTableCount(t, database, "component_releases", 36)
-	assertTableCount(t, database, "scenarios", 3)
+	assertTableCount(t, database, "components", 34)
+	assertTableCount(t, database, "component_releases", 37)
+	assertTableCount(t, database, "scenarios", 5)
 	assertTableCount(t, database, "environments", 2)
 	assertTableCount(t, database, "audit_events", 2)
 }
@@ -437,6 +608,8 @@ func TestOpenFuyaoSnapshotAndJobReferences(t *testing.T) {
 		filepath.Join(snapshotRoot, "component-bke-common.platform.yml"),
 		filepath.Join(snapshotRoot, "component-bke-addon.platform.yml"),
 		filepath.Join(snapshotRoot, "component-bke-master.platform.yml"),
+		filepath.Join(snapshotRoot, "component-bke-master-verify.platform.yml"),
+		filepath.Join(snapshotRoot, "component-bke-nodes.platform.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "cert_1175.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "etcd_serverless.yml"),
 		filepath.Join(repositoryRoot, "examples", "ansible", "k8s-1.17.5-cluster", "master_1175.yml"),

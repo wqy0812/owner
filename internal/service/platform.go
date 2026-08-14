@@ -154,9 +154,20 @@ func validateRelease(release domain.ComponentRelease) error {
 			return fmt.Errorf("%w: %s action must declare an explicit fromReleaseId and toReleaseId", domain.ErrInvalid, action.Kind)
 		}
 		for _, parameter := range action.AllowedParameters {
-			if sensitiveKey.MatchString(parameter) {
+			if isSensitiveKey(parameter) {
 				return fmt.Errorf("%w: sensitive action parameter %q must use a CredentialRef", domain.ErrInvalid, parameter)
 			}
+		}
+		seenCredentials := map[string]struct{}{}
+		for _, credential := range action.RequiredCredentials {
+			credential = strings.TrimSpace(credential)
+			if credential == "" {
+				return fmt.Errorf("%w: required credential names must not be empty", domain.ErrInvalid)
+			}
+			if _, exists := seenCredentials[credential]; exists {
+				return fmt.Errorf("%w: duplicate required credential %q", domain.ErrInvalid, credential)
+			}
+			seenCredentials[credential] = struct{}{}
 		}
 	}
 	return nil

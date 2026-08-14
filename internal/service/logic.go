@@ -12,6 +12,14 @@ import (
 
 var sensitiveKey = regexp.MustCompile(`(?i)(password|passwd|secret|token|private[_-]?key|encryption[_-]?key|credential)`)
 
+func isSensitiveKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	if strings.HasSuffix(normalized, "_version") {
+		return false
+	}
+	return sensitiveKey.MatchString(key)
+}
+
 // ResolveParameters applies the platform's fixed precedence order. Run input
 // may only override keys explicitly declared by the scenario node.
 func ResolveParameters(defaults, nodeValues, environment, runInput map[string]any, allowedRunInput []string) (map[string]any, error) {
@@ -107,7 +115,7 @@ func Redact(value any, literalSecrets ...string) any {
 }
 
 func redactValue(value any, secrets []string, key string) any {
-	if sensitiveKey.MatchString(key) {
+	if isSensitiveKey(key) {
 		return "[REDACTED]"
 	}
 	switch typed := value.(type) {
@@ -283,4 +291,3 @@ func appendImpactPath(paths []domain.ImpactPath, path domain.ImpactPath) []domai
 	}
 	return append(paths, path)
 }
-

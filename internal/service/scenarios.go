@@ -112,12 +112,12 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 			return revision, err
 		}
 		for parameter, environmentKey := range node.Bindings {
-			if sensitiveKey.MatchString(parameter) || sensitiveKey.MatchString(environmentKey) {
+			if isSensitiveKey(parameter) || isSensitiveKey(environmentKey) {
 				return revision, fmt.Errorf("%w: sensitive scenario binding %q must use a CredentialRef", domain.ErrInvalid, parameter)
 			}
 		}
 		for _, parameter := range node.RunInputs {
-			if sensitiveKey.MatchString(parameter) {
+			if isSensitiveKey(parameter) {
 				return revision, fmt.Errorf("%w: sensitive run input %q must use a CredentialRef", domain.ErrInvalid, parameter)
 			}
 		}
@@ -165,6 +165,11 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 	for _, node := range revision.Graph.Nodes {
 		release, ok := releaseByNode[node.ID]
 		if !ok {
+			continue
+		}
+		// A verify node observes a release that is expected to exist already. Its
+		// install-time dependencies do not need to be rebuilt in this scenario.
+		if node.Action == domain.ActionVerify {
 			continue
 		}
 		for _, dependency := range release.Dependencies {

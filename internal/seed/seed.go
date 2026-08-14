@@ -115,33 +115,7 @@ func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 		{component: component("component-kube-proxy", "kube-proxy", "kube-proxy", "节点 Service 网络代理。", ComponentOwnerK8sID, now), releases: []domain.ComponentRelease{plainRelease("release-kube-proxy-1.34.3", "component-kube-proxy", "v1.34.3-of.1.icbc.harbor")}},
 	}
 
-	stage := func(id, slug, name, owner, group string, dependencies []domain.ComponentDependency) seededComponent {
-		releaseID := "release-" + slug + "-25.12"
-		release := domain.ComponentRelease{
-			ID: releaseID, ComponentID: id, Version: "v25.12", Type: domain.ReleaseAtomic, Status: domain.ReleaseReleased,
-			ReleaseNotes: "来自 OpenFuyao 管理集群搭建作业快照；依赖内部介质和合格主机。", Verified: false,
-			RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
-			ParameterSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-			Dependencies:    dependencies,
-			Actions: []domain.ActionDefinition{{
-				ID: "action-" + slug + "-build", ReleaseID: releaseID, Name: "OpenFuyao " + slug + " (includes recovery)", Kind: domain.ActionInstall,
-				Playbook: "openfuyao/component-" + slug + ".platform.yml", Tags: []string{"init", "image_plugin", "rcv", "ins"}, Limit: group, HostGroup: group,
-				TimeoutSeconds: 3600, RiskLevel: domain.RiskDestructive, Destructive: true,
-			}}, CreatedAt: now, ReleasedAt: ptr(now),
-		}
-		for i := range release.Dependencies {
-			release.Dependencies[i].ID = "dependency-" + slug + "-" + fmt.Sprint(i+1)
-			release.Dependencies[i].ReleaseID = releaseID
-		}
-		return seededComponent{component: component(id, slug, name, "OpenFuyao v25.12 搭建阶段（真实作业快照）。", owner, now), releases: []domain.ComponentRelease{release}}
-	}
-	cert := stage("component-bke-cert", "bke-cert", "BKE Certificates", ComponentOwnerRuntimeID, "bootstrap_host", nil)
-	bootstrap := stage("component-bke-bootstrap", "bke-bootstrap", "BKE Bootstrap", ComponentOwnerRuntimeID, "bootstrap_host", []domain.ComponentDependency{{UpstreamComponentID: cert.component.ID, UpstreamReleaseID: cert.releases[0].ID, Purpose: "certificate bootstrap"}})
-	common := stage("component-bke-common", "bke-common", "BKE Common", ComponentOwnerRuntimeID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: bootstrap.component.ID, UpstreamReleaseID: bootstrap.releases[0].ID, Purpose: "bootstrap endpoint"}})
-	addon := stage("component-bke-addon", "bke-addon", "BKE Addons", ComponentOwnerK8sID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: common.component.ID, UpstreamReleaseID: common.releases[0].ID, Purpose: "cluster prerequisites"}})
-	master := stage("component-bke-master", "bke-master", "BKE Management Cluster", ComponentOwnerK8sID, "management_cluster_k8smaster", []domain.ComponentDependency{{UpstreamComponentID: addon.component.ID, UpstreamReleaseID: addon.releases[0].ID, Purpose: "management addons"}})
-	addon.releases[0].Type = domain.ReleaseBundle
-	components = append(components, cert, bootstrap, common, addon, master)
+	components = append(components, openFuyaoComponents(now, constraints)...)
 
 	for _, item := range components {
 		if err := s.createComponentIfMissing(ctx, item.component); err != nil {
@@ -213,7 +187,7 @@ func componentClassification(id string) (domain.ComponentLayer, domain.Component
 		return domain.LayerObservabilityManagement, domain.CategoryNodeManagement, domain.ComponentSoftware, domain.RequiredOptional
 	case "component-prometheus-access-bootstrap":
 		return domain.LayerObservabilityManagement, domain.CategoryObservability, domain.ComponentConfiguration, domain.RequiredOptional
-	case "component-bke-common", "component-bke-master":
+	case "component-bke-common", "component-bke-master", "component-bke-nodes":
 		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentDeliveryStage, domain.RequiredProfile
 	case "component-bke-addon":
 		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentSoftwareBundle, domain.RequiredProfile
@@ -227,23 +201,7 @@ func componentClassification(id string) (domain.ComponentLayer, domain.Component
 }
 
 func (s Seeder) seedScenarios(ctx context.Context, now time.Time) error {
-	openNodes := []domain.ScenarioNode{
-		scenarioNode("open-cert", "Certificates", "release-bke-cert-25.12", "bootstrap_host", 40, 80),
-		scenarioNode("open-bootstrap", "Bootstrap", "release-bke-bootstrap-25.12", "bootstrap_host", 300, 80),
-		scenarioNode("open-common", "Common", "release-bke-common-25.12", "management_cluster_k8smaster", 560, 80),
-		scenarioNode("open-addon", "Addons", "release-bke-addon-25.12", "management_cluster_k8smaster", 820, 80),
-		scenarioNode("open-master", "Master", "release-bke-master-25.12", "management_cluster_k8smaster", 1080, 80),
-	}
-	openEdges := make([]domain.ScenarioEdge, 0, len(openNodes)-1)
-	for i := 0; i < len(openNodes)-1; i++ {
-		openEdges = append(openEdges, domain.ScenarioEdge{ID: fmt.Sprintf("open-edge-%d", i+1), Source: openNodes[i].ID, Target: openNodes[i+1].ID})
-	}
-	openScenario := domain.Scenario{ID: "scenario-openfuyao", Slug: "openfuyao-management-cluster", Name: "OpenFuyao Management Cluster Build", Description: "真实 OpenFuyao 两阶段管理集群搭建作业；包含 rcv，执行前必须审批。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
-	openRevision := domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: openScenario.ID, Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: openNodes, Edges: openEdges}, ExecutionPolicy: map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}, CreatedAt: now}
-	if _, err := s.createScenarioIfMissing(ctx, openScenario, openRevision); err != nil {
-		return fmt.Errorf("seed OpenFuyao scenario: %w", err)
-	}
-	return nil
+	return s.seedOpenFuyaoScenarios(ctx, now)
 }
 
 func scenarioNode(id, name, releaseID, group string, x, y float64) domain.ScenarioNode {
@@ -251,13 +209,7 @@ func scenarioNode(id, name, releaseID, group string, x, y float64) domain.Scenar
 }
 
 func (s Seeder) seedEnvironments(ctx context.Context, now time.Time) error {
-	openInventory, _ := json.Marshal(map[string]any{"hosts": []any{
-		map[string]any{"name": "bootstrap-1", "address": "192.0.2.10", "groups": []any{"bootstrap_host"}, "port": 22, "user": "sysop"},
-		map[string]any{"name": "manager-1", "address": "192.0.2.20", "groups": []any{"management_cluster_k8smaster"}, "port": 22, "user": "sysop"},
-	}})
-	open := domain.Environment{ID: "environment-openfuyao-template", Name: "OpenFuyao Preflight Template", Description: "使用 TEST-NET 地址的脱敏模板；不会连接真实基础设施。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	openRevision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: open.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "Kylin V10", "network": "IPv4", "templateOnly": true}, Inventory: openInventory, Parameters: map[string]any{"clusterVersion": "v25.12", "kubernetesVersion": "v1.34.3-of.1", "etcdVersion": "v3.6.7-of.1", "containerdVersion": "v2.1.1", "calicoVersion": "v3.27.3-icbc", "coreDNSVersion": "v1.12.2-of.1", "kubeProxyVersion": "v1.34.3-of.1.icbc.harbor"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
-	return s.createEnvironmentIfMissing(ctx, open, openRevision)
+	return s.seedOpenFuyaoEnvironment(ctx, now)
 }
 
 func (s Seeder) createComponentIfMissing(ctx context.Context, value domain.Component) error {

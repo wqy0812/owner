@@ -360,13 +360,17 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
 	definition := map[string]any{
 		"version": "1.0.0", "type": "atomic", "parameterSchema": map[string]any{},
-		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60}},
+		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}}},
 	}
 	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", definition, alice)
 	if createdRelease.Code != http.StatusCreated {
 		t.Fatalf("create release status=%d body=%s", createdRelease.Code, createdRelease.Body.String())
 	}
 	releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
+	createdAction := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["actions"].([]any)[0].(map[string]any)
+	if got, ok := createdAction["requiredCredentials"].([]any); !ok || len(got) != 1 || got[0] != "ansible_ssh_pass" {
+		t.Fatalf("requiredCredentials API round trip=%#v", createdAction["requiredCredentials"])
+	}
 	if err := f.database.MarkReleaseVerified(context.Background(), releaseID, true); err != nil {
 		t.Fatal(err)
 	}

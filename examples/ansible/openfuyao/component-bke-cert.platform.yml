@@ -1,8 +1,22 @@
 ---
 - name: OpenFuyao certificate component
-  hosts: bootstrap_host
+  hosts: "{{ target_host_group }}"
   remote_user: sysop
   gather_facts: false
   any_errors_fatal: true
+  pre_tasks:
+    - import_tasks: component-bke-contract.tasks.yml
+      vars:
+        openfuyao_required_vars:
+          - target_host_group
+          - cluster_id
+          - SERVICE_IP_RANGE_IPV4
+          - KUBERNETES_CLUSTER_IP
+          - certOutputPath
+          - certOutputFile
+          - cert_config
+          - CERT_EXPIRY_TIME
+          - ansible_ssh_pass
+      tags: always
   roles:
     - role: bke-cert

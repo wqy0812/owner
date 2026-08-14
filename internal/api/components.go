@@ -37,20 +37,21 @@ type componentDependencyInput struct {
 }
 
 type componentActionInput struct {
-	Name              string            `json:"name"`
-	Kind              domain.ActionKind `json:"kind"`
-	Type              domain.ActionKind `json:"type"`
-	Playbook          string            `json:"playbook"`
-	Tags              []string          `json:"tags"`
-	Limit             string            `json:"limit"`
-	HostGroup         string            `json:"hostGroup"`
-	AllowedParameters []string          `json:"allowedParameters"`
-	TimeoutSeconds    int               `json:"timeoutSeconds"`
-	RiskLevel         domain.RiskLevel  `json:"riskLevel"`
-	Risk              string            `json:"risk"`
-	Destructive       bool              `json:"destructive"`
-	FromReleaseID     string            `json:"fromReleaseId"`
-	ToReleaseID       string            `json:"toReleaseId"`
+	Name                string            `json:"name"`
+	Kind                domain.ActionKind `json:"kind"`
+	Type                domain.ActionKind `json:"type"`
+	Playbook            string            `json:"playbook"`
+	Tags                []string          `json:"tags"`
+	Limit               string            `json:"limit"`
+	HostGroup           string            `json:"hostGroup"`
+	AllowedParameters   []string          `json:"allowedParameters"`
+	RequiredCredentials []string          `json:"requiredCredentials"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
+	Risk                string            `json:"risk"`
+	Destructive         bool              `json:"destructive"`
+	FromReleaseID       string            `json:"fromReleaseId"`
+	ToReleaseID         string            `json:"toReleaseId"`
 }
 
 func (input releaseInput) domain() domain.ComponentRelease {
@@ -89,7 +90,8 @@ func (input releaseInput) domain() domain.ComponentRelease {
 		release.Actions = append(release.Actions, domain.ActionDefinition{
 			Name: inputAction.Name, Kind: kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
 			Limit: inputAction.Limit, HostGroup: inputAction.HostGroup, AllowedParameters: inputAction.AllowedParameters,
-			TimeoutSeconds: inputAction.TimeoutSeconds, RiskLevel: risk,
+			RequiredCredentials: inputAction.RequiredCredentials,
+			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
 			Destructive:   inputAction.Destructive || inputAction.Risk == "destructive",
 			FromReleaseID: inputAction.FromReleaseID, ToReleaseID: inputAction.ToReleaseID,
 		})

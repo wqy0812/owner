@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -50,6 +51,7 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
 			Playbook: "demo/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
+			RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"},
 		}},
 	}
 	if status == domain.ReleaseReleased {
@@ -96,6 +98,9 @@ func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 	}
 
 	draft, _ := s.GetComponentRelease(ctx, "alice-draft")
+	if got := draft.Actions[0].RequiredCredentials; !reflect.DeepEqual(got, []string{"ansible_ssh_pass", "registry_user"}) {
+		t.Fatalf("required credentials round trip=%v", got)
+	}
 	if err := s.PublishComponentRelease(ctx, draft.ID, testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

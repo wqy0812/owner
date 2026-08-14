@@ -133,7 +133,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(a.Tags), a.Limit, a.HostGroup, jsonText(a.AllowedParameters), a.TimeoutSeconds, a.RiskLevel, a.Destructive, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(a.Tags), a.Limit, a.HostGroup, jsonText(a.AllowedParameters), jsonText(a.RequiredCredentials), a.TimeoutSeconds, a.RiskLevel, a.Destructive, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -264,7 +264,7 @@ func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domai
 }
 
 func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.ActionDefinition, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -272,14 +272,15 @@ func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.Act
 	var out []domain.ActionDefinition
 	for rows.Next() {
 		var a domain.ActionDefinition
-		var tags, allowed string
+		var tags, allowed, requiredCredentials string
 		var destructive int
 		var from, to sql.NullString
-		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &tags, &a.Limit, &a.HostGroup, &allowed, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &from, &to); err != nil {
+		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &tags, &a.Limit, &a.HostGroup, &allowed, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &from, &to); err != nil {
 			return nil, err
 		}
 		a.Tags = decodeJSON(tags, []string{})
 		a.AllowedParameters = decodeJSON(allowed, []string{})
+		a.RequiredCredentials = decodeJSON(requiredCredentials, []string{})
 		a.Destructive = destructive != 0
 		a.FromReleaseID = from.String
 		a.ToReleaseID = to.String

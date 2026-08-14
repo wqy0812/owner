@@ -239,6 +239,7 @@ function normalizeAction(raw: LooseRecord): ActionDefinition {
     hostGroup: optionalString(raw, 'hostGroup', 'host_group'),
     timeoutSeconds: optionalNumber(raw, 'timeoutSeconds', 'timeout_seconds'),
     allowedParameters: optionalStringArray(raw, 'allowedParameters', 'allowed_parameters'),
+    requiredCredentials: optionalStringArray(raw, 'requiredCredentials', 'required_credentials'),
     risk: risk ?? (optionalBoolean(raw, 'destructive') ? 'destructive' : undefined),
     fromReleaseId: optionalString(raw, 'fromReleaseId', 'from_release_id'),
     toReleaseId: optionalString(raw, 'toReleaseId', 'to_release_id'),

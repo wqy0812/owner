@@ -30,6 +30,7 @@ export interface ActionDefinition {
   hostGroup?: string;
   timeoutSeconds?: number;
   allowedParameters?: string[];
+  requiredCredentials?: string[];
   risk?: 'normal' | 'destructive';
   fromReleaseId?: string;
   toReleaseId?: string;

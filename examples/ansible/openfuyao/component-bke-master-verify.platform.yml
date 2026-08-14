@@ -1,0 +1,35 @@
+---
+- name: Verify an existing OpenFuyao BKE cluster
+  hosts: "{{ target_host_group }}"
+  remote_user: sysop
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - import_tasks: component-bke-contract.tasks.yml
+      vars:
+        openfuyao_required_vars:
+          - target_host_group
+          - cluster_id
+          - cluster_role
+          - ansible_ssh_pass
+        openfuyao_validate_cluster_role: true
+        openfuyao_allowed_target_groups_by_role:
+          manager:
+            - management_cluster_k8smaster
+          work:
+            - work_cluster_k8smaster
+        openfuyao_required_delegate_groups_by_role:
+          manager: bootstrap_host
+          work: management_cluster_k8smaster
+      tags: always
+  tasks:
+    - name: Read BKE cluster readiness
+      command: >-
+        kubectl get bc/{{ cluster_id | lower }}
+        -n bke-{{ cluster_id | lower }}
+        -o jsonpath={.status.clusterStatus}
+      register: openfuyao_cluster_status
+      changed_when: false
+      failed_when: openfuyao_cluster_status.rc != 0 or openfuyao_cluster_status.stdout != 'Ready'
+      delegate_to: "{{ groups['bootstrap_host'][0] if cluster_role == 'manager' else groups['management_cluster_k8smaster'][0] }}"
+      run_once: true

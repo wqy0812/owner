@@ -1,6 +1,6 @@
 ---
-# Safe schema-like example derived from the original deployment's bke_all keys.
-# This file contains no source-environment values or credentials.
+# Safe grouped Environment contract for the platform-owned OpenFuyao adapters.
+# Values are TEST-NET/placeholders. Credentials are references, never inline values.
 
 facts:
   operating_system: kylin-v10
@@ -12,6 +12,13 @@ inventory:
   groups:
     bootstrap_host: []
     management_cluster_k8smaster: []
+    work_cluster_k8smaster: []
+    work_cluster_k8snode: []
+
+operation:
+  management_cluster_id: demo-management-cluster
+  work_cluster_id: demo-work-cluster
+  strategy: StatelessFlatNetworkStrategy
 
 artifact_sources:
   registry:
@@ -19,45 +26,33 @@ artifact_sources:
     ip: 192.0.2.10
     port: 443
     project: openfuyao
-    username_ref:
-      envVarRef: DEMO_REGISTRY_USERNAME
-    password_ref:
-      envVarRef: DEMO_REGISTRY_PASSWORD
   chart_repository:
+    url: https://charts.example.invalid
     port: 443
-    username_ref:
-      envVarRef: DEMO_CHART_USERNAME
-    password_ref:
-      envVarRef: DEMO_CHART_PASSWORD
+    name: openfuyao
   file_station:
     domain: files.example.invalid
     ip: 192.0.2.20
     port: 443
     prefix: /file-station
     url: https://files.example.invalid/file-station
+  binaries:
+    bke_admin: bke-admin
+    jq: jq
+    bootstrap_image: bootstrap-image
 
 ssh:
-  public_key: ""
-  known_hosts: ""
-  private_key_ref:
-    sshKeyPath: /path/to/demo-only/id_ed25519
+  public_key: /path/to/demo-only/id_ed25519.pub
+  known_hosts: /path/to/demo-only/known_hosts
 
-operation:
-  strategy: StatelessFlatNetworkStrategy
-  task_id: demo-task
-  timeout_seconds: 3600
-  callback_url: ""
-  callback_token_ref:
-    envVarRef: DEMO_CALLBACK_TOKEN
-  callback_target: ""
-  cluster_id: demo-management-cluster
-  cluster_role: manager
-  management_cluster_id: demo-management-cluster
+monitoring:
+  amc_address: 192.0.2.30
+  amc_port: 58080
 
 network:
   service_ipv4_cidr: 10.96.0.0/12
   pod_ipv4_cidr: 192.168.0.0/16
-  pod_ipv6_cidr: ""
+  pod_ipv6_cidr: fd00:10:244::/56
   cluster_dns_service_ip: 10.96.0.10
   kubernetes_service_ip: 10.96.0.1
   host_port_min: 30000
@@ -74,9 +69,39 @@ versions:
   kube_proxy: v1.34.3-of.1.icbc.harbor
   openstack_vlan: v0.0.2
   redis_operator: v1.0.0
-  harbor_secret: v1.0.0
+  harbor_secret_version: v1.0.0
+  pause: placeholder
+  cluster_api: 1.0.5
+  bkeagent_deployer: source-6909da3
+  bkeagent_deployer_tag: source-6909da3
+  ip_mod: source-6909da3
 
 certificates:
   output_path: /tmp/newplatform-demo-certs
   output_file: cluster-certs.tar.gz
+  config_path: /etc/openFuyao/certs/cert_config
   expiry: 8760h
+
+addon_params:
+  amc: {}
+  clusterconfig: {}
+  clustermonitor: {}
+  monitcontrollermanager: {}
+  housekeeping: {}
+  openstack-vlan: {}
+
+credential_refs:
+  ansible_ssh_pass:
+    envVarRef: NEWPLATFORM_OPENFUYAO_SSH_PASSWORD
+  ENV_DOCKER_SECRET_USERNAME:
+    envVarRef: NEWPLATFORM_OPENFUYAO_REGISTRY_USERNAME
+  ENV_DOCKER_SECRET_PASSWORD:
+    envVarRef: NEWPLATFORM_OPENFUYAO_REGISTRY_PASSWORD
+  ENV_CHART_PULL_USERNAME:
+    envVarRef: NEWPLATFORM_OPENFUYAO_CHART_USERNAME
+  ENV_CHART_PULL_PASSWORD:
+    envVarRef: NEWPLATFORM_OPENFUYAO_CHART_PASSWORD
+
+# cluster_role and target_host_group are fixed by each scenario node. Callback
+# URL/token, task ID, and the legacy management_cluster_id wrapper variable are
+# not Release parameters because the platform does not invoke ansible_run.sh.

@@ -116,7 +116,7 @@ func findSensitiveValue(value any, prefix string) (string, bool) {
 			if prefix != "" {
 				path = prefix + "." + key
 			}
-			if sensitiveKey.MatchString(key) {
+			if isSensitiveKey(key) {
 				return path, true
 			}
 			if nested, found := findSensitiveValue(child, path); found {

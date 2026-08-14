@@ -278,6 +278,10 @@ make build
 
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
 
+环境参数绑定支持点路径。例如 `cluster_id` 可以绑定到
+`operation.work_cluster_id`。解析时完整顶层键优先，因此原有扁平键仍兼容；
+路径不存在或中间节点不是对象时，该参数保持未绑定并在必填校验阶段失败。
+
 当前界面虽然显示并允许选择 Bootstrap / Management Cluster“阶段”，但后端不会持久化这个字段；重新读取时会根据主机组名称推导显示。阶段不决定执行顺序，请用 DAG 连线表达顺序。执行策略 JSON 当前也只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
 
 参数配置示例：
@@ -531,7 +535,27 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 
 ### 8.1 OpenFuyao Preflight Template
 
-用途：展示组件化 OpenFuyao 管理集群场景。该环境使用脱敏 TEST-NET 地址，Playbook 依赖内部介质、仓库和合格主机。包含 `rcv` 的 build 动作会被视为 destructive。不要在没有替换 Inventory 和完成安全评审时批准。
+用途：承载三个相互独立的 OpenFuyao 场景：管理集群构建、业务集群控制面
+构建、业务节点纳管。节点纳管不会重建控制面，而是先用 master verify 只读
+确认 BKECluster，再按原作业顺序执行 common 和 nodes。
+
+模板包含四个 TEST-NET 主机组：`bootstrap_host`、
+`management_cluster_k8smaster`、`work_cluster_k8smaster`、
+`work_cluster_k8snode`。管理与业务场景已分别固定
+`cluster_role=manager|work`、策略和目标主机组，界面不提供危险 Run Input
+覆盖。普通参数按 `operation`、`network`、`versions`、`artifact_sources`、
+`certificates`、`addon_params` 分组，通过点路径 Bindings 映射到 Ansible
+实际变量名。
+
+环境 Owner 必须声明动作所需的以下 CredentialRef；缺少任一项时运行会在排队
+前失败：`ansible_ssh_pass`、`ENV_DOCKER_SECRET_USERNAME`、
+`ENV_DOCKER_SECRET_PASSWORD`、`ENV_CHART_PULL_USERNAME`、
+`ENV_CHART_PULL_PASSWORD`。Release 和运行快照只保存必需凭据名称，不保存值。
+
+该环境使用脱敏 TEST-NET 地址，Playbook 依赖内部介质、仓库和合格主机。
+包含 `rcv` 的 build 动作会被视为 destructive。不要在没有替换 Inventory、
+普通参数、CredentialRef 并完成安全评审时批准。callback URL/token、task ID 和
+旧 wrapper 的 `management_cluster_id` 不属于本平台 Release 参数合同。
 
 ### 8.2 Kubernetes 1.17.5 SUSE Template
 

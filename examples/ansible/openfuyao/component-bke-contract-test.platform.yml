@@ -1,10 +1,8 @@
 ---
-- name: OpenFuyao management cluster component
+- name: Exercise the platform-owned OpenFuyao contract only
   hosts: "{{ target_host_group }}"
-  remote_user: sysop
   gather_facts: false
-  any_errors_fatal: true
-  pre_tasks:
+  tasks:
     - import_tasks: component-bke-contract.tasks.yml
       vars:
         openfuyao_required_vars:
@@ -52,8 +50,6 @@
           - addon_params
           - ENV_DOCKER_SECRET_USERNAME
           - ENV_DOCKER_SECRET_PASSWORD
-          - ENV_CHART_PULL_USERNAME
-          - ENV_CHART_PULL_PASSWORD
           - ansible_ssh_pass
         openfuyao_object_vars:
           - addon_params
@@ -70,23 +66,3 @@
             - management_cluster_k8smaster
           work:
             - work_cluster_k8smaster
-      tags: always
-
-    - name: Bridge platform inventory user to the legacy template variable
-      set_fact:
-        ansible_ssh_user: "{{ ansible_user }}"
-      tags: always
-
-    - name: Build Docker registry credential document for BKE templates
-      set_fact:
-        docker_config_json: "{{ {'auths': {ENV_DOCKER_HARBOR_DOMAIN: {'username': ENV_DOCKER_SECRET_USERNAME, 'password': ENV_DOCKER_SECRET_PASSWORD, 'auth': ('%s:%s' | format(ENV_DOCKER_SECRET_USERNAME, ENV_DOCKER_SECRET_PASSWORD) | b64encode)}}} | to_json }}"
-      no_log: true
-      tags: always
-
-    - name: Encode Docker registry credential document for BKE templates
-      set_fact:
-        harbor_config_json: "{{ docker_config_json | b64encode }}"
-      no_log: true
-      tags: always
-  roles:
-    - role: bke-master

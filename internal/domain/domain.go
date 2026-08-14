@@ -184,20 +184,21 @@ const (
 )
 
 type ActionDefinition struct {
-	ID                string     `json:"id"`
-	ReleaseID         string     `json:"releaseId"`
-	Name              string     `json:"name"`
-	Kind              ActionKind `json:"kind"`
-	Playbook          string     `json:"playbook"`
-	Tags              []string   `json:"tags"`
-	Limit             string     `json:"limit"`
-	HostGroup         string     `json:"hostGroup"`
-	AllowedParameters []string   `json:"allowedParameters"`
-	TimeoutSeconds    int        `json:"timeoutSeconds"`
-	RiskLevel         RiskLevel  `json:"riskLevel"`
-	Destructive       bool       `json:"destructive"`
-	FromReleaseID     string     `json:"fromReleaseId,omitempty"`
-	ToReleaseID       string     `json:"toReleaseId,omitempty"`
+	ID                  string     `json:"id"`
+	ReleaseID           string     `json:"releaseId"`
+	Name                string     `json:"name"`
+	Kind                ActionKind `json:"kind"`
+	Playbook            string     `json:"playbook"`
+	Tags                []string   `json:"tags"`
+	Limit               string     `json:"limit"`
+	HostGroup           string     `json:"hostGroup"`
+	AllowedParameters   []string   `json:"allowedParameters"`
+	RequiredCredentials []string   `json:"requiredCredentials"`
+	TimeoutSeconds      int        `json:"timeoutSeconds"`
+	RiskLevel           RiskLevel  `json:"riskLevel"`
+	Destructive         bool       `json:"destructive"`
+	FromReleaseID       string     `json:"fromReleaseId,omitempty"`
+	ToReleaseID         string     `json:"toReleaseId,omitempty"`
 }
 
 func (a ActionDefinition) NeedsApproval() bool {
