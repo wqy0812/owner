@@ -18,8 +18,8 @@ test('identity switch changes owner-specific component controls', async ({ page 
       const id = (request.postDataJSON() as { userId: keyof typeof users }).userId;
       current = users[id];
       data = current;
-    } else if (path.endsWith('/components')) data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-alice', layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required', latestRelease: { id: 'containerd-2', componentId: 'containerd', version: 'v2.1.1', type: 'atomic', status: 'released' } }];
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) });
+    } else if (path.endsWith('/components')) data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-alice', layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required', latestRelease: { id: 'containerd-2', componentId: 'containerd', version: 'v2.1.1', type: 'atomic', state: 'released', status: 'released' } }];
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
   });
 
   await page.goto('/components');
@@ -41,26 +41,25 @@ test('scenario rollback and declared run input are submitted to the API', async 
     else if (path.endsWith('/components')) data = [{
       id: 'test-runtime', name: 'Test Runtime', ownerId: 'component-alice', layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
       latestRelease: {
-        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', status: 'released', verified: true,
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', state: 'released', status: 'released', verified: true,
+        actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }],
       },
       releases: [{
-        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', status: 'released', verified: true,
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', state: 'released', status: 'released', verified: true,
+        actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }],
       }],
     }];
     else if (path.endsWith('/scenarios')) data = [{
-      id: 'safe-upgrade', name: 'Safe upgrade', ownerId: 'scenario-carol', currentRevisionId: 'safe-upgrade-r2',
-      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, status: 'draft', graph: {
-        nodes: [{ id: 'runtime', name: 'Rollback runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', runInputs: ['rollback_version'], position: { x: 80, y: 80 } }], edges: [],
-      } }],
+      id: 'safe-upgrade', slug: 'safe-upgrade', name: 'Safe upgrade', ownerId: 'scenario-carol', currentRevisionId: 'safe-upgrade-r2',
+      currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', status: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', runInputs: ['rollback_version'] } }], edges: [], executionPolicy: {} },
+      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', status: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', runInputs: ['rollback_version'] } }], edges: [], executionPolicy: {} }],
     }];
-    else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-dave', currentRevision: { id: 'test-r1', revision: 1, hosts: [] } }];
+    else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-dave', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], parameters: {}, credentialRefs: [] } }];
     else if (path.endsWith('/test-runs')) {
       submitted = request.postDataJSON();
       data = { id: 'run-1', status: 'queued', environmentId: 'test' };
     }
-    await route.fulfill({ status: path.endsWith('/test-runs') ? 202 : 200, contentType: 'application/json', body: JSON.stringify({ data }) });
+    await route.fulfill({ status: path.endsWith('/test-runs') ? 202 : 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
   });
 
   await page.goto('/scenarios');

@@ -1,14 +1,21 @@
 import type {
+  ActionDefinition,
+  Approval,
   Component,
+  ComponentDependency,
   ComponentRelease,
-  DashboardSummary,
+  CredentialRef,
   Environment,
+  EnvironmentHost,
+  EnvironmentRevision,
   ImpactPreview,
   Notification,
   Run,
+  RunStep,
   Scenario,
   ScenarioEdge,
   ScenarioNode,
+  ScenarioRevision,
   User,
 } from '../types/domain';
 
@@ -49,200 +56,490 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       headers,
       credentials: 'include',
     });
-  } catch {
+  } catch (reason) {
+    if (isAbortError(reason)) throw reason;
     throw new ApiError(0, {
       error: { code: 'NETWORK_ERROR', message: '无法连接平台 API，请确认 Go 服务已启动。' },
     });
   }
 
   const text = await response.text();
-  const payload = text ? safeJSON(text) : undefined;
-  if (!response.ok) throw new ApiError(response.status, (payload ?? {}) as ApiErrorBody);
+  const payload = text ? parseJSON(text) : undefined;
+  if (!response.ok) throw new ApiError(response.status, isApiErrorBody(payload) ? payload : {});
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
+    throw invalidResponse(response.status, '平台 API 返回了非 JSON 响应。');
+  }
+  if (text && payload === undefined) throw invalidResponse(response.status, '平台 API 返回了损坏的 JSON 响应。');
   return payload as T;
 }
 
-function safeJSON(value: string): unknown {
+function parseJSON(value: string): unknown | undefined {
   try {
     return JSON.parse(value);
   } catch {
-    return { message: value };
+    return undefined;
   }
 }
 
-function unwrapList<T>(value: T[] | { items?: T[]; data?: T[] }): T[] {
-  if (Array.isArray(value)) return value;
-  return value.items ?? value.data ?? [];
+function isApiErrorBody(value: unknown): value is ApiErrorBody {
+  return typeof value === 'object' && value !== null;
 }
 
-function unwrap<T>(value: T | { data: T }): T {
-  if (value && typeof value === 'object' && 'data' in value) return value.data;
+function isAbortError(reason: unknown): boolean {
+  return (reason instanceof DOMException || reason instanceof Error) && reason.name === 'AbortError';
+}
+
+function invalidResponse(status: number, message: string): ApiError {
+  return new ApiError(status, { error: { code: 'INVALID_RESPONSE', message } });
+}
+
+function unwrapList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const body = record(value);
+  const items = body && (body.items ?? body.data);
+  if (Array.isArray(items)) return items;
+  throw invalidResponse(200, '平台 API 返回了无效的列表响应。');
+}
+
+function unwrap(value: unknown): unknown {
+  const body = record(value);
+  return body && 'data' in body ? body.data : value;
+}
+
+type LooseRecord = Record<string, unknown>;
+
+const RELEASE_STATES = ['draft', 'released', 'deprecated'] as const;
+const COMPONENT_LAYERS = ['host_foundation', 'runtime_state', 'orchestration_core', 'cluster_service', 'observability_management', 'platform_extension'] as const;
+const COMPONENT_CATEGORIES = ['preflight', 'bootstrap', 'security', 'runtime', 'state_store', 'control_plane', 'worker', 'network', 'dns', 'ingress', 'storage', 'observability', 'node_management', 'platform', 'autoscaling'] as const;
+const COMPONENT_KINDS = ['software', 'software_bundle', 'delivery_stage', 'configuration', 'artifact_set'] as const;
+const COMPONENT_REQUIREDNESS = ['core_required', 'profile_required', 'optional'] as const;
+const ACTION_TYPES = ['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall'] as const;
+const RUN_STATUSES = ['queued', 'awaiting_approval', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted', 'rejected'] as const;
+const STEP_STATUSES = [...RUN_STATUSES, 'pending', 'skipped'] as const;
+const CREDENTIAL_TYPES = ['sshKeyPath', 'envVarRef'] as const;
+
+function isRecord(value: unknown): value is LooseRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function record(value: unknown): LooseRecord | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function requireRecord(value: unknown, field: string): LooseRecord {
+  if (isRecord(value)) return value;
+  throw invalidResponse(200, `平台 API 缺少或错误返回了 ${field}。`);
+}
+
+function field(raw: LooseRecord, ...keys: string[]): unknown {
+  for (const key of keys) {
+    const value = raw[key];
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+function optionalString(raw: LooseRecord, ...keys: string[]): string | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是字符串。`);
+}
+
+function requireString(raw: LooseRecord, ...keys: string[]): string {
+  const value = optionalString(raw, ...keys);
+  if (value !== undefined) return value;
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+}
+
+function optionalNumber(raw: LooseRecord, ...keys: string[]): number | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是数字。`);
+}
+
+function requireNumber(raw: LooseRecord, ...keys: string[]): number {
+  const value = optionalNumber(raw, ...keys);
+  if (value !== undefined) return value;
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+}
+
+function optionalBoolean(raw: LooseRecord, ...keys: string[]): boolean | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是布尔值。`);
+}
+
+function requireBoolean(raw: LooseRecord, ...keys: string[]): boolean {
+  const value = optionalBoolean(raw, ...keys);
+  if (value !== undefined) return value;
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+}
+
+function optionalRecord(raw: LooseRecord, ...keys: string[]): LooseRecord | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  return requireRecord(value, keys[0]);
+}
+
+function requireRecords(raw: LooseRecord, fieldName: string): LooseRecord[] {
+  const value = raw[fieldName];
+  if (!Array.isArray(value)) throw invalidResponse(200, `平台 API 的 ${fieldName} 必须是数组。`);
+  return value.map((item, index) => requireRecord(item, `${fieldName}[${index}]`));
+}
+
+function optionalRecords(raw: LooseRecord, ...keys: string[]): LooseRecord[] | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是数组。`);
+  return value.map((item, index) => requireRecord(item, `${keys[0]}[${index}]`));
+}
+
+function optionalStringArray(raw: LooseRecord, ...keys: string[]): string[] | undefined {
+  const value = field(raw, ...keys);
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是字符串数组。`);
+  }
   return value;
 }
 
-type LooseRecord = Record<string, any>;
+function requireStringArray(raw: LooseRecord, ...keys: string[]): string[] {
+  const value = optionalStringArray(raw, ...keys);
+  if (value !== undefined) return value;
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+}
 
-function normalizeRelease(raw: LooseRecord): ComponentRelease {
-  const status = raw.state ?? raw.status ?? 'draft';
+function optionalEnum<T extends string>(raw: LooseRecord, values: readonly T[], ...keys: string[]): T | undefined {
+  const value = optionalString(raw, ...keys);
+  if (value === undefined) return undefined;
+  if ((values as readonly string[]).includes(value)) return value as T;
+  throw invalidResponse(200, `平台 API 的 ${keys[0]} 值 ${JSON.stringify(value)} 不受支持。`);
+}
+
+function requireEnum<T extends string>(raw: LooseRecord, values: readonly T[], ...keys: string[]): T {
+  const value = optionalEnum(raw, values, ...keys);
+  if (value !== undefined) return value;
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+}
+
+function optionalObject(raw: LooseRecord, ...keys: string[]): Record<string, unknown> | undefined {
+  return optionalRecord(raw, ...keys);
+}
+
+function normalizeAction(raw: LooseRecord): ActionDefinition {
+  const risk = optionalEnum(raw, ['normal', 'destructive'] as const, 'risk');
   return {
-    ...raw,
-    id: raw.id,
-    version: raw.version ?? '',
-    componentId: raw.componentId ?? raw.component_id ?? '',
-    state: status,
-    status,
-    releaseNotes: raw.releaseNotes ?? raw.release_notes,
-    environmentConstraints: raw.environmentConstraints ?? raw.environment_constraints,
-    parameterSchema: raw.parameterSchema ?? raw.parameter_schema,
-    actions: (raw.actions ?? []).map((action: LooseRecord) => ({
-      ...action,
-      type: action.type ?? action.kind,
-      hostGroup: action.hostGroup ?? action.host_group,
-      timeoutSeconds: action.timeoutSeconds ?? action.timeout_seconds,
-      allowedParameters: action.allowedParameters ?? action.allowed_parameters ?? [],
-      fromReleaseId: action.fromReleaseId ?? action.from_release_id,
-      toReleaseId: action.toReleaseId ?? action.to_release_id,
-    })),
-    dependencies: (raw.dependencies ?? []).map((dependency: LooseRecord) => ({
-      ...dependency,
-      componentId: dependency.componentId ?? dependency.component_id ?? dependency.upstreamComponentId,
-      componentName: dependency.componentName ?? dependency.upstreamComponentName,
-      releaseId: dependency.upstreamReleaseId ?? dependency.upstream_release_id ?? dependency.releaseId ?? dependency.release_id,
-    })),
+    id: optionalString(raw, 'id'),
+    type: requireEnum(raw, ACTION_TYPES, 'type', 'kind'),
+    playbook: requireString(raw, 'playbook'),
+    tags: optionalStringArray(raw, 'tags'),
+    hostGroup: optionalString(raw, 'hostGroup', 'host_group'),
+    timeoutSeconds: optionalNumber(raw, 'timeoutSeconds', 'timeout_seconds'),
+    allowedParameters: optionalStringArray(raw, 'allowedParameters', 'allowed_parameters'),
+    risk: risk ?? (optionalBoolean(raw, 'destructive') ? 'destructive' : undefined),
+    fromReleaseId: optionalString(raw, 'fromReleaseId', 'from_release_id'),
+    toReleaseId: optionalString(raw, 'toReleaseId', 'to_release_id'),
   };
+}
+
+function normalizeDependency(raw: LooseRecord): ComponentDependency {
+  return {
+    componentId: requireString(raw, 'componentId', 'component_id', 'upstreamComponentId'),
+    componentName: optionalString(raw, 'componentName', 'upstreamComponentName'),
+    releaseId: requireString(raw, 'upstreamReleaseId', 'upstream_release_id', 'releaseId', 'release_id'),
+    version: optionalString(raw, 'version'),
+    purpose: optionalString(raw, 'purpose'),
+  };
+}
+
+function normalizeRelease(raw: LooseRecord, componentID?: string): ComponentRelease {
+  const state = requireEnum(raw, RELEASE_STATES, 'state', 'status');
+  const resolvedComponentID = optionalString(raw, 'componentId', 'component_id') ?? componentID;
+  if (!resolvedComponentID) throw invalidResponse(200, '平台 API 缺少必填字段 componentId。');
+  const actions = optionalRecords(raw, 'actions')?.map(normalizeAction);
+  const dependencies = optionalRecords(raw, 'dependencies')?.map(normalizeDependency);
+  return {
+    id: requireString(raw, 'id'),
+    componentId: resolvedComponentID,
+    version: requireString(raw, 'version'),
+    type: optionalEnum(raw, ['atomic', 'bundle'] as const, 'type'),
+    state,
+    status: state,
+    verification: optionalEnum(raw, ['unverified', 'testing', 'passed', 'failed'] as const, 'verification'),
+    verified: optionalBoolean(raw, 'verified'),
+    breaking: optionalBoolean(raw, 'breaking'),
+    releaseNotes: optionalString(raw, 'releaseNotes', 'release_notes'),
+    dependencies,
+    environmentConstraints: optionalObject(raw, 'environmentConstraints', 'environment_constraints'),
+    parameterSchema: optionalObject(raw, 'parameterSchema', 'parameter_schema'),
+    actions,
+    createdAt: optionalString(raw, 'createdAt', 'created_at'),
+    releasedAt: optionalString(raw, 'releasedAt', 'released_at'),
+  };
+}
+
+function normalizeReleaseActionResponse(value: unknown, componentID?: string): ComponentRelease {
+  const raw = requireRecord(normalizeOptionalData(value), 'release');
+  return normalizeRelease(raw, componentID);
 }
 
 function normalizeComponent(raw: LooseRecord): Component {
-  const releases = (raw.releases ?? []).map(normalizeRelease) as ComponentRelease[];
-  const latest = raw.latestRelease ?? raw.latest_release;
-  const latestRelease = latest ? normalizeRelease(latest) : releases[0];
+  const releases = optionalRecords(raw, 'releases')?.map((release) => normalizeRelease(release));
+  const latest = optionalRecord(raw, 'latestRelease', 'latest_release');
   return {
-    ...raw,
-    id: raw.id,
-    name: raw.name ?? '',
-    ownerId: raw.ownerId ?? raw.owner_id ?? raw.owner?.id ?? '',
-    ownerName: raw.ownerName ?? raw.owner_name ?? raw.owner?.name,
-    layer: raw.layer,
-    category: raw.category,
-    kind: raw.kind,
-    requiredness: raw.requiredness,
-    latestRelease,
+    id: requireString(raw, 'id'),
+    name: requireString(raw, 'name'),
+    slug: optionalString(raw, 'slug'),
+    description: optionalString(raw, 'description'),
+    ownerId: requireString(raw, 'ownerId', 'owner_id'),
+    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    layer: requireEnum(raw, COMPONENT_LAYERS, 'layer'),
+    category: requireEnum(raw, COMPONENT_CATEGORIES, 'category'),
+    kind: requireEnum(raw, COMPONENT_KINDS, 'kind'),
+    requiredness: requireEnum(raw, COMPONENT_REQUIREDNESS, 'requiredness'),
+    latestRelease: latest ? normalizeRelease(latest) : releases?.[0],
     releases,
-    releaseCount: raw.releaseCount ?? raw.release_count ?? releases.length,
+    releaseCount: optionalNumber(raw, 'releaseCount', 'release_count'),
+    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
   };
 }
 
-function normalizeRevision(raw?: LooseRecord) {
-  if (!raw) return undefined;
-  const graph = raw.graph ?? {};
+function normalizePosition(raw: LooseRecord): { x: number; y: number } {
+  return { x: requireNumber(raw, 'x'), y: requireNumber(raw, 'y') };
+}
+
+function normalizeBindings(raw: LooseRecord): Record<string, string> {
+  const bindings: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== 'string') throw invalidResponse(200, `平台 API 的 bindings.${key} 必须是字符串。`);
+    bindings[key] = value;
+  }
+  return bindings;
+}
+
+function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
+  const data = requireRecord(raw.data, 'node.data');
   return {
-    ...raw,
-    scenarioId: raw.scenarioId ?? raw.scenario_id ?? '',
-    state: raw.state ?? raw.status ?? 'draft',
-    nodes: (raw.nodes ?? graph.nodes ?? []).map((node: LooseRecord) => node.data ? node : ({
-      id: node.id,
-      type: 'component',
-      position: node.position ?? { x: 0, y: 0 },
-      data: {
-        label: node.name ?? node.label ?? node.id,
-        componentId: node.componentId ?? '',
-        releaseId: node.releaseId ?? '',
-        version: node.version,
-        action: node.action ?? 'install',
-        hostGroup: node.hostGroup ?? 'all',
-        values: node.values ?? {},
-        bindings: node.bindings ?? {},
-        runInputs: node.runInputs ?? [],
-      },
-    })),
-    edges: raw.edges ?? graph.edges ?? [],
-    runInputs: raw.runInputs ?? raw.run_inputs,
-    executionPolicy: raw.executionPolicy ?? raw.execution_policy,
+    id: requireString(raw, 'id'),
+    type: optionalString(raw, 'type') ?? 'component',
+    position: normalizePosition(requireRecord(raw.position, 'node.position')),
+    data: {
+      label: requireString(data, 'label'),
+      componentId: requireString(data, 'componentId'),
+      releaseId: requireString(data, 'releaseId'),
+      version: optionalString(data, 'version'),
+      action: optionalEnum(data, ACTION_TYPES, 'action'),
+      hostGroup: optionalString(data, 'hostGroup'),
+      values: optionalObject(data, 'values'),
+      bindings: optionalRecord(data, 'bindings') ? normalizeBindings(optionalRecord(data, 'bindings')!) : undefined,
+      runInputs: optionalStringArray(data, 'runInputs'),
+      layer: optionalEnum(data, COMPONENT_LAYERS, 'layer'),
+    },
+  };
+}
+
+function normalizeScenarioEdge(raw: LooseRecord): ScenarioEdge {
+  return {
+    id: requireString(raw, 'id'),
+    source: requireString(raw, 'source'),
+    target: requireString(raw, 'target'),
+    label: optionalString(raw, 'label'),
+  };
+}
+
+function normalizeRevision(raw: LooseRecord): ScenarioRevision {
+  return {
+    id: requireString(raw, 'id'),
+    scenarioId: requireString(raw, 'scenarioId', 'scenario_id'),
+    revision: requireNumber(raw, 'revision'),
+    state: requireEnum(raw, ['draft', 'testing', 'test_passed', 'released', 'deprecated'] as const, 'state', 'status'),
+    nodes: requireRecords(raw, 'nodes').map(normalizeScenarioNode),
+    edges: requireRecords(raw, 'edges').map(normalizeScenarioEdge),
+    runInputs: optionalStringArray(raw, 'runInputs', 'run_inputs'),
+    executionPolicy: optionalObject(raw, 'executionPolicy', 'execution_policy'),
+    validationErrors: optionalStringArray(raw, 'validationErrors'),
+    testedAt: optionalString(raw, 'testedAt', 'testPassedAt'),
+    createdAt: optionalString(raw, 'createdAt'),
   };
 }
 
 function normalizeScenario(raw: LooseRecord): Scenario {
-  const revisions = (raw.revisions ?? []).map(normalizeRevision);
-  const currentID = raw.currentRevisionId ?? raw.current_revision_id;
-  const current = raw.currentRevision ?? raw.current_revision ?? raw.revision ?? revisions.find((revision: LooseRecord) => revision?.id === currentID) ?? revisions[0];
+  const revisions = optionalRecords(raw, 'revisions')?.map(normalizeRevision);
+  const current = optionalRecord(raw, 'currentRevision', 'current_revision', 'revision');
+  const currentID = optionalString(raw, 'currentRevisionId', 'current_revision_id');
   return {
-    ...raw,
-    id: raw.id,
-    name: raw.name ?? '',
-    ownerId: raw.ownerId ?? raw.owner_id ?? raw.owner?.id ?? '',
-    ownerName: raw.ownerName ?? raw.owner_name ?? raw.owner?.name,
-    currentRevision: current?.nodes ? current : normalizeRevision(current),
+    id: requireString(raw, 'id'),
+    slug: requireString(raw, 'slug'),
+    name: requireString(raw, 'name'),
+    description: optionalString(raw, 'description'),
+    ownerId: requireString(raw, 'ownerId', 'owner_id'),
+    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    currentRevision: current ? normalizeRevision(current) : revisions?.find((revision) => revision.id === currentID) ?? revisions?.[0],
     revisions,
-  } as Scenario;
+    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+  };
+}
+
+function normalizeHost(raw: LooseRecord): EnvironmentHost {
+  return {
+    name: requireString(raw, 'name'),
+    address: requireString(raw, 'address'),
+    groups: requireStringArray(raw, 'groups'),
+    port: optionalNumber(raw, 'port'),
+    user: optionalString(raw, 'user'),
+  };
+}
+
+function normalizeCredential(raw: LooseRecord): CredentialRef {
+  return {
+    name: requireString(raw, 'name'),
+    type: requireEnum(raw, CREDENTIAL_TYPES, 'type', 'kind'),
+    reference: optionalString(raw, 'reference'),
+    maskedReference: optionalString(raw, 'maskedReference'),
+  };
+}
+
+function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
+  return {
+    id: requireString(raw, 'id'),
+    environmentId: requireString(raw, 'environmentId', 'environment_id'),
+    revision: requireNumber(raw, 'revision'),
+    facts: requireRecord(raw.facts, 'facts'),
+    hosts: requireRecords(raw, 'hosts').map(normalizeHost),
+    parameters: requireRecord(raw.parameters, 'parameters'),
+    credentialRefs: requireRecords(raw, 'credentialRefs').map(normalizeCredential),
+    maxConcurrentRuns: optionalNumber(raw, 'maxConcurrentRuns', 'max_concurrent_runs', 'maxConcurrent'),
+    createdAt: optionalString(raw, 'createdAt'),
+  };
 }
 
 function normalizeEnvironment(raw: LooseRecord): Environment {
-  const revision = raw.currentRevision ?? raw.current_revision ?? raw.revision;
-  let inventory = revision?.inventory ?? {};
-  if (typeof inventory === 'string') {
-    try { inventory = JSON.parse(inventory); } catch { inventory = {}; }
-  }
+  const revision = optionalRecord(raw, 'currentRevision', 'current_revision', 'revision');
   return {
-    ...raw,
-    id: raw.id,
-    name: raw.name ?? '',
-    ownerId: raw.ownerId ?? raw.owner_id ?? raw.owner?.id ?? '',
-    ownerName: raw.ownerName ?? raw.owner_name ?? raw.owner?.name,
-    status: raw.status ?? (raw.activeRunId ? 'locked' : 'ready'),
-    currentRevision: revision
-      ? {
-          ...revision,
-          environmentId: revision.environmentId ?? revision.environment_id ?? raw.id,
-          hosts: revision.hosts ?? inventory.hosts ?? [],
-          credentialRefs: (revision.credentialRefs ?? revision.credential_refs ?? []).map((credential: LooseRecord) => ({
-            ...credential,
-            type: credential.type ?? credential.kind,
-            maskedReference: credential.reference || credential.configured ? '••••••••' : '未配置',
-          })),
-          maxConcurrentRuns: revision.maxConcurrentRuns ?? revision.max_concurrent_runs ?? revision.maxConcurrent,
-        }
-      : undefined,
+    id: requireString(raw, 'id'),
+    name: requireString(raw, 'name'),
+    description: optionalString(raw, 'description'),
+    ownerId: requireString(raw, 'ownerId', 'owner_id'),
+    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    status: optionalEnum(raw, ['ready', 'locked', 'offline'] as const, 'status'),
+    activeRunId: optionalString(raw, 'activeRunId'),
+    currentRevision: revision ? normalizeEnvironmentRevision(revision) : undefined,
+    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+  };
+}
+
+function normalizeRunStep(raw: LooseRecord): RunStep {
+  return {
+    id: requireString(raw, 'id'),
+    name: requireString(raw, 'name'),
+    componentName: optionalString(raw, 'componentName'),
+    action: optionalString(raw, 'action'),
+    status: requireEnum(raw, STEP_STATUSES, 'status'),
+    startedAt: optionalString(raw, 'startedAt'),
+    finishedAt: optionalString(raw, 'finishedAt'),
+    summary: optionalString(raw, 'summary'),
+  };
+}
+
+function normalizeApproval(raw: LooseRecord): Approval {
+  return {
+    id: requireString(raw, 'id'),
+    runId: requireString(raw, 'runId'),
+    status: requireEnum(raw, ['pending', 'approved', 'rejected'] as const, 'status'),
+    riskReason: optionalString(raw, 'riskReason', 'reason'),
+    requestedAt: optionalString(raw, 'requestedAt'),
+    decidedAt: optionalString(raw, 'decidedAt'),
   };
 }
 
 function normalizeRun(raw: LooseRecord): Run {
-  const source = raw.run ?? raw;
-  const logs = raw.logs ?? source.logs;
+  const source = optionalRecord(raw, 'run') ?? raw;
+  const logTail = optionalStringArray(source, 'logTail', 'log_tail');
+  const steps = optionalRecords(source, 'steps')?.map(normalizeRunStep);
+  const approval = optionalRecord(source, 'approval');
   return {
-    ...source,
-    id: source.id,
-    status: source.status ?? 'queued',
-    environmentId: source.environmentId ?? source.environment_id ?? '',
-    environmentName: source.environmentName ?? source.environment_name,
-    scenarioName: source.scenarioName ?? source.scenario_name,
-    componentName: source.componentName ?? source.component_name,
-    queuePosition: source.queuePosition ?? source.queue_position,
-    createdBy: source.createdBy ?? source.requestedBy,
-    createdByName: source.createdByName ?? source.created_by_name,
-    logTail: source.logTail ?? source.log_tail ?? (Array.isArray(logs) ? logs.map((log: LooseRecord) => log.message ?? String(log)) : undefined),
-    approval: source.approval ? { ...source.approval, riskReason: source.approval.riskReason ?? source.approval.reason } : undefined,
+    id: requireString(source, 'id'),
+    kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run'] as const, 'kind'),
+    name: optionalString(source, 'name'),
+    status: requireEnum(source, RUN_STATUSES, 'status'),
+    scenarioId: optionalString(source, 'scenarioId'),
+    scenarioName: optionalString(source, 'scenarioName'),
+    scenarioRevisionId: optionalString(source, 'scenarioRevisionId'),
+    componentId: optionalString(source, 'componentId'),
+    componentName: optionalString(source, 'componentName'),
+    componentReleaseId: optionalString(source, 'componentReleaseId'),
+    environmentId: requireString(source, 'environmentId', 'environment_id'),
+    environmentName: optionalString(source, 'environmentName'),
+    createdBy: optionalString(source, 'createdBy', 'requestedBy'),
+    createdByName: optionalString(source, 'createdByName'),
+    destructive: optionalBoolean(source, 'destructive'),
+    queuePosition: optionalNumber(source, 'queuePosition'),
+    progress: optionalNumber(source, 'progress'),
+    steps,
+    approval: approval ? normalizeApproval(approval) : undefined,
+    logTail,
+    createdAt: optionalString(source, 'createdAt'),
+    startedAt: optionalString(source, 'startedAt'),
+    finishedAt: optionalString(source, 'finishedAt'),
   };
 }
 
 function normalizeNotification(raw: LooseRecord): Notification {
-  const payload = raw.payload ?? {};
+  const payload = optionalRecord(raw, 'payload');
+  const payloadString = (key: string) => payload ? optionalString(payload, key) : undefined;
+  const payloadBoolean = (key: string) => payload ? optionalBoolean(payload, key) : undefined;
+  const payloadStrings = (key: string) => payload ? optionalStringArray(payload, key) : undefined;
   return {
-    ...raw,
-    id: raw.id,
-    title: raw.title ?? '平台通知',
-    message: raw.message ?? raw.body ?? '',
-    read: raw.read ?? Boolean(raw.readAt),
-    resourceUrl: raw.resourceUrl ?? raw.resource_url,
-    componentId: raw.componentId ?? payload.componentId,
-    componentName: raw.componentName ?? payload.componentName,
-    oldVersion: raw.oldVersion ?? payload.oldVersion,
-    newVersion: raw.newVersion ?? payload.newVersion,
-    breaking: raw.breaking ?? payload.breaking,
-    impactPaths: raw.impactPaths ?? payload.impactPaths ?? payload.paths,
-    scenarioIds: raw.scenarioIds ?? payload.scenarioIds,
+    id: requireString(raw, 'id'),
+    userId: optionalString(raw, 'userId'),
+    type: optionalString(raw, 'type'),
+    title: requireString(raw, 'title'),
+    message: requireString(raw, 'message', 'body'),
+    read: requireBoolean(raw, 'read'),
+    resourceUrl: optionalString(raw, 'resourceUrl'),
+    componentId: optionalString(raw, 'componentId') ?? payloadString('componentId'),
+    componentName: optionalString(raw, 'componentName') ?? payloadString('componentName'),
+    oldVersion: optionalString(raw, 'oldVersion') ?? payloadString('oldVersion'),
+    newVersion: optionalString(raw, 'newVersion') ?? payloadString('newVersion'),
+    breaking: optionalBoolean(raw, 'breaking') ?? payloadBoolean('breaking'),
+    impactPaths: narrowStringPaths(field(raw, 'impactPaths') ?? field(payload ?? {}, 'impactPaths', 'paths')),
+    scenarioIds: optionalStringArray(raw, 'scenarioIds') ?? payloadStrings('scenarioIds'),
+    createdAt: optionalString(raw, 'createdAt'),
   };
 }
 
-const get = <T>(path: string) => request<T>(path);
+function normalizeUser(value: unknown): User {
+  const raw = requireRecord(value, 'session user');
+  return {
+    id: requireString(raw, 'id'),
+    name: requireString(raw, 'name'),
+    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner'] as const, 'role'),
+    title: optionalString(raw, 'title'),
+  };
+}
+
+function normalizeOptionalData(value: unknown): unknown {
+  const data = unwrap(value);
+  if (data === undefined) throw invalidResponse(200, '平台 API 缺少响应数据。');
+  return data;
+}
+
+function narrowPeople(value: unknown): Array<{ id: string; name: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => isRecord(item) && typeof item.id === 'string' && typeof item.name === 'string'
+    ? [{ id: item.id, name: item.name }]
+    : []);
+}
+
+function narrowStringPaths(value: unknown): string[][] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((path) => Array.isArray(path) && path.every((part) => typeof part === 'string') ? [path] : []);
+}
+
+const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal });
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 const put = <T>(path: string, body: unknown) =>
@@ -252,73 +549,62 @@ const patch = <T>(path: string, body: unknown) =>
 
 export const api = {
   async me() {
-    return unwrap(await get<User | { data: User }>('/session/me'));
+    return normalizeUser(unwrap(await get<unknown>('/session/me')));
   },
   async switchUser(userId: string) {
-    return unwrap(await post<User | { data: User }>('/session/switch', { userId }));
+    return normalizeUser(unwrap(await post<unknown>('/session/switch', { userId })));
   },
-  async dashboard() {
-    return unwrap(await get<DashboardSummary | { data: DashboardSummary }>('/dashboard'));
-  },
-  async components() {
-    return unwrapList(await get<Component[] | { items?: Component[]; data?: Component[] }>('/components')).map((item) => normalizeComponent(item as LooseRecord));
+  async components(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/components', signal)).map((item) => normalizeComponent(requireRecord(item, 'component')));
   },
   async component(id: string) {
-    return normalizeComponent(unwrap(await get<Component | { data: Component }>(`/components/${id}`)) as LooseRecord);
+    return normalizeComponent(requireRecord(unwrap(await get<unknown>(`/components/${id}`)), 'component'));
   },
   async createComponent(input: Partial<Component>) {
-    return unwrap(await post<Component | { data: Component }>('/components', input));
+    return normalizeComponent(requireRecord(normalizeOptionalData(await post<unknown>('/components', input)), 'component'));
   },
   async updateComponent(id: string, input: Partial<Component>) {
-    return unwrap(await patch<Component | { data: Component }>(`/components/${id}`, input));
+    return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
   async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean }) {
-    return unwrap(
-      await post<ComponentRelease | { data: ComponentRelease }>(`/component-releases/${releaseId}/clone`, input),
-    );
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
   },
   async createRelease(componentId: string, input: Partial<ComponentRelease>) {
-    return unwrap(
-      await post<ComponentRelease | { data: ComponentRelease }>(`/components/${componentId}/releases`, input),
-    );
+    return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/releases`, input), componentId);
   },
   async updateRelease(releaseId: string, input: Partial<ComponentRelease>) {
-    return unwrap(
-      await put<ComponentRelease | { data: ComponentRelease }>(`/component-releases/${releaseId}`, input),
-    );
+    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}`, input));
   },
-  async releaseImpact(releaseId: string) {
-    const raw = unwrap(await get<ImpactPreview | { data: ImpactPreview }>(`/component-releases/${releaseId}/impact`)) as unknown as LooseRecord;
-    if (!raw.recipients) return raw as ImpactPreview;
-    const componentOwners = raw.recipients.filter((item: LooseRecord) => item.role === 'component_owner').map((item: LooseRecord) => ({ id: item.userId, name: item.userName ?? item.userId }));
-    const scenarioOwners = raw.recipients.filter((item: LooseRecord) => item.role === 'scenario_owner').map((item: LooseRecord) => ({ id: item.userId, name: item.userName ?? item.userId }));
-    const scenarioIds = [...new Set(raw.recipients.flatMap((item: LooseRecord) => item.scenarioIds ?? []))] as string[];
-    return { componentOwners, scenarioOwners, scenarios: scenarioIds.map((id) => ({ id, name: id })), paths: raw.recipients.flatMap((item: LooseRecord) => (item.paths ?? []).map((path: LooseRecord) => path.componentNames ?? path)) };
+  async releaseImpact(releaseId: string): Promise<ImpactPreview> {
+    const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact`));
+    if (!isRecord(raw)) throw invalidResponse(200, '平台 API 返回了无效的影响分析响应。');
+    return {
+      componentOwners: narrowPeople(raw.componentOwners),
+      scenarioOwners: narrowPeople(raw.scenarioOwners),
+      scenarios: narrowPeople(raw.scenarios),
+      paths: narrowStringPaths(raw.paths),
+    };
   },
   async publishRelease(releaseId: string) {
-    return unwrap(
-      await post<ComponentRelease | { data: ComponentRelease }>(`/component-releases/${releaseId}/publish`),
-    );
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/publish`));
   },
   async deprecateRelease(releaseId: string) {
-    return normalizeRelease(unwrap(await post<ComponentRelease | { data: ComponentRelease }>(`/component-releases/${releaseId}/deprecate`)) as LooseRecord);
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
   },
   async testRelease(releaseId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return unwrap(
-      await post<Run | { data: Run }>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput }),
-    );
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput })), 'run'));
   },
-  async scenarios() {
-    return unwrapList(await get<Scenario[] | { items?: Scenario[]; data?: Scenario[] }>('/scenarios')).map((item) => normalizeScenario(item as LooseRecord));
+  async scenarios(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/scenarios', signal)).map((item) => normalizeScenario(requireRecord(item, 'scenario')));
   },
   async createScenario(input: Pick<Scenario, 'name'> & Partial<Scenario>) {
-    return normalizeScenario(unwrap(await post<Scenario | { data: Scenario }>('/scenarios', input)) as LooseRecord);
+    return normalizeScenario(requireRecord(unwrap(await post<unknown>('/scenarios', input)), 'scenario'));
   },
   async scenario(id: string) {
-    return normalizeScenario(unwrap(await get<Scenario | { data: Scenario }>(`/scenarios/${id}`)) as LooseRecord);
+    return normalizeScenario(requireRecord(unwrap(await get<unknown>(`/scenarios/${id}`)), 'scenario'));
   },
   async cloneScenarioRevision(scenarioId: string) {
-    return normalizeRevision(unwrap(await post<LooseRecord | { data: LooseRecord }>(`/scenarios/${scenarioId}/revisions`)) as LooseRecord);
+    return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenarios/${scenarioId}/revisions`)), 'scenario revision'));
   },
   async saveGraph(revisionId: string, graph: { nodes: ScenarioNode[]; edges: ScenarioEdge[]; executionPolicy?: Record<string, unknown> }) {
     const backendGraph = {
@@ -336,87 +622,72 @@ export const api = {
       edges: graph.edges,
       executionPolicy: graph.executionPolicy ?? {},
     };
-    return unwrap(
-      await put<Scenario | { data: Scenario }>(`/scenario-revisions/${revisionId}/graph`, backendGraph),
-    );
+    return normalizeRevision(requireRecord(normalizeOptionalData(await put<unknown>(`/scenario-revisions/${revisionId}/graph`, backendGraph)), 'scenario revision'));
   },
   async validateScenario(revisionId: string) {
-    const result = unwrap(
-      await post<{ valid: boolean; errors: string[] } | { data: { valid: boolean; errors: string[] } }>(
-        `/scenario-revisions/${revisionId}/validate`,
-      ),
-    );
-    if (Array.isArray(result)) return { valid: result.length === 0, errors: result.map((issue: LooseRecord) => issue.message ?? String(issue)) };
-    return result;
+    const result = requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/validate`)), 'scenario validation');
+    return { valid: requireBoolean(result, 'valid'), errors: requireStringArray(result, 'errors') };
   },
   async testScenario(revisionId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return unwrap(
-      await post<Run | { data: Run }>(`/scenario-revisions/${revisionId}/test-runs`, { environmentId, runInput }),
-    );
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/test-runs`, { environmentId, runInput })), 'run'));
   },
   async runScenario(revisionId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return unwrap(
-      await post<Run | { data: Run }>(`/scenario-revisions/${revisionId}/runs`, { environmentId, runInput }),
-    );
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/runs`, { environmentId, runInput })), 'run'));
   },
   async publishScenario(revisionId: string) {
-    return unwrap(
-      await post<Scenario | { data: Scenario }>(`/scenario-revisions/${revisionId}/publish`),
-    );
+    return normalizeRevision(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/publish`)), 'scenario revision'));
   },
   async deprecateScenario(revisionId: string) {
-    return normalizeRevision(unwrap(await post<LooseRecord | { data: LooseRecord }>(`/scenario-revisions/${revisionId}/deprecate`)) as LooseRecord);
+    return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/deprecate`)), 'scenario revision'));
   },
-  async environments() {
-    return unwrapList(await get<Environment[] | { items?: Environment[]; data?: Environment[] }>('/environments')).map((item) => normalizeEnvironment(item as LooseRecord));
+  async environments(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/environments', signal)).map((item) => normalizeEnvironment(requireRecord(item, 'environment')));
   },
   async createEnvironment(input: Partial<Environment> & { facts?: Record<string, unknown> }) {
-    return normalizeEnvironment(unwrap(await post<Environment | { data: Environment }>('/environments', input)) as LooseRecord);
+    return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environments', input)), 'environment'));
   },
-  async updateInventory(environmentId: string, hosts: Environment['currentRevision'] extends infer _ ? unknown : never) {
-    return unwrap(await put<Environment | { data: Environment }>(`/environments/${environmentId}/inventory`, { hosts }));
+  async updateInventory(environmentId: string, hosts: EnvironmentHost[]) {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/inventory`, { hosts })), 'environment'));
   },
   async updateParameters(environmentId: string, parameters: Record<string, unknown>) {
-    return unwrap(
-      await put<Environment | { data: Environment }>(`/environments/${environmentId}/parameters`, { parameters }),
-    );
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/parameters`, { parameters })), 'environment'));
   },
   async updateFacts(environmentId: string, facts: Record<string, unknown>) {
-    return unwrap(await put<Environment | { data: Environment }>(`/environments/${environmentId}/facts`, { facts }));
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/facts`, { facts })), 'environment'));
   },
   async updateCredentialRefs(environmentId: string, credentialRefs: unknown[]) {
     const refs = credentialRefs.map((credential) => {
-      const item = credential as LooseRecord;
-      return { name: item.name, kind: item.kind ?? item.type, reference: item.reference };
+      const item = requireRecord(credential, 'credential reference');
+      return {
+        name: requireString(item, 'name'),
+        kind: requireEnum(item, CREDENTIAL_TYPES, 'kind', 'type'),
+        reference: optionalString(item, 'reference'),
+      };
     });
-    return unwrap(
-      await put<Environment | { data: Environment }>(`/environments/${environmentId}/credential-refs`, {
-        credentialRefs: refs,
-      }),
-    );
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/credential-refs`, {
+      credentialRefs: refs,
+    })), 'environment'));
   },
-  async runs() {
-    return unwrapList(await get<Run[] | { items?: Run[]; data?: Run[] }>('/runs')).map((item) => normalizeRun(item as LooseRecord));
+  async runs(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/runs', signal)).map((item) => normalizeRun(requireRecord(item, 'run')));
   },
-  async run(id: string) {
-    return normalizeRun(unwrap(await get<Run | { data: Run }>(`/runs/${id}`)) as LooseRecord);
+  async run(id: string, signal?: AbortSignal) {
+    return normalizeRun(requireRecord(unwrap(await get<unknown>(`/runs/${id}`, signal)), 'run'));
   },
   async cancelRun(id: string) {
-    return unwrap(await post<Run | { data: Run }>(`/runs/${id}/cancel`));
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/runs/${id}/cancel`)), 'run'));
   },
   async approve(id: string) {
-    return unwrap(await post<Run | { data: Run }>(`/approvals/${id}/approve`));
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/approve`)), 'run'));
   },
   async reject(id: string) {
-    return unwrap(await post<Run | { data: Run }>(`/approvals/${id}/reject`));
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/reject`)), 'run'));
   },
-  async notifications() {
-    return unwrapList(
-      await get<Notification[] | { items?: Notification[]; data?: Notification[] }>('/notifications'),
-    ).map((item) => normalizeNotification(item as LooseRecord));
+  async notifications(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/notifications', signal)).map((item) => normalizeNotification(requireRecord(item, 'notification')));
   },
   async markNotificationRead(id: string, read = true) {
-    return unwrap(await patch<Notification | { data: Notification }>(`/notifications/${id}`, { read }));
+    return normalizeNotification(requireRecord(normalizeOptionalData(await patch<unknown>(`/notifications/${id}`, { read })), 'notification'));
   },
 };
 

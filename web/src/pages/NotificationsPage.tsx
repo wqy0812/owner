@@ -2,28 +2,29 @@ import { useMemo, useState } from 'react';
 import { AlertTriangle, Bell, CheckCheck, GitBranch, Network, PackageOpen } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, RefreshNotice, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 
 export function NotificationsPage() {
   const { user, notify, signalRefresh } = useApp();
-  const { data: notifications, loading, error, reload } = useApiData(() => api.notifications(), [user.id]);
+  const { data: notifications, loading, error, isRefreshing, reload } = useApiData((signal) => api.notifications(signal), [user.id], 'notifications');
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
   const visible = useMemo(() => (notifications ?? []).filter((item) => filter === 'all' || !item.read), [filter, notifications]);
 
   async function mark(id: string) {
-    try { await api.markNotificationRead(id); signalRefresh(); }
+    try { await api.markNotificationRead(id); signalRefresh('notifications'); }
     catch (reason) { notify('error', '更新通知失败', displayError(reason)); }
   }
 
   async function markAll() {
-    try { await Promise.all((notifications ?? []).filter((item) => !item.read).map((item) => api.markNotificationRead(item.id))); notify('success', '全部标记为已读'); signalRefresh(); }
+    try { await Promise.all((notifications ?? []).filter((item) => !item.read).map((item) => api.markNotificationRead(item.id))); notify('success', '全部标记为已读'); signalRefresh('notifications'); }
     catch (reason) { notify('error', '更新通知失败', displayError(reason)); }
   }
 
   return <div className="page">
     <PageHeader eyebrow="Impact inbox" title="通知中心" description="组件发布时沿反向依赖图追踪直接与传递影响，不会自动修改任何下游版本。" actions={(notifications ?? []).some((item) => !item.read) ? <button className="button button--quiet" onClick={() => void markAll()}><CheckCheck size={16} /> 全部已读</button> : undefined} />
+    <RefreshNotice loading={isRefreshing} error={notifications ? error : undefined} onRetry={() => void reload()} />
     {loading && !notifications ? <LoadingBlock label="正在加载影响通知…" /> : error && !notifications ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <section className="notification-center panel">
       <div className="notification-filter"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部 <span>{notifications?.length ?? 0}</span></button><button className={filter === 'unread' ? 'active' : ''} onClick={() => setFilter('unread')}>未读 <span>{notifications?.filter((item) => !item.read).length ?? 0}</span></button></div>
       {visible.length ? <div className="notification-list">{visible.map((notice) => <article key={notice.id} className={`notification-card${notice.read ? '' : ' notification-card--unread'}`}>

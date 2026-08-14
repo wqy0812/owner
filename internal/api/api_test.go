@@ -279,6 +279,44 @@ func TestComponentKindIsIndependentFromReleaseType(t *testing.T) {
 	}
 }
 
+func TestPublicListAndScenarioDTOContracts(t *testing.T) {
+	f := newAPIFixture(t)
+	carol := f.session(seed.ScenarioOwnerID)
+
+	components := decodeEnvelope(t, f.request(http.MethodGet, "/api/v1/components", nil, carol))
+	if _, ok := components["items"].([]any); !ok {
+		t.Fatalf("components must use items envelope: %#v", components)
+	}
+
+	scenarios := decodeEnvelope(t, f.request(http.MethodGet, "/api/v1/scenarios", nil, carol))
+	items, ok := scenarios["items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("scenarios must use non-empty items envelope: %#v", scenarios)
+	}
+	scenario, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("scenario item type: %#v", items[0])
+	}
+	revision, ok := scenario["currentRevision"].(map[string]any)
+	if !ok {
+		t.Fatalf("currentRevision missing: %#v", scenario)
+	}
+	nodes, ok := revision["nodes"].([]any)
+	if !ok {
+		t.Fatalf("revision nodes must be an array: %#v", revision)
+	}
+	if len(nodes) > 0 {
+		node, ok := nodes[0].(map[string]any)
+		if !ok {
+			t.Fatalf("scenario node type: %#v", nodes[0])
+		}
+		data, ok := node["data"].(map[string]any)
+		if !ok || data["componentId"] == "" || data["releaseId"] == "" {
+			t.Fatalf("scenario node public metadata missing: %#v", node)
+		}
+	}
+}
+
 func TestReleaseImpactNotifiesDownstreamAndScenarioOwners(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)

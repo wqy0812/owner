@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Ban, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, ListFilter, PlayCircle, ScrollText, ShieldAlert, Square, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { Run } from '../types/domain';
@@ -10,22 +10,34 @@ import type { Run } from '../types/domain';
 const ACTIVE = new Set(['queued', 'awaiting_approval', 'running']);
 
 export function RunsPage() {
-  const { user, notify, signalRefresh } = useApp();
+  const { user, notify, refreshTokens, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: runs, loading, error, reload } = useApiData(() => api.runs(), [user.id]);
+  const { data: runs, loading, error, isRefreshing, reload } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const [filter, setFilter] = useState<'all' | 'active' | 'finished'>('all');
   const [detail, setDetail] = useState<Run>();
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string>();
+  const [detailRetry, setDetailRetry] = useState(0);
   const [busy, setBusy] = useState<string>();
   const selectedId = searchParams.get('selected') ?? runs?.[0]?.id;
 
   useEffect(() => {
-    if (!selectedId) { setDetail(undefined); return; }
-    let active = true;
-    api.run(selectedId).then((run) => active && setDetail(run)).catch(() => {
-      if (active) setDetail(runs?.find((run) => run.id === selectedId));
+    if (!selectedId) { setDetail(undefined); setDetailError(undefined); return; }
+    const controller = new AbortController();
+    setDetailLoading(true);
+    setDetailError(undefined);
+    api.run(selectedId, controller.signal).then((run) => {
+      if (!controller.signal.aborted) setDetail(run);
+    }).catch((reason) => {
+      if (!controller.signal.aborted) {
+        setDetail(undefined);
+        setDetailError(displayError(reason));
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setDetailLoading(false);
     });
-    return () => { active = false; };
-  }, [runs, selectedId]);
+    return () => controller.abort();
+  }, [detailRetry, refreshTokens.runs, selectedId]);
 
   const filtered = useMemo(() => (runs ?? []).filter((run) => filter === 'all' || (filter === 'active' ? ACTIVE.has(run.status) : !ACTIVE.has(run.status))), [filter, runs]);
 
@@ -34,7 +46,7 @@ export function RunsPage() {
     try {
       if (kind === 'cancel') await api.cancelRun(detail.id);
       else if (detail.approval?.id) await (kind === 'approve' ? api.approve(detail.approval.id) : api.reject(detail.approval.id));
-      notify('success', kind === 'approve' ? '已批准执行' : kind === 'reject' ? '已拒绝执行' : '取消请求已发送'); signalRefresh();
+      notify('success', kind === 'approve' ? '已批准执行' : kind === 'reject' ? '已拒绝执行' : '取消请求已发送'); signalRefresh(['runs', 'environments', 'scenarios']);
     } catch (reason) { notify('error', '操作失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
@@ -42,13 +54,14 @@ export function RunsPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Ansible executions" title="运行中心" description="跟踪排队、审批、执行步骤和实时脱敏日志；每个环境按 FIFO 串行执行。" />
+    <RefreshNotice loading={isRefreshing} error={runs ? error : undefined} onRetry={() => void reload()} />
     {loading && !runs ? <LoadingBlock label="正在加载运行队列…" /> : error && !runs ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="runs-layout">
       <aside className="run-sidebar panel">
         <div className="run-filter"><ListFilter size={16} />{(['all', 'active', 'finished'] as const).map((value) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value === 'all' ? '全部' : value === 'active' ? '进行中' : '已结束'}</button>)}</div>
         <div className="run-cards">{filtered.map((run) => <button key={run.id} className={`run-card${selectedId === run.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: run.id })}><span className={`run-card__status run-card__status--${run.status}`}>{run.status === 'succeeded' ? <CheckCircle2 size={17} /> : run.status === 'awaiting_approval' ? <ShieldAlert size={17} /> : <CircleDashed size={17} />}</span><div><strong>{run.name ?? run.scenarioName ?? run.componentName ?? `Run ${run.id.slice(0, 8)}`}</strong><small>{run.environmentName ?? '未知环境'} · {formatTime(run.createdAt)}</small><span><StatusPill status={run.status} />{run.queuePosition ? <em>队列 #{run.queuePosition}</em> : null}</span></div><ChevronRight size={16} /></button>)}</div>
         {!filtered.length && <EmptyState title="当前筛选无运行" />}
       </aside>
-      {detail ? <section className="run-detail detail-stack">
+      {detailLoading && !detail ? <section className="panel"><LoadingBlock label="正在加载运行详情…" /></section> : detailError ? <section className="panel"><ErrorBlock message={detailError} onRetry={() => setDetailRetry((value) => value + 1)} /></section> : detail ? <section className="run-detail detail-stack">
         <article className="panel run-hero">
           <div><div className={`run-symbol run-symbol--${detail.status}`}><PlayCircle size={23} /></div><div><div className="eyebrow">{detail.kind?.replaceAll('_', ' ') ?? 'scenario run'} · {detail.id.slice(0, 12)}</div><h2>{detail.name ?? detail.scenarioName ?? detail.componentName}</h2><p>{detail.environmentName} · 发起人 {detail.createdByName ?? detail.createdBy ?? '—'} · {formatTime(detail.createdAt)}</p></div></div>
           <div className="run-actions"><StatusPill status={detail.status} />{ACTIVE.has(detail.status) && detail.status !== 'awaiting_approval' && <button disabled={busy === 'cancel'} className="button button--danger-soft" onClick={() => void action('cancel')}><Square size={14} /> 取消</button>}</div>

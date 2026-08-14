@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { AppProvider } from '../context/AppContext';
 import { parseRunInput, uniqueRunInputs } from '../components/RunInputFields';
+import { EventSourceMock } from './setup';
 
 const alice = { id: 'component-alice', name: 'Alice Component', role: 'component_owner' };
 const dave = { id: 'environment-dave', name: 'Dave Environment', role: 'environment_owner' };
@@ -20,12 +21,12 @@ const components = [{
   category: 'runtime',
   kind: 'software',
   requiredness: 'profile_required',
-  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] },
-  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
+  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }] },
+  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml' }, { type: 'verify', playbook: 'verify.yml' }, { type: 'rollback', playbook: 'rollback.yml' }] }],
 }];
 
 function json(data: unknown, status = 200) {
-  return Promise.resolve(new Response(JSON.stringify(status >= 400 ? data : { data }), {
+  return Promise.resolve(new Response(JSON.stringify(status >= 400 ? data : Array.isArray(data) ? { items: data } : { data }), {
     status,
     headers: { 'Content-Type': 'application/json' },
   }));
@@ -50,19 +51,30 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
       id: 'scenario-openfuyao',
       name: 'OpenFuyao Management Cluster Build',
       ownerId: carol.id,
+      slug: 'openfuyao-management-cluster-build',
       currentRevisionId: 'scenario-openfuyao-r1',
+      currentRevision: {
+        id: 'scenario-openfuyao-r1',
+        scenarioId: 'scenario-openfuyao',
+        revision: 1,
+        state: 'draft',
+        status: 'draft',
+        nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
+        edges: [],
+        executionPolicy: {},
+      },
       revisions: [{
         id: 'scenario-openfuyao-r1',
         scenarioId: 'scenario-openfuyao',
         revision: 1,
+        state: 'draft',
         status: 'draft',
-        graph: {
-          nodes: [{ id: 'bke-cert', name: 'bke-cert', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'], position: { x: 80, y: 80 } }],
-          edges: [],
-        },
+        nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
+        edges: [],
+        executionPolicy: {},
       }],
     }] : []);
-    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', revision: 1, hosts: [] } }]);
+    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
     return json({});
@@ -153,6 +165,31 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(paletteButton);
     expect(await screen.findByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument();
     expect(screen.getAllByText('containerd').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps unsaved scenario nodes when a component metadata refresh arrives', async () => {
+    installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    const paletteButton = await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    await userEvent.click(paletteButton);
+    expect(await screen.findByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument();
+
+    EventSourceMock.instances.at(-1)?.emit('release.published');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 450)); });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument());
+  });
+
+  it('does not reload scenario component metadata for a run log event', async () => {
+    const fetchMock = installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    const componentCallsBefore = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components')).length;
+
+    EventSourceMock.instances.at(-1)?.emit('run.log');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 450)); });
+
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components'))).toHaveLength(componentCallsBefore);
   });
 
   it('submits only declared scenario run inputs with a test run', async () => {

@@ -16,7 +16,7 @@ import {
 } from '@xyflow/react';
 import { Beaker, Boxes, CheckCircle2, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, StatusPill } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
@@ -39,9 +39,9 @@ const nodeTypes = { component: ComponentNode };
 
 export function ScenariosPage() {
   const { user, notify, signalRefresh } = useApp();
-  const { data: scenarios, loading, error, reload } = useApiData(() => api.scenarios(), [user.id]);
-  const { data: components } = useApiData(() => api.components(), [user.id]);
-  const { data: environments } = useApiData(() => api.environments(), [user.id]);
+  const { data: scenarios, loading, error, isRefreshing, reload } = useApiData((signal) => api.scenarios(signal), [user.id], 'scenarios');
+  const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
+  const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>();
   const selectedScenario = useMemo(() => scenarios?.find((item) => item.id === selectedScenarioId) ?? scenarios?.[0], [scenarios, selectedScenarioId]);
   const revision = selectedScenario?.currentRevision;
@@ -60,21 +60,35 @@ export function ScenariosPage() {
   const canLaunch = Boolean((user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id) || user.role === 'environment_owner');
 
   useEffect(() => {
-    setNodes(((revision?.nodes ?? []) as FlowNode[]).map((node) => {
-      const component = components?.find((item) => item.releases?.some((release) => release.id === node.data.releaseId));
-      const release = component?.releases?.find((item) => item.id === node.data.releaseId);
-      return { ...node, type: 'component', data: { ...node.data, componentId: node.data.componentId || component?.id || '', label: node.data.label || component?.name || node.id, version: node.data.version ?? release?.version, layer: component?.layer } };
-    }));
+    setNodes((revision?.nodes ?? []).map((node) => ({ ...node, type: 'component' })) as FlowNode[]);
     setEdges((revision?.edges ?? []) as Edge[]);
     setSelectedNodeId(undefined);
     setValidation(undefined);
     setRunInputValues({});
 		setExecutionPolicy(JSON.stringify(revision?.executionPolicy ?? {}, null, 2));
-  }, [components, revision?.id, setEdges, setNodes]);
+  }, [revision?.id, setEdges, setNodes]);
+
+  const releaseMetadata = useMemo(() => new Map(
+    components?.flatMap((component) => (component.releases ?? []).map((release) => [release.id, { component, release }] as const)) ?? [],
+  ), [components]);
+  const displayNodes = useMemo(() => nodes.map((node) => {
+    const metadata = releaseMetadata.get(node.data.releaseId);
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        componentId: node.data.componentId || metadata?.component.id || '',
+        label: node.data.label || metadata?.component.name || node.id,
+        version: node.data.version ?? metadata?.release.version,
+        layer: node.data.layer ?? metadata?.component.layer,
+      },
+    };
+  }), [nodes, releaseMetadata]);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
-  const selectedNodeComponent = useMemo(() => components?.find((component) => component.id === selectedNode?.data.componentId), [components, selectedNode?.data.componentId]);
-  const selectedRelease = useMemo(() => components?.flatMap((component) => component.releases ?? []).find((release) => release.id === selectedNode?.data.releaseId), [components, selectedNode?.data.releaseId]);
+  const selectedNodeMetadata = selectedNode ? releaseMetadata.get(selectedNode.data.releaseId) : undefined;
+  const selectedNodeComponent = selectedNodeMetadata?.component ?? components?.find((component) => component.id === selectedNode?.data.componentId);
+  const selectedRelease = selectedNodeMetadata?.release;
   const availableNodeActions = useMemo(() => {
     const explicit = selectedRelease?.actions?.map((action) => action.type).filter(Boolean) ?? [];
     return [...new Set(explicit.length ? explicit : [selectedNode?.data.action ?? 'install'])];
@@ -114,7 +128,7 @@ export function ScenariosPage() {
     try {
       const policy = JSON.parse(executionPolicy || '{}') as Record<string, unknown>;
       await api.saveGraph(revision.id, { nodes: nodes.map(({ id, type, position, data }) => ({ id, type, position, data })), edges: edges.map(({ id, source, target, label }) => ({ id, source, target, label: typeof label === 'string' ? label : undefined })) as ScenarioEdge[], executionPolicy: policy });
-      notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh();
+      notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh('scenarios');
     } catch (reason) { notify('error', '保存失败', reason instanceof SyntaxError ? '执行策略必须是有效 JSON。' : displayError(reason)); } finally { setBusy(undefined); }
   }
 
@@ -130,31 +144,32 @@ export function ScenariosPage() {
       const runInput = parseRunInput(declaredRunInputs, runInputValues);
       if (revision.state === 'released') await api.runScenario(revision.id, testEnvironment, runInput);
       else await api.testScenario(revision.id, testEnvironment, runInput);
-      notify('success', revision.state === 'released' ? '场景运行已提交' : '完整场景测试已提交', revision.state === 'released' ? '可以在运行中心查看执行进度。' : '场景状态将进入 Testing。'); setTestOpen(false); signalRefresh();
+      notify('success', revision.state === 'released' ? '场景运行已提交' : '完整场景测试已提交', revision.state === 'released' ? '可以在运行中心查看执行进度。' : '场景状态将进入 Testing。'); setTestOpen(false); signalRefresh(['scenarios', 'runs', 'environments']);
     }
     catch (reason) { notify('error', '测试提交失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function publish() {
     if (!revision) return; setBusy('publish');
-    try { await api.publishScenario(revision.id); notify('success', '场景已发布', 'Revision 已锁定为不可变版本。'); signalRefresh(); }
+    try { await api.publishScenario(revision.id); notify('success', '场景已发布', 'Revision 已锁定为不可变版本。'); signalRefresh('scenarios'); }
     catch (reason) { notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function cloneRevision() {
     if (!selectedScenario) return; setBusy('clone');
-    try { await api.cloneScenarioRevision(selectedScenario.id); notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。'); signalRefresh(); }
+    try { await api.cloneScenarioRevision(selectedScenario.id); notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。'); signalRefresh('scenarios'); }
     catch (reason) { notify('error', '创建 Revision 失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function deprecateRevision() {
     if (!revision || !window.confirm(`确认废弃 Revision ${revision.revision}？`)) return; setBusy('deprecate');
-    try { await api.deprecateScenario(revision.id); notify('success', '场景 Revision 已废弃'); signalRefresh(); }
+    try { await api.deprecateScenario(revision.id); notify('success', '场景 Revision 已废弃'); signalRefresh('scenarios'); }
     catch (reason) { notify('error', '废弃失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   return <div className="page page--scenario">
     <PageHeader eyebrow="Scenario composer" title="场景编排" description="场景 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建场景</button> : undefined} />
+    <RefreshNotice loading={isRefreshing} error={scenarios ? error : undefined} onRetry={() => void reload()} />
     {loading && !scenarios ? <LoadingBlock label="正在加载场景图…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <>
       <div className="scenario-toolbar panel">
         <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSelectedScenarioId(event.target.value)}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
@@ -181,7 +196,7 @@ export function ScenariosPage() {
           <div className="palette-hint"><GitCommitHorizontal size={17} /><p>分层只用于分类提示；连线才表示硬依赖和实际执行顺序。</p></div>
         </aside>
         <section className="flow-canvas panel" aria-label="场景 DAG 画布">
-          {nodes.length ? <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
+          {nodes.length ? <ReactFlow nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
             <Background gap={22} size={1} color="#d8deeb" /><MiniMap pannable zoomable nodeColor="#6075e8" /><Controls showInteractive={false} />
           </ReactFlow> : <EmptyState title="场景画布为空" description={editable ? '从左侧添加已发布的组件版本。' : '这个场景还没有组件节点。'} />}
           {validation && <div className={`validation-result${validation.valid ? ' validation-result--ok' : ''}`}><strong>{validation.valid ? '校验通过' : `${validation.errors.length} 个问题`}</strong>{validation.errors.map((item) => <span key={item}>{item}</span>)}</div>}
@@ -194,7 +209,7 @@ export function ScenariosPage() {
       </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由场景 Owner 创建一个场景。" /></div>}
     </>}
     {testOpen && <Modal title={revision?.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setTestOpen(false)}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision?.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
-    {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh(); }} />}
+    {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('scenarios'); }} />}
   </div>;
 }
 

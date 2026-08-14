@@ -141,6 +141,7 @@ h1, h2, h3, p { margin-top: 0; }
 .state-block--error { align-items: center; color: #b33e53; }
 .state-block--error div { display: flex; flex-direction: column; }
 .state-block--error span { color: #7d7080; font-size: 10px; }
+.state-block--refresh { justify-content: flex-start; min-height: auto; margin-bottom: 14px; padding: 10px 12px; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 130px; padding: 24px; text-align: center; }

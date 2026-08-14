@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, eventsURL } from '../api/client';
 import type { Role, User } from '../types/domain';
 
@@ -16,6 +16,12 @@ interface Toast {
   message?: string;
 }
 
+export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications';
+
+export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications'];
+
+type RefreshTokens = Record<RefreshTarget, number>;
+
 interface AppContextValue {
   user: User;
   users: User[];
@@ -23,8 +29,8 @@ interface AppContextValue {
   connected: boolean;
   switchUser: (id: string) => Promise<void>;
   notify: (tone: Toast['tone'], title: string, message?: string) => void;
-  refreshToken: number;
-  signalRefresh: () => void;
+  refreshTokens: RefreshTokens;
+  signalRefresh: (targets?: RefreshTarget | readonly RefreshTarget[]) => void;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -42,7 +48,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [switching, setSwitching] = useState(false);
   const [connected, setConnected] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [refreshToken, setRefreshToken] = useState(0);
+  const [refreshTokens, setRefreshTokens] = useState<RefreshTokens>({
+    components: 0,
+    scenarios: 0,
+    environments: 0,
+    runs: 0,
+    notifications: 0,
+  });
+  const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
+  const refreshTimer = useRef<number>();
 
   const notify = useCallback((tone: Toast['tone'], title: string, message?: string) => {
     const id = Date.now() + Math.random();
@@ -50,7 +64,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4600);
   }, []);
 
-  const signalRefresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+  const signalRefresh = useCallback((targets: RefreshTarget | readonly RefreshTarget[] = ALL_REFRESH_TARGETS) => {
+    const affected: readonly RefreshTarget[] = typeof targets === 'string' ? [targets] : targets;
+    setRefreshTokens((current) => {
+      const next = { ...current };
+      for (const target of affected) next[target] += 1;
+      return next;
+    });
+  }, []);
+
+  const scheduleRefresh = useCallback((targets: RefreshTarget | readonly RefreshTarget[]) => {
+    const affected: readonly RefreshTarget[] = typeof targets === 'string' ? [targets] : targets;
+    for (const target of affected) pendingRefreshTargets.current.add(target);
+    if (refreshTimer.current !== undefined) return;
+    refreshTimer.current = window.setTimeout(() => {
+      const affected = [...pendingRefreshTargets.current];
+      pendingRefreshTargets.current.clear();
+      refreshTimer.current = undefined;
+      if (affected.length) signalRefresh(affected);
+    }, 400);
+  }, [signalRefresh]);
 
   const switchUser = useCallback(
     async (id: string) => {
@@ -98,16 +131,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const stream = new EventSource(eventsURL(), { withCredentials: true });
     stream.onopen = () => setConnected(true);
     stream.onerror = () => setConnected(false);
-    stream.onmessage = () => signalRefresh();
-    for (const event of ['notification', 'run.updated', 'run.log', 'approval.updated', 'release.published', 'scenario.published']) {
-      stream.addEventListener(event, signalRefresh);
-    }
-    return () => stream.close();
-  }, [signalRefresh, user.id]);
+    stream.onmessage = () => scheduleRefresh(ALL_REFRESH_TARGETS);
+    const listeners: Array<[string, () => void]> = [
+      ['notification', () => scheduleRefresh('notifications')],
+      ['run.log', () => scheduleRefresh('runs')],
+      ['run.updated', () => scheduleRefresh(['components', 'runs', 'environments', 'scenarios'])],
+      ['approval.updated', () => scheduleRefresh('runs')],
+      ['release.published', () => scheduleRefresh(['components', 'notifications'])],
+      ['scenario.published', () => scheduleRefresh('scenarios')],
+    ];
+    for (const [event, listener] of listeners) stream.addEventListener(event, listener);
+    return () => {
+      stream.close();
+      for (const [event, listener] of listeners) stream.removeEventListener(event, listener);
+      if (refreshTimer.current !== undefined) {
+        window.clearTimeout(refreshTimer.current);
+        refreshTimer.current = undefined;
+      }
+      pendingRefreshTargets.current.clear();
+    };
+  }, [scheduleRefresh, user.id]);
 
   const value = useMemo(
-    () => ({ user, users: DEMO_USERS, switching, connected, switchUser, notify, refreshToken, signalRefresh }),
-    [connected, notify, refreshToken, signalRefresh, switchUser, switching, user],
+    () => ({ user, users: DEMO_USERS, switching, connected, switchUser, notify, refreshTokens, signalRefresh }),
+    [connected, notify, refreshTokens, signalRefresh, switchUser, switching, user],
   );
 
   return (

@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowUpRight, Beaker, Boxes, GitBranch, PencilLine, Plus, Rocket, Shield, UserRound } from 'lucide-react';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
@@ -18,7 +18,7 @@ import type { Component, ComponentKind, ComponentLayer, ComponentRelease, Compon
 export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: components, loading, error, reload } = useApiData(() => api.components(), [user.id]);
+  const { data: components, loading, error, isRefreshing, reload } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const selectedId = searchParams.get('selected') ?? undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [versionBase, setVersionBase] = useState<Component>();
@@ -58,7 +58,7 @@ export function ComponentsPage() {
       await api.publishRelease(publishRelease.id);
       notify('success', '组件版本已发布', '下游 Owner 的站内影响通知已生成。');
       setPublishRelease(undefined);
-      signalRefresh();
+      signalRefresh(['components', 'notifications']);
     } catch (reason) {
       notify('error', '发布失败', displayError(reason));
     } finally {
@@ -68,7 +68,7 @@ export function ComponentsPage() {
 
   async function deprecate(release: ComponentRelease) {
     if (!window.confirm(`确认废弃 ${release.version}？已锁定该 Release ID 的历史 Run 不受影响。`)) return;
-    try { await api.deprecateRelease(release.id); notify('success', '组件版本已废弃'); signalRefresh(); }
+    try { await api.deprecateRelease(release.id); notify('success', '组件版本已废弃'); signalRefresh('components'); }
     catch (reason) { notify('error', '废弃失败', displayError(reason)); }
   }
 
@@ -81,6 +81,8 @@ export function ComponentsPage() {
         actions={user.role === 'component_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建组件</button> : undefined}
       />
       {loading && !components ? <LoadingBlock label="正在读取组件目录…" /> : error && !components ? <ErrorBlock message={error} onRetry={() => void reload()} /> : (
+        <>
+        <RefreshNotice loading={isRefreshing} error={components ? error : undefined} onRetry={() => void reload()} />
         <div className="catalog-layout">
           <aside className="catalog-list panel">
             <div className="catalog-list__header"><strong>组件目录</strong><span>{components?.length ?? 0}</span></div>
@@ -141,13 +143,14 @@ export function ComponentsPage() {
             </div>
           </section> : <section className="panel"><EmptyState title="请选择组件" /></section>}
         </div>
+        </>
       )}
 
-      {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh(); }} />}
-      {editComponent && <EditComponentModal component={editComponent} onClose={() => setEditComponent(undefined)} onDone={() => { setEditComponent(undefined); signalRefresh(); }} />}
-      {versionBase && <NewVersionModal component={versionBase} onClose={() => setVersionBase(undefined)} onDone={() => { setVersionBase(undefined); signalRefresh(); }} />}
-      {editRelease && <EditReleaseModal release={editRelease} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh(); }} />}
-      {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(); }} />}
+      {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('components'); }} />}
+      {editComponent && <EditComponentModal component={editComponent} onClose={() => setEditComponent(undefined)} onDone={() => { setEditComponent(undefined); signalRefresh('components'); }} />}
+      {versionBase && <NewVersionModal component={versionBase} onClose={() => setVersionBase(undefined)} onDone={() => { setVersionBase(undefined); signalRefresh('components'); }} />}
+      {editRelease && <EditReleaseModal release={editRelease} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }} />}
+      {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(['components', 'runs']); }} />}
       {publishRelease && <Modal title={`发布 ${publishRelease.version}`} description="发布后版本不可修改；影响通知将发送给下游组件和场景 Owner。" onClose={() => setPublishRelease(undefined)}>
         <div className="modal-body">
           {!publishRelease.verified && publishRelease.verification !== 'passed' && <div className="warning-callout"><AlertTriangle size={19} /><div><strong>此版本尚未验证</strong><p>组件允许以 Unverified 状态发布，下游会在通知中看到该风险。</p></div></div>}
@@ -216,7 +219,7 @@ function NewVersionModal({ component, onClose, onDone }: { component: Component;
 }
 
 function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {
-  const { notify } = useApp(); const { data: environments } = useApiData(() => api.environments(), []); const [environmentId, setEnvironmentId] = useState(''); const [busy, setBusy] = useState(false);
+  const { notify } = useApp(); const { data: environments } = useApiData((signal) => api.environments(signal), [], 'environments'); const [environmentId, setEnvironmentId] = useState(''); const [busy, setBusy] = useState(false);
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
   const primary = release.actions?.find((action) => action.type === 'upgrade') ?? release.actions?.find((action) => action.type === 'install');
   const declaredRunInputs = uniqueRunInputs(primary?.allowedParameters ?? []);

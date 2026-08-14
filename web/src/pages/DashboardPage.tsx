@@ -1,39 +1,33 @@
 import { ArrowRight, BellRing, Boxes, CheckCircle2, Clock3, Network, PlayCircle, ShieldAlert } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, Metric, PageHeader, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Metric, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import { ROLE_LABELS, type Component, type Notification, type Run, type Scenario } from '../types/domain';
-
-interface OverviewData {
-  components: Component[];
-  scenarios: Scenario[];
-  notifications: Notification[];
-  runs: Run[];
-}
+import { ROLE_LABELS } from '../types/domain';
 
 const ACTIVE_STATUSES = new Set(['queued', 'awaiting_approval', 'running']);
 
 export function DashboardPage() {
   const { user } = useApp();
-  const { data, loading, error, reload } = useApiData<OverviewData>(async () => {
-    const [components, scenarios, notifications, runs] = await Promise.all([
-      api.components(),
-      api.scenarios(),
-      api.notifications(),
-      api.runs(),
-    ]);
-    return { components, scenarios, notifications, runs };
-  }, [user.id]);
+  const componentsQuery = useApiData((signal) => api.components(signal), [user.id], 'components');
+  const scenariosQuery = useApiData((signal) => api.scenarios(signal), [user.id], 'scenarios');
+  const notificationsQuery = useApiData((signal) => api.notifications(signal), [user.id], 'notifications');
+  const runsQuery = useApiData((signal) => api.runs(signal), [user.id], 'runs');
+  const queries = [componentsQuery, scenariosQuery, notificationsQuery, runsQuery];
+  const loading = queries.some((query) => query.isInitialLoading);
+  const error = queries.find((query) => query.error && !query.data)?.error;
+  const refreshError = queries.find((query) => query.error && query.data)?.error;
+  const isRefreshing = queries.some((query) => query.isRefreshing);
+  const reload = () => queries.forEach((query) => void query.reload());
 
-  if (loading && !data) return <LoadingBlock label="正在汇总交付态势…" />;
-  if (error && !data) return <ErrorBlock message={error} onRetry={() => void reload()} />;
+  if (loading) return <LoadingBlock label="正在汇总交付态势…" />;
+  if (error) return <ErrorBlock message={error} onRetry={reload} />;
 
-  const components = data?.components ?? [];
-  const scenarios = data?.scenarios ?? [];
-  const notifications = data?.notifications ?? [];
-  const runs = data?.runs ?? [];
+  const components = componentsQuery.data ?? [];
+  const scenarios = scenariosQuery.data ?? [];
+  const notifications = notificationsQuery.data ?? [];
+  const runs = runsQuery.data ?? [];
   const ownedComponents = components.filter((item) => item.ownerId === user.id).length;
   const ownedScenarios = scenarios.filter((item) => item.ownerId === user.id).length;
   const unread = notifications.filter((item) => !item.read).length;
@@ -48,6 +42,7 @@ export function DashboardPage() {
         description={`当前身份：${ROLE_LABELS[user.role]}。这里汇总与你相关的组件、场景和运行状态。`}
         actions={<Link className="button button--primary" to="/runs"><PlayCircle size={16} /> 查看运行</Link>}
       />
+      <RefreshNotice loading={isRefreshing} error={refreshError} onRetry={reload} />
 
       <section className="metrics-grid">
         <Metric label="我的组件" value={ownedComponents} note={`${components.length} 个可见组件`} tone="indigo" />

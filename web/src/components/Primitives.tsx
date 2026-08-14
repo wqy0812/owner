@@ -56,6 +56,20 @@ export function ErrorBlock({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
+export function RefreshNotice({ loading, error, onRetry }: { loading: boolean; error?: string; onRetry?: () => void }) {
+  if (loading) {
+    return <div className="state-block state-block--refresh" role="status"><LoaderCircle className="spin" size={16} /><span>正在刷新数据…</span></div>;
+  }
+  if (!error) return null;
+  return (
+    <div className="state-block state-block--error state-block--refresh" role="alert">
+      <AlertCircle size={16} />
+      <div><strong>当前显示的是上次成功的数据</strong><span>{error}</span></div>
+      {onRetry && <button className="button button--quiet" type="button" onClick={onRetry}><RefreshCcw size={15} /> 重试</button>}
+    </div>
+  );
+}
+
 export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
   return (
     <div className="empty-state">

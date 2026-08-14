@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { CloudCog, Cpu, HardDrive, KeyRound, LockKeyhole, Network, Plus, Save, Server, Trash2, UserRound } from 'lucide-react';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { CredentialRef, EnvironmentHost } from '../types/domain';
@@ -10,8 +10,8 @@ type Tab = 'inventory' | 'facts' | 'parameters' | 'credentials';
 
 export function EnvironmentsPage() {
   const { user, notify, signalRefresh } = useApp();
-  const { data: environments, loading, error, reload } = useApiData(() => api.environments(), [user.id]);
-  const { data: runs } = useApiData(() => api.runs(), [user.id]);
+  const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
+  const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const [selectedId, setSelectedId] = useState<string>();
   const selected = useMemo(() => environments?.find((item) => item.id === selectedId) ?? environments?.[0], [environments, selectedId]);
   const [tab, setTab] = useState<Tab>('inventory');
@@ -38,7 +38,7 @@ export function EnvironmentsPage() {
       if (tab === 'facts') await api.updateFacts(selected.id, JSON.parse(factsText) as Record<string, unknown>);
       if (tab === 'parameters') await api.updateParameters(selected.id, JSON.parse(parameters) as Record<string, unknown>);
       if (tab === 'credentials') await api.updateCredentialRefs(selected.id, credentials.map(({ name, type, reference }) => ({ name, type, reference })));
-      notify('success', '环境 Revision 已更新', '后续运行会锁定新的环境快照。'); signalRefresh();
+      notify('success', '环境 Revision 已更新', '后续运行会锁定新的环境快照。'); signalRefresh('environments');
     } catch (reason) {
       notify('error', '环境保存失败', reason instanceof SyntaxError ? '参数必须是有效 JSON。' : displayError(reason));
     } finally { setBusy(false); }
@@ -53,6 +53,7 @@ export function EnvironmentsPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Execution environments" title="环境管理" description="环境 Owner 管理 Inventory、环境事实、普通参数和安全凭据引用；其他 Owner 可选择环境运行测试。" actions={user.role === 'environment_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button> : undefined} />
+    <RefreshNotice loading={isRefreshing} error={environments ? error : undefined} onRetry={() => void reload()} />
     {loading && !environments ? <LoadingBlock label="正在读取共享环境…" /> : error && !environments ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="catalog-layout">
       <aside className="catalog-list panel">
         <div className="catalog-list__header"><strong>共享环境</strong><span>{environments?.length ?? 0}</span></div>
@@ -80,7 +81,7 @@ export function EnvironmentsPage() {
         <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><LockKeyhole size={18} /></span><div><h2>最近环境运行</h2><p>同一环境一次只允许一个活动 Run</p></div></div></header>{environmentRuns.length ? <div className="simple-table">{environmentRuns.map((run) => <div key={run.id}><div><strong>{run.name ?? run.scenarioName ?? run.componentName}</strong><small>{formatTime(run.createdAt)}</small></div><StatusPill status={run.status} /></div>)}</div> : <EmptyState title="暂无运行记录" />}</article>
       </section> : <section className="panel"><EmptyState title="没有可见环境" /></section>}
     </div>}
-    {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh(); }} />}
+    {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
   </div>;
 }
 

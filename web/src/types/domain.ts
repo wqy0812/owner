@@ -247,15 +247,6 @@ export interface ImpactPreview {
   paths: string[][];
 }
 
-export interface DashboardSummary {
-  ownedComponents?: number;
-  ownedScenarios?: number;
-  unreadNotifications?: number;
-  activeRuns?: number;
-  pendingApprovals?: number;
-  recentRuns?: Run[];
-}
-
 export const ROLE_LABELS: Record<Role, string> = {
   component_owner: '组件 Owner',
   scenario_owner: '场景 Owner',
