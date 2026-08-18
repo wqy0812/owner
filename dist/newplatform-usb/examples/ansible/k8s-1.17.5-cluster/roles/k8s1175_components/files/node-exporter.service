@@ -1,0 +1,14 @@
+[Unit]
+Description=Node Exporter 0.18.0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sysop
+Group=users
+ExecStart=/approot1/paas/exporter/bin/node_exporter --web.listen-address=:9101
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

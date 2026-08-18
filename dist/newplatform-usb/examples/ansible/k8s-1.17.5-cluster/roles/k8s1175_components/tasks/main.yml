@@ -1,0 +1,7 @@
+---
+- name: Enforce the component artifact contract before remote writes
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Execute one logical Kubernetes 1.17.5 capability
+  ansible.builtin.include_tasks: "{{ k8s1175_component_task }}.yml"
+

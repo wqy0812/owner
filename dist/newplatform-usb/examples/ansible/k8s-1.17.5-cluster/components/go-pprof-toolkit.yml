@@ -1,0 +1,25 @@
+---
+- name: Apply go-pprof-toolkit on k8setcd
+  hosts: k8setcd
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_components
+      k8s1175_component_task: go-pprof-toolkit
+
+- name: Apply go-pprof-toolkit on k8smaster
+  hosts: k8smaster
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_components
+      k8s1175_component_task: go-pprof-toolkit
+
+- name: Apply go-pprof-toolkit on k8snode
+  hosts: k8snode
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_components
+      k8s1175_component_task: go-pprof-toolkit
+

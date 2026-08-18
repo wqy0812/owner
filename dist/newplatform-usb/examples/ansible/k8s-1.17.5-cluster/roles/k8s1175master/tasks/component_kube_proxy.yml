@@ -1,0 +1,33 @@
+---
+- name: Install kube-proxy service unit
+  ansible.builtin.copy:
+    src: kube-proxy.service
+    dest: /usr/lib/systemd/system/kube-proxy.service
+    owner: root
+    group: users
+    mode: '0644'
+    backup: true
+
+- name: Write kube-proxy configuration
+  ansible.builtin.template:
+    src: kube-proxy.config.yaml.j2
+    dest: "{{ kubeRoot | default('/approot1/paas/kube') }}/conf/kube-proxy.config.yaml"
+    owner: kube
+    group: users
+    mode: '0644'
+
+- name: Write kube-proxy parameters
+  ansible.builtin.copy:
+    src: proxy
+    dest: "{{ kubeRoot | default('/approot1/paas/kube') }}/conf/proxy"
+    owner: kube
+    group: users
+    mode: '0644'
+
+- name: Enable and start kube-proxy
+  ansible.builtin.systemd:
+    name: kube-proxy
+    enabled: true
+    state: started
+    daemon_reload: true
+

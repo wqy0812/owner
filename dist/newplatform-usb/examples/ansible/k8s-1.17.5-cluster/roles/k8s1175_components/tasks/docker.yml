@@ -1,0 +1,19 @@
+---
+- name: Download the locked Docker 18.09.7 bundle with SHA256 verification
+  ansible.builtin.get_url:
+    url: "http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ DOCKER_18_09_7_MEDPATH }}"
+    dest: /var/tmp/docker-18.09.7.tar.gz
+    checksum: "sha256:{{ DOCKER_18_09_7_SHA256 }}"
+    mode: '0600'
+
+- name: Install the locked Docker bundle
+  ansible.builtin.unarchive:
+    src: /var/tmp/docker-18.09.7.tar.gz
+    dest: /
+    remote_src: true
+
+- name: Configure Docker as the Kubernetes CRI runtime
+  ansible.builtin.include_role:
+    name: "{{ 'k8s1175master' if inventory_hostname in (groups['k8smaster'] | default([])) else 'k8s1175node' }}"
+    tasks_from: install_docker
+

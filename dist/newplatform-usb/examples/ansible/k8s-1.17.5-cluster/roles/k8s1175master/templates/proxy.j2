@@ -1,0 +1,1 @@
+KUBE_PROXY_ARGS="--master=http://{{ groups['k8s_F5'][0] }}:{{ APISERVER_LBPORT }} 	--logtostderr=true 	--log-dir=/var/log/kubernetes 	--healthz-bind-address=0.0.0.0 	--v=2"

@@ -1,5 +1,6 @@
 import {
   Bell,
+  BookOpenText,
   Boxes,
   ChevronDown,
   CircleGauge,
@@ -20,6 +21,7 @@ const links = [
   { to: '/environments', label: '环境', icon: CloudCog },
   { to: '/runs', label: '运行', icon: PlayCircle },
   { to: '/notifications', label: '通知', icon: Bell },
+  { to: '/manual', label: '操作说明书', icon: BookOpenText },
 ];
 
 export function AppShell() {

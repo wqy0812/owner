@@ -1,0 +1,233 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hcssecuritygroup
+  namespace: default
+  labels:
+    cniSecret: "true"
+    role: securitygroup
+stringData:
+  apiUrl: "https://{{ .apiDomain }}/v2.0/security-groups"
+  user: "kfzx-redis"
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: networks.networking.upm.io
+spec:
+  group: networking.upm.io
+  names:
+    kind: Network
+    listKind: NetworkList
+    plural: networks
+    singular: network  # 建议添加singular名称
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true      # 必须字段，表示是否提供此版本
+      storage: true     # 必须字段，表示是否将此版本持久化存储
+      subresources:     # 将subresources移到versions下
+        status: {}
+      schema:           # 必须字段，定义验证schema
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: networkclaims.networking.upm.io
+spec:
+  group: networking.upm.io
+  names:
+    kind: NetworkClaim
+    listKind: NetworkClaimList
+    plural: networkclaims
+    singular: networkclaim  # 建议添加单数形式
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true      # 必须字段，表示是否启用该版本
+      storage: true     # 必须字段，表示是否作为存储版本
+      subresources:
+        status: {}      # 启用 status 子资源
+      schema:           # 必须字段，定义 OpenAPI 验证规则
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true  # 允许未定义字段
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: networkcontroller
+rules:
+  - apiGroups:
+      - networking.upm.io
+    resources:
+      - '*'
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+      - events
+      - secrets
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - middleware.io
+    resources:
+      - '*'
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - '*'
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: networkcontroller
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: networkcontroller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: networkcontroller
+subjects:
+- kind: ServiceAccount
+  name: networkcontroller
+  namespace: default
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: networkcontroller
+  namespace: default
+  labels:
+    app: networkcontroller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: networkcontroller
+  template:
+    metadata:
+      labels:
+        app: networkcontroller
+    spec:
+      serviceAccountName: networkcontroller  # 使用专用SA
+      # 添加 nodeSelector 选择 master 节点
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "control-plane"
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"  # 替换为实际的污点键
+          operator: "Exists"
+          effect: "NoSchedule"
+      dnsPolicy: ClusterFirst
+      imagePullSecrets:
+        - name: harbor-secret
+      hostNetwork: true
+      restartPolicy: Always
+      containers:
+        - name: networkcontroller
+          image: {{ .repo }}networkcontroller:v1.0  # 替换为实际镜像
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/networkcontroller"]
+          args:
+            - "--logtostderr=true"
+            - "-v=4"
+            - "-getPortApiUrl=https://{{ .apiDomain }}/v2.0/ports"
+            - "-subInterfaceUrl=https://{{ .apiDomain }}/v3"
+            - "-hcsSecret={{ .hcsSecret }}"
+          # 使用exec探针的健康检查
+          #          livenessProbe:
+          #            exec:
+          #              command: ["sh", "-c", "pgrep networkcontroller || exit 1"]
+          #            initialDelaySeconds: 30
+          #            periodSeconds: 10
+          #            failureThreshold: 3
+          #          readinessProbe:
+          #            exec:
+          #              command: ["sh", "-c", "pgrep networkcontroller || exit 1"]
+          #            initialDelaySeconds: 5
+          #            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+
+
+

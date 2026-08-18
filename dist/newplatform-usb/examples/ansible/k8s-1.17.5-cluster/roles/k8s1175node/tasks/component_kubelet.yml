@@ -1,0 +1,41 @@
+---
+- name: Fetch this worker's scoped kubelet bootstrap kubeconfig
+  ansible.builtin.fetch:
+    src: "/approot1/paas/kube/cert/kubelet-bootstrap-{{ inventory_hostname }}.kubeconfig"
+    dest: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/"
+    flat: true
+  delegate_to: "{{ groups['k8smaster'][0] }}"
+  no_log: true
+
+- name: Install this worker's scoped kubelet bootstrap kubeconfig
+  ansible.builtin.copy:
+    src: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubelet-bootstrap-{{ inventory_hostname }}.kubeconfig"
+    dest: /approot1/paas/kube/cert/kubelet-bootstrap.kubeconfig
+    owner: sysop
+    group: users
+    mode: '0600'
+  no_log: true
+
+- name: Install kubelet service unit
+  ansible.builtin.copy:
+    src: kubelet.service
+    dest: /usr/lib/systemd/system/kubelet.service
+    owner: root
+    group: users
+    mode: '0644'
+    backup: true
+
+- name: Write kubelet parameters
+  ansible.builtin.template:
+    src: kubelet.j2
+    dest: /approot1/paas/kube/conf/kubelet
+    owner: sysop
+    group: users
+    mode: '0644'
+
+- name: Enable and start kubelet
+  ansible.builtin.systemd:
+    name: kubelet
+    enabled: true
+    state: started
+    daemon_reload: true

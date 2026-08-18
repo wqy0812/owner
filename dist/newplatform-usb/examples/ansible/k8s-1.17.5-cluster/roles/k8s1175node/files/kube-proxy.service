@@ -1,0 +1,24 @@
+[Unit] 
+Description=Kubernetes Kube-Proxy Server
+Documentation=https://kubernetes.io/docs/concepts/overview/components/#kube-proxy https://kubernetes.io/docs/reference/generated/kube-proxy/
+After=network.target
+
+[Service]
+EnvironmentFile=-/approot1/paas/kube/conf/kube-proxy.config
+EnvironmentFile=-/approot1/paas/kube/conf/proxy
+ExecStart=/approot1/paas/kube/bin/kube-proxy \
+$KUBE_LOGTOSTDERR \
+$KUBE_LOG_LEVEL \
+$KUBE_MASTER \
+$KUBE_PROXY_ARGS
+Restart=always
+RestartSec=10
+StartLimitInterval=30
+StartLimitBurst=3
+LimitNOFILE=65536
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=kube-proxy
+  
+[Install]
+WantedBy=multi-user.target

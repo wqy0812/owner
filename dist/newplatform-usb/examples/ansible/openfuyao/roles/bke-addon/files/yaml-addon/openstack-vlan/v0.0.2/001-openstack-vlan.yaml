@@ -1,0 +1,157 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .hcsSecret }}
+  namespace: default
+  labels:
+    cniSecret: "true"
+    role: resource
+stringData:
+  apiUrl: "https://{{ .hsApiDomain }}/v3/auth/tokens"
+  domain: "{{ .hsDomain }}"
+  name: "{{ .hsName }}"
+  expirationTime: "0"
+  password: "{{ .hsPassword }}"
+  projectID: "{{ .hsProjectID }}"
+  token: ""
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-secret-reader
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["{{ .hcsSecret }}"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: node-secret-reader-binding
+subjects:
+- kind: Group
+  name: system:nodes
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: node-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: openstack-config
+  namespace: kube-system
+data:
+  veth_mtu: "0"
+  cni_network_config: |-
+    {
+      "name": "openstack-pod-network",
+      "cniVersion": "1.0.0",
+      "plugins": [
+        {
+          "type": "vlan",
+          "master": "{{ .masterIf }}",
+          "mtu": __CNI_MTU__,
+          "neutronUrl": "https://{{ .apiDomain }}",
+          "neutronTokenSecret": "{{ .hcsSecret }}",
+          "kubeletConf": "/etc/kubernetes/kubelet.conf",
+          "routes": [
+            { "dst": "{{ .serviceSubnet }}" }
+          ]
+        }
+      ]
+    }
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: install-cni
+  namespace: kube-system
+  labels:
+    k8s-app: install-cni
+spec:
+  selector:
+    matchLabels:
+      k8s-app: install-cni
+  template:
+    metadata:
+      labels:
+        k8s-app: install-cni
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      hostNetwork: true
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      priorityClassName: system-node-critical
+      imagePullSecrets:
+        - name: harbor-secret
+      initContainers:
+        - name: update-hosts
+          image: {{ .repo }}busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              sed -E -e "/[[:space:]]{{ .apiDomain }}\b/d" \
+                 -e "/[[:space:]]{{ .hsApiDomain }}\b/d" /mnt/hosts > hosts.tmp
+              echo "{{ .apiHost }} {{ .apiDomain }}" >> hosts.tmp
+              echo "{{ .hsApiHost }} {{ .hsApiDomain }}" >> hosts.tmp
+              cat hosts.tmp > /mnt/hosts
+          volumeMounts:
+            - mountPath: /mnt/hosts
+              name: hosts-file
+        - name: install-cni
+          image: {{ .repo }}calico/cni:v3.27.3.icbc
+          command: ["/opt/cni/bin/install"]
+          env:
+            - name: CNI_CONF_NAME
+              value: "05-openstack-net.conflist"
+            - name: CNI_NETWORK_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: openstack-config
+                  key: cni_network_config
+            - name: CNI_MTU
+              valueFrom:
+                configMapKeyRef:
+                  name: openstack-config
+                  key: veth_mtu
+            - name: SLEEP
+              value: "false"
+          volumeMounts:
+            - mountPath: /host/opt/cni/bin
+              name: cni-bin-dir
+            - mountPath: /host/etc/cni/net.d
+              name: cni-net-dir
+          securityContext:
+            privileged: true
+      automountServiceAccountToken: false
+      containers:
+        # Runs calico-node container on each Kubernetes node. This
+        # container programs network policy and routes on each
+        # host.
+        - name: pause
+          image: {{ .pauseImage }}
+          imagePullPolicy: IfNotPresent
+      volumes:
+        - name: cni-bin-dir
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni-net-dir
+          hostPath:
+            path: /etc/cni/net.d
+        - name: hosts-file
+          hostPath:
+            path: /etc/hosts
+            type: File

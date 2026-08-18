@@ -1,0 +1,93 @@
+---
+
+- include_tasks: "yaml-addon/addon_files_prepare.yml"
+  tags: init
+
+# Helm 安装任务
+- name: Install Helm
+  block:
+    - name: Check if Helm is already installed by checking version
+      command: helm version --short
+      register: helm_check
+      ignore_errors: yes
+      changed_when: false
+      tags:
+        - always
+
+    - name: Display Helm status
+      debug:
+        msg: "Helm {{ 'already installed' if helm_check.rc == 0 else 'needs installation' }}"
+      tags:
+        - always
+
+    # 仅当 Helm 未安装时执行安装
+    - name: Download Helm v3.18.6
+      block:
+        - name: Download Helm
+          get_url:
+            url: "http://{{ENV_FILESTATION_IP}}:{{ENV_FILESTATION_PORT}}/file-station/openfuyao/helm-v3.18.6-linux-amd64.tar.gz"
+            dest: /tmp/helm-v3.18.6-linux-amd64.tar.gz
+            mode: '0644'
+          register: download_result
+
+        - name: Extract Helm archive
+          unarchive:
+            src: /tmp/helm-v3.18.6-linux-amd64.tar.gz
+            dest: /tmp/
+            remote_src: yes
+          when: download_result is succeeded
+
+        - name: Install Helm binary
+          copy:
+            src: /tmp/linux-amd64/helm
+            dest: /usr/local/bin/helm
+            mode: '0755'
+            remote_src: yes
+          when: download_result is succeeded
+
+        - name: Verify Helm installation
+          command: helm version --short
+          register: helm_version
+          changed_when: false
+          when: download_result is succeeded
+
+        - name: Display installation result
+          debug:
+            msg: "Helm installed successfully: {{ helm_version.stdout }}"
+          when: download_result is succeeded
+      when: helm_check.rc != 0
+
+    # 无论是否新安装都执行 repo 配置
+    - name: Configure Helm repositories
+      block:
+        - name: Add Helm repository
+          command: >-
+            helm repo add --force-update {{ helm_repo_name }} {{ chart_museum_url }}
+            --username={{ ENV_CHART_PULL_USERNAME }}
+            --password={{ ENV_CHART_PULL_PASSWORD }}
+            --insecure-skip-tls-verify
+          register: repo_add_result
+          changed_when: repo_add_result.rc == 0
+          failed_when: >
+            repo_add_result.rc != 0 and
+            'already exists' not in repo_add_result.stderr
+
+        - name: Update Helm repositories
+          command: helm repo update
+          changed_when: false
+      when: helm_check.rc == 0 or (helm_check.rc != 0 and download_result is succeeded)
+  tags:
+    - init
+
+- name: Create docker config json
+  set_fact:
+    docker_config_json: "{{ {'auths': {harbor_domain: {'username': username, 'password': password, 'auth': auth_string}}}|to_json }}"
+  vars:
+    harbor_domain: "{{ ENV_DOCKER_HARBOR_DOMAIN }}"
+    username: "{{ ENV_DOCKER_SECRET_USERNAME }}"
+    password: "{{ ENV_DOCKER_SECRET_PASSWORD }}"
+    auth_string: "{{ '%s:%s' | format(username, password) | b64encode }}"
+
+- name: Encode to base64
+  set_fact:
+    harbor_config_json: "{{ docker_config_json | b64encode }}"

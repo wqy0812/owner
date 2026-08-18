@@ -94,7 +94,7 @@ describe('platform shell and RBAC UI', () => {
   it('shows the dashboard summary and all primary navigation entries', async () => {
     renderApp();
     expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
-    for (const label of ['概览', '组件', '场景', '环境', '运行', '通知']) {
+    for (const label of ['概览', '组件', '场景', '环境', '运行', '通知', '操作说明书']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(screen.getByText(/无密码身份模式/)).toBeInTheDocument();
@@ -106,6 +106,34 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
     await waitFor(() => expect(screen.queryByRole('button', { name: '新建组件' })).not.toBeInTheDocument());
     expect(screen.getByText('环境 Owner')).toBeInTheDocument();
+  });
+
+  it('shows the platform workflow overview from the operation manual entry', async () => {
+    renderApp('/manual');
+    expect(await screen.findByRole('heading', { name: '操作说明书' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '平台工作流程总览' })).toBeInTheDocument();
+    for (const label of ['1. 组件 Release', '2. 场景 Revision', '3. 环境 Revision', '4. Run']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByRole('link', { name: /查看我的操作手册/ })).toHaveAttribute('href', '/manual/role');
+  });
+
+  it('updates the role manual after switching the current owner identity', async () => {
+    renderApp('/manual/role');
+    expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), carol.id);
+
+    expect(await screen.findByRole('heading', { name: '场景 Owner 操作手册' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '场景 Owner 操作路径' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '组件 Owner 操作路径' })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
+
+    expect(await screen.findByRole('heading', { name: '环境 Owner 操作手册' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
   });
 
   it('shows which upstream component parameter a release depends on', async () => {

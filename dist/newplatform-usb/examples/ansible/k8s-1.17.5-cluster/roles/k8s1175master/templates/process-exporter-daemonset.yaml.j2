@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+    name: process-exporter
+    labels:
+      app: process-exporter
+spec:
+  selector:
+    matchLabels:
+      app: process-exporter
+  template:
+    metadata:
+      name: process-exporter
+      labels:
+        app: process-exporter  
+    spec:
+      dnsPolicy: Default
+      imagePullSecrets:
+        - name: harbor-secret
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - image: {{ NETWORK_CLASSIFIED_HARBOR_DOMAIN }}/f-ucmp-subdocp/process-exporter:v0.12.1
+        args:
+        - "-procfs=/host/proc"
+        - "-config.path=/etc/process-exporter/process-exporter.yaml"
+        name: process-exporter
+        ports:
+        - name: http
+          containerPort: 9256
+          hostPort: 9256
+        resources:
+          requests:
+            memory: 150Mi
+            cpu: 150m
+          limits:
+            memory: 150Mi
+            cpu: 300m
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/process-exporter
+        - name: proc
+          readOnly:  true
+          mountPath: /host/proc
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: config-volume
+          configMap:
+            name: process-config

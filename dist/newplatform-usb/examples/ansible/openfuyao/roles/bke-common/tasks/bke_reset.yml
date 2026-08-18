@@ -1,0 +1,23 @@
+---
+
+- name: Check bke exists
+  stat:
+    path: "/usr/bin/bke"
+  register: file_stat
+
+- name: bke reset
+  shell: |
+    timeout 300 bke reset --all --mount --confirm
+  when: file_stat.stat.exists
+
+- name: check bkeagent status
+  shell: systemctl list-unit-files --type=service | grep -q "^bkeagent"
+  register: bkeagent_check
+  ignore_errors: yes
+
+- name: stop bkeagent
+  service:
+    name: bkeagent
+    state: stopped
+    enabled: no
+  when: bkeagent_check is defined and bkeagent_check.rc == 0

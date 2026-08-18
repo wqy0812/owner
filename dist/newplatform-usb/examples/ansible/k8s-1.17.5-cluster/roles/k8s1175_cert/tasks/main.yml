@@ -1,0 +1,307 @@
+---
+
+- name: mkdir kubernetes
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubernetes state=directory owner={{ ANSIBLE_USER }}
+  
+- name: mkdir etcd
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/etcd state=directory owner={{ ANSIBLE_USER }}
+  
+- name: mkdir kube-scheduler
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-scheduler state=directory owner={{ ANSIBLE_USER }}
+  
+- name: mkdir kube-controller-manager
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-controller-manager state=directory owner={{ ANSIBLE_USER }}
+  
+- name: <k8smaster>download {{ CFSSL_MEDPATH }} with SHA256 verification
+  tags:
+    - install
+    - update
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ CFSSL_MEDPATH }}
+    dest: /var/tmp/cfssl-k8s1175.tar.gz
+    checksum: sha256:{{ CFSSL_MEDPATH_SHA256 }}
+    mode: '0600'
+
+- name: <k8smaster>unarchive verified CFSSL tools
+  tags:
+    - install
+    - update
+  unarchive:
+    src: /var/tmp/cfssl-k8s1175.tar.gz
+    dest: /approot1/paas/admin/app/ansible/task/cert
+    remote_src: true
+    owner: "{{ ANSIBLE_USER }}"
+
+- name: restrict this cluster's controller certificate workspace
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}
+    state: directory
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rwx,g=,o="
+  
+- name: copy ca-config.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=ca-config.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+
+- name: copy ca-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=ca-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+
+- name: generate a dedicated CA for this cluster
+  tags:
+    - install
+    - check
+    - update
+  shell: >-
+    /approot1/paas/admin/app/ansible/task/cert/cfssl gencert
+    -initca /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-csr.json
+    | /approot1/paas/admin/app/ansible/task/cert/cfssljson
+    -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca
+  args:
+    creates: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem
+  no_log: true
+
+- name: restrict the generated CA private key
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem
+    state: file
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rw,g=,o="
+
+- name: copy cluster CA certificate as cb-ca.pem
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem
+    dest: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/cb-ca.pem
+    remote_src: true
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rw,g=r,o=r"
+
+- name: copy admin-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=admin-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/admin-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy kube-proxy-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kube-proxy-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy etcd-csr.json
+  tags:
+    - install
+    - check
+    - update
+  template: src=etcd-csr.json.j2 dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/etcd/etcd-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy kube-controller-manager-csr.json
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-controller-manager-csr.json.j2 dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-controller-manager/kube-controller-manager-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy kubernetes-csr.json
+  tags:
+    - install
+    - check
+    - update
+  template: src=kubernetes-csr.json.j2 dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubernetes/kubernetes-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy kube-scheduler-csr.json
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-scheduler-csr.json.j2 dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-scheduler/kube-scheduler-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy flanneld-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=flanneld-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/flanneld-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: copy aggregator-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=aggregator-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/aggregator-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+
+- name: copy front-proxy-ca-csr.json
+  tags:
+    - install
+    - check
+    - update
+  copy: src=front-proxy-ca-csr.json dest=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca-csr.json owner={{ ANSIBLE_USER }} mode="u=rw,g=r,o=r"
+  
+- name: make etcd.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/etcd/etcd-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/etcd/etcd"
+  no_log: true
+ 
+- name: make admin.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/admin-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/admin"
+  no_log: true
+  
+- name: make kubernetes.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubernetes/kubernetes-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kubernetes/kubernetes"
+  no_log: true
+  
+- name: make kube-controller-manager.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-controller-manager/kube-controller-manager-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-controller-manager/kube-controller-manager"
+  no_log: true
+
+- name: make kube-scheduler.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-scheduler/kube-scheduler-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-scheduler/kube-scheduler"
+  no_log: true
+  
+- name: make kube-proxy.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy"
+  no_log: true
+  
+- name: make flanneld.key from cfssl
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/flanneld-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/flanneld"
+  no_log: true
+  
+- name: generate a dedicated front-proxy CA
+  tags:
+    - install
+    - check
+    - update
+  shell: >-
+    /approot1/paas/admin/app/ansible/task/cert/cfssl gencert
+    -initca /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca-csr.json
+    | /approot1/paas/admin/app/ansible/task/cert/cfssljson
+    -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca
+  args:
+    creates: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca-key.pem
+  no_log: true
+
+- name: make front-proxy client key from dedicated CA
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/admin/app/ansible/task/cert/cfssl gencert -ca=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca.pem -ca-key=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/front-proxy-ca-key.pem -config=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca-config.json -profile=kubernetes /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/aggregator-csr.json | /approot1/paas/admin/app/ansible/task/cert/cfssljson -bare /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/aggregator"
+  no_log: true
+
+- name: find controller certificate directories
+  tags:
+    - install
+    - check
+    - update
+  find:
+    paths: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}
+    recurse: true
+    file_type: directory
+  register: k8s1175_controller_cert_directories
+
+- name: restrict controller certificate directories
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rwx,g=,o="
+  loop: "{{ k8s1175_controller_cert_directories.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: find controller private keys
+  tags:
+    - install
+    - check
+    - update
+  find:
+    paths: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}
+    recurse: true
+    file_type: file
+    patterns:
+      - "*-key.pem"
+      - "*.key"
+      - "*.kubeconfig"
+  register: k8s1175_controller_private_files
+
+- name: restrict controller private keys and kubeconfigs
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: "{{ item.path }}"
+    state: file
+    owner: "{{ ANSIBLE_USER }}"
+    mode: "u=rw,g=,o="
+  loop: "{{ k8s1175_controller_private_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  no_log: true

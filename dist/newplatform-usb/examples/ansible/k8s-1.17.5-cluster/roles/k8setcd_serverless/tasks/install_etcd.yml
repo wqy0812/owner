@@ -1,0 +1,150 @@
+---
+- name: useradd etcd
+  tags:
+    - install
+    - check
+    - update
+  user: name=etcd comment="run etcd" uid=2000 group=users state=present
+  
+- name: mkdir /approot1/paas/etcd
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/etcd state=directory owner=etcd
+   
+- name: mkdir /approot1/paas/etcd/data
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/etcd/data state=directory owner=etcd
+  
+- name: mkdir /approot1/paas/etcd/cert
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/etcd/cert state=directory owner=etcd
+
+- name: upload service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=etcd.service dest=/usr/lib/systemd/system/etcd.service owner=root group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: systemctl daemon-reload
+  
+- meta: flush_handlers
+  
+- name: upload startetcd.sh
+  tags:
+    - install
+    - check
+    - update
+  template: src=startetcd.sh.j2 dest=/approot1/paas/etcd/startetcd.sh owner=etcd group=users mode="u=rwx,g=r,o=r"
+
+- name: download {{ ETCD_MEDPATH_SERVERLESS }} with SHA256 verification
+  tags:
+    - install
+  become: yes
+  become_user: etcd
+  get_url:
+    url: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ ETCD_MEDPATH_SERVERLESS }}
+    dest: /approot1/paas/etcd/etcd-3.3.10.tar.gz
+    checksum: sha256:{{ ETCD_MEDPATH_SERVERLESS_SHA256 }}
+    mode: '0600'
+
+- name: unarchive verified etcd 3.3.10
+  tags:
+    - install
+  become: yes
+  become_user: etcd
+  unarchive:
+    src: /approot1/paas/etcd/etcd-3.3.10.tar.gz
+    dest: /approot1/paas/etcd
+    remote_src: true
+    extra_opts: ['--strip-components=1', '--show-stored-names']
+    
+- name: enable etcd service
+  tags:
+    - install
+    - check
+    - update
+  service: name=etcd enabled=yes
+
+- name: modify kernel parameter net.netfilter.nf_conntrack_max
+  tags:
+    - install
+    - check
+    - update
+  sysctl:
+    name: net.netfilter.nf_conntrack_max
+    value: '1048576'
+    state: present
+  ignore_errors: yes
+  
+- name: upload etcd certificate tree
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/etcd/
+    dest: /approot1/paas/etcd/cert/
+    owner: etcd
+    group: users
+    mode: preserve
+  no_log: true
+   
+- name: upload ca.pem
+  tags:
+    - install
+    - check
+    - update
+  copy: src=/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/ca.pem dest=/approot1/paas/etcd/cert/ca.pem owner=etcd group=users mode="u=rw,g=,o="
+
+- name: restrict etcd certificate directory
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: /approot1/paas/etcd/cert
+    state: directory
+    owner: etcd
+    group: users
+    mode: "u=rwx,g=,o="
+
+- name: find etcd certificate files
+  tags:
+    - install
+    - check
+    - update
+  find:
+    paths: /approot1/paas/etcd/cert
+    recurse: true
+    file_type: file
+  register: k8s1175_etcd_cert_files
+
+- name: restrict etcd certificate files
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: "{{ item.path }}"
+    state: file
+    owner: etcd
+    group: users
+    mode: "u=rw,g=,o="
+  loop: "{{ k8s1175_etcd_cert_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  
+- name: chown for etcdpath
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/etcd state=directory owner=etcd group=users

@@ -1,0 +1,64 @@
+---
+
+- name: <k8snode amc>create workdir
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: /approot1/paas/node_amc
+    state: directory
+    owner: root
+    mode: 0755
+
+- name: <k8snode amc>upload program
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: '{{ item.src }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: users
+    mode: "u=rwx,g=rx,o=rx"
+    backup: yes
+  with_items:
+    - { src: 'amc_stop.sh', dest: '/approot1/paas/node_amc/amc_stop.sh' }
+    - { src: 'amc_start.sh', dest: '/approot1/paas/node_amc/amc_start.sh' }
+    - { src: 'amc_shadow.sh', dest: '/approot1/paas/node_amc/amc_shadow.sh' }
+    - { src: 'amc_monitor.sh', dest: '/approot1/paas/node_amc/amc_monitor.sh' }
+    - { src: 'amc_check_1.sh', dest: '/approot1/paas/node_amc/amc_check_1.sh' }
+    - { src: 'amc_check_2.sh', dest: '/approot1/paas/node_amc/amc_check_2.sh' }
+    - { src: 'amc_check_3.sh', dest: '/approot1/paas/node_amc/amc_check_3.sh' }
+    - { src: 'amclog', dest: '/etc/logrotate.d/amclog' }
+
+- name: <k8snode amc>upload the strategy of amc log cleaning
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: '{{ item.src }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: "u=rw,g=r,o=r"
+    backup: yes
+  with_items:
+    - { src: 'amclog', dest: '/etc/logrotate.d/amclog' }
+
+- name: <k8snode amc>upload config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=amc.properties dest=/approot1/paas/node_amc/amc.properties owner=root group=users mode="u=rw,g=r,o=r"
+- name: <k8snode amc>config the automatic start
+  tags:
+    - install
+    - check
+    - update
+  lineinfile:
+    path: /etc/init.d/after.local
+    line: '/approot1/paas/node_amc/amc_start.sh'

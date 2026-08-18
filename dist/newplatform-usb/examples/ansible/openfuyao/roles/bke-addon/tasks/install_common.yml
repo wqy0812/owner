@@ -1,0 +1,16 @@
+---
+#集群通用组件安装
+- name: install amc
+  shell: helm install amc {{ helm_repo_name }}/amc --namespace default --set-json='amcParams={{ addon_params.amc | to_json }}' --insecure-skip-tls-verify
+  ignore_errors: true
+  run_once: true
+
+- name: install cluster-config default
+  shell: helm install clusterconfig {{ helm_repo_name }}/clusterconfig --namespace default --set-json='clusterConfig={{ addon_params.clusterconfig | to_json }}' --insecure-skip-tls-verify
+  ignore_errors: true
+  run_once: true
+
+- name: install cluster-config kube-system
+  shell: helm install clusterconfig {{ helm_repo_name }}/clusterconfig --namespace kube-system --set-json='clusterConfig={{ addon_params.clusterconfig | to_json }}' --set namespaceOverride=kube-system --insecure-skip-tls-verify
+  ignore_errors: true
+  run_once: true

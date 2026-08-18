@@ -1,0 +1,53 @@
+---
+- name: Create HAProxy installation directory
+  ansible.builtin.file:
+    path: /approot1/paas/haproxy
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Download HAProxy media with SHA256 verification
+  ansible.builtin.get_url:
+    url: "http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ HAPROXY_MEDPATH }}"
+    dest: /var/tmp/haproxy-k8s1175.tar.gz
+    checksum: "sha256:{{ HAPROXY_MEDPATH_SHA256 }}"
+    mode: '0600'
+
+- name: Install the verified HAProxy media
+  ansible.builtin.unarchive:
+    src: /var/tmp/haproxy-k8s1175.tar.gz
+    dest: /approot1/paas/haproxy
+    remote_src: true
+    extra_opts: ['--strip-components=1']
+
+- name: Configure HAProxy control-plane endpoints
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../roles/k8s1175master/templates/haproxy_k8smaster.cfg.j2"
+    dest: /approot1/paas/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: '0640'
+
+- name: Install HAProxy service unit
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Kubernetes Control Plane HAProxy
+      After=network-online.target
+      [Service]
+      ExecStart=/approot1/paas/haproxy/sbin/haproxy -Ws -f /approot1/paas/haproxy/haproxy.cfg
+      Restart=on-failure
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/haproxy.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start HAProxy
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: started
+    daemon_reload: true

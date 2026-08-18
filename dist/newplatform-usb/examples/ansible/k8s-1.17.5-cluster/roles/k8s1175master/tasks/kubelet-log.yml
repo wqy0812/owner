@@ -1,0 +1,20 @@
+
+---
+
+- name: create /var/log/kubelet.log
+  shell: "touch /var/log/kubelet.log && chmod +x /var/log/kubelet.log"
+
+- name: <k8smaster>upload  kubelet.config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kubelet.config.j2 dest=/approot1/paas/kube/conf/kubelet.config owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: <k8smaster>upload  kubelet.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kubelet.conf.j2 dest=/etc/rsyslog.d/kubelet.conf owner=sysop group=root mode="u=rw,g=r,o=r"
+

@@ -1,0 +1,21 @@
+---
+# This playbook deploys the whole application stack in this site.
+
+- name: install bootstrap nodes
+  remote_user: sysop
+  gather_facts: no
+  hosts: bootstrap_host
+  any_errors_fatal: true
+  roles:
+    - { role: bke-cert }
+    - { role: bke-bootstrap }
+
+- name: install manager cluster
+  remote_user: sysop
+  gather_facts: no
+  hosts: management_cluster_k8smaster
+  any_errors_fatal: true
+  roles:
+    - { role: bke-common }
+    - { role: bke-addon }
+    - { role: bke-master }

@@ -1,0 +1,62 @@
+target_host_group: management_cluster_k8smaster
+cluster_id: contract-cluster
+cluster_role: manager
+strategy: StatelessFlatNetworkStrategy
+BKE_ADMIN: bke-admin
+JQ_MEDPATH: jq
+BOOTSTRAP_IMAGE: bootstrap-image
+SSH_KEY_PUB: /tmp/openfuyao-contract.pub
+SSH_KNOWN_HOSTS: /tmp/openfuyao-known-hosts
+ENV_DOCKER_HARBOR_DOMAIN: registry.example.invalid
+ENV_DOCKER_HARBOR_IP: 192.0.2.60
+ENV_DOCKER_HARBOR_PORT: 443
+ENV_DOCKER_HARBOR_PORJECT: openfuyao
+ENV_DOCKER_SECRET_USERNAME: contract-user
+ENV_DOCKER_SECRET_PASSWORD: contract-password
+ENV_FILESTATION_DOMAIN: files.example.invalid
+ENV_FILESTATION_IP: 192.0.2.70
+ENV_FILESTATION_PORT: 443
+ENV_FILESTATION_PREFIX: /file-station
+ENV_FILESTATION_URL: https://files.example.invalid/file-station
+ENV_CHART_REPO_PORT: 443
+ENV_CHART_PULL_USERNAME: contract-user
+ENV_CHART_PULL_PASSWORD: contract-password
+chart_museum_url: https://charts.example.invalid
+helm_repo_name: openfuyao
+ENV_AMC_USABLITY_ADDR: 192.0.2.80
+ENV_AMC_USABLITY_PORT: 58080
+SERVICE_IP_RANGE_IPV4: 10.96.0.0/12
+CLUSTER_IP_RANGE_IPV4: 192.168.0.0/16
+CLUSTER_IP_RANGE_IPV6: fd00:10:244::/56
+CLUSTER_DNS_SVC_IP: 10.96.0.10
+KUBERNETES_CLUSTER_IP: 10.96.0.1
+PORTMAP_HOST_PORT_MIN: 30000
+PORTMAP_HOST_PORT_MAX: 32767
+NET_IPV4_IP_LOCAL_PORT_RANGE: 1024 65535
+openFuyao_version: v25.12
+kubernetes_version: v1.34.3-of.1
+etcd_version: v3.6.7-of.1
+containerd_version: v2.1.1
+calico_version: v3.27.3-icbc
+coredns_version: v1.12.2-of.1
+kubeproxy_version: v1.34.3-of.1.icbc.harbor
+openstack_vlan_version: v0.0.2
+redis_operator_version: v1.0.0
+harbor_secret_version: v1.0.0
+pause_tag: placeholder
+cluster_api_version: 1.0.5
+bkeagent_deployer_version: source-6909da3
+bkeagent_deployer_tag: source-6909da3
+IP_MOD_VERSION: source-6909da3
+certOutputPath: /tmp/newplatform-demo-certs
+certOutputFile: cluster-certs.tar.gz
+cert_config: /etc/openFuyao/certs/cert_config
+CERT_EXPIRY_TIME: 8760h
+addon_params:
+  amc: {}
+  clusterconfig: {}
+  clustermonitor: {}
+  monitcontrollermanager: {}
+  housekeeping: {}
+  openstack-vlan: {}
+ansible_ssh_pass: contract-password

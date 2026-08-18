@@ -1,0 +1,8 @@
+KUBE_SCHEDULER_LOGTOSTDERR="--logtostderr=true"
+
+KUBE_SCHEDULER_LOG_LEVEL="--v=4"
+
+KUBE_SCHEDULER_ALLOW_PRIV="--allow-privileged=true"
+
+KUBE_MASTER="--master=https://{{ groups['k8s_F5'][0] }}:6443"
+

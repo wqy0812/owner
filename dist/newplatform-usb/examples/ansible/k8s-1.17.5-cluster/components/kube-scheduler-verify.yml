@@ -1,0 +1,8 @@
+---
+- name: Verify kube-scheduler on k8smaster
+  hosts: k8smaster
+  gather_facts: false
+  become: true
+  roles:
+    - role: k8s1175_component_verify
+      k8s1175_component_task: kube-scheduler

@@ -4,7 +4,7 @@ import type { Component, ComponentDependency, ComponentRelease, ParameterDefinit
 const PARAMETER_TYPES: ParameterType[] = ['string', 'boolean', 'integer', 'number', 'object', 'array'];
 
 export function emptyParameter(): ParameterDefinition {
-  return { name: '', description: '', type: 'string', required: false, visibility: 'internal' };
+  return { name: '', description: '', type: 'string', required: false, visibility: 'internal', enum: undefined };
 }
 
 export function resolveUpstream(dependency: ComponentDependency, components: Component[] = []) {
@@ -71,14 +71,15 @@ export function downstreamParameterConsumers(componentId: string | undefined, co
 export function parameterContractErrors(parameters: ParameterDefinition[], dependencies: ComponentDependency[], upstreams: ComponentRelease[]): string[] {
   const errors: string[] = [];
   const seen = new Set<string>();
-  for (const parameter of parameters) {
-    if (!parameter.name.trim() || !parameter.description.trim()) errors.push('每个参数都需要名称和说明');
-    if (seen.has(parameter.name)) errors.push(`参数 ${parameter.name} 重复`);
-    seen.add(parameter.name);
-    if (/(password|secret|token|private[_-]?key|encryption[_-]?key|credential)/i.test(parameter.name) && !parameter.name.toLowerCase().endsWith('_version')) {
-      errors.push(`敏感参数 ${parameter.name} 必须使用 CredentialRef`);
-    }
-  }
+   for (const parameter of parameters) {
+     if (!parameter.name.trim()) errors.push(`参数 ${parameter.name} 名称不能为空`);
+     if (!parameter.description.trim()) errors.push(`参数 ${parameter.name} 说明不能为空`);
+     if (seen.has(parameter.name)) errors.push(`参数 ${parameter.name} 重复`);
+     seen.add(parameter.name);
+     if (/(password|secret|token|private[_-]?key|encryption[_-]?key|credential)/i.test(parameter.name) && !parameter.name.toLowerCase().endsWith('_version')) {
+       errors.push(`敏感参数 ${parameter.name} 必须使用 CredentialRef`);
+     }
+   }
   const mapped = new Set<string>();
   const lockedComponents = new Set<string>();
   for (const dependency of dependencies) {
@@ -113,29 +114,29 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
   return <div className="parameter-table">
     {parameters.map((parameter, index) => <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}`}>
       <div className="parameter-card__grid">
-        <label><span>参数名称</span><input aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value })} /></label>
+        <label><span>参数名称</span><input aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value.trim() })} /></label>
         <label className="span-2"><span>说明</span><input aria-label="参数说明" placeholder="这个参数给谁用" value={parameter.description} disabled={disabled} onChange={(event) => update(index, { description: event.target.value })} /></label>
-        <label><span>类型</span><select aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(event) => update(index, { type: event.target.value as ParameterType, defaultValue: undefined })}>
+        <label><span>类型</span><select aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(event) => update(index, { type: event.target.value as ParameterType, defaultValue: undefined, enum: undefined, minLength: undefined })}>
           {PARAMETER_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
         </select></label>
         <fieldset className="visibility-fieldset">
           <legend>可见性</legend>
           <div className="visibility-toggle" role="radiogroup" aria-label="可见性">
             <label className={parameter.visibility === 'internal' ? 'active' : ''}>
-              <input type="radio" name={`visibility-${index}`} value="internal" checked={parameter.visibility === 'internal'} disabled={disabled} onChange={() => update(index, { visibility: 'internal' })} />
-              <strong>内部</strong>
-              <small>仅本组件使用，下游不可选</small>
+              <input aria-label="内部" type="radio" name={`visibility-${index}`} value="internal" checked={parameter.visibility === 'internal'} disabled={disabled} onChange={() => update(index, { visibility: 'internal' })} />
+              <strong>仅本 Release 使用</strong>
+              <small>下游不可引用</small>
             </label>
             <label className={parameter.visibility === 'public' ? 'active' : ''}>
-              <input type="radio" name={`visibility-${index}`} value="public" checked={parameter.visibility === 'public'} disabled={disabled} onChange={() => update(index, { visibility: 'public' })} />
-              <strong>公开</strong>
-              <small>可被下游组件引用</small>
+              <input aria-label="公开" type="radio" name={`visibility-${index}`} value="public" checked={parameter.visibility === 'public'} disabled={disabled} onChange={() => update(index, { visibility: 'public' })} />
+              <strong>允许下游映射引用</strong>
+              <small>下游可显式映射使用</small>
             </label>
           </div>
         </fieldset>
-        <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })} /><span>必填</span></label>
+        <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })} /><span>运行时必须有值</span></label>
         <label><span>默认值</span><DefaultValueEditor parameter={parameter} disabled={disabled} onChange={(defaultValue) => update(index, { defaultValue })} /></label>
-        <label><span>环境路径</span><input aria-label="环境路径" placeholder="kubernetes.installRoot" value={parameter.environmentPath ?? ''} disabled={disabled} onChange={(event) => update(index, { environmentPath: event.target.value })} /></label>
+        <label><span>环境参数路径</span><input aria-label="环境参数路径" placeholder="kubernetes.installRoot" value={parameter.environmentPath ?? ''} disabled={disabled} onChange={(event) => update(index, { environmentPath: event.target.value })} /></label>
         <label><span>枚举</span><input aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>
         {parameter.type === 'string' ? <label><span>最小长度</span><input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })} /></label> : <span />}
       </div>
@@ -157,7 +158,13 @@ function DefaultValueEditor({ parameter, disabled, onChange }: { parameter: Para
     return <textarea aria-label="默认值 JSON" className="code-editor code-editor--small" disabled={disabled} defaultValue={parameter.defaultValue === undefined ? '' : JSON.stringify(parameter.defaultValue)} onBlur={(event) => {
       const text = event.target.value.trim();
       if (!text) { onChange(undefined); return; }
-      try { onChange(JSON.parse(text)); } catch { /* keep previous until save validation */ }
+      try {
+        const parsed = JSON.parse(text);
+        if (typeof parsed !== 'object') throw new Error('must be object/array');
+        onChange(parsed);
+      } catch {
+        onChange(undefined);
+      }
     }} />;
   }
   return <input aria-label="默认值" placeholder="默认值" disabled={disabled} value={parameter.defaultValue === undefined || parameter.defaultValue === null ? '' : String(parameter.defaultValue)} onChange={(event) => {

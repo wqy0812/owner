@@ -1,0 +1,26 @@
+{% for host in groups['work_cluster_k8snode'] %}
+---
+apiVersion: bke.bocloud.com/v1beta1
+kind: BKENode
+metadata:
+  labels:
+    cluster.x-k8s.io/cluster-name: {{ cluster_id_lower }}
+  name: {{ host }}
+  namespace: bke-{{ cluster_id_lower }}
+spec:
+  hostname: {{ host }}
+  ip: {{ host }}
+  username: {{ hostvars[host]['ansible_ssh_user'] }}
+  password: "{{ hostvars[host]['ansible_ssh_pass'] }}"
+  port: "22"
+  role:
+  - node
+  labels:
+{% if hostvars[host].get('tags') %}
+{% for key, value in hostvars[host]['tags'].items() %}
+  - key: {{ key }}
+    value: {{ value }}
+{% endfor %}
+{% endif %}
+status: {}
+{% endfor %}

@@ -1,0 +1,6 @@
+{
+    "ipv6": true,
+    "fixed-cidr-v6": "fd00:daad:beee::/64",
+    "bridge": "docker0"
+}
+

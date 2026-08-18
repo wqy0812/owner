@@ -1,0 +1,23 @@
+[Unit]
+Description=Containerd Standalone OCI Container Daemon
+Documentation=https://containerd.tools/
+After=network.target containerd.socket
+Requires=containerd.socket
+
+[Service]
+EnvironmentFile=/etc/sysconfig/containerd
+ExecStart=/usr/sbin/containerd --listen fd:// --start-timeout=2m $CONTAINERD_OPTS
+LimitNOFILE=1048576
+LimitNPROC=1048576
+LimitCORE=infinity
+
+# While containerd doesn't directly modify cgroups, we have to make sure that
+# systemd doesn't suddenly decide to mess around with runC's cgroup setup.
+Delegate=true
+
+# TasksMax is set to a silly value by default, so we need to bump it up to
+# infinity so that containers don't randomly fail to spawn.
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target

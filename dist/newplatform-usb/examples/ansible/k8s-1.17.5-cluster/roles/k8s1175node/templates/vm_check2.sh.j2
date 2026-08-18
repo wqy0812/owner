@@ -1,0 +1,105 @@
+#!/bin/bash
+checkFlag=0
+
+MASTER_PORTS=(
+    "6443"
+)
+FF_PORTS=(
+    "6443"
+)
+#ADMIN_PORTS=(
+#    "80"
+#    "8081"
+#)
+SLB_ETCD_PORTS=(
+    "4001"
+)
+# tcp check function
+function tcp_socket_port_check(){
+    local PAAS_TCP_SOCKET_HOST=$1
+    local PAAS_TCP_SOCKET_PORT=$2
+    local tcp_socket_cmd_ret=""
+    local tcp_socket_cmd="cat </dev/null >/dev/tcp/${PAAS_TCP_SOCKET_HOST}/${PAAS_TCP_SOCKET_PORT}"
+    local cmd_output=""
+
+    cmd_output=$(timeout "1" bash -c "${tcp_socket_cmd}" 2>&1)
+    tcp_socket_cmd_ret="$?"
+
+    return ${tcp_socket_cmd_ret}
+}
+# check master list ports
+{% for i in range((groups['k8smaster']|length)) %}
+    MasterIP={{ groups['k8smaster'][i] }}
+    for MPorts in "${MASTER_PORTS[@]}"
+    do
+        tcp_socket_port_check "$MasterIP" "$MPorts"
+        TCPStatus="$?"
+        if [[ $TCPStatus -gt 0 ]]
+        then
+            echo -e "telnet master $MasterIP port $MPorts: abnormal"
+            let checkFlag=$checkFlag+1
+        else
+            echo -e "telnet master $MasterIP port $MPorts: OK"
+        fi
+    done
+{% endfor %}
+
+# check f5 list ports
+{% for i in range((groups['k8s_F5']|length)) %}
+    FIP={{ groups['k8s_F5'][i] }}
+    for FPorts in "${FF_PORTS[@]}"
+    do
+        tcp_socket_port_check "$FIP" "$FPorts"
+        TCPStatus="$?"
+        if [[ $TCPStatus -gt 0 ]]
+        then
+            echo -e "telnet f5 $FIP port $FPorts: abnormal"
+            let checkFlag=$checkFlag+1
+        else
+            echo -e "telnet f5 $FIP port $FPorts: OK"
+        fi
+    done
+{% endfor %}
+
+# check SLB etcd list ports
+j=0
+SLBIPS=()
+{% for a in SLB_ETCDS_ENDPOINTS %}
+    SLBIP={{ a.address }}
+    SLBIPS[$j]=`echo $SLBIP |awk -F ':' '{print $1}' `
+    for SPorts in "${SLB_ETCD_PORTS[@]}"
+        do
+            tcp_socket_port_check "${SLBIPS[$j]}" "$SPorts"
+            TCPStatus="$?"
+            if [[ $TCPStatus -gt 0 ]]
+            then
+                echo -e "telnet SLB_etcd ${SLBIPS[$j]} port $SPorts: abnormal"
+                let checkFlag=$checkFlag+1
+            else
+                echo -e "telnet SLB_etcd ${SLBIPS[$j]} port $SPorts: OK"
+            fi
+    done
+    let j=$j+1
+{% endfor %}
+# check domains
+#IhsIP={{ IHS_IP }}
+#for IPorts in "${ADMIN_PORTS[@]}"
+#do
+#    tcp_socket_port_check "$IhsIP" "$IPorts"
+#    TCPStatus="$?"
+#    if [[ $TCPStatus -gt 0 ]]
+#    then
+#        echo -e "telnet domains $IhsIP port $IPorts: abnormal"
+#        let checkFlag=$checkFlag+1
+#    else
+#        echo -e "telnet domains $IhsIP port $IPorts: OK"
+#    fi
+#done
+# Check result
+if [ $checkFlag -gt 0 ]; then
+        echo "there are $checkFlag not ok"
+        exit 1
+else
+        echo "all check ok"
+        exit 0
+fi

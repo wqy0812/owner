@@ -1,0 +1,20 @@
+
+---
+
+- name: create /var/log/kube-proxy.log
+  shell: "touch /var/log/kube-proxy.log && chmod +x /var/log/kube-proxy.log"
+
+- name: <k8smaster>upload  kubelet.config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-proxy.config.j2 dest=/approot1/paas/kube/conf/kube-proxy.config owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: <k8smaster>upload  kube-proxy.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-proxy.conf.j2 dest=/etc/rsyslog.d/kube-proxy.conf owner=sysop group=root mode="u=rw,g=r,o=r"
+

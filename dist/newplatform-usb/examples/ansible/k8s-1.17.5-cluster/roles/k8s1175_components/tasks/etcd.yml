@@ -1,0 +1,11 @@
+---
+- name: Install etcd 3.3.10 only
+  ansible.builtin.include_role:
+    name: k8setcd_serverless
+    tasks_from: install_etcd
+
+- name: Start etcd after its isolated install
+  ansible.builtin.include_role:
+    name: k8setcd_serverless
+    tasks_from: restart_etcd
+

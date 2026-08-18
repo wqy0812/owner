@@ -1,0 +1,24 @@
+---
+
+- name: upload sh
+  template:
+    src: "{{ playbook_dir }}/roles/k8s1175node/templates/f5_check.sh.j2"
+    dest: /tmp/f5_check.sh
+    owner: sysop
+    group: users
+    mode: "u=rwx,g=rx,o=rx"
+  when: ENABLE_VM_CHECK
+  tags:
+    - always
+
+- name: execute
+  shell: "sh /tmp/f5_check.sh"
+  register: f5_check_result
+  when: ENABLE_VM_CHECK
+  tags:
+    - always
+- debug:
+    msg: "{{ f5_check_result.stdout }}"
+  when: ENABLE_VM_CHECK
+  tags:
+    - always

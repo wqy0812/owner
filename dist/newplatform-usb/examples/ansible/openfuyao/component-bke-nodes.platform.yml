@@ -1,0 +1,33 @@
+---
+- name: OpenFuyao work node enrollment component
+  hosts: "{{ target_host_group }}"
+  remote_user: sysop
+  gather_facts: false
+  any_errors_fatal: true
+  pre_tasks:
+    - import_tasks: component-bke-contract.tasks.yml
+      vars:
+        openfuyao_required_vars:
+          - target_host_group
+          - cluster_id
+          - cluster_role
+          - BKE_ADMIN
+          - JQ_MEDPATH
+          - SSH_KEY_PUB
+          - SSH_KNOWN_HOSTS
+          - ENV_FILESTATION_URL
+          - NET_IPV4_IP_LOCAL_PORT_RANGE
+          - ansible_ssh_pass
+        openfuyao_validate_cluster_role: true
+        openfuyao_allowed_target_groups_by_role:
+          work:
+            - work_cluster_k8snode
+      tags: always
+
+    - name: Bridge platform inventory user to the legacy node template variable
+      set_fact:
+        ansible_ssh_user: "{{ ansible_user }}"
+      tags: always
+  roles:
+    - role: bke-common
+    - role: bke-nodes

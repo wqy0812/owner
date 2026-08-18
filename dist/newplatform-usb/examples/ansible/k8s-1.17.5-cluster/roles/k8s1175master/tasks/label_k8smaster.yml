@@ -1,0 +1,28 @@
+---
+
+#- name: label first label
+#  shell: "/approot1/paas/kube/bin/kubectl label no {{ item }} c1800v=true --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig --overwrite=true"
+#  with_inventory_hostnames: k8smaster
+
+- name: wait for node started
+  tags:
+    - install
+    - update
+    - check
+  wait_for: timeout=20
+
+- name: label second label
+  tags:
+    - install
+    - update
+    - check
+  shell: "/approot1/paas/kube/bin/kubectl label no {{ item }} node-role.kubernetes.io/master= --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig --overwrite=true"
+  with_inventory_hostnames: k8smaster
+
+- name: taint master no schedule
+  tags:
+    - install
+    - update
+    - check
+  shell: "/approot1/paas/kube/bin/kubectl taint node {{ item }} node-role.kubernetes.io/master=:NoSchedule --kubeconfig=/approot1/paas/kube/cert/kubectl.kubeconfig --overwrite=true"
+  with_inventory_hostnames: k8smaster

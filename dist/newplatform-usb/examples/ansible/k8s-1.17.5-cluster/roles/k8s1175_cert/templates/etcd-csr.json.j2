@@ -1,0 +1,22 @@
+{
+  "CN": "etcd",
+  "hosts": [
+    "127.0.0.1",
+    "{{ groups['k8setcd'][0] }}",
+    "{{ groups['k8setcd'][1] }}",
+    "{{ groups['k8setcd'][2] }}"
+  ],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "ST": "Hangzhou",
+      "L": "Hangzhou",
+      "O": "k8s",
+      "OU": "4Paradigm"
+    }
+  ]
+}

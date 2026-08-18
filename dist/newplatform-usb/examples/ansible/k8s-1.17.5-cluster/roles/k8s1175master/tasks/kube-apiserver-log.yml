@@ -1,0 +1,19 @@
+
+---
+
+- name: <k8smaster>upload  kube-apiserver.config file
+  tags:
+    - install
+    - check
+    - update
+  template: src=kube-apiserver.config.j2 dest=/approot1/paas/kube/conf/kube-apiserver.config owner=kube group=users mode="u=rw,g=r,o=r"
+
+- name: create /var/log/apiserver.log
+  shell: "touch /var/log/apiserver.log && chmod +x /var/log/apiserver.log"
+
+- name: <k8smaster>upload  apiserver.conf file
+  tags:
+    - install
+    - check
+    - update
+  template: src=apiserver.conf.j2 dest=/etc/rsyslog.d/apiserver.conf owner=sysop group=root mode="u=rw,g=r,o=r"

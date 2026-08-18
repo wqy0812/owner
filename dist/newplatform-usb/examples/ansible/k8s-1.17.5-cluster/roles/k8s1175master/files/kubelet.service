@@ -1,0 +1,29 @@
+[Unit]
+Description=Kubernetes Kubelet Server
+Documentation=https://kubernetes.io/docs/concepts/overview/components/#kubelet https://kubernetes.io/docs/reference/generated/kubelet/
+After=docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/approot1/paas/kube/kubelet
+EnvironmentFile=-/approot1/paas/kube/conf/kubelet.config
+EnvironmentFile=-/approot1/paas/kube/conf/kubelet
+ExecStart=/approot1/paas/kube/bin/kubelet \
+	    $KUBELET_LOGTOSTDERR \
+	    $KUBELET_LOG_LEVEL \
+	    $KUBELET_KUBECONFIG \
+	    $KUBELET_ADDRESS \
+	    $KUBELET_PORT \
+	    $KUBELET_HOSTNAME \
+	    $KUBELET_ARGS
+Restart=always
+RestartSec=10
+StartLimitInterval=30
+StartLimitBurst=3
+KillMode=process
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=kubelet
+
+[Install]
+WantedBy=multi-user.target

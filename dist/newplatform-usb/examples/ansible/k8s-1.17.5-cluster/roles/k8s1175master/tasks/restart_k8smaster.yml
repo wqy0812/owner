@@ -1,0 +1,35 @@
+---
+
+# - name: <k8snode>restart systemd-journald
+  # service: name=systemd-journald state=restarted
+
+# - name: <k8smaster>restart haproxy
+  # service: name=haproxy state=restarted
+  
+# - name: <k8smaster>restart docker
+  # service: name=docker state=restarted
+  
+- name: <k8smaster>restart kube-apiserver
+  tags: install
+  service: name=kube-apiserver state=restarted
+  
+# - name: <daemonset>wait for kube-apiserver starting
+  # wait_for: 
+    # sleep: 10
+    # # port: 6443
+    # # delay: 10
+    # # timeout: 15
+  
+- name: <k8smaster>restart kube-controller-manager
+  tags: install
+  service: name=kube-controller-manager state=restarted
+  
+- name: <k8smaster>restart kube-scheduler
+  tags: install
+  service: name=kube-scheduler state=restarted
+
+  
+# - name: <k8smaster>restart heapster
+  # service: name=heapster state=restarted
+  # run_once: true
+  # delegate_to: "{{ groups['k8smaster'][1] }}"

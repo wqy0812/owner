@@ -1,0 +1,334 @@
+---
+# These tasks are responsible for copying the latest dev/production code from
+# the version control system.
+
+- name: useradd kube
+  tags:
+    - install
+    - check
+    - update
+  user: name=kube home=/approot1/paas/kube group=users state=present
+
+- name: absent kubelet.kubeconfig
+  ignore_errors: yes
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items:
+    - { path: '/approot1/paas/kube/cert/kubelet.kubeconfig'}
+    - { path: '/approot1/paas/kube/cert/kubelet.crt'}
+    - { path: '/approot1/paas/kube/cert/kubelet.key'}
+
+- name: mkdir /approot1/paas/kube/bin
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/bin state=directory owner=kube mode="u=rwx,g=rx,o=rx"
+  
+- name: mkdir /approot1/paas/kube/conf
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/conf state=directory owner=kube mode="u=rwx,g=rx,o=rx"
+  
+- name: mkdir /approot1/paas/kube/logs
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/logs state=directory owner=kube mode="u=rwx,g=rx,o=rx"
+  
+- name: mkdir /approot1/paas/kube/cert
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube/cert state=directory owner=kube mode="u=rwx,g=rx,o=rx"
+
+- name: <k8smaster>download and unarchive {{ K8SMASTER_1175_CERT }}
+  tags:
+    - install
+  unarchive: 
+    src: http://{{ IHS_IP }}:{{ IHS_PORT }}/{{ K8SMASTER_1175_CERT }}
+    dest: /approot1/paas/kube/bin
+    copy: no
+    extra_opts: ['--strip-components=3']
+    owner: kube
+
+- name: upload certificate tree for master
+  tags:
+    - install
+    - check
+    - update
+  copy:
+    src: /approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/
+    dest: /approot1/paas/kube/cert/
+    owner: kube
+    group: users
+    mode: preserve
+  no_log: true
+
+- name: find master certificate directories
+  tags:
+    - install
+    - check
+    - update
+  find:
+    paths: /approot1/paas/kube/cert
+    recurse: true
+    file_type: directory
+  register: k8s1175_master_cert_directories
+
+- name: restrict master certificate directories
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: kube
+    group: users
+    mode: "u=rwx,g=rx,o="
+  loop: "{{ k8s1175_master_cert_directories.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: find master certificate files
+  tags:
+    - install
+    - check
+    - update
+  find:
+    paths: /approot1/paas/kube/cert
+    recurse: true
+    file_type: file
+  register: k8s1175_master_cert_files
+
+- name: restrict master certificate files to the kube service account
+  tags:
+    - install
+    - check
+    - update
+  file:
+    path: "{{ item.path }}"
+    state: file
+    owner: kube
+    group: users
+    mode: "u=rw,g=,o="
+  loop: "{{ k8s1175_master_cert_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  
+- name: upload encryption-config.yaml
+  tags:
+    - install
+    - check
+    - update
+  template: src=encryption-config.yaml.j2 dest=/approot1/paas/kube/cert/encryption-config.yaml owner=kube group=users mode="u=rw,g=,o="
+  no_log: true
+  
+- import_tasks: kube-apiserver-log.yml
+
+- import_tasks: kube-controller-manager-log.yml
+
+- import_tasks: kube-scheduler-log.yml
+
+- import_tasks: kubelet-log.yml
+
+- import_tasks: kube-proxy-log.yml
+
+- import_tasks: install-rsyslog.yml
+  
+- name: upload kube-apiserver service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kube-apiserver.service dest=/usr/lib/systemd/system/kube-apiserver.service owner=kube group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: systemctl daemon-reload
+  
+- meta: flush_handlers
+
+- name: <k8smaster>upload kube-apiserver parameter file
+  tags:
+    - install
+    - check
+    - update
+  template: src=apiserver.j2 dest=/approot1/paas/kube/conf/apiserver owner=kube group=users mode="u=rw,g=r,o=r"
+  
+- name: <k8smaster>enable kube-apiserver service
+  tags:
+    - install
+    - check
+    - update
+  service: name=kube-apiserver enabled=yes
+  
+- name: <k8smaster>upload kube-controller-manager service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kube-controller-manager.service dest=/usr/lib/systemd/system/kube-controller-manager.service owner=kube group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: systemctl daemon-reload
+  
+- meta: flush_handlers
+
+- name: <k8smaster>upload kube-controller-manager's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  template: src=init-kube-controller-manager.sh.j2 dest=/approot1/paas/kube/bin/init-kube-controller-manager.sh owner=kube group=users mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>init kube-controller-manager's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/kube/bin/init-kube-controller-manager.sh"
+
+- name: <k8smaster>upload kube-controller-manager parameter file
+  tags:
+    - install
+    - check
+    - update
+  template: src=controller-manager.j2 dest=/approot1/paas/kube/conf/controller-manager owner=kube group=users mode="u=rw,g=r,o=r"
+  
+- name: <k8smaster>enable kube-controller-manager service
+  tags:
+    - install
+    - check
+    - update
+  service: name=kube-controller-manager enabled=yes
+  
+- name: <k8smaster>upload kube-scheduler service file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=kube-scheduler.service dest=/usr/lib/systemd/system/kube-scheduler.service owner=kube group=users mode="u=rw,g=r,o=r" backup=yes
+  notify: systemctl daemon-reload
+
+- meta: flush_handlers
+
+- name: <k8smaster>upload kube-scheduler's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  template: src=init-kube-scheduler.sh.j2 dest=/approot1/paas/kube/bin/init-kube-scheduler.sh owner=kube group=users mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>init kube-scheduler's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/kube/bin/init-kube-scheduler.sh"
+  
+- name: <k8smaster>upload kube-scheduler parameter file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=scheduler dest=/approot1/paas/kube/conf/scheduler owner=kube group=users mode="u=rw,g=r,o=r"
+  
+- name: <k8smaster_scheduler>upload scheduler-policy-config file
+  tags:
+    - install
+    - check
+    - update
+  copy: src=scheduler-policy-config.json dest=/approot1/paas/kube/conf/scheduler-policy-config.json owner=kube group=users mode="u=rw,g=r,o=r" backup=yes
+  
+- meta: flush_handlers
+  
+- name: <k8smaster>enable kube-scheduler service
+  tags:
+    - install
+    - check
+    - update
+  service: name=kube-scheduler enabled=yes
+  
+- name: <k8smaster>upload kubectl's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  template: src=init-kubectl.sh.j2 dest=/approot1/paas/kube/bin/init-kubectl.sh owner=kube group=users mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>init kubectl's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/kube/bin/init-kubectl.sh"
+  
+  
+- name: <k8smaster>upload kube-proxy's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  template: src=init-kube-proxy.sh.j2 dest=/approot1/paas/kube/bin/init-kube-proxy.sh owner=kube group=users mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>init kube-proxy's kubeconfig script
+  tags:
+    - install
+    - check
+    - update
+  shell: "/approot1/paas/kube/bin/init-kube-proxy.sh"
+  
+- name: chown /approot1/paas/kube
+  tags:
+    - install
+    - check
+    - update
+  file: path=/approot1/paas/kube state=directory owner=kube recurse=yes
+ 
+- name: upload /tmp/env.sh
+  tags:
+    - install
+    - check
+    - update
+  copy: src=env.sh dest=/tmp/env.sh owner=sysop mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>upload journald.conf
+  tags:
+    - install
+    - check
+    - update
+  copy: src=journald.conf dest=/etc/systemd/journald.conf owner=root group=root mode="u=rw,g=r,o=r" backup=yes
+  
+- name: <k8smaster>make persistent log dir of journal
+  tags:
+    - install
+    - check
+    - update
+  file: path=/var/log/journal state=directory mode="u=rwx,g=rx,o=rx"
+  
+- name: <k8smaster>upload logrotate conf of syslog
+  tags:
+    - install
+    - check
+    - update
+  copy: src=syslog dest=/etc/logrotate.d/syslog owner=root group=root mode="u=rw,g=r,o=r" backup=yes
+
+- name: get scriptes kubectl
+  tags:
+   - install
+   - check
+   - update
+  lineinfile:
+    path: /home/sysop/.bashrc
+    line: 'export KUBECONFIG=/approot1/paas/kube/cert/kubectl.kubeconfig'
+
+- name: get scriptes kubectl
+  tags:
+   - install
+   - check
+   - update
+  lineinfile:
+    path: /home/sysop/.bashrc
+    line: 'export PATH=$PATH:/approot1/paas/kube/bin'
