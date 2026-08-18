@@ -55,17 +55,17 @@ func TestEnvironmentBindingSupportsExactKeysAndDottedPaths(t *testing.T) {
 	}
 }
 
-func TestSchemaEnvironmentValuesUsesDottedPaths(t *testing.T) {
-	schema := map[string]any{"properties": map[string]any{
-		"cluster_id": map[string]any{"type": "string", "x-environmentPath": "operation.cluster_id"},
-		"plain":      map[string]any{"type": "string"},
-	}}
-	got := schemaEnvironmentValues(schema, map[string]any{
+func TestParameterEnvironmentValuesUsesDottedPaths(t *testing.T) {
+	parameters := []domain.ParameterDefinition{
+		{Name: "cluster_id", Type: domain.ParameterTypeString, EnvironmentPath: "operation.cluster_id"},
+		{Name: "plain", Type: domain.ParameterTypeString},
+	}
+	got := parameterEnvironmentValues(parameters, map[string]any{
 		"operation": map[string]any{"cluster_id": "work-a"},
 		"plain":     "compatible-flat-value",
 	})
 	if got["cluster_id"] != "work-a" || got["plain"] != "compatible-flat-value" {
-		t.Fatalf("schema environment values=%#v", got)
+		t.Fatalf("parameter environment values=%#v", got)
 	}
 }
 
@@ -102,15 +102,12 @@ func TestScenarioRunInputIsValidatedGloballyAndScopedPerNode(t *testing.T) {
 }
 
 func TestResolvedParameterRequiredTypeAndEnumValidation(t *testing.T) {
-	schema := map[string]any{
-		"required": []any{"endpoint", "replicas"},
-		"properties": map[string]any{
-			"endpoint": map[string]any{"type": "string", "minLength": 1},
-			"replicas": map[string]any{"type": "integer"},
-			"mode":     map[string]any{"type": "string", "enum": []any{"safe", "fast"}},
-		},
+	parameters := []domain.ParameterDefinition{
+		{Name: "endpoint", Type: domain.ParameterTypeString, Required: true, MinLength: 1},
+		{Name: "replicas", Type: domain.ParameterTypeInteger, Required: true},
+		{Name: "mode", Type: domain.ParameterTypeString, Enum: []any{"safe", "fast"}},
 	}
-	if err := validateResolvedParameters(schema, map[string]any{"endpoint": "localhost", "replicas": float64(3), "mode": "safe"}); err != nil {
+	if err := validateResolvedParameters(parameters, map[string]any{"endpoint": "localhost", "replicas": float64(3), "mode": "safe"}); err != nil {
 		t.Fatal(err)
 	}
 	for name, values := range map[string]map[string]any{
@@ -120,7 +117,7 @@ func TestResolvedParameterRequiredTypeAndEnumValidation(t *testing.T) {
 		"enum":     {"endpoint": "localhost", "replicas": 1, "mode": "unsafe"},
 		"empty":    {"endpoint": "", "replicas": 1, "mode": "safe"},
 	} {
-		if err := validateResolvedParameters(schema, values); err == nil {
+		if err := validateResolvedParameters(parameters, values); err == nil {
 			t.Fatalf("%s invalid values were accepted: %#v", name, values)
 		}
 	}
@@ -135,13 +132,12 @@ func TestVersionNamesContainingSecretAreNotTreatedAsCredentials(t *testing.T) {
 	}
 }
 
-func TestRequiredParameterWithSchemaDefaultIsStaticallyBound(t *testing.T) {
-	schema := map[string]any{
-		"required":   []any{"endpoint"},
-		"properties": map[string]any{"endpoint": map[string]any{"type": "string", "default": "localhost"}},
-	}
+func TestRequiredParameterWithDefaultIsStaticallyBound(t *testing.T) {
+	release := domain.ComponentRelease{Parameters: []domain.ParameterDefinition{
+		{Name: "endpoint", Type: domain.ParameterTypeString, Required: true, DefaultValue: "localhost", Visibility: domain.ParameterInternal, Description: "api"},
+	}}
 	var issues []domain.ValidationIssue
-	validateRequiredParameters(schema, domain.ScenarioNode{ID: "node", Values: map[string]any{}, Bindings: map[string]string{}}, &issues)
+	validateRequiredParameters(release, domain.ScenarioNode{ID: "node", Values: map[string]any{}, Bindings: map[string]string{}}, &issues)
 	if len(issues) != 0 {
 		t.Fatalf("required parameter with default reported unbound: %+v", issues)
 	}
@@ -150,8 +146,8 @@ func TestRequiredParameterWithSchemaDefaultIsStaticallyBound(t *testing.T) {
 func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release := domain.ComponentRelease{
 		Version: "1.0.0", Type: domain.ReleaseAtomic, RiskLevel: domain.RiskLow,
-		ParameterSchema: map[string]any{"properties": map[string]any{"region": map[string]any{"default": "cn"}}},
-		Actions:         []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60}},
+		Parameters: []domain.ParameterDefinition{{Name: "region", Description: "region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "cn"}},
+		Actions:    []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60}},
 	}
 	before := componentReleaseSpecDigest(release)
 	release.Actions[0].Playbook = "install-v2.yml"
@@ -162,6 +158,19 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release.Actions[0].RequiredCredentials = []string{"ansible_ssh_pass"}
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not include required credentials")
+	}
+	before = componentReleaseSpecDigest(release)
+	release.Parameters[0].DefaultValue = "us"
+	if after := componentReleaseSpecDigest(release); before == after {
+		t.Fatal("release definition digest did not include parameters")
+	}
+	before = componentReleaseSpecDigest(release)
+	release.Dependencies = []domain.ComponentDependency{{
+		UpstreamComponentID: "upstream", UpstreamReleaseID: "upstream-1",
+		ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "region"}},
+	}}
+	if after := componentReleaseSpecDigest(release); before == after {
+		t.Fatal("release definition digest did not include parameter mappings")
 	}
 }
 
@@ -206,9 +215,9 @@ func TestInlineSensitiveMapsAreRejectedBeforePersistence(t *testing.T) {
 	}
 	if err := validateRelease(domain.ComponentRelease{
 		Version: "1.0.0", Type: domain.ReleaseAtomic,
-		ParameterSchema: map[string]any{"properties": map[string]any{"password": map[string]any{"type": "string", "default": "do-not-store"}}},
+		Parameters: []domain.ParameterDefinition{{Name: "password", Description: "bad", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "do-not-store"}},
 	}); err == nil || strings.Contains(err.Error(), "do-not-store") {
-		t.Fatalf("sensitive release schema rejection=%v", err)
+		t.Fatalf("sensitive release parameter contract rejection=%v", err)
 	}
 }
 

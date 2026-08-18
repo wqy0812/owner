@@ -218,13 +218,12 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		properties, _ := release.ParameterSchema["properties"].(map[string]any)
-		if len(properties) == 0 {
-			t.Fatalf("release %s has empty schema", releaseID)
+		if len(release.Parameters) == 0 {
+			t.Fatalf("release %s has empty parameters", releaseID)
 		}
-		for name := range credentialNames {
-			if _, leaked := properties[name]; leaked {
-				t.Fatalf("credential %s leaked into release %s schema", name, releaseID)
+		for _, parameter := range release.Parameters {
+			if credentialNames[parameter.Name] {
+				t.Fatalf("credential %s leaked into release %s parameters", parameter.Name, releaseID)
 			}
 		}
 		for _, action := range release.Actions {
@@ -237,7 +236,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 				}
 			}
 		}
-		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, environment.ID, nil)
+		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, environment.ID, nil, nil)
 		if err != nil || componentRun.Status != domain.RunAwaitingApproval {
 			t.Fatalf("component test %s run=%+v err=%v", releaseID, componentRun, err)
 		}
@@ -308,9 +307,32 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 				t.Fatalf("unsafe component entrypoint for %s: %q", releaseID, action.Playbook)
 			}
 		}
-		properties, _ := release.ParameterSchema["properties"].(map[string]any)
-		if _, leaked := properties["K8S_ENCRYPTION_KEY"]; leaked {
-			t.Fatalf("sensitive encryption key was persisted in schema for %s", releaseID)
+		for _, parameter := range release.Parameters {
+			if parameter.Name == "K8S_ENCRYPTION_KEY" {
+				t.Fatalf("sensitive encryption key was persisted in parameters for %s", releaseID)
+			}
+		}
+		if releaseID == "release-kubelet-1.17.5" {
+			parameter, ok := domain.ParameterByName(release.Parameters, "kubeInstallRoot")
+			if !ok || parameter.Visibility != domain.ParameterPublic || parameter.DefaultValue != "/approot1/paas/kube" {
+				t.Fatalf("kubelet public install root=%+v ok=%v", parameter, ok)
+			}
+		}
+		if releaseID == "release-kube-proxy-1.17.5" {
+			if _, ok := domain.ParameterByName(release.Parameters, "kubeRoot"); !ok {
+				t.Fatal("kube-proxy missing kubeRoot parameter")
+			}
+			found := false
+			for _, dependency := range release.Dependencies {
+				for _, mapping := range dependency.ParameterMappings {
+					if mapping.UpstreamParameter == "kubeInstallRoot" && mapping.TargetParameter == "kubeRoot" {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("kube-proxy missing kubelet public parameter mapping: %+v", release.Dependencies)
+			}
 		}
 	}
 
@@ -345,6 +367,15 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		if len(usage[releaseID]) != 2 {
 			t.Fatalf("release %s was not reused across control and worker host groups: %+v", releaseID, usage[releaseID])
 		}
+	}
+	sources := map[string]string{}
+	for _, node := range core.Graph.Nodes {
+		if node.ID == "k8s1175-proxy-master" || node.ID == "k8s1175-proxy-worker" {
+			sources[node.ID] = node.DependencySources["dependency-kube-proxy-1"]
+		}
+	}
+	if sources["k8s1175-proxy-master"] != "k8s1175-kubelet-master" || sources["k8s1175-proxy-worker"] != "k8s1175-kubelet-worker" {
+		t.Fatalf("kube-proxy dependency sources=%v", sources)
 	}
 }
 

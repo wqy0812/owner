@@ -103,7 +103,7 @@ func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 		}
 		return domain.ComponentRelease{
 			ID: id, ComponentID: componentID, Version: version, Type: releaseType, Status: domain.ReleaseReleased,
-			Verified: true, RiskLevel: domain.RiskLow, EnvironmentConstraints: constraints, ParameterSchema: map[string]any{}, CreatedAt: now, ReleasedAt: ptr(now),
+			Verified: true, RiskLevel: domain.RiskLow, EnvironmentConstraints: constraints, Parameters: []domain.ParameterDefinition{}, CreatedAt: now, ReleasedAt: ptr(now),
 		}
 	}
 	components := []seededComponent{

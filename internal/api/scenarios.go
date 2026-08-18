@@ -21,13 +21,14 @@ type flowNodeInput struct {
 	Type     string               `json:"type"`
 	Position domain.GraphPosition `json:"position"`
 	Data     struct {
-		Label     string            `json:"label"`
-		ReleaseID string            `json:"releaseId"`
-		Action    domain.ActionKind `json:"action"`
-		HostGroup string            `json:"hostGroup"`
-		Values    map[string]any    `json:"values"`
-		Bindings  map[string]string `json:"bindings"`
-		RunInputs []string          `json:"runInputs"`
+		Label             string            `json:"label"`
+		ReleaseID         string            `json:"releaseId"`
+		Action            domain.ActionKind `json:"action"`
+		HostGroup         string            `json:"hostGroup"`
+		Values            map[string]any    `json:"values"`
+		Bindings          map[string]string `json:"bindings"`
+		RunInputs         []string          `json:"runInputs"`
+		DependencySources map[string]string `json:"dependencySources"`
 	} `json:"data"`
 }
 
@@ -42,7 +43,8 @@ func (input graphInput) domain() (domain.ScenarioGraph, error) {
 			graph.Nodes = append(graph.Nodes, domain.ScenarioNode{
 				ID: flow.ID, Name: flow.Data.Label, ReleaseID: flow.Data.ReleaseID,
 				Action: flow.Data.Action, HostGroup: flow.Data.HostGroup,
-				Values: flow.Data.Values, Bindings: flow.Data.Bindings, RunInputs: flow.Data.RunInputs, Position: flow.Position,
+				Values: flow.Data.Values, Bindings: flow.Data.Bindings, RunInputs: flow.Data.RunInputs,
+				DependencySources: flow.Data.DependencySources, Position: flow.Position,
 			})
 			continue
 		}
@@ -238,6 +240,7 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 		data := map[string]any{
 			"label": node.Name, "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
 			"values": node.Values, "bindings": node.Bindings, "runInputs": node.RunInputs,
+			"dependencySources": node.DependencySources,
 		}
 		if release, ok := releases[node.ReleaseID]; ok {
 			data["componentId"], data["version"] = release.ComponentID, release.Version

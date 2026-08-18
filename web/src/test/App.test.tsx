@@ -108,6 +108,89 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('环境 Owner')).toBeInTheDocument();
   });
 
+  it('shows which upstream component parameter a release depends on', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+      }, {
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        latestRelease: {
+          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+          parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
+          dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+        },
+        releases: [{
+          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+          parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
+          dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+        }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    renderApp('/components?selected=component-kube-proxy');
+    expect((await screen.findAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot')).length).toBeGreaterThan(0);
+    expect(screen.getByText('内部')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '查看合同' }));
+    expect(screen.getByRole('dialog', { name: '1.17.5 参数合同' })).toBeInTheDocument();
+    expect(screen.getAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot').length).toBeGreaterThan(1);
+  });
+
+  it('switches the visible contract when a component has multiple releases', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        latestRelease: { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', status: 'released', parameters: [], dependencies: [] },
+        releases: [
+          { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', status: 'released', parameters: [], dependencies: [] },
+          {
+            id: 'release-kube-proxy-old', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+            parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
+            dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+          },
+        ],
+      }, {
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    renderApp('/components?selected=component-kube-proxy');
+    expect(await screen.findByText(/当前展示 1.17.5，因为它有参数映射/)).toBeInTheDocument();
+    expect(screen.getAllByText(/本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/1.17.5：本组件参数 kubeRoot/)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('查看版本合同'), 'release-kube-proxy-new');
+    expect(screen.getByText('没有直接依赖')).toBeInTheDocument();
+  });
+
+  it('lets the owner choose public vs internal visibility on a draft release', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
+        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    renderApp('/components?selected=component-kubelet');
+    await userEvent.click(await screen.findByRole('button', { name: '配置参数' }));
+    expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /公开/ })).not.toBeChecked();
+    await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
+    expect(screen.getByRole('radio', { name: /公开/ })).toBeChecked();
+  });
+
   it('renders all six component layers including an empty L5', async () => {
     renderApp('/components');
     expect((await screen.findAllByText('containerd')).length).toBeGreaterThan(0);
@@ -116,7 +199,8 @@ describe('platform shell and RBAC UI', () => {
     }
     expect(screen.getByText('可观测与节点管理层')).toBeInTheDocument();
     expect(screen.getAllByText('本层暂无组件').length).toBeGreaterThan(0);
-		expect(screen.getByText('2 项必需凭据')).toBeInTheDocument();
+		expect(screen.getByText('0 个参数映射')).toBeInTheDocument();
+    expect(screen.getByText('0 个公开参数')).toBeInTheDocument();
   });
 
   it('submits the complete component classification contract', async () => {

@@ -246,13 +246,36 @@ function normalizeAction(raw: LooseRecord): ActionDefinition {
   };
 }
 
-function normalizeDependency(raw: LooseRecord): ComponentDependency {
+function normalizeParameter(raw: LooseRecord): import('../types/domain').ParameterDefinition {
+  const type = requireEnum(raw, ['string', 'boolean', 'integer', 'number', 'object', 'array'] as const, 'type');
+  const visibility = requireEnum(raw, ['internal', 'public'] as const, 'visibility');
+  const enumValues = raw.enum;
   return {
+    name: requireString(raw, 'name'),
+    description: requireString(raw, 'description'),
+    type,
+    required: optionalBoolean(raw, 'required') ?? false,
+    defaultValue: raw.defaultValue,
+    visibility,
+    environmentPath: optionalString(raw, 'environmentPath', 'environment_path'),
+    enum: Array.isArray(enumValues) ? enumValues : undefined,
+    minLength: optionalNumber(raw, 'minLength', 'min_length'),
+  };
+}
+
+function normalizeDependency(raw: LooseRecord): ComponentDependency {
+  const mappings = optionalRecords(raw, 'parameterMappings', 'parameter_mappings') ?? [];
+  return {
+    id: optionalString(raw, 'id'),
     componentId: requireString(raw, 'componentId', 'component_id', 'upstreamComponentId'),
     componentName: optionalString(raw, 'componentName', 'upstreamComponentName'),
     releaseId: requireString(raw, 'upstreamReleaseId', 'upstream_release_id', 'releaseId', 'release_id'),
-    version: optionalString(raw, 'version'),
+    version: optionalString(raw, 'upstreamVersion', 'upstream_version', 'version'),
     purpose: optionalString(raw, 'purpose'),
+    parameterMappings: mappings.map((item) => ({
+      upstreamParameter: requireString(item, 'upstreamParameter', 'upstream_parameter'),
+      targetParameter: requireString(item, 'targetParameter', 'target_parameter'),
+    })),
   };
 }
 
@@ -275,7 +298,7 @@ function normalizeRelease(raw: LooseRecord, componentID?: string): ComponentRele
     releaseNotes: optionalString(raw, 'releaseNotes', 'release_notes'),
     dependencies,
     environmentConstraints: optionalObject(raw, 'environmentConstraints', 'environment_constraints'),
-    parameterSchema: optionalObject(raw, 'parameterSchema', 'parameter_schema'),
+    parameters: optionalRecords(raw, 'parameters')?.map(normalizeParameter) ?? [],
     actions,
     createdAt: optionalString(raw, 'createdAt', 'created_at'),
     releasedAt: optionalString(raw, 'releasedAt', 'released_at'),
@@ -337,6 +360,7 @@ function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
       values: optionalObject(data, 'values'),
       bindings: optionalRecord(data, 'bindings') ? normalizeBindings(optionalRecord(data, 'bindings')!) : undefined,
       runInputs: optionalStringArray(data, 'runInputs'),
+      dependencySources: optionalRecord(data, 'dependencySources') as Record<string, string> | undefined,
       layer: optionalEnum(data, COMPONENT_LAYERS, 'layer'),
     },
   };
@@ -482,6 +506,7 @@ function normalizeRun(raw: LooseRecord): Run {
     steps,
     approval: approval ? normalizeApproval(approval) : undefined,
     logTail,
+    resolvedParametersByNode: optionalRecord(source, 'resolvedParametersByNode') as Run['resolvedParametersByNode'],
     createdAt: optionalString(source, 'createdAt'),
     startedAt: optionalString(source, 'startedAt'),
     finishedAt: optionalString(source, 'finishedAt'),
@@ -592,8 +617,8 @@ export const api = {
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
   },
-  async testRelease(releaseId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput })), 'run'));
+  async testRelease(releaseId: string, environmentId: string, runInput: Record<string, unknown> = {}, dependencyFixtures: Record<string, unknown> = {}) {
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput, dependencyFixtures })), 'run'));
   },
   async scenarios(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/scenarios', signal)).map((item) => normalizeScenario(requireRecord(item, 'scenario')));
@@ -618,6 +643,7 @@ export const api = {
         values: node.data.values ?? {},
         bindings: node.data.bindings ?? {},
         runInputs: node.data.runInputs ?? [],
+        dependencySources: node.data.dependencySources ?? {},
         position: node.position,
       })),
       edges: graph.edges,

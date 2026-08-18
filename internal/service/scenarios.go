@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -156,7 +157,12 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		if _, actionErr := actionFor(release, node.Action); actionErr != nil {
 			issues = append(issues, domain.ValidationIssue{Code: "action_missing", Message: actionErr.Error(), NodeID: node.ID})
 		}
-		validateRequiredParameters(release.ParameterSchema, node, &issues)
+		validateRequiredParameters(release, node, &issues)
+		if conflicts := nodeOverridesMappedParameter(node, release); len(conflicts) > 0 {
+			issues = append(issues, domain.ValidationIssue{
+				Code: "mapped_parameter_overridden", Message: fmt.Sprintf("mapped parameters cannot also be set locally: %s", strings.Join(conflicts, ", ")), NodeID: node.ID,
+			})
+		}
 		nodesByRelease[release.ID] = append(nodesByRelease[release.ID], node.ID)
 		releaseByNode[node.ID] = release
 	}
@@ -168,8 +174,10 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 			continue
 		}
 		// A verify node observes a release that is expected to exist already. Its
-		// install-time dependencies do not need to be rebuilt in this scenario.
-		if node.Action == domain.ActionVerify {
+		// install-time dependencies do not need to be rebuilt unless this node
+		// actually imports mapped parameters.
+		skipInstallDependencies := node.Action == domain.ActionVerify && !releaseNeedsImportedParameters(release)
+		if skipInstallDependencies {
 			continue
 		}
 		for _, dependency := range release.Dependencies {
@@ -184,6 +192,12 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 				issues = append(issues, domain.ValidationIssue{
 					Code: "dependency_order", Message: "upstream component must precede the dependent node", NodeID: node.ID,
 				})
+			}
+			if len(dependency.ParameterMappings) == 0 {
+				continue
+			}
+			if _, sourceErr := selectDependencySource(node, dependency, revision.Graph, releaseByNode, reachable); sourceErr != nil {
+				issues = append(issues, domain.ValidationIssue{Code: sourceIssueCode(sourceErr), Message: sourceErr.Error(), NodeID: node.ID})
 			}
 		}
 	}
@@ -205,35 +219,31 @@ func anyUpstreamNodeReachable(upstreamNodes []string, downstreamNode string, rea
 	return false
 }
 
-func validateRequiredParameters(schema map[string]any, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {
-	for _, key := range requiredParameterKeys(schema) {
-		if parameterHasDefault(schema, key) {
+func validateRequiredParameters(release domain.ComponentRelease, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {
+	mapped := domain.MappedTargets(release.Dependencies)
+	for _, parameter := range release.Parameters {
+		if !parameter.Required || parameter.HasDefault() {
 			continue
 		}
-		validateRequiredKey(key, node, issues)
-	}
-}
-
-func parameterHasDefault(schema map[string]any, key string) bool {
-	properties, _ := schema["properties"].(map[string]any)
-	definition, _ := properties[key].(map[string]any)
-	_, exists := definition["default"]
-	return exists
-}
-
-func requiredParameterKeys(schema map[string]any) []string {
-	var keys []string
-	switch required := schema["required"].(type) {
-	case []string:
-		keys = append(keys, required...)
-	case []any:
-		for _, value := range required {
-			if key, ok := value.(string); ok {
-				keys = append(keys, key)
-			}
+		if _, imported := mapped[parameter.Name]; imported {
+			continue
 		}
+		validateRequiredKey(parameter.Name, node, issues)
 	}
-	return keys
+}
+
+func sourceIssueCode(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "absent from the graph"):
+		return "missing_dependency_node"
+	case strings.Contains(message, "must choose a source"):
+		return "dependency_source_required"
+	case strings.Contains(message, "not a reachable"), strings.Contains(message, "does not lock"):
+		return "dependency_source_invalid"
+	default:
+		return "dependency_source"
+	}
 }
 
 func validateRequiredKey(key string, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {

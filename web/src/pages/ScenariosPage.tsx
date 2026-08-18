@@ -17,6 +17,7 @@ import {
 import { Beaker, Boxes, CheckCircle2, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
+import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
@@ -24,6 +25,21 @@ import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../
 import type { Component, Environment, Scenario, ScenarioEdge, ScenarioNodeData } from '../types/domain';
 
 type FlowNode = Node<ScenarioNodeData>;
+
+export function isNodeReachable(source: string, target: string, edges: Array<Pick<Edge, 'source' | 'target'>>) {
+  const forward = new Map<string, string[]>();
+  for (const edge of edges) forward.set(edge.source, [...(forward.get(edge.source) ?? []), edge.target]);
+  const queue = [source];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (current === target) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    queue.push(...(forward.get(current) ?? []));
+  }
+  return false;
+}
 
 function ComponentNode({ data, selected }: NodeProps<FlowNode>) {
   return <div className={`flow-node${selected ? ' selected' : ''}`}>
@@ -89,6 +105,12 @@ export function ScenariosPage() {
   const selectedNodeMetadata = selectedNode ? releaseMetadata.get(selectedNode.data.releaseId) : undefined;
   const selectedNodeComponent = selectedNodeMetadata?.component ?? components?.find((component) => component.id === selectedNode?.data.componentId);
   const selectedRelease = selectedNodeMetadata?.release;
+  const mappedTargets = mappedParameterNames(selectedRelease);
+  const mappingDependencies = (selectedRelease?.dependencies ?? []).filter((dependency) => (dependency.parameterMappings ?? []).length > 0);
+  const sourceOptionsByDependency = Object.fromEntries(mappingDependencies.map((dependency) => {
+    const candidates = displayNodes.filter((node) => node.data.releaseId === dependency.releaseId && selectedNodeId && isNodeReachable(node.id, selectedNodeId, edges));
+    return [dependency.id ?? dependency.releaseId, candidates];
+  }));
   const availableNodeActions = useMemo(() => {
     const explicit = selectedRelease?.actions?.map((action) => action.type).filter(Boolean) ?? [];
     return [...new Set(explicit.length ? explicit : [selectedNode?.data.action ?? 'install'])];
@@ -204,7 +226,16 @@ export function ScenariosPage() {
         <aside className="node-inspector panel">
           <header><Settings2 size={17} /><div><h3>节点配置</h3><p>参数与目标主机组</p></div></header>
           <div className="inspector-form"><label><span>执行策略 JSON</span><textarea aria-label="执行策略 JSON" className="code-editor code-editor--small" value={executionPolicy} disabled={!editable} onChange={(event) => setExecutionPolicy(event.target.value)} /></label></div>
-          {selectedNode ? <div className="inspector-form"><label><span>显示名称</span><input value={selectedNode.data.label} disabled={!editable} onChange={(event) => updateSelected({ label: event.target.value })} /></label><label><span>组件分层</span><input value={selectedNodeComponent ? `${componentLayer(selectedNodeComponent.layer).code} · ${componentLayer(selectedNodeComponent.layer).label}` : '—'} disabled /></label><label><span>精确版本</span><input value={selectedNode.data.version ?? ''} disabled /></label><label><span>生命周期动作</span><select value={selectedNode.data.action ?? availableNodeActions[0]} disabled={!editable} onChange={(event) => updateSelected({ action: event.target.value as ScenarioNodeData['action'] })}>{availableNodeActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label><label><span>主机组</span><input value={selectedNode.data.hostGroup ?? ''} disabled={!editable} onChange={(event) => updateSelected({ hostGroup: event.target.value })} /></label><label><span>节点参数 JSON</span><textarea key={`${selectedNode.id}-values`} className="code-editor code-editor--small" defaultValue={JSON.stringify(selectedNode.data.values ?? {}, null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ values: JSON.parse(event.target.value) }); } catch { notify('error', '节点参数不是有效 JSON'); } }} /></label><label><span>环境参数绑定 JSON</span><textarea key={`${selectedNode.id}-bindings`} className="code-editor code-editor--small" defaultValue={JSON.stringify(selectedNode.data.bindings ?? {}, null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ bindings: JSON.parse(event.target.value) }); } catch { notify('error', '参数绑定不是有效 JSON'); } }} /></label><label><span>运行时输入（逗号分隔）</span><input value={(selectedNode.data.runInputs ?? []).join(', ')} disabled={!editable} onChange={(event) => updateSelected({ runInputs: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和参数绑定。" />}
+          {selectedNode ? <div className="inspector-form"><label><span>显示名称</span><input value={selectedNode.data.label} disabled={!editable} onChange={(event) => updateSelected({ label: event.target.value })} /></label><label><span>组件分层</span><input value={selectedNodeComponent ? `${componentLayer(selectedNodeComponent.layer).code} · ${componentLayer(selectedNodeComponent.layer).label}` : '—'} disabled /></label><label><span>精确版本</span><input value={selectedNode.data.version ?? ''} disabled /></label><label><span>生命周期动作</span><select value={selectedNode.data.action ?? availableNodeActions[0]} disabled={!editable} onChange={(event) => updateSelected({ action: event.target.value as ScenarioNodeData['action'] })}>{availableNodeActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label><label><span>主机组</span><input value={selectedNode.data.hostGroup ?? ''} disabled={!editable} onChange={(event) => updateSelected({ hostGroup: event.target.value })} /></label>{mappingDependencies.length ? <div className="source-picker"><strong>依赖参数来源</strong>{mappingDependencies.map((dependency) => {
+            const options = sourceOptionsByDependency[dependency.id ?? dependency.releaseId] ?? [];
+            const selectedSource = selectedNode.data.dependencySources?.[dependency.id ?? ''];
+            return <div key={dependency.id ?? dependency.releaseId} className="source-picker__item">
+              {(dependency.parameterMappings ?? []).map((mapping) => <p key={`${mapping.upstreamParameter}-${mapping.targetParameter}`} className="parameter-lineage">{describeParameterMapping(dependency, mapping, components ?? [])}</p>)}
+              {options.length <= 1
+                ? <label><span>来源节点</span><input value={options[0] ? `${options[0].data.label} · ${options[0].data.version} · ${options[0].data.hostGroup}` : '自动绑定'} disabled /></label>
+                : <label><span>来源节点</span><select required value={selectedSource ?? ''} disabled={!editable} onChange={(event) => updateSelected({ dependencySources: { ...selectedNode.data.dependencySources, [dependency.id ?? '']: event.target.value } })}><option value="">请选择来源节点</option>{options.map((option) => <option key={option.id} value={option.id}>{option.data.label} · {option.data.version} · {option.data.hostGroup}</option>)}</select></label>}
+            </div>;
+          })}</div> : null}{mappedTargets.size ? <p className="palette-hint">已由上游映射的参数不可再配置：{[...mappedTargets].join(', ')}</p> : null}<label><span>节点参数 JSON</span><textarea key={`${selectedNode.id}-values`} className="code-editor code-editor--small" defaultValue={JSON.stringify(Object.fromEntries(Object.entries(selectedNode.data.values ?? {}).filter(([key]) => !mappedTargets.has(key))), null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ values: Object.fromEntries(Object.entries(JSON.parse(event.target.value) as Record<string, unknown>).filter(([key]) => !mappedTargets.has(key))) }); } catch { notify('error', '节点参数不是有效 JSON'); } }} /></label><label><span>环境参数绑定 JSON</span><textarea key={`${selectedNode.id}-bindings`} className="code-editor code-editor--small" defaultValue={JSON.stringify(Object.fromEntries(Object.entries(selectedNode.data.bindings ?? {}).filter(([key]) => !mappedTargets.has(key))), null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ bindings: Object.fromEntries(Object.entries(JSON.parse(event.target.value) as Record<string, string>).filter(([key]) => !mappedTargets.has(key))) }); } catch { notify('error', '参数绑定不是有效 JSON'); } }} /></label><label><span>运行时输入（逗号分隔）</span><input value={(selectedNode.data.runInputs ?? []).filter((item) => !mappedTargets.has(item)).join(', ')} disabled={!editable} onChange={(event) => updateSelected({ runInputs: event.target.value.split(',').map((item) => item.trim()).filter((item) => item && !mappedTargets.has(item)) })} /></label>{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和参数绑定。" />}
         </aside>
       </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由场景 Owner 创建一个场景。" /></div>}
     </>}

@@ -56,20 +56,35 @@ var kubernetes1175ReleaseSpecs = []kubernetes1175ReleaseSpec{
 	{componentID: "component-autoscaling-rbac", slug: "autoscaling-rbac", name: "Autoscaling RBAC", description: "配置集群自动伸缩所需 RBAC。", releaseID: "release-autoscaling-rbac-k8s-1.17.5", version: "v1.17.5-r1", action: domain.ActionConfigure, hostGroup: "k8smaster", dependencies: []kubernetes1175DependencySpec{{"component-kube-apiserver", "release-kube-apiserver-1.17.5", "available API server"}}},
 }
 
-func kubernetes1175ParameterSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"K8S_VERSION":                         map[string]any{"type": "string", "enum": []any{"v1.17.5"}, "default": "v1.17.5"},
-			"K8S1175_ARTIFACTS_VERIFIED":          map[string]any{"type": "boolean", "default": false},
-			"K8S1175_OPTIONAL_ARTIFACTS_VERIFIED": map[string]any{"type": "boolean", "default": false},
-			"K8S1175_DOCKER_RUNTIME_VERIFIED":     map[string]any{"type": "boolean", "default": false},
-			"K8S1175_DOCKER_VERSION":              map[string]any{"type": "string", "enum": []any{"18.09.7"}, "default": "18.09.7"},
-			"IHS_IP":                              map[string]any{"type": "string", "default": "192.0.2.80"},
-			"IHS_PORT":                            map[string]any{"type": "integer", "default": 8080},
-			"ENABLE_VM_CHECK":                     map[string]any{"type": "boolean", "default": false},
-		},
+func kubernetes1175Parameters() []domain.ParameterDefinition {
+	return []domain.ParameterDefinition{
+		{Name: "K8S_VERSION", Description: "Kubernetes 发行版本", Type: domain.ParameterTypeString, Required: true, DefaultValue: "v1.17.5", Visibility: domain.ParameterInternal, Enum: []any{"v1.17.5"}},
+		{Name: "K8S1175_ARTIFACTS_VERIFIED", Description: "核心制品是否已验真", Type: domain.ParameterTypeBoolean, Required: true, DefaultValue: false, Visibility: domain.ParameterInternal},
+		{Name: "K8S1175_OPTIONAL_ARTIFACTS_VERIFIED", Description: "可选制品是否已验真", Type: domain.ParameterTypeBoolean, Required: true, DefaultValue: false, Visibility: domain.ParameterInternal},
+		{Name: "K8S1175_DOCKER_RUNTIME_VERIFIED", Description: "Docker 运行时是否已验真", Type: domain.ParameterTypeBoolean, Required: true, DefaultValue: false, Visibility: domain.ParameterInternal},
+		{Name: "K8S1175_DOCKER_VERSION", Description: "Docker 版本", Type: domain.ParameterTypeString, Required: true, DefaultValue: "18.09.7", Visibility: domain.ParameterInternal, Enum: []any{"18.09.7"}},
+		{Name: "IHS_IP", Description: "制品仓库地址", Type: domain.ParameterTypeString, Required: true, DefaultValue: "192.0.2.80", Visibility: domain.ParameterInternal},
+		{Name: "IHS_PORT", Description: "制品仓库端口", Type: domain.ParameterTypeInteger, Required: true, DefaultValue: 8080, Visibility: domain.ParameterInternal},
+		{Name: "ENABLE_VM_CHECK", Description: "是否启用虚机检查", Type: domain.ParameterTypeBoolean, Required: true, DefaultValue: false, Visibility: domain.ParameterInternal},
 	}
+}
+
+func kubernetes1175ReleaseParameters(componentID string) []domain.ParameterDefinition {
+	parameters := kubernetes1175Parameters()
+	switch componentID {
+	case "component-kubelet":
+		parameters = append(parameters, domain.ParameterDefinition{
+			Name: "kubeInstallRoot", Description: "kubelet 安装根目录", Type: domain.ParameterTypeString,
+			Required: true, DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic,
+			EnvironmentPath: "kubernetes.installRoot", MinLength: 1,
+		})
+	case "component-kube-proxy":
+		parameters = append(parameters, domain.ParameterDefinition{
+			Name: "kubeRoot", Description: "复用 kubelet 安装目录", Type: domain.ParameterTypeString,
+			Required: true, Visibility: domain.ParameterInternal, MinLength: 1,
+		})
+	}
+	return parameters
 }
 
 func (s Seeder) seedKubernetes1175Catalog(ctx context.Context, now time.Time) error {
@@ -101,10 +116,14 @@ func (s Seeder) seedKubernetes1175Catalog(ctx context.Context, now time.Time) er
 		}}
 		dependencies := make([]domain.ComponentDependency, 0, len(spec.dependencies))
 		for i, dependency := range spec.dependencies {
-			dependencies = append(dependencies, domain.ComponentDependency{
+			item := domain.ComponentDependency{
 				ID: fmt.Sprintf("dependency-%s-%d", spec.slug, i+1), ReleaseID: spec.releaseID,
 				UpstreamComponentID: dependency.componentID, UpstreamReleaseID: dependency.releaseID, Purpose: dependency.purpose,
-			})
+			}
+			if spec.componentID == "component-kube-proxy" && dependency.componentID == "component-kubelet" {
+				item.ParameterMappings = []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}
+			}
+			dependencies = append(dependencies, item)
 		}
 		releaseType := domain.ReleaseAtomic
 		if spec.componentID == "component-kubernetes-distribution" {
@@ -114,7 +133,7 @@ func (s Seeder) seedKubernetes1175Catalog(ctx context.Context, now time.Time) er
 			ID: spec.releaseID, ComponentID: spec.componentID, Version: spec.version, Type: releaseType,
 			Status: domain.ReleaseReleased, ReleaseNotes: "来自 6909da3 作业快照的最小逻辑组件；介质未完成部署验真。",
 			Verified: false, RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
-			ParameterSchema: kubernetes1175ParameterSchema(), Dependencies: dependencies, Actions: actions,
+			Parameters: kubernetes1175ReleaseParameters(spec.componentID), Dependencies: dependencies, Actions: actions,
 			CreatedAt: now, ReleasedAt: ptr(now),
 		}
 		if err := s.createReleaseIfMissing(ctx, release); err != nil {
@@ -132,7 +151,18 @@ func kubernetes1175Node(id, name, releaseID, group string, x, y float64) domain.
 			break
 		}
 	}
-	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}, Destructive: action != domain.ActionPreflight}
+	node := domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}, Destructive: action != domain.ActionPreflight}
+	switch id {
+	case "k8s1175-proxy-master":
+		node.DependencySources = map[string]string{"dependency-kube-proxy-1": "k8s1175-kubelet-master"}
+	case "k8s1175-proxy-worker":
+		node.DependencySources = map[string]string{"dependency-kube-proxy-1": "k8s1175-kubelet-worker"}
+	case "k8s1175-ext-proxy-master":
+		node.DependencySources = map[string]string{"dependency-kube-proxy-1": "k8s1175-ext-kubelet-master"}
+	case "k8s1175-ext-proxy-worker":
+		node.DependencySources = map[string]string{"dependency-kube-proxy-1": "k8s1175-ext-kubelet-worker"}
+	}
+	return node
 }
 
 func kubernetes1175CoreGraph(prefix string) domain.ScenarioGraph {

@@ -150,6 +150,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		tail = append(tail, fmt.Sprintf("[%s] %s", logLine.Stream, logLine.Message))
 	}
 	output["logTail"] = tail
+	if resolved, ok := run.InputSnapshot["resolvedParametersByNode"]; ok {
+		output["resolvedParametersByNode"] = resolved
+	}
 	if run.Status == domain.RunQueued {
 		var position int
 		_ = h.platform.Store().DB().QueryRowContext(r.Context(), `SELECT COUNT(*) FROM runs WHERE environment_id=? AND status='queued' AND created_at<=?`, run.EnvironmentID, run.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")).Scan(&position)

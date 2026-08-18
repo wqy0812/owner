@@ -98,7 +98,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	oldRelease := domain.ComponentRelease{
 		ID: "release-test-runtime-1.0.0", ComponentID: "component-test-runtime", Version: "v1.0.0", Type: domain.ReleaseAtomic,
 		Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now,
-		EnvironmentConstraints: map[string]any{}, ParameterSchema: map[string]any{"type": "object", "properties": map[string]any{"expected_version": map[string]any{"type": "string", "default": "1.0.0"}}},
+		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{{Name: "expected_version", Description: "expected runtime version", Type: domain.ParameterTypeString, Required: true, DefaultValue: "1.0.0", Visibility: domain.ParameterInternal}},
 		Actions: []domain.ActionDefinition{
 			{ID: "action-test-runtime-install-1.0", ReleaseID: "release-test-runtime-1.0.0", Name: "install", Kind: domain.ActionInstall, Playbook: "tests/runtime/install.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
 			{ID: "action-test-runtime-verify-1.0", ReleaseID: "release-test-runtime-1.0.0", Name: "verify", Kind: domain.ActionVerify, Playbook: "tests/runtime/verify.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
@@ -107,7 +107,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	newRelease := domain.ComponentRelease{
 		ID: "release-test-runtime-1.1.0", ComponentID: "component-test-runtime", Version: "v1.1.0", Type: domain.ReleaseAtomic,
 		Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, CreatedAt: now.Add(time.Second),
-		EnvironmentConstraints: map[string]any{}, ParameterSchema: map[string]any{"type": "object", "properties": map[string]any{"expected_version": map[string]any{"type": "string", "default": "1.1.0"}}},
+		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{{Name: "expected_version", Description: "expected runtime version", Type: domain.ParameterTypeString, Required: true, DefaultValue: "1.1.0", Visibility: domain.ParameterInternal}},
 		Actions: []domain.ActionDefinition{
 			{ID: "action-test-runtime-upgrade-1.1", ReleaseID: "release-test-runtime-1.1.0", Name: "upgrade", Kind: domain.ActionUpgrade, Playbook: "tests/runtime/upgrade.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow, FromReleaseID: oldRelease.ID, ToReleaseID: "release-test-runtime-1.1.0"},
 			{ID: "action-test-runtime-verify-1.1", ReleaseID: "release-test-runtime-1.1.0", Name: "verify", Kind: domain.ActionVerify, Playbook: "tests/runtime/verify.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
@@ -131,7 +131,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	consumerRelease := domain.ComponentRelease{
 		ID: "release-test-consumer-1.0.0", ComponentID: consumer.ID, Version: "v1.0.0", Type: domain.ReleaseBundle,
 		Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now,
-		EnvironmentConstraints: map[string]any{}, ParameterSchema: map[string]any{},
+		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{},
 		Dependencies: []domain.ComponentDependency{{ID: "dependency-test-consumer-runtime", ReleaseID: "release-test-consumer-1.0.0", UpstreamComponentID: "component-test-runtime", UpstreamReleaseID: oldRelease.ID, Purpose: "runtime"}},
 	}
 	if err := database.CreateComponentRelease(ctx, consumerRelease); err != nil {
@@ -359,7 +359,7 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Mutable", "mutable"), alice)
 	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
 	definition := map[string]any{
-		"version": "1.0.0", "type": "atomic", "parameterSchema": map[string]any{},
+		"version": "1.0.0", "type": "atomic", "parameters": []any{},
 		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}}},
 	}
 	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", definition, alice)

@@ -62,12 +62,12 @@ var openFuyaoEnvironmentPaths = map[string]string{
 	"addon_params":                 "addon_params",
 }
 
-var openFuyaoProperties = map[string]map[string]any{
-	"cluster_id":        {"type": "string", "minLength": 1},
-	"cluster_role":      {"type": "string", "enum": []any{"manager", "work"}, "default": "manager"},
-	"strategy":          {"type": "string", "enum": []any{"StatefulFlatNetworkStrategy", "StatelessPortMappingStrategy", "StatelessFlatNetworkStrategy"}},
-	"target_host_group": {"type": "string", "enum": []any{"bootstrap_host", "management_cluster_k8smaster", "work_cluster_k8smaster", "work_cluster_k8snode"}},
-	"addon_params":      {"type": "object"},
+var openFuyaoParameterDefs = map[string]domain.ParameterDefinition{
+	"cluster_id":        {Name: "cluster_id", Description: "集群标识", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, MinLength: 1},
+	"cluster_role":      {Name: "cluster_role", Description: "集群角色", Type: domain.ParameterTypeString, Required: false, DefaultValue: "manager", Visibility: domain.ParameterInternal, Enum: []any{"manager", "work"}},
+	"strategy":          {Name: "strategy", Description: "网络策略", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Enum: []any{"StatefulFlatNetworkStrategy", "StatelessPortMappingStrategy", "StatelessFlatNetworkStrategy"}},
+	"target_host_group": {Name: "target_host_group", Description: "目标主机组", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Enum: []any{"bootstrap_host", "management_cluster_k8smaster", "work_cluster_k8smaster", "work_cluster_k8snode"}},
+	"addon_params":      {Name: "addon_params", Description: "插件参数", Type: domain.ParameterTypeObject, Required: true, Visibility: domain.ParameterInternal},
 }
 
 var openFuyaoStringParameters = []string{
@@ -91,14 +91,21 @@ var openFuyaoIntegerParameters = []string{
 
 func init() {
 	for _, name := range openFuyaoStringParameters {
-		openFuyaoProperties[name] = map[string]any{"type": "string", "minLength": 1}
+		openFuyaoParameterDefs[name] = domain.ParameterDefinition{
+			Name: name, Description: name, Type: domain.ParameterTypeString, Required: true,
+			Visibility: domain.ParameterInternal, MinLength: 1,
+		}
 	}
 	for _, name := range openFuyaoIntegerParameters {
-		openFuyaoProperties[name] = map[string]any{"type": "integer"}
+		openFuyaoParameterDefs[name] = domain.ParameterDefinition{
+			Name: name, Description: name, Type: domain.ParameterTypeInteger, Required: true,
+			Visibility: domain.ParameterInternal,
+		}
 	}
 	for name, path := range openFuyaoEnvironmentPaths {
-		if property := openFuyaoProperties[name]; property != nil {
-			property["x-environmentPath"] = path
+		if definition, ok := openFuyaoParameterDefs[name]; ok {
+			definition.EnvironmentPath = path
+			openFuyaoParameterDefs[name] = definition
 		}
 	}
 }
@@ -114,44 +121,36 @@ var (
 	}
 )
 
-func openFuyaoSchema(keys ...string) map[string]any {
-	properties := make(map[string]any, len(keys))
-	required := make([]any, 0, len(keys))
+func openFuyaoParameters(keys ...string) []domain.ParameterDefinition {
+	parameters := make([]domain.ParameterDefinition, 0, len(keys))
 	for _, key := range keys {
-		definition, ok := openFuyaoProperties[key]
+		definition, ok := openFuyaoParameterDefs[key]
 		if !ok {
 			panic("missing OpenFuyao property definition: " + key)
 		}
-		copyDefinition := make(map[string]any, len(definition))
-		for name, value := range definition {
-			copyDefinition[name] = value
-		}
-		properties[key] = copyDefinition
-		if _, hasDefault := definition["default"]; !hasDefault {
-			required = append(required, key)
-		}
+		parameters = append(parameters, definition)
 	}
-	return map[string]any{
-		"type": "object", "additionalProperties": false,
-		"properties": properties, "required": required,
-	}
+	return parameters
 }
 
-func openFuyaoSchemaDefault(schema map[string]any, key string, value any) {
-	properties, _ := schema["properties"].(map[string]any)
-	definition, ok := properties[key].(map[string]any)
-	if !ok {
-		return
+func openFuyaoParameterDefault(parameters []domain.ParameterDefinition, key string, value any) []domain.ParameterDefinition {
+	for i := range parameters {
+		if parameters[i].Name != key {
+			continue
+		}
+		parameters[i].DefaultValue = value
+		parameters[i].Required = false
 	}
-	definition["default"] = value
-	required, _ := schema["required"].([]any)
-	filtered := required[:0]
-	for _, item := range required {
-		if item != key {
-			filtered = append(filtered, item)
+	return parameters
+}
+
+func openFuyaoParameterEnvironmentPath(parameters []domain.ParameterDefinition, key, path string) []domain.ParameterDefinition {
+	for i := range parameters {
+		if parameters[i].Name == key {
+			parameters[i].EnvironmentPath = path
 		}
 	}
-	schema["required"] = filtered
+	return parameters
 }
 
 func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComponent {
@@ -194,18 +193,16 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 	items := make([]seededComponent, 0, len(specs))
 	for _, item := range specs {
 		releaseID := "release-" + item.slug + "-25.12"
-		parameterSchema := openFuyaoSchema(item.parameters...)
-		openFuyaoSchemaDefault(parameterSchema, "target_host_group", item.group)
+		parameters := openFuyaoParameterDefault(openFuyaoParameters(item.parameters...), "target_host_group", item.group)
 		if item.slug == "bke-nodes" {
-			openFuyaoSchemaDefault(parameterSchema, "cluster_role", "work")
-			properties := parameterSchema["properties"].(map[string]any)
-			properties["cluster_id"].(map[string]any)["x-environmentPath"] = "operation.work_cluster_id"
+			parameters = openFuyaoParameterDefault(parameters, "cluster_role", "work")
+			parameters = openFuyaoParameterEnvironmentPath(parameters, "cluster_id", "operation.work_cluster_id")
 		}
 		release := domain.ComponentRelease{
 			ID: releaseID, ComponentID: item.id, Version: "v25.12", Type: item.kind, Status: domain.ReleaseReleased,
 			ReleaseNotes: "OpenFuyao v25.12 作业快照的平台变量契约；真实介质和目标环境尚未验真。",
 			Verified:     false, RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
-			ParameterSchema: parameterSchema, Dependencies: item.dependencies,
+			Parameters: parameters, Dependencies: item.dependencies,
 			Actions: []domain.ActionDefinition{{
 				ID: "action-" + item.slug + "-install", ReleaseID: releaseID,
 				Name: "OpenFuyao " + item.slug + " install", Kind: domain.ActionInstall,
@@ -237,11 +234,9 @@ func openFuyaoBindings(releaseID, clusterPath string) map[string]string {
 		if item.releases[0].ID != releaseID {
 			continue
 		}
-		properties, _ := item.releases[0].ParameterSchema["properties"].(map[string]any)
-		for name, raw := range properties {
-			definition, _ := raw.(map[string]any)
-			if path, ok := definition["x-environmentPath"].(string); ok {
-				bindings[name] = path
+		for _, parameter := range item.releases[0].Parameters {
+			if parameter.EnvironmentPath != "" {
+				bindings[parameter.Name] = parameter.EnvironmentPath
 			}
 		}
 		break

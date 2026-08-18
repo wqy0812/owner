@@ -15,25 +15,26 @@ type componentDTO struct {
 }
 
 type releaseInput struct {
-	Version                string                     `json:"version"`
-	Type                   domain.ReleaseType         `json:"type"`
-	Status                 domain.ReleaseStatus       `json:"status"`
-	State                  domain.ReleaseStatus       `json:"state"`
-	ReleaseNotes           string                     `json:"releaseNotes"`
-	Breaking               bool                       `json:"breaking"`
-	RiskLevel              domain.RiskLevel           `json:"riskLevel"`
-	EnvironmentConstraints map[string]any             `json:"environmentConstraints"`
-	ParameterSchema        map[string]any             `json:"parameterSchema"`
-	Dependencies           []componentDependencyInput `json:"dependencies"`
-	Actions                []componentActionInput     `json:"actions"`
+	Version                string                       `json:"version"`
+	Type                   domain.ReleaseType           `json:"type"`
+	Status                 domain.ReleaseStatus         `json:"status"`
+	State                  domain.ReleaseStatus         `json:"state"`
+	ReleaseNotes           string                       `json:"releaseNotes"`
+	Breaking               bool                         `json:"breaking"`
+	RiskLevel              domain.RiskLevel             `json:"riskLevel"`
+	EnvironmentConstraints map[string]any               `json:"environmentConstraints"`
+	Parameters             []domain.ParameterDefinition `json:"parameters"`
+	Dependencies           []componentDependencyInput   `json:"dependencies"`
+	Actions                []componentActionInput       `json:"actions"`
 }
 
 type componentDependencyInput struct {
-	ComponentID       string `json:"componentId"`
-	ReleaseID         string `json:"releaseId"`
-	UpstreamComponent string `json:"upstreamComponentId"`
-	UpstreamRelease   string `json:"upstreamReleaseId"`
-	Purpose           string `json:"purpose"`
+	ComponentID       string                    `json:"componentId"`
+	ReleaseID         string                    `json:"releaseId"`
+	UpstreamComponent string                    `json:"upstreamComponentId"`
+	UpstreamRelease   string                    `json:"upstreamReleaseId"`
+	Purpose           string                    `json:"purpose"`
+	ParameterMappings []domain.ParameterMapping `json:"parameterMappings"`
 }
 
 type componentActionInput struct {
@@ -62,7 +63,7 @@ func (input releaseInput) domain() domain.ComponentRelease {
 	release := domain.ComponentRelease{
 		Version: input.Version, Type: input.Type, Status: status, ReleaseNotes: input.ReleaseNotes,
 		Breaking: input.Breaking, RiskLevel: input.RiskLevel,
-		EnvironmentConstraints: input.EnvironmentConstraints, ParameterSchema: input.ParameterSchema,
+		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
 	for _, dependency := range input.Dependencies {
 		componentID, releaseID := dependency.UpstreamComponent, dependency.UpstreamRelease
@@ -72,7 +73,7 @@ func (input releaseInput) domain() domain.ComponentRelease {
 		if releaseID == "" {
 			releaseID = dependency.ReleaseID
 		}
-		release.Dependencies = append(release.Dependencies, domain.ComponentDependency{UpstreamComponentID: componentID, UpstreamReleaseID: releaseID, Purpose: dependency.Purpose})
+		release.Dependencies = append(release.Dependencies, domain.ComponentDependency{UpstreamComponentID: componentID, UpstreamReleaseID: releaseID, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings})
 	}
 	for _, inputAction := range input.Actions {
 		kind := inputAction.Kind
@@ -224,14 +225,15 @@ func (h *Handler) deprecateRelease(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) testRelease(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		EnvironmentID string         `json:"environmentId"`
-		RunInput      map[string]any `json:"runInput"`
+		EnvironmentID      string         `json:"environmentId"`
+		RunInput           map[string]any `json:"runInput"`
+		DependencyFixtures map[string]any `json:"dependencyFixtures"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
+	run, err := h.platform.StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput, input.DependencyFixtures)
 	if err != nil {
 		writeError(w, err)
 		return

@@ -14,12 +14,42 @@ export type ComponentCategory = 'preflight' | 'bootstrap' | 'security' | 'runtim
 export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage' | 'configuration' | 'artifact_set';
 export type ComponentRequiredness = 'core_required' | 'profile_required' | 'optional';
 
+export type ParameterType = 'string' | 'boolean' | 'integer' | 'number' | 'object' | 'array';
+export type ParameterVisibility = 'internal' | 'public';
+
+export interface ParameterDefinition {
+  name: string;
+  description: string;
+  type: ParameterType;
+  required?: boolean;
+  defaultValue?: unknown;
+  visibility: ParameterVisibility;
+  environmentPath?: string;
+  enum?: unknown[];
+  minLength?: number;
+}
+
+export interface ParameterMapping {
+  upstreamParameter: string;
+  targetParameter: string;
+}
+
 export interface ComponentDependency {
+  id?: string;
   componentId: string;
   componentName?: string;
   releaseId: string;
   version?: string;
   purpose?: string;
+  parameterMappings?: ParameterMapping[];
+}
+
+export interface ResolvedParameter {
+  value?: unknown;
+  source?: string;
+  sourceNodeId?: string;
+  upstreamParameter?: string;
+  targetParameter?: string;
 }
 
 export interface ActionDefinition {
@@ -49,7 +79,7 @@ export interface ComponentRelease {
   releaseNotes?: string;
   dependencies?: ComponentDependency[];
   environmentConstraints?: Record<string, unknown>;
-  parameterSchema?: Record<string, unknown>;
+  parameters?: ParameterDefinition[];
   actions?: ActionDefinition[];
   createdAt?: string;
   releasedAt?: string;
@@ -84,6 +114,7 @@ export interface ScenarioNodeData extends Record<string, unknown> {
   values?: Record<string, unknown>;
   bindings?: Record<string, string>;
   runInputs?: string[];
+  dependencySources?: Record<string, string>;
   layer?: ComponentLayer;
 }
 
@@ -218,6 +249,7 @@ export interface Run {
   steps?: RunStep[];
   approval?: Approval;
   logTail?: string[];
+  resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
   createdAt?: string;
   startedAt?: string;
   finishedAt?: string;

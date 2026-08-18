@@ -14,4 +14,3 @@
   roles:
     - role: k8s1175_components
       k8s1175_component_task: kube-proxy
-

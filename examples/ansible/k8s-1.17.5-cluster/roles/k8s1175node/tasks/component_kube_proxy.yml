@@ -1,7 +1,7 @@
 ---
 - name: Fetch kube-proxy kubeconfig from the first master
   ansible.builtin.fetch:
-    src: /approot1/paas/kube/cert/kube-proxy.kubeconfig
+    src: "{{ kubeRoot | default('/approot1/paas/kube') }}/cert/kube-proxy.kubeconfig"
     dest: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/"
     flat: true
   delegate_to: "{{ groups['k8smaster'][0] }}"
@@ -10,7 +10,7 @@
 - name: Install kube-proxy kubeconfig on this worker
   ansible.builtin.copy:
     src: "/approot1/paas/admin/app/ansible/task/cert/{{ CLUSTER_ID }}/kube-proxy.kubeconfig"
-    dest: /approot1/paas/kube/cert/kube-proxy.kubeconfig
+    dest: "{{ kubeRoot | default('/approot1/paas/kube') }}/cert/kube-proxy.kubeconfig"
     owner: sysop
     group: users
     mode: '0600'
@@ -28,7 +28,7 @@
 - name: Write kube-proxy configuration
   ansible.builtin.template:
     src: kube-proxy.config.yaml.j2
-    dest: /approot1/paas/kube/conf/kube-proxy.config.yaml
+    dest: "{{ kubeRoot | default('/approot1/paas/kube') }}/conf/kube-proxy.config.yaml"
     owner: sysop
     group: users
     mode: '0644'
@@ -36,7 +36,7 @@
 - name: Write kube-proxy parameters
   ansible.builtin.copy:
     src: proxy
-    dest: /approot1/paas/kube/conf/proxy
+    dest: "{{ kubeRoot | default('/approot1/paas/kube') }}/conf/proxy"
     owner: sysop
     group: users
     mode: '0644'

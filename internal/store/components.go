@@ -89,7 +89,7 @@ func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRe
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameter_schema_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.ParameterSchema), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err = tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -105,7 +105,7 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_type=?,release_notes=?,breaking=?,verified=?,risk_level=?,environment_constraints_json=?,parameter_schema_json=? WHERE id=? AND status='draft'`, r.Version, r.Type, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.ParameterSchema), r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_type=?,release_notes=?,breaking=?,verified=?,risk_level=?,environment_constraints_json=?,parameters_json=? WHERE id=? AND status='draft'`, r.Version, r.Type, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -127,7 +127,11 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 
 func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentRelease) error {
 	for _, d := range r.Dependencies {
-		_, err := tx.ExecContext(ctx, `INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose) VALUES(?,?,?,?,?)`, d.ID, r.ID, d.UpstreamComponentID, d.UpstreamReleaseID, d.Purpose)
+		mappings := d.ParameterMappings
+		if mappings == nil {
+			mappings = []domain.ParameterMapping{}
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES(?,?,?,?,?,?)`, d.ID, r.ID, d.UpstreamComponentID, d.UpstreamReleaseID, d.Purpose, jsonText(mappings))
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -149,7 +153,7 @@ func nullString(v string) any {
 }
 
 func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameter_schema_json,created_at,released_at,deprecated_at FROM component_releases WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE id=?`, id)
 	r, err := scanRelease(row)
 	if err != nil {
 		return r, mapSQLError(err)
@@ -195,13 +199,13 @@ type scanner interface{ Scan(...any) error }
 func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var r domain.ComponentRelease
 	var breaking, verified int
-	var constraints, schema, created string
+	var constraints, parameters, created string
 	var released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Type, &r.Status, &r.ReleaseNotes, &breaking, &verified, &r.RiskLevel, &constraints, &schema, &created, &released, &deprecated)
+	err := row.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Type, &r.Status, &r.ReleaseNotes, &breaking, &verified, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
 	r.Breaking = breaking != 0
 	r.Verified = verified != 0
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
-	r.ParameterSchema = decodeJSON(schema, map[string]any{})
+	r.Parameters = decodeJSON(parameters, []domain.ParameterDefinition{})
 	r.CreatedAt = parseTime(created)
 	r.ReleasedAt = parseNullTime(released)
 	r.DeprecatedAt = parseNullTime(deprecated)
@@ -209,7 +213,7 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 }
 
 func (s *Store) ListComponentReleases(ctx context.Context, componentID string, releasedOnly bool) ([]domain.ComponentRelease, error) {
-	q := `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameter_schema_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=?`
+	q := `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=?`
 	if releasedOnly {
 		q += ` AND status='released'`
 	}
@@ -247,7 +251,7 @@ func (s *Store) ListComponentReleases(ctx context.Context, componentID string, r
 }
 
 func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domain.ComponentDependency, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,c.name FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id WHERE d.release_id=? ORDER BY c.name`, releaseID)
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id=? ORDER BY c.name`, releaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,9 +259,11 @@ func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domai
 	var out []domain.ComponentDependency
 	for rows.Next() {
 		var d domain.ComponentDependency
-		if err := rows.Scan(&d.ID, &d.ReleaseID, &d.UpstreamComponentID, &d.UpstreamReleaseID, &d.Purpose, &d.UpstreamComponentName); err != nil {
+		var mappings string
+		if err := rows.Scan(&d.ID, &d.ReleaseID, &d.UpstreamComponentID, &d.UpstreamReleaseID, &d.Purpose, &mappings, &d.UpstreamComponentName, &d.UpstreamVersion); err != nil {
 			return nil, err
 		}
+		d.ParameterMappings = decodeJSON(mappings, []domain.ParameterMapping{})
 		out = append(out, d)
 	}
 	return out, rows.Err()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -117,7 +118,7 @@ func (p *Platform) CreateRelease(ctx context.Context, user domain.User, componen
 	}
 	release.CreatedAt = time.Now().UTC()
 	rewriteReleaseChildren(&release)
-	if err := validateRelease(release); err != nil {
+	if err := p.validateReleaseContract(ctx, release, false); err != nil {
 		return release, err
 	}
 	if err := p.store.CreateComponentRelease(ctx, release); err != nil {
@@ -175,7 +176,7 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		patch.RiskLevel = release.RiskLevel
 	}
 	rewriteReleaseChildren(&patch)
-	if err := validateRelease(patch); err != nil {
+	if err := p.validateReleaseContract(ctx, patch, false); err != nil {
 		return release, err
 	}
 	if err := p.store.UpdateDraftRelease(ctx, patch); err != nil {
@@ -206,7 +207,7 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	source.CreatedAt = time.Now().UTC()
 	source.ReleasedAt, source.DeprecatedAt = nil, nil
 	rewriteReleaseChildren(&source)
-	if err := validateRelease(source); err != nil {
+	if err := p.validateReleaseContract(ctx, source, false); err != nil {
 		return source, err
 	}
 	if err := p.store.CreateComponentRelease(ctx, source); err != nil {
@@ -332,8 +333,70 @@ func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id st
 	return release, nil
 }
 
-func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain.ComponentRelease) error {
+func (p *Platform) validateReleaseContract(ctx context.Context, release domain.ComponentRelease, publishing bool) error {
 	if err := validateRelease(release); err != nil {
+		return err
+	}
+	if err := p.validateReleaseMappings(ctx, release); err != nil {
+		return err
+	}
+	if publishing {
+		return p.validateUpgradeRollbackMappingContracts(ctx, release)
+	}
+	return nil
+}
+
+func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
+	for _, dependency := range release.Dependencies {
+		if len(dependency.ParameterMappings) == 0 {
+			continue
+		}
+		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
+		if err != nil {
+			return fmt.Errorf("%w: locked upstream release %s does not exist", domain.ErrInvalid, dependency.UpstreamReleaseID)
+		}
+		for _, mapping := range dependency.ParameterMappings {
+			upstreamParameter, ok := domain.ParameterByName(upstream.Parameters, mapping.UpstreamParameter)
+			if !ok || upstreamParameter.Visibility != domain.ParameterPublic {
+				return fmt.Errorf("%w: mapping source %q must be a public parameter of %s", domain.ErrInvalid, mapping.UpstreamParameter, dependency.UpstreamReleaseID)
+			}
+			target, _ := domain.ParameterByName(release.Parameters, mapping.TargetParameter)
+			if upstreamParameter.Type != target.Type {
+				return fmt.Errorf("%w: mapped parameter %q type %s does not match upstream %s", domain.ErrInvalid, mapping.TargetParameter, target.Type, upstreamParameter.Type)
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Platform) validateUpgradeRollbackMappingContracts(ctx context.Context, release domain.ComponentRelease) error {
+	for _, action := range release.Actions {
+		var peer domain.ComponentRelease
+		var err error
+		switch action.Kind {
+		case domain.ActionUpgrade:
+			peer, err = p.store.GetComponentRelease(ctx, action.FromReleaseID)
+		case domain.ActionRollback:
+			peer, err = p.store.GetComponentRelease(ctx, action.ToReleaseID)
+		default:
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !mappingContractsEqual(release.Dependencies, peer.Dependencies) {
+			return fmt.Errorf("%w: %s action requires an identical parameter mapping contract", domain.ErrInvalid, action.Kind)
+		}
+	}
+	return nil
+}
+
+func mappingContractsEqual(left, right []domain.ComponentDependency) bool {
+	return strings.Join(domain.MappingContract(left), "\n") == strings.Join(domain.MappingContract(right), "\n")
+}
+
+func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain.ComponentRelease) error {
+	if err := p.validateReleaseContract(ctx, release, true); err != nil {
 		return err
 	}
 	for _, action := range release.Actions {

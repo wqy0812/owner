@@ -153,7 +153,7 @@ type ComponentRelease struct {
 	Verified               bool                  `json:"verified"`
 	RiskLevel              RiskLevel             `json:"riskLevel"`
 	EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
-	ParameterSchema        map[string]any        `json:"parameterSchema"`
+	Parameters             []ParameterDefinition `json:"parameters"`
 	Dependencies           []ComponentDependency `json:"dependencies"`
 	Actions                []ActionDefinition    `json:"actions"`
 	CreatedAt              time.Time             `json:"createdAt"`
@@ -161,13 +161,95 @@ type ComponentRelease struct {
 	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
 }
 
+type ParameterVisibility string
+
+const (
+	ParameterInternal ParameterVisibility = "internal"
+	ParameterPublic   ParameterVisibility = "public"
+)
+
+type ParameterType string
+
+const (
+	ParameterTypeString  ParameterType = "string"
+	ParameterTypeBoolean ParameterType = "boolean"
+	ParameterTypeInteger ParameterType = "integer"
+	ParameterTypeNumber  ParameterType = "number"
+	ParameterTypeObject  ParameterType = "object"
+	ParameterTypeArray   ParameterType = "array"
+)
+
+type ParameterDefinition struct {
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Type            ParameterType       `json:"type"`
+	Required        bool                `json:"required"`
+	DefaultValue    any                 `json:"defaultValue,omitempty"`
+	Visibility      ParameterVisibility `json:"visibility"`
+	EnvironmentPath string              `json:"environmentPath,omitempty"`
+	Enum            []any               `json:"enum,omitempty"`
+	MinLength       int                 `json:"minLength,omitempty"`
+}
+
+func (p ParameterDefinition) HasDefault() bool { return p.DefaultValue != nil }
+
+func (p ParameterType) Valid() bool {
+	switch p {
+	case ParameterTypeString, ParameterTypeBoolean, ParameterTypeInteger, ParameterTypeNumber, ParameterTypeObject, ParameterTypeArray:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p ParameterVisibility) Valid() bool {
+	return p == ParameterInternal || p == ParameterPublic
+}
+
+func ParameterByName(parameters []ParameterDefinition, name string) (ParameterDefinition, bool) {
+	for _, parameter := range parameters {
+		if parameter.Name == name {
+			return parameter, true
+		}
+	}
+	return ParameterDefinition{}, false
+}
+
+func MappedTargets(dependencies []ComponentDependency) map[string]ParameterMapping {
+	targets := make(map[string]ParameterMapping)
+	for _, dependency := range dependencies {
+		for _, mapping := range dependency.ParameterMappings {
+			targets[mapping.TargetParameter] = mapping
+		}
+	}
+	return targets
+}
+
+func MappingContract(dependencies []ComponentDependency) []string {
+	keys := make([]string, 0)
+	for _, dependency := range dependencies {
+		for _, mapping := range dependency.ParameterMappings {
+			keys = append(keys, dependency.UpstreamComponentID+"\x00"+mapping.UpstreamParameter+"\x00"+mapping.TargetParameter)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+type ParameterMapping struct {
+	UpstreamParameter string `json:"upstreamParameter"`
+	TargetParameter   string `json:"targetParameter"`
+}
+
 type ComponentDependency struct {
-	ID                    string `json:"id"`
-	ReleaseID             string `json:"releaseId"`
-	UpstreamComponentID   string `json:"upstreamComponentId"`
-	UpstreamReleaseID     string `json:"upstreamReleaseId"`
-	UpstreamComponentName string `json:"upstreamComponentName,omitempty"`
-	Purpose               string `json:"purpose"`
+	ID                    string             `json:"id"`
+	ReleaseID             string             `json:"releaseId"`
+	UpstreamComponentID   string             `json:"upstreamComponentId"`
+	UpstreamReleaseID     string             `json:"upstreamReleaseId"`
+	UpstreamComponentName string             `json:"upstreamComponentName,omitempty"`
+	UpstreamVersion       string             `json:"upstreamVersion,omitempty"`
+	Purpose               string             `json:"purpose"`
+	ParameterMappings     []ParameterMapping `json:"parameterMappings"`
 }
 
 type ActionKind string
@@ -255,16 +337,17 @@ type ScenarioGraph struct {
 }
 
 type ScenarioNode struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	ReleaseID   string            `json:"releaseId"`
-	Action      ActionKind        `json:"action"`
-	HostGroup   string            `json:"hostGroup"`
-	Values      map[string]any    `json:"values"`
-	Bindings    map[string]string `json:"bindings"`
-	RunInputs   []string          `json:"runInputs"`
-	Position    GraphPosition     `json:"position"`
-	Destructive bool              `json:"destructive,omitempty"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	ReleaseID         string            `json:"releaseId"`
+	Action            ActionKind        `json:"action"`
+	HostGroup         string            `json:"hostGroup"`
+	Values            map[string]any    `json:"values"`
+	Bindings          map[string]string `json:"bindings"`
+	RunInputs         []string          `json:"runInputs"`
+	DependencySources map[string]string `json:"dependencySources,omitempty"`
+	Position          GraphPosition     `json:"position"`
+	Destructive       bool              `json:"destructive,omitempty"`
 }
 
 type GraphPosition struct {

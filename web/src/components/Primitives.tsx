@@ -81,10 +81,10 @@ export function EmptyState({ title, description, action }: { title: string; desc
   );
 }
 
-export function Modal({ title, description, children, onClose }: { title: string; description?: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, description, children, onClose, size = 'default' }: { title: string; description?: string; children: ReactNode; onClose: () => void; size?: 'default' | 'wide' }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
-      <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
+      <section className={`modal${size === 'wide' ? ' modal--wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <header>
           <div>
             <h2>{title}</h2>

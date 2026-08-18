@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS component_releases (
   verified INTEGER NOT NULL DEFAULT 0,
   risk_level TEXT NOT NULL DEFAULT 'low',
   environment_constraints_json TEXT NOT NULL DEFAULT '{}',
-  parameter_schema_json TEXT NOT NULL DEFAULT '{}',
+  parameters_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   released_at TEXT,
   deprecated_at TEXT,
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS component_dependencies (
   upstream_component_id TEXT NOT NULL REFERENCES components(id),
   upstream_release_id TEXT NOT NULL REFERENCES component_releases(id),
   purpose TEXT NOT NULL DEFAULT '',
+  parameter_mappings_json TEXT NOT NULL DEFAULT '[]',
   UNIQUE(release_id, upstream_component_id)
 );
 

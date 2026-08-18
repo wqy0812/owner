@@ -1,6 +1,6 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowUpRight, Beaker, Boxes, GitBranch, PencilLine, Plus, Rocket, Shield, UserRound } from 'lucide-react';
+import { AlertTriangle, Beaker, Boxes, GitBranch, PencilLine, Plus, Rocket, Shield, UserRound } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
@@ -13,7 +13,8 @@ import {
   COMPONENT_REQUIREDNESS_LABELS,
   componentLayer,
 } from '../types/componentClassification';
-import type { Component, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, Environment, ImpactPreview } from '../types/domain';
+import { ComponentMappingOverview, defaultContractRelease, defaultFixtureValues, DependencyContractList, DependencyEditor, mappedParameterNames, mappingCount, ParameterContractList, ParameterTable, parameterContractErrors } from '../components/ParameterEditors';
+import type { Component, ComponentDependency, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, Environment, ImpactPreview, ParameterDefinition } from '../types/domain';
 
 export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
@@ -27,6 +28,8 @@ export function ComponentsPage() {
   const [editRelease, setEditRelease] = useState<ComponentRelease>();
   const [impact, setImpact] = useState<ImpactPreview>();
   const [testRelease, setTestRelease] = useState<ComponentRelease>();
+  const [inspectRelease, setInspectRelease] = useState<ComponentRelease>();
+  const [contractReleaseId, setContractReleaseId] = useState<string>();
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(
@@ -34,6 +37,9 @@ export function ComponentsPage() {
     [components, selectedId],
   );
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
+  const contractRelease = releases.find((release) => release.id === contractReleaseId) ?? defaultContractRelease(releases, selected?.latestRelease);
+  const editableDraft = releases.find((release) => release.state === 'draft');
+  useEffect(() => { setContractReleaseId(undefined); }, [selected?.id]);
   const mine = selected?.ownerId === user.id && user.role === 'component_owner';
   const canTest = mine || user.role === 'environment_owner';
   const layeredComponents = COMPONENT_LAYERS.map((layer) => ({
@@ -109,21 +115,22 @@ export function ComponentsPage() {
                 <span><GitBranch size={15} /> {selected.releaseCount ?? releases.length} 个版本</span>
                 {selected.latestRelease && <StatusPill status={selected.latestRelease.state} />}
               </div>
-              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => setVersionBase(selected)}><Plus size={16} /> 创建新版本</button></div>}
+              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => editableDraft ? setEditRelease(editableDraft) : setVersionBase(selected)}><PencilLine size={16} /> {editableDraft ? '编辑参数可见性' : '创建版本并设置可见性'}</button></div>}
             </article>
 
             <article className="panel">
               <header className="panel__header"><div><span className="panel__icon"><Rocket size={18} /></span><div><h2>发布历史</h2><p>Released 版本不可修改，更新将产生新 Draft</p></div></div></header>
               {releases.length ? <div className="release-table">
                 <div className="release-table__head"><span>版本</span><span>验证</span><span>依赖 / 动作</span><span>发布时间</span><span /></div>
-                {releases.map((release) => <div key={release.id} className="release-row">
+                {releases.map((release) => <div key={release.id} className={`release-row${contractRelease?.id === release.id ? ' release-row--active' : ''}`}>
                   <div><strong>{release.version}</strong>{release.breaking && <span className="breaking-badge">BREAKING</span>}<small>{release.releaseNotes ?? '未填写发布说明'}</small></div>
                   <div><StatusPill status={release.verification ?? (release.verified ? 'passed' : 'unverified')} /></div>
-                  <div className="release-facts"><span>{release.dependencies?.length ?? 0} 项依赖</span><span>{release.actions?.length ?? 0} 个动作</span><span>{releaseCredentialCount(release)} 项必需凭据</span></div>
+                  <div className="release-facts"><span>{release.dependencies?.length ?? 0} 项依赖</span><span>{mappingCount(release)} 个参数映射</span><span>{publicCount(release)} 个公开参数</span></div>
                   <div>{formatTime(release.releasedAt ?? release.createdAt)}</div>
                   <div className="row-actions">
                     {canTest && <button className="icon-text" onClick={() => setTestRelease(release)}><Beaker size={15} /> 测试</button>}
-                    {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setEditRelease(release)}><PencilLine size={15} /> 配置</button>}
+                    <button className="icon-text" onClick={() => { setContractReleaseId(release.id); setInspectRelease(release); }}>查看合同</button>
+                    {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setEditRelease(release)}><PencilLine size={15} /> 配置参数</button>}
                     {mine && release.state === 'draft' && <button className="icon-text icon-text--primary" onClick={() => void previewPublish(release)}><Rocket size={15} /> 发布</button>}
                     {mine && release.state === 'released' && <button className="icon-text" onClick={() => void deprecate(release)}>废弃</button>}
                   </div>
@@ -131,14 +138,20 @@ export function ComponentsPage() {
               </div> : <EmptyState title="尚无发布版本" description="创建 Draft 并配置安装、验证和升级动作。" />}
             </article>
 
+            <ComponentMappingOverview releases={releases} components={components ?? []} />
             <div className="two-column">
               <article className="panel">
-                <header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>锁定精确 Release ID</p></div></div></header>
-                {(selected.latestRelease?.dependencies ?? []).length ? <div className="dependency-list">{selected.latestRelease!.dependencies!.map((dep) => <div key={`${dep.componentId}-${dep.releaseId}`}><span className="dependency-dot" /><div><strong>{dep.componentName ?? dep.componentId}</strong><small>{dep.version ?? dep.releaseId} · {dep.purpose ?? 'runtime dependency'}</small></div><ArrowUpRight size={15} /></div>)}</div> : <EmptyState title="没有直接依赖" />}
+                <header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
+                  {releases.length > 1 ? <label className="release-switcher"><span>查看版本</span><select aria-label="查看版本合同" value={contractRelease?.id ?? ''} onChange={(event) => setContractReleaseId(event.target.value)}>{releases.map((release) => <option key={release.id} value={release.id}>{release.version} · {mappingCount(release)} 个映射</option>)}</select></label> : null}
+                </header>
+                {!contractReleaseId && selected.latestRelease && contractRelease && selected.latestRelease.id !== contractRelease.id ? <p className="mapping-empty contract-hint">当前展示 {contractRelease.version}，因为它有参数映射。最新版本 {selected.latestRelease.version} 没有映射。</p> : null}
+                <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
               </article>
               <article className="panel">
-                <header className="panel__header"><div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>环境约束</h2><p>执行前由 Planner 校验</p></div></div></header>
-                <pre className="json-preview">{JSON.stringify(selected.latestRelease?.environmentConstraints ?? { arch: ['amd64'], network: ['ipv4'] }, null, 2)}</pre>
+                <header className="panel__header"><div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>公开参数可被下游引用；内部参数只给本组件使用</p></div></div>
+                  {mine && editableDraft ? <button className="button button--secondary" onClick={() => setEditRelease(editableDraft)}><PencilLine size={15} /> 编辑可见性</button> : mine ? <button className="button button--quiet" onClick={() => setVersionBase(selected)}>创建新版本以修改</button> : null}
+                </header>
+                <ParameterContractList release={contractRelease} components={components ?? []} />
               </article>
             </div>
           </section> : <section className="panel"><EmptyState title="请选择组件" /></section>}
@@ -148,7 +161,8 @@ export function ComponentsPage() {
 
       {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('components'); }} />}
       {editComponent && <EditComponentModal component={editComponent} onClose={() => setEditComponent(undefined)} onDone={() => { setEditComponent(undefined); signalRefresh('components'); }} />}
-      {versionBase && <NewVersionModal component={versionBase} onClose={() => setVersionBase(undefined)} onDone={() => { setVersionBase(undefined); signalRefresh('components'); }} />}
+      {versionBase && <NewVersionModal component={versionBase} baseRelease={contractRelease ?? versionBase.latestRelease} onClose={() => setVersionBase(undefined)} onDone={(release) => { setVersionBase(undefined); signalRefresh('components'); if (release) { setContractReleaseId(release.id); setEditRelease(release); } }} />}
+      {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setEditRelease(inspectRelease); setInspectRelease(undefined); } : undefined} />}
       {editRelease && <EditReleaseModal release={editRelease} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }} />}
       {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(['components', 'runs']); }} />}
       {publishRelease && <Modal title={`发布 ${publishRelease.version}`} description="发布后版本不可修改；影响通知将发送给下游组件和场景 Owner。" onClose={() => setPublishRelease(undefined)}>
@@ -173,7 +187,7 @@ function EditComponentModal({ component, onClose, onDone }: { component: Compone
       notify('success', '组件信息已更新'); onDone();
     } catch (reason) { notify('error', '更新组件失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={`编辑 ${component.name}`} description="分类用于展示和编排提示，不改变 Release 依赖或 DAG 顺序。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9-]+" /></label><ClassificationFields component={component} /><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
+  return <Modal title={`编辑 ${component.name}`} description="名称和分类在这里改。参数公开/内部、以及依赖哪个上游参数，属于 Release 合同。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9-]+" /></label><ClassificationFields component={component} /><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
 }
 
 function CreateComponentModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -212,30 +226,49 @@ function ClassificationFields({ component }: { component?: Component }) {
   </>;
 }
 
-function NewVersionModal({ component, onClose, onDone }: { component: Component; onClose: () => void; onDone: () => void }) {
+function NewVersionModal({ component, baseRelease, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
   const { notify } = useApp(); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget); const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on' }; try { if (component.latestRelease) await api.cloneRelease(component.latestRelease.id, input); else await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' }); notify('success', 'Draft 已创建', component.latestRelease ? '依赖、类型和动作已从上一版本复制。' : '请继续配置依赖和 Ansible 动作。'); onDone(); } catch (reason) { notify('error', '创建版本失败', displayError(reason)); } finally { setBusy(false); } }
-  return <Modal title={`更新 ${component.name}`} description={component.latestRelease ? '从当前版本克隆为新 Draft，Released 版本保持不变。' : '创建组件的首个 Draft Release。'} onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={component.latestRelease?.type ?? (component.kind === 'software_bundle' ? 'bundle' : 'atomic')} disabled={Boolean(component.latestRelease)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer></form></Modal>;
+  const source = baseRelease ?? component.latestRelease;
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget); const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on' }; try { const release = source ? await api.cloneRelease(source.id, input) : await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' }); notify('success', 'Draft 已创建', '接下来为每个参数选择内部或公开，并映射上游公开参数。'); onDone(release); } catch (reason) { notify('error', '创建版本失败', displayError(reason)); } finally { setBusy(false); } }
+  return <Modal title={`更新 ${component.name}`} description={source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。'} onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={source?.type ?? (component.kind === 'software_bundle' ? 'bundle' : 'atomic')} disabled={Boolean(source)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer></form></Modal>;
 }
 
 function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {
-  const { notify } = useApp(); const { data: environments } = useApiData((signal) => api.environments(signal), [], 'environments'); const [environmentId, setEnvironmentId] = useState(''); const [busy, setBusy] = useState(false);
+  const { notify } = useApp(); const { data: environments } = useApiData((signal) => api.environments(signal), [], 'environments');
+  const { data: components } = useApiData((signal) => api.components(signal), [], 'components');
+  const [environmentId, setEnvironmentId] = useState(''); const [busy, setBusy] = useState(false);
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
+  const mapped = [...mappedParameterNames(release)];
+  const [fixtureValues, setFixtureValues] = useState<Record<string, string>>({});
+  useEffect(() => { setFixtureValues(defaultFixtureValues(release, components)); }, [components, release]);
   const primary = release.actions?.find((action) => action.type === 'upgrade') ?? release.actions?.find((action) => action.type === 'install');
   const declaredRunInputs = uniqueRunInputs(primary?.allowedParameters ?? []);
-  async function run() { if (!environmentId) return; setBusy(true); try { await api.testRelease(release.id, environmentId, parseRunInput(declaredRunInputs, runInputValues)); notify('success', '组件测试已提交', '可以在运行中心查看 Ansible 日志。'); onDone(); } catch (reason) { notify('error', '提交测试失败', displayError(reason)); } finally { setBusy(false); } }
-  return <Modal title={`测试 ${release.version}`} description="选择共享环境执行组件生命周期验证。" onClose={onClose}><div className="modal-body"><label><span>测试环境</span><select value={environmentId} onChange={(event) => setEnvironmentId(event.target.value)}><option value="">请选择环境</option>{environments?.map((env: Environment) => <option key={env.id} value={env.id}>{env.name} · {env.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={!environmentId || busy} onClick={() => void run()}><Beaker size={16} /> {busy ? '提交中…' : '开始测试'}</button></footer></Modal>;
+  async function run() {
+    if (!environmentId) return; setBusy(true);
+    try {
+      const fixtures = Object.fromEntries(mapped.map((name) => {
+        const raw = fixtureValues[name] ?? '';
+        try { return [name, JSON.parse(raw)]; } catch { return [name, raw]; }
+      }));
+      await api.testRelease(release.id, environmentId, parseRunInput(declaredRunInputs, runInputValues), fixtures);
+      notify('success', '组件测试已提交', mapped.length ? 'Fixture 只证明组件能消费参数，不能替代场景完整测试。' : '可以在运行中心查看 Ansible 日志。'); onDone();
+    } catch (reason) { notify('error', '提交测试失败', displayError(reason)); } finally { setBusy(false); }
+  }
+  return <Modal title={`测试 ${release.version}`} description="选择共享环境执行组件生命周期验证。" onClose={onClose}><div className="modal-body"><label><span>测试环境</span><select value={environmentId} onChange={(event) => setEnvironmentId(event.target.value)}><option value="">请选择环境</option>{environments?.map((env: Environment) => <option key={env.id} value={env.id}>{env.name} · {env.status ?? 'ready'}</option>)}</select></label>{mapped.length ? <div className="fixture-fields">{mapped.map((name) => <label key={name}><span>依赖 Fixture · {name}</span><input value={fixtureValues[name] ?? ''} onChange={(event) => setFixtureValues((current) => ({ ...current, [name]: event.target.value }))} /></label>)}</div> : null}<RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={!environmentId || busy} onClick={() => void run()}><Beaker size={16} /> {busy ? '提交中…' : '开始测试'}</button></footer></Modal>;
 }
 
 function EditReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {
   const { notify } = useApp();
+  const { data: components } = useApiData((signal) => api.components(signal), [], 'components');
   const [busy, setBusy] = useState(false);
   const [constraints, setConstraints] = useState(JSON.stringify(release.environmentConstraints ?? {}, null, 2));
-  const [schema, setSchema] = useState(JSON.stringify(release.parameterSchema ?? {}, null, 2));
-  const [dependencies, setDependencies] = useState(JSON.stringify(release.dependencies ?? [], null, 2));
+  const [parameters, setParameters] = useState<ParameterDefinition[]>(release.parameters ?? []);
+  const [dependencies, setDependencies] = useState<ComponentDependency[]>(release.dependencies ?? []);
   const [actions, setActions] = useState(JSON.stringify(release.actions ?? [], null, 2));
+  const contractErrors = parameterContractErrors(parameters, dependencies, components?.flatMap((item) => item.releases ?? []) ?? []);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget);
+    if (contractErrors.length) { notify('error', '参数合同无效', contractErrors.join('；')); setBusy(false); return; }
     try {
       await api.updateRelease(release.id, {
         ...release,
@@ -244,19 +277,35 @@ function EditReleaseModal({ release, onClose, onDone }: { release: ComponentRele
         releaseNotes: String(form.get('notes')),
         breaking: form.get('breaking') === 'on',
         environmentConstraints: JSON.parse(constraints),
-        parameterSchema: JSON.parse(schema),
-        dependencies: JSON.parse(dependencies),
+        parameters,
+        dependencies,
         actions: JSON.parse(actions),
       });
-      notify('success', 'Draft 配置已保存', '依赖、Schema 和 Ansible 动作已更新。'); onDone();
-    } catch (reason) { notify('error', '保存 Draft 失败', reason instanceof SyntaxError ? '约束、Schema 和动作必须是有效 JSON。' : displayError(reason)); }
+      notify('success', 'Draft 配置已保存', '参数合同、依赖映射和 Ansible 动作已更新。'); onDone();
+    } catch (reason) { notify('error', '保存 Draft 失败', reason instanceof SyntaxError ? '约束和动作必须是有效 JSON。' : displayError(reason)); }
     finally { setBusy(false); }
   }
-  return <Modal title={`配置 Draft ${release.version}`} description="配置类型、依赖、参数 Schema、环境约束及 Ansible 生命周期动作。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={release.type ?? 'atomic'}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><label><span>环境约束 JSON</span><textarea className="code-editor code-editor--small" value={constraints} onChange={(event) => setConstraints(event.target.value)} /></label><label><span>参数 Schema JSON</span><textarea className="code-editor code-editor--small" value={schema} onChange={(event) => setSchema(event.target.value)} /></label><label className="span-2"><span>精确依赖 JSON（componentId、releaseId、purpose）</span><textarea className="code-editor code-editor--small" value={dependencies} onChange={(event) => setDependencies(event.target.value)} /></label><label className="span-2"><span>Ansible 动作 JSON（kind/type、playbook、hostGroup、timeoutSeconds、requiredCredentials）</span><textarea className="code-editor code-editor--small" value={actions} onChange={(event) => setActions(event.target.value)} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
+  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="为每个参数选择内部或公开；依赖映射只能选择上游已发布版本的公开参数。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={release.type ?? 'atomic'}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><label className="span-2"><span>环境约束 JSON</span><textarea className="code-editor code-editor--small" value={constraints} onChange={(event) => setConstraints(event.target.value)} /></label><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}<label className="span-2"><span>Ansible 动作 JSON（kind/type、playbook、hostGroup、timeoutSeconds、requiredCredentials）</span><textarea className="code-editor code-editor--small" value={actions} onChange={(event) => setActions(event.target.value)} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
 }
 
-function releaseCredentialCount(release: ComponentRelease) {
-  return new Set((release.actions ?? []).flatMap((action) => action.requiredCredentials ?? [])).size;
+function InspectReleaseModal({ release, components, onClose, onEdit }: { release: ComponentRelease; components: Component[]; onClose: () => void; onEdit?: () => void }) {
+  return <Modal size="wide" title={`${release.version} 参数合同`} description="查看每个参数的可见性，以及本组件引用了哪个上游组件的哪个公开参数。" onClose={onClose}>
+    <div className="modal-body inspect-contract">
+      <ParameterContractList release={release} components={components} />
+      <section className="contract-section">
+        <h3>依赖映射</h3>
+        <DependencyContractList dependencies={release.dependencies ?? []} components={components} />
+      </section>
+    </div>
+    <footer className="modal-actions">
+      <button type="button" className="button button--quiet" onClick={onClose}>关闭</button>
+      {onEdit && <button type="button" className="button button--primary" onClick={onEdit}><PencilLine size={15} /> 编辑可见性与映射</button>}
+    </footer>
+  </Modal>;
+}
+
+function publicCount(release: ComponentRelease) {
+  return (release.parameters ?? []).filter((item) => item.visibility === 'public').length;
 }
 
 function SaveIcon() { return <PencilLine size={15} />; }

@@ -128,8 +128,9 @@ erDiagram
 
 - 类型：`atomic` 或 `bundle`。
 - 状态：`draft -> released -> deprecated`。
-- 属性：发布说明、Breaking 标记、验证标记、风险等级、环境约束和参数 Schema。
-- 依赖：锁定上游 `componentId + releaseId`。
+- 属性：发布说明、Breaking 标记、验证标记、风险等级、环境约束和结构化参数合同。
+- 参数：每个参数必须声明 `name`、`description`、`type` 和 `visibility`（`internal` 或 `public`）。敏感值继续使用 CredentialRef，不能作为普通参数或公开参数。
+- 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
 
 Released Release 不可修改；更新时从已有版本克隆新 Draft。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
@@ -148,7 +149,7 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 `Scenario` 是稳定标识；`ScenarioRevision` 保存 DAG 和执行策略：
 
 - 状态：`draft -> testing -> test_passed -> released -> deprecated`。
-- DAG 节点锁定一个组件 Release、一个动作、目标主机组、节点参数、环境参数绑定和允许的运行输入。
+- DAG 节点锁定一个组件 Release、一个动作、目标主机组、节点参数、环境参数绑定、允许的运行输入，以及多来源时的 `dependencySources`。
 - DAG 边表达执行先后关系。
 
 场景面板按组件层级分组并在节点上显示层级标签，但 `ScenarioNode` 不锁定分类元数据。分层不参与调度，不自动生成边；真实执行顺序只由 Release 依赖和 DAG 边决定。
@@ -161,8 +162,10 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 - 边的源和目标必须存在，图中不能有环。
 - 节点只能使用已发布 Release；已发布场景可继续引用已废弃但保留的 Release。
 - 节点动作必须由对应 Release 定义。
-- Release 所需参数必须有默认值、节点值、环境绑定或声明的运行输入。
+- Release 所需参数必须有默认值、节点值、环境绑定、声明的运行输入，或来自上游映射。
 - 上游依赖 Release 必须出现在图中，而且在拓扑上先于下游节点。
+- 带参数映射的依赖：只有一个可达上游节点时自动绑定；多个可达节点时必须在 `dependencySources` 中明确选择。
+- 映射目标不得同时出现在节点值、环境绑定或 Run Input 中。
 
 环境绑定先查找完整顶层键，再把 `operation.cluster_id` 视为点路径逐层读取；
 因此旧的扁平键继续有效，新的环境模板可以保存分组参数。`verify` 节点观察的
@@ -208,7 +211,7 @@ stateDiagram-v2
     running --> interrupted: 服务重启恢复
 ```
 
-每个场景节点先执行节点动作；若动作不是 `verify` 且 Release 定义了 `verify`，Planner 会追加验证步骤。Rollback 后的验证使用目标旧 Release 的验证动作和参数 Schema。
+每个场景节点先执行节点动作；若动作不是 `verify` 且 Release 定义了 `verify`，Planner 会追加验证步骤。Rollback 后的验证使用目标旧 Release 的验证动作和参数合同。
 
 ## 5. 数据模型
 
@@ -233,7 +236,7 @@ SQLite 主要表如下：
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
 | `audit_events` | 审计记录 | 数据库触发器禁止更新和删除 |
 
-时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括 Schema、约束、DAG、Inventory、参数、CredentialRefs 和运行快照。
+时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 为首版合同，不保留旧 `parameterSchema`。
 
 ## 6. 权限和可见性
 
@@ -279,14 +282,20 @@ SQLite 主要表如下：
 
 ### 7.2 参数解析
 
-参数合并优先级从低到高为：
+节点先按自身合同解析，再应用依赖映射。自身优先级从低到高为：
 
-1. Release 参数 Schema 中的默认值。
-2. 场景节点 `values`，其中环境绑定先解析到节点值。
-3. Environment Revision 的 Parameters。
+1. Release 参数默认值。
+2. 场景节点 `values` 与环境绑定。
+3. Environment Revision 的同名 Parameters，以及尚未被节点值/绑定占用的 `environmentPath`。
 4. 本次 Run Input。
 
-Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验必填项、基本 JSON Schema 类型和 enum。当前实现不会执行完整 JSON Schema 规范，只校验平台实现的子集。
+随后按 DAG 拓扑把上游节点**本次运行的最终值**写入映射目标。映射值不可被本地覆盖；同名环境参数对映射目标不生效。支持 A → B → C 连续传递。传给 Ansible 的 extra-vars 只用下游参数名。
+
+组件独立测试不能读取上游节点，必须通过 `dependencyFixtures` 提供映射目标；API 不会用上游默认值静默补全。Fixture 只证明组件能消费参数，不能替代场景完整测试。
+
+首版只传递运行前可解析的配置值，不支持 Playbook 执行后动态输出，也不读取历史 Run。
+
+Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验必填、类型、enum 和 minLength。Upgrade/Rollback 发布时要求起止 Release 的映射合同一致。
 
 ### 7.3 Run 规划与不可变快照
 
@@ -374,7 +383,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 输入覆盖。环境使用 `operation`、`network`、`versions`、`artifact_sources`、
 `certificates`、`addon_params` 分组，再由点路径 Bindings 映射到 Ansible 实际
 变量名。callback URL/token、task ID 和旧 wrapper 的
-`management_cluster_id` 不属于 Release Schema。
+`management_cluster_id` 不属于 Release 参数合同。
 
 ### 8.5 日志
 

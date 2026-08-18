@@ -69,7 +69,7 @@ make build
 
 以下位置只能填写非敏感数据：
 
-- 组件参数 Schema 和环境约束。
+- 组件参数合同和环境约束。
 - 场景节点参数、参数绑定、运行时输入。
 - 环境 Facts 和 Parameters。
 
@@ -123,8 +123,8 @@ make build
 - 版本和 Release 类型。
 - 发布说明和 Breaking 标记。
 - 环境约束 JSON。
-- 参数 Schema JSON。
-- 精确依赖 JSON。
+- 结构化参数表：名称、说明、类型、必填、默认值、可见性、环境路径和约束。可见性必须显式选择 `internal` 或 `public`。
+- 依赖下拉框：只能选择已发布上游 Release，并映射其公开参数。
 - Ansible 动作 JSON。
 
 示例环境约束：
@@ -137,36 +137,7 @@ make build
 }
 ```
 
-示例参数 Schema：
-
-```json
-{
-  "type": "object",
-  "required": ["install_root"],
-  "properties": {
-    "install_root": {
-      "type": "string",
-      "default": "/opt/example"
-    },
-    "mode": {
-      "type": "string",
-      "enum": ["standard", "ha"]
-    }
-  }
-}
-```
-
-示例精确依赖：
-
-```json
-[
-  {
-    "componentId": "component-containerd",
-    "releaseId": "release-containerd-2.1.1",
-    "purpose": "container runtime"
-  }
-]
-```
+示例公开参数：`kubeInstallRoot`，类型 string，可见性 public，默认值 `/approot1/paas/kube`。下游 kube-proxy 通过映射导入为 `kubeRoot`。首版不支持 Playbook 执行后动态产生的参数输出。
 
 示例动作：
 
@@ -200,7 +171,8 @@ make build
 
 - Playbook 必须是允许 Ansible 根目录下的相对路径，不能包含 `..`。
 - 依赖必须锁定已发布的上游 Release。
-- Upgrade 和 Rollback 还必须配置正确的 `fromReleaseId` 和 `toReleaseId`。
+- 参数映射只能选择上游公开参数，且类型必须一致。
+- Upgrade 和 Rollback 还必须配置正确的 `fromReleaseId` 和 `toReleaseId`，且映射合同必须与对端 Release 一致。
 - 保存 Draft 会使之前的组件测试证据失效，需要重新测试。
 
 ### 3.5 发起组件测试
@@ -208,10 +180,11 @@ make build
 1. 在发布历史中单击目标 Release 的“测试”。
 2. 选择共享环境。
 3. 填写动作声明允许的运行参数。
-4. 单击“开始测试”。
-5. 进入“运行”查看状态、步骤和日志。
+4. 如果该 Release 声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
+5. 单击“开始测试”。
+6. 进入“运行”查看状态、步骤、解析参数来源和日志。
 
-平台优先测试 Upgrade；没有 Upgrade 时测试 Install。如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。
+平台优先测试 Upgrade；没有 Upgrade 时测试 Install。如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
 
 环境 Owner 也可以发起任意可见组件的测试，用于基础设施侧验证。
 
@@ -270,7 +243,8 @@ make build
    - 显示名称。
    - 生命周期动作。
    - 主机组。
-   - 节点参数 JSON。
+   - 依赖参数来源：唯一上游自动绑定，多个可达节点时必须选择。
+   - 节点参数 JSON。已被上游映射的参数不能再填。
    - 环境参数绑定 JSON。
    - 允许的运行时输入。
 4. 根据需要编辑“执行策略 JSON”。
@@ -311,7 +285,9 @@ make build
 | 动作不存在 | 选择该 Release 实际定义的动作 |
 | 缺少依赖节点 | 将锁定的上游 Release 加入画布 |
 | 依赖顺序错误 | 增加从上游到下游的可达路径 |
-| 必填参数未绑定 | 填默认值、节点值、环境绑定或声明运行输入 |
+| 必填参数未绑定 | 填默认值、节点值、环境绑定、声明运行输入，或确认上游映射会导入 |
+| 需要选择依赖来源 | 在重复上游节点中明确选择 sourceNodeId |
+| 映射参数被覆盖 | 删除节点值、绑定或 Run Input 中的映射目标 |
 
 只有当前场景 Owner 可以校验自己的 Draft；后端会再次校验，不依赖画布前端判断。
 
@@ -421,7 +397,7 @@ make build
 2. 填写不敏感 JSON。
 3. 保存新 Revision。
 
-环境参数的优先级高于 Schema 默认值和场景节点值。只有发起时显式允许的 Run Input 能进一步覆盖。
+环境参数的优先级高于参数合同默认值和场景节点值。只有发起时显式允许的 Run Input 能进一步覆盖。
 
 不要填写 `password`、`secret`、`token`、`privateKey`、`encryptionKey`、`credential` 等敏感键；后端会拒绝保存。
 

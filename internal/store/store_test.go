@@ -47,7 +47,7 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 		ID: id, ComponentID: component, Version: version, Type: domain.ReleaseAtomic,
 		Status: status, RiskLevel: domain.RiskLow, CreatedAt: testNow,
 		EnvironmentConstraints: map[string]any{"arch": "amd64"},
-		ParameterSchema:        map[string]any{"type": "object"},
+		Parameters:             []domain.ParameterDefinition{},
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
 			Playbook: "demo/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
@@ -116,6 +116,75 @@ func TestComponentClassificationDatabaseConstraint(t *testing.T) {
 	component.Category = domain.CategoryDNS
 	if err := s.CreateComponent(context.Background(), component); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("invalid layer/category insert=%v, want conflict", err)
+	}
+}
+
+func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if err := s.CreateComponent(ctx, componentFixture("kubelet", "component-alice")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateComponent(ctx, componentFixture("kube-proxy", "component-alice")); err != nil {
+		t.Fatal(err)
+	}
+	minLength := 1
+	_ = minLength
+	upstream := releaseFixture("release-kubelet", "kubelet", "1.17.5", domain.ReleaseReleased)
+	upstream.Parameters = []domain.ParameterDefinition{{
+		Name: "kubeInstallRoot", Description: "kubelet install root", Type: domain.ParameterTypeString,
+		Required: true, DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, MinLength: 1,
+		EnvironmentPath: "kubernetes.installRoot",
+	}}
+	if err := s.CreateComponentRelease(ctx, upstream); err != nil {
+		t.Fatal(err)
+	}
+	downstream := releaseFixture("release-kube-proxy", "kube-proxy", "1.17.5", domain.ReleaseDraft)
+	downstream.Parameters = []domain.ParameterDefinition{{
+		Name: "kubeRoot", Description: "imported kubelet root", Type: domain.ParameterTypeString,
+		Required: true, Visibility: domain.ParameterInternal,
+	}}
+	downstream.Dependencies = []domain.ComponentDependency{{
+		ID: "dependency-kube-proxy-kubelet", ReleaseID: downstream.ID,
+		UpstreamComponentID: "kubelet", UpstreamReleaseID: upstream.ID, Purpose: "reuse install root",
+		ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}},
+	}}
+	if err := s.CreateComponentRelease(ctx, downstream); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetComponentRelease(ctx, downstream.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Parameters) != 1 || got.Parameters[0].Name != "kubeRoot" || got.Parameters[0].Visibility != domain.ParameterInternal {
+		t.Fatalf("parameters=%+v", got.Parameters)
+	}
+	if len(got.Dependencies) != 1 || len(got.Dependencies[0].ParameterMappings) != 1 || got.Dependencies[0].ParameterMappings[0].TargetParameter != "kubeRoot" {
+		t.Fatalf("dependencies=%+v", got.Dependencies)
+	}
+	if got.Dependencies[0].UpstreamComponentName != "kubelet" || got.Dependencies[0].UpstreamVersion != "1.17.5" {
+		t.Fatalf("upstream identity=%+v", got.Dependencies[0])
+	}
+
+	cloned := got
+	cloned.ID = "release-kube-proxy-clone"
+	cloned.Version = "1.17.6"
+	cloned.Status = domain.ReleaseDraft
+	cloned.Dependencies[0].ID = "dependency-clone"
+	cloned.Dependencies[0].ReleaseID = cloned.ID
+	for i := range cloned.Actions {
+		cloned.Actions[i].ID = cloned.ID + "-action-" + string(rune('a'+i))
+		cloned.Actions[i].ReleaseID = cloned.ID
+	}
+	if err := s.CreateComponentRelease(ctx, cloned); err != nil {
+		t.Fatal(err)
+	}
+	copy, err := s.GetComponentRelease(ctx, cloned.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(copy.Parameters, got.Parameters) || !reflect.DeepEqual(copy.Dependencies[0].ParameterMappings, got.Dependencies[0].ParameterMappings) {
+		t.Fatalf("clone parameters=%+v mappings=%+v", copy.Parameters, copy.Dependencies[0].ParameterMappings)
 	}
 }
 

@@ -54,7 +54,7 @@ type lockedPlan struct {
 	TreeDigest string       `json:"treeDigest"`
 }
 
-func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, releaseID, environmentID string, runInput map[string]any) (domain.Run, error) {
+func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, releaseID, environmentID string, runInput, dependencyFixtures map[string]any) (domain.Run, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.Run{}, err
@@ -87,23 +87,29 @@ func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, rel
 	if verify, ok := findAction(release, domain.ActionVerify); ok {
 		actions = append(actions, verify)
 	}
-	defaults := schemaDefaults(release.ParameterSchema)
-	variables, err := ResolveParameters(defaults, nil, schemaEnvironmentValues(release.ParameterSchema, environment.Revision.Parameters), runInput, primary.AllowedParameters)
+	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, environment.Revision.Parameters, runInput, primary.AllowedParameters)
 	if err != nil {
 		return domain.Run{}, err
 	}
-	if err := validateResolvedParameters(release.ParameterSchema, variables); err != nil {
+	if err := applyDependencyFixtures(release, dependencyFixtures, variables, provenance); err != nil {
+		return domain.Run{}, err
+	}
+	if err := validateResolvedParameters(release.Parameters, variables); err != nil {
 		return domain.Run{}, err
 	}
 	steps := make([]lockedStep, 0, len(actions))
+	nodeID := "component-" + component.ID
 	for _, action := range actions {
-		step, stepErr := p.lockAction(component.Name, "component-"+component.ID, release, action, variables)
+		step, stepErr := p.lockAction(component.Name, nodeID, release, action, variables)
 		if stepErr != nil {
 			return domain.Run{}, stepErr
 		}
+		if action.Kind == domain.ActionVerify {
+			step.NodeID = nodeID + "-verify"
+		}
 		steps = append(steps, step)
 	}
-	return p.createRun(ctx, user, environment, domain.RunComponentTest, release.ID, "", primary.Kind, steps)
+	return p.createRun(ctx, user, environment, domain.RunComponentTest, release.ID, "", primary.Kind, steps, map[string]map[string]resolvedParameter{nodeID: provenance})
 }
 
 func primaryActionForComponentTest(release domain.ComponentRelease) (domain.ActionDefinition, bool) {
@@ -172,11 +178,18 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		return domain.Run{}, err
 	}
 	steps := make([]lockedStep, 0, len(ordered))
+	releaseByNode := map[string]domain.ComponentRelease{}
+	resolvedByNode := map[string]map[string]any{}
+	provenanceByNode := map[string]map[string]resolvedParameter{}
 	for _, node := range ordered {
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
 		if releaseErr != nil {
 			return domain.Run{}, releaseErr
 		}
+		releaseByNode[node.ID] = release
+	}
+	for _, node := range ordered {
+		release := releaseByNode[node.ID]
 		if constraintErr := validateEnvironmentConstraints(release.EnvironmentConstraints, environment.Revision.Facts); constraintErr != nil {
 			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, constraintErr)
 		}
@@ -188,10 +201,18 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if actionErr != nil {
 			return domain.Run{}, actionErr
 		}
-		variables, resolveErr := resolveNodeParameters(release, node, environment.Revision.Parameters, runInput)
+		variables, provenance, resolveErr := resolveOwnParameters(release, node, environment.Revision.Parameters, runInputForNode(node, runInput), node.RunInputs)
 		if resolveErr != nil {
 			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, resolveErr)
 		}
+		if mapErr := applyParameterMappings(release, node, revision.Graph, releaseByNode, resolvedByNode, variables, provenance); mapErr != nil {
+			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, mapErr)
+		}
+		if err := validateResolvedParameters(release.Parameters, variables); err != nil {
+			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, err)
+		}
+		resolvedByNode[node.ID] = variables
+		provenanceByNode[node.ID] = provenance
 		if node.HostGroup != "" {
 			action.Limit = node.HostGroup
 		}
@@ -208,9 +229,15 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 					return domain.Run{}, fmt.Errorf("%w: rollback target must be a retained release of the same component", domain.ErrInvalid)
 				}
 				verifyRelease = target
-				verifyVariables, targetErr = resolveNodeParameters(target, node, environment.Revision.Parameters, runInput)
+				verifyVariables, _, targetErr = resolveOwnParameters(target, node, environment.Revision.Parameters, runInputForNode(node, runInput), node.RunInputs)
 				if targetErr != nil {
 					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, targetErr)
+				}
+				if mapErr := applyParameterMappings(target, node, revision.Graph, releaseByNode, resolvedByNode, verifyVariables, map[string]resolvedParameter{}); mapErr != nil {
+					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, mapErr)
+				}
+				if err := validateResolvedParameters(target.Parameters, verifyVariables); err != nil {
+					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, err)
 				}
 			}
 			if verify, ok := findAction(verifyRelease, domain.ActionVerify); ok {
@@ -229,7 +256,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 			return domain.Run{}, err
 		}
 	}
-	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps)
+	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps, provenanceByNode)
 	if err != nil && kind == domain.RunScenarioTest {
 		_ = p.store.SetScenarioRevisionStatus(ctx, revisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 	}
@@ -243,79 +270,6 @@ func findAction(release domain.ComponentRelease, kind domain.ActionKind) (domain
 		}
 	}
 	return domain.ActionDefinition{}, false
-}
-
-func schemaDefaults(schema map[string]any) map[string]any {
-	out := map[string]any{}
-	properties, _ := schema["properties"].(map[string]any)
-	for key, raw := range properties {
-		if definition, ok := raw.(map[string]any); ok {
-			if value, exists := definition["default"]; exists {
-				out[key] = deepCopy(value)
-			}
-		}
-	}
-	return out
-}
-
-func schemaEnvironmentValues(schema, environment map[string]any) map[string]any {
-	out := cloneMap(environment)
-	properties, _ := schema["properties"].(map[string]any)
-	for name, raw := range properties {
-		definition, _ := raw.(map[string]any)
-		path, _ := definition["x-environmentPath"].(string)
-		if path == "" {
-			continue
-		}
-		if value, ok := resolveEnvironmentBinding(environment, path); ok {
-			out[name] = value
-		}
-	}
-	return out
-}
-
-func validateResolvedParameters(schema, resolved map[string]any) error {
-	for _, key := range requiredParameterKeys(schema) {
-		if _, ok := resolved[key]; !ok {
-			return fmt.Errorf("%w: required parameter %q has no resolved value", domain.ErrInvalid, key)
-		}
-	}
-	properties, _ := schema["properties"].(map[string]any)
-	for key, rawDefinition := range properties {
-		value, exists := resolved[key]
-		if !exists {
-			continue
-		}
-		definition, _ := rawDefinition.(map[string]any)
-		expected, _ := definition["type"].(string)
-		if expected != "" && !matchesParameterType(value, expected) {
-			return fmt.Errorf("%w: parameter %q must be of type %s", domain.ErrInvalid, key, expected)
-		}
-		if minimumLength, ok := numericSchemaInt(definition["minLength"]); ok {
-			text, isString := value.(string)
-			if isString && len([]rune(text)) < minimumLength {
-				return fmt.Errorf("%w: parameter %q must contain at least %d characters", domain.ErrInvalid, key, minimumLength)
-			}
-		}
-		if enum, ok := definition["enum"].([]any); ok && !containsParameterValue(enum, value) {
-			return fmt.Errorf("%w: parameter %q is not one of the allowed values", domain.ErrInvalid, key)
-		}
-	}
-	return nil
-}
-
-func numericSchemaInt(value any) (int, bool) {
-	switch typed := value.(type) {
-	case int:
-		return typed, true
-	case int64:
-		return int(typed), true
-	case float64:
-		if math.Trunc(typed) == typed {
-			return int(typed), true
-		}
-	}
-	return 0, false
 }
 
 func matchesParameterType(value any, expected string) bool {
@@ -349,8 +303,7 @@ func matchesParameterType(value any, expected string) bool {
 	case "null":
 		return false
 	default:
-		// Unknown JSON Schema extensions are left to the playbook; rejecting
-		// them here would make a valid schema unusable.
+		// Parameter types are validated when the release contract is saved.
 		return true
 	}
 }
@@ -410,23 +363,6 @@ func runInputForNode(node domain.ScenarioNode, runInput map[string]any) map[stri
 		}
 	}
 	return selected
-}
-
-func resolveNodeParameters(release domain.ComponentRelease, node domain.ScenarioNode, environment, runInput map[string]any) (map[string]any, error) {
-	nodeValues := cloneMap(node.Values)
-	for parameter, environmentKey := range node.Bindings {
-		if value, ok := resolveEnvironmentBinding(environment, environmentKey); ok {
-			nodeValues[parameter] = value
-		}
-	}
-	variables, err := ResolveParameters(schemaDefaults(release.ParameterSchema), nodeValues, environment, runInputForNode(node, runInput), node.RunInputs)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateResolvedParameters(release.ParameterSchema, variables); err != nil {
-		return nil, err
-	}
-	return variables, nil
 }
 
 func resolveEnvironmentBinding(environment map[string]any, key string) (any, bool) {
@@ -516,7 +452,7 @@ func (p *Platform) lockAction(componentName, nodeID string, release domain.Compo
 	return step, nil
 }
 
-func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep) (domain.Run, error) {
+func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter) (domain.Run, error) {
 	if p.runner == nil {
 		return domain.Run{}, fmt.Errorf("%w: Ansible runner is not configured", domain.ErrConflict)
 	}
@@ -562,6 +498,9 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		}
 	}
 	snapshot := structToMap(plan)
+	if len(resolvedParametersByNode) > 0 {
+		snapshot["resolvedParametersByNode"] = provenanceSnapshot(resolvedParametersByNode)
+	}
 	if releaseID != "" {
 		release, err := p.store.GetComponentRelease(ctx, releaseID)
 		if err != nil {
@@ -913,9 +852,10 @@ func (p *Platform) finishRun(run domain.Run, status domain.RunStatus, cause erro
 
 func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 	type dependencySpec struct {
-		UpstreamComponentID string `json:"upstreamComponentId"`
-		UpstreamReleaseID   string `json:"upstreamReleaseId"`
-		Purpose             string `json:"purpose"`
+		UpstreamComponentID string                    `json:"upstreamComponentId"`
+		UpstreamReleaseID   string                    `json:"upstreamReleaseId"`
+		Purpose             string                    `json:"purpose"`
+		ParameterMappings   []domain.ParameterMapping `json:"parameterMappings"`
 	}
 	type actionSpec struct {
 		Name                string            `json:"name"`
@@ -933,23 +873,24 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		ToReleaseID         string            `json:"toReleaseId"`
 	}
 	spec := struct {
-		Version                string             `json:"version"`
-		Type                   domain.ReleaseType `json:"type"`
-		ReleaseNotes           string             `json:"releaseNotes"`
-		Breaking               bool               `json:"breaking"`
-		RiskLevel              domain.RiskLevel   `json:"riskLevel"`
-		EnvironmentConstraints map[string]any     `json:"environmentConstraints"`
-		ParameterSchema        map[string]any     `json:"parameterSchema"`
-		Dependencies           []dependencySpec   `json:"dependencies"`
-		Actions                []actionSpec       `json:"actions"`
+		Version                string                       `json:"version"`
+		Type                   domain.ReleaseType           `json:"type"`
+		ReleaseNotes           string                       `json:"releaseNotes"`
+		Breaking               bool                         `json:"breaking"`
+		RiskLevel              domain.RiskLevel             `json:"riskLevel"`
+		EnvironmentConstraints map[string]any               `json:"environmentConstraints"`
+		Parameters             []domain.ParameterDefinition `json:"parameters"`
+		Dependencies           []dependencySpec             `json:"dependencies"`
+		Actions                []actionSpec                 `json:"actions"`
 	}{
 		Version: release.Version, Type: release.Type, ReleaseNotes: release.ReleaseNotes,
 		Breaking: release.Breaking, RiskLevel: release.RiskLevel,
-		EnvironmentConstraints: release.EnvironmentConstraints, ParameterSchema: release.ParameterSchema,
+		EnvironmentConstraints: release.EnvironmentConstraints, Parameters: release.Parameters,
 	}
 	for _, dependency := range release.Dependencies {
 		spec.Dependencies = append(spec.Dependencies, dependencySpec{
 			UpstreamComponentID: dependency.UpstreamComponentID, UpstreamReleaseID: dependency.UpstreamReleaseID, Purpose: dependency.Purpose,
+			ParameterMappings: dependency.ParameterMappings,
 		})
 	}
 	for _, action := range release.Actions {

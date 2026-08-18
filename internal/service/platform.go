@@ -126,7 +126,7 @@ func validateRelease(release domain.ComponentRelease) error {
 	if release.Type != domain.ReleaseAtomic && release.Type != domain.ReleaseBundle {
 		return fmt.Errorf("%w: release type must be atomic or bundle", domain.ErrInvalid)
 	}
-	if err := rejectSensitiveMap(release.ParameterSchema, "component parameter schema"); err != nil {
+	if err := validateReleaseParameters(release); err != nil {
 		return err
 	}
 	if err := rejectSensitiveMap(release.EnvironmentConstraints, "environment constraint"); err != nil {
