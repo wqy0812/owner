@@ -132,6 +132,7 @@ func validateRelease(release domain.ComponentRelease) error {
 	if err := rejectSensitiveMap(release.EnvironmentConstraints, "environment constraint"); err != nil {
 		return err
 	}
+	seenDependencies := make(map[string]struct{}, len(release.Dependencies))
 	for _, dependency := range release.Dependencies {
 		if dependency.UpstreamComponentID == "" || dependency.UpstreamReleaseID == "" {
 			return fmt.Errorf("%w: dependencies must lock a component and release", domain.ErrInvalid)
@@ -139,6 +140,10 @@ func validateRelease(release domain.ComponentRelease) error {
 		if dependency.UpstreamComponentID == release.ComponentID {
 			return fmt.Errorf("%w: a release cannot depend on its own component", domain.ErrInvalid)
 		}
+		if _, exists := seenDependencies[dependency.UpstreamComponentID]; exists {
+			return fmt.Errorf("%w: duplicate dependency on component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
+		}
+		seenDependencies[dependency.UpstreamComponentID] = struct{}{}
 	}
 	for _, action := range release.Actions {
 		if action.Kind == "" || strings.TrimSpace(action.Playbook) == "" {

@@ -80,8 +80,19 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
     }
   }
   const mapped = new Set<string>();
+  const lockedComponents = new Set<string>();
   for (const dependency of dependencies) {
+    if (!dependency.componentId.trim() || !dependency.releaseId.trim()) {
+      errors.push('每项依赖必须锁定一个已发布的上游版本');
+      continue;
+    }
     const upstream = upstreams.find((release) => release.id === dependency.releaseId);
+    if (!upstream || upstream.state !== 'released' || upstream.componentId !== dependency.componentId) {
+      errors.push(`依赖 ${dependency.componentId} 必须锁定该组件的已发布版本`);
+      continue;
+    }
+    if (lockedComponents.has(dependency.componentId)) errors.push(`组件 ${dependency.componentId} 只能添加一项直接依赖`);
+    lockedComponents.add(dependency.componentId);
     for (const mapping of dependency.parameterMappings ?? []) {
       if (mapped.has(mapping.targetParameter)) errors.push(`目标参数 ${mapping.targetParameter} 被映射多次`);
       mapped.add(mapping.targetParameter);
@@ -162,31 +173,42 @@ function DefaultValueEditor({ parameter, disabled, onChange }: { parameter: Para
 }
 
 export function DependencyEditor({
-  dependencies, components, currentParameters, onChange, disabled,
+  dependencies, components, currentParameters, currentComponentId, onChange, disabled,
 }: {
   dependencies: ComponentDependency[];
   components: Component[];
   currentParameters: ParameterDefinition[];
+  currentComponentId?: string;
   onChange: (dependencies: ComponentDependency[]) => void;
   disabled?: boolean;
 }) {
-  const released = useMemo(() => components.flatMap((component) => (component.releases ?? []).filter((release) => release.state === 'released').map((release) => ({ component, release }))), [components]);
+  const upstreams = useMemo(() => components
+    .filter((component) => component.id !== currentComponentId)
+    .map((component) => ({ component, releases: (component.releases ?? []).filter((release) => release.state === 'released') }))
+    .filter((item) => item.releases.length > 0), [components, currentComponentId]);
   function update(index: number, patch: Partial<ComponentDependency>) {
     onChange(dependencies.map((item, current) => current === index ? { ...item, ...patch } : item));
   }
   return <div className="dependency-editor">
     {dependencies.map((dependency, index) => {
-      const selected = released.find((item) => item.release.id === dependency.releaseId);
-      const publicParameters = selected?.release.parameters?.filter((item) => item.visibility === 'public') ?? [];
+      const selectedComponent = upstreams.find((item) => item.component.id === dependency.componentId);
+      const selectedRelease = selectedComponent?.releases.find((release) => release.id === dependency.releaseId);
+      const publicParameters = selectedRelease?.parameters?.filter((item) => item.visibility === 'public') ?? [];
       const usedTargets = new Set((dependency.parameterMappings ?? []).map((item) => item.targetParameter));
-      return <article key={`${dependency.releaseId}-${index}`} className="dependency-card">
+      const usedComponents = new Set(dependencies.filter((_, current) => current !== index).map((item) => item.componentId));
+      return <article key={`${dependency.componentId}-${dependency.releaseId}-${index}`} className="dependency-card">
         <div className="dependency-card__grid">
-          <label><span>上游组件 / 已发布版本</span><select aria-label="上游组件" disabled={disabled} value={selected ? `${selected.component.id}:${selected.release.id}` : ''} onChange={(event) => {
-            const [componentId, releaseId] = event.target.value.split(':');
-            update(index, { componentId, releaseId, parameterMappings: [] });
+          <label><span>上游组件</span><select aria-label="上游组件" disabled={disabled} value={dependency.componentId} onChange={(event) => {
+            update(index, { componentId: event.target.value, releaseId: '', parameterMappings: [] });
           }}>
-            <option value="">选择已发布上游</option>
-            {released.map(({ component, release }) => <option key={release.id} value={`${component.id}:${release.id}`}>{component.name} · {release.version}</option>)}
+            <option value="">选择上游组件</option>
+            {upstreams.filter(({ component }) => component.id === dependency.componentId || !usedComponents.has(component.id)).map(({ component }) => <option key={component.id} value={component.id}>{component.name}</option>)}
+          </select></label>
+          <label><span>已发布版本</span><select aria-label="已发布版本" disabled={disabled || !dependency.componentId} value={dependency.releaseId} onChange={(event) => {
+            update(index, { releaseId: event.target.value, parameterMappings: [] });
+          }}>
+            <option value="">{dependency.componentId ? '选择已发布版本' : '先选择上游组件'}</option>
+            {selectedComponent?.releases.map((release) => <option key={release.id} value={release.id}>{release.version}</option>)}
           </select></label>
           <label><span>依赖用途</span><input aria-label="依赖用途" placeholder="例如复用 kubelet 安装目录" disabled={disabled} value={dependency.purpose ?? ''} onChange={(event) => update(index, { purpose: event.target.value })} /></label>
         </div>
@@ -215,8 +237,8 @@ export function DependencyEditor({
               {!disabled && <button type="button" className="button button--quiet" onClick={() => update(index, { parameterMappings: (dependency.parameterMappings ?? []).filter((_, current) => current !== mappingIndex) })}>删除映射</button>}
             </div>
           </div>)}
-          {!publicParameters.length && selected ? <p className="mapping-empty">上游 {selected.component.name} {selected.release.version} 没有公开参数，下游无法引用它的配置。</p> : null}
-          {!disabled && <button type="button" className="button button--quiet" disabled={!selected} onClick={() => update(index, { parameterMappings: [...(dependency.parameterMappings ?? []), { upstreamParameter: '', targetParameter: '' }] })}>增加映射</button>}
+          {!publicParameters.length && selectedRelease ? <p className="mapping-empty">上游 {selectedComponent?.component.name} {selectedRelease.version} 没有公开参数，下游无法引用它的配置。</p> : null}
+          {!disabled && <button type="button" className="button button--quiet" disabled={!selectedRelease} onClick={() => update(index, { parameterMappings: [...(dependency.parameterMappings ?? []), { upstreamParameter: '', targetParameter: '' }] })}>增加映射</button>}
         </div>
         {!disabled && <button type="button" className="button button--danger-soft" onClick={() => onChange(dependencies.filter((_, current) => current !== index))}>删除依赖</button>}
       </article>;

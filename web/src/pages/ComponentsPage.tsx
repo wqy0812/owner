@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Beaker, Boxes, GitBranch, PencilLine, Plus, Rocket, Shield, UserRound } from 'lucide-react';
+import { AlertTriangle, Beaker, Boxes, ChevronDown, ChevronRight, GitBranch, PencilLine, Plus, Rocket, Shield, UserRound } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
@@ -14,7 +14,11 @@ import {
   componentLayer,
 } from '../types/componentClassification';
 import { ComponentMappingOverview, defaultContractRelease, defaultFixtureValues, DependencyContractList, DependencyEditor, mappedParameterNames, mappingCount, ParameterContractList, ParameterTable, parameterContractErrors } from '../components/ParameterEditors';
+import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
+import { environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
 import type { Component, ComponentDependency, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, Environment, ImpactPreview, ParameterDefinition } from '../types/domain';
+
+type ContractSection = 'dependencies' | 'parameters';
 
 export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
@@ -30,6 +34,9 @@ export function ComponentsPage() {
   const [testRelease, setTestRelease] = useState<ComponentRelease>();
   const [inspectRelease, setInspectRelease] = useState<ComponentRelease>();
   const [contractReleaseId, setContractReleaseId] = useState<string>();
+  const [editingContract, setEditingContract] = useState(false);
+  const [contractFocus, setContractFocus] = useState<ContractSection>();
+  const [layerOpen, setLayerOpen] = useState<Partial<Record<ComponentLayer, boolean>>>({});
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(
@@ -39,13 +46,57 @@ export function ComponentsPage() {
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
   const contractRelease = releases.find((release) => release.id === contractReleaseId) ?? defaultContractRelease(releases, selected?.latestRelease);
   const editableDraft = releases.find((release) => release.state === 'draft');
-  useEffect(() => { setContractReleaseId(undefined); }, [selected?.id]);
+  const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
   const mine = selected?.ownerId === user.id && user.role === 'component_owner';
   const canTest = mine || user.role === 'environment_owner';
+  useEffect(() => {
+    setContractReleaseId(undefined);
+    setEditingContract(false);
+    setContractFocus(undefined);
+  }, [selected?.id]);
+  function selectContractRelease(id: string) {
+    const release = releases.find((item) => item.id === id);
+    setContractReleaseId(id);
+    if (release?.state !== 'draft') {
+      setEditingContract(false);
+      setContractFocus(undefined);
+    }
+  }
+  function startEditingContract(section?: ContractSection) {
+    if (!selected || !mine) return;
+    if (contractRelease?.state === 'draft') {
+      setEditingContract(true);
+      setContractFocus(section);
+      return;
+    }
+    if (editableDraft) {
+      setContractReleaseId(editableDraft.id);
+      setEditingContract(true);
+      setContractFocus(section);
+      notify('info', '已切换到可编辑 Draft', `${contractRelease?.version ?? '当前版本'} 已不可修改，正在编辑 ${editableDraft.version}。`);
+      return;
+    }
+    setVersionBase(selected);
+  }
   const layeredComponents = COMPONENT_LAYERS.map((layer) => ({
     layer,
     components: components?.filter((component) => component.layer === layer.value) ?? [],
   }));
+  function isLayerOpen(layer: ComponentLayer) {
+    if (layerOpen[layer] !== undefined) return layerOpen[layer];
+    return selected?.layer === layer;
+  }
+  function toggleLayer(layer: ComponentLayer) {
+    setLayerOpen((current) => ({ ...current, [layer]: !isLayerOpen(layer) }));
+  }
+  function setAllLayers(open: boolean) {
+    setLayerOpen(Object.fromEntries(COMPONENT_LAYERS.map((layer) => [layer.value, open])));
+  }
+  function selectComponent(id: string) {
+    const component = components?.find((item) => item.id === id);
+    if (component) setLayerOpen((current) => ({ ...current, [component.layer]: true }));
+    setSearchParams({ selected: id });
+  }
 
   async function previewPublish(release: ComponentRelease) {
     setPublishRelease(release);
@@ -91,17 +142,31 @@ export function ComponentsPage() {
         <RefreshNotice loading={isRefreshing} error={components ? error : undefined} onRetry={() => void reload()} />
         <div className="catalog-layout">
           <aside className="catalog-list panel">
-            <div className="catalog-list__header"><strong>组件目录</strong><span>{components?.length ?? 0}</span></div>
-            {components?.length ? layeredComponents.map(({ layer, components: layerComponents }) => <section className="catalog-layer" key={layer.value}>
-              <header><span>{layer.code}</span><div><strong>{layer.label}</strong><small>{layerComponents.length} 个组件</small></div></header>
-              {layerComponents.length ? layerComponents.map((component) => (
-                <button key={component.id} className={`catalog-item${selected?.id === component.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: component.id })}>
-                  <span className="catalog-item__icon"><Boxes size={18} /></span>
-                  <span><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {COMPONENT_KIND_LABELS[component.kind]}</small></span>
-                  {component.ownerId === user.id && <span className="mine-dot" title="我负责的组件" />}
+            <div className="catalog-list__header">
+              <strong>组件目录</strong>
+              <div className="catalog-list__tools">
+                <span>{components?.length ?? 0}</span>
+                <button type="button" className="icon-text" onClick={() => setAllLayers(true)}>全部展开</button>
+                <button type="button" className="icon-text" onClick={() => setAllLayers(false)}>全部折叠</button>
+              </div>
+            </div>
+            {components?.length ? layeredComponents.map(({ layer, components: layerComponents }) => {
+              const open = isLayerOpen(layer.value);
+              return <section className={`catalog-layer${open ? '' : ' catalog-layer--collapsed'}`} key={layer.value}>
+                <button type="button" className="catalog-layer__toggle" aria-expanded={open} aria-controls={`catalog-layer-${layer.value}`} onClick={() => toggleLayer(layer.value)}>
+                  <span>{layer.code}</span>
+                  <div><strong>{layer.label}</strong><small>{layerComponents.length} 个组件</small></div>
+                  {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                 </button>
-              )) : <div className="catalog-layer__empty">本层暂无组件</div>}
-            </section>) : <EmptyState title="暂无组件" description="组件 Owner 可以创建第一个组件。" />}
+                {open ? <div id={`catalog-layer-${layer.value}`}>{layerComponents.length ? layerComponents.map((component) => (
+                  <button key={component.id} className={`catalog-item${selected?.id === component.id ? ' active' : ''}`} onClick={() => selectComponent(component.id)}>
+                    <span className="catalog-item__icon"><Boxes size={18} /></span>
+                    <span><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {COMPONENT_KIND_LABELS[component.kind]}</small></span>
+                    {component.ownerId === user.id && <span className="mine-dot" title="我负责的组件" />}
+                  </button>
+                )) : <div className="catalog-layer__empty">本层暂无组件</div>}</div> : null}
+              </section>;
+            }) : <EmptyState title="暂无组件" description="组件 Owner 可以创建第一个组件。" />}
           </aside>
 
           {selected ? <section className="detail-stack">
@@ -115,45 +180,58 @@ export function ComponentsPage() {
                 <span><GitBranch size={15} /> {selected.releaseCount ?? releases.length} 个版本</span>
                 {selected.latestRelease && <StatusPill status={selected.latestRelease.state} />}
               </div>
-              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => editableDraft ? setEditRelease(editableDraft) : setVersionBase(selected)}><PencilLine size={16} /> {editableDraft ? '编辑参数可见性' : '创建版本并设置可见性'}</button></div>}
+              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => startEditingContract()}><PencilLine size={16} /> {editableDraft ? '编辑依赖和参数' : '创建 Draft 编辑合同'}</button>{editableDraft ? <button className="button button--quiet" onClick={() => setEditRelease(editableDraft)}>编辑版本信息</button> : null}</div>}
             </article>
 
             <article className="panel">
-              <header className="panel__header"><div><span className="panel__icon"><Rocket size={18} /></span><div><h2>发布历史</h2><p>Released 版本不可修改，更新将产生新 Draft</p></div></div></header>
+              <header className="panel__header"><div><span className="panel__icon"><Rocket size={18} /></span><div><h2>发布历史</h2><p>点击版本可切换下方依赖和参数合同；Released 版本不可修改</p></div></div></header>
               {releases.length ? <div className="release-table">
-                <div className="release-table__head"><span>版本</span><span>验证</span><span>依赖 / 动作</span><span>发布时间</span><span /></div>
-                {releases.map((release) => <div key={release.id} className={`release-row${contractRelease?.id === release.id ? ' release-row--active' : ''}`}>
-                  <div><strong>{release.version}</strong>{release.breaking && <span className="breaking-badge">BREAKING</span>}<small>{release.releaseNotes ?? '未填写发布说明'}</small></div>
-                  <div><StatusPill status={release.verification ?? (release.verified ? 'passed' : 'unverified')} /></div>
-                  <div className="release-facts"><span>{release.dependencies?.length ?? 0} 项依赖</span><span>{mappingCount(release)} 个参数映射</span><span>{publicCount(release)} 个公开参数</span></div>
-                  <div>{formatTime(release.releasedAt ?? release.createdAt)}</div>
-                  <div className="row-actions">
-                    {canTest && <button className="icon-text" onClick={() => setTestRelease(release)}><Beaker size={15} /> 测试</button>}
-                    <button className="icon-text" onClick={() => { setContractReleaseId(release.id); setInspectRelease(release); }}>查看合同</button>
-                    {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setEditRelease(release)}><PencilLine size={15} /> 配置参数</button>}
-                    {mine && release.state === 'draft' && <button className="icon-text icon-text--primary" onClick={() => void previewPublish(release)}><Rocket size={15} /> 发布</button>}
-                    {mine && release.state === 'released' && <button className="icon-text" onClick={() => void deprecate(release)}>废弃</button>}
-                  </div>
-                </div>)}
+                <div className="release-table__head"><span>版本</span><span>适配环境</span><span>验证</span><span>依赖 / 动作</span><span>发布时间</span><span /></div>
+                {releases.map((release) => {
+                  const active = contractRelease?.id === release.id;
+                  return <div key={release.id} className={`release-row${active ? ' release-row--active' : ''}`} onClick={() => selectContractRelease(release.id)}>
+                    <button type="button" className="release-row__version" aria-pressed={active} aria-label={`查看 ${release.version} 的依赖和参数合同`} onClick={() => selectContractRelease(release.id)}>
+                      <strong>{release.version}</strong>{release.breaking && <span className="breaking-badge">BREAKING</span>}
+                      <small>{release.releaseNotes ?? '未填写发布说明'}</small>
+                    </button>
+                    <EnvironmentConstraints constraints={release.environmentConstraints} />
+                    <div><StatusPill status={release.verification ?? (release.verified ? 'passed' : 'unverified')} /></div>
+                    <div className="release-facts"><span>{release.dependencies?.length ?? 0} 项依赖</span><span>{mappingCount(release)} 个参数映射</span><span>{publicCount(release)} 个公开参数</span></div>
+                    <div>{formatTime(release.releasedAt ?? release.createdAt)}</div>
+                    <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                      {canTest && <button className="icon-text" onClick={() => { setContractReleaseId(release.id); setTestRelease(release); }}><Beaker size={15} /> 测试</button>}
+                      <button className="icon-text" onClick={() => { setContractReleaseId(release.id); setInspectRelease(release); }}>查看合同</button>
+                      {mine && release.state === 'draft' && <button className="icon-text" onClick={() => { selectContractRelease(release.id); setEditingContract(true); }}><PencilLine size={15} /> 配置合同</button>}
+                      {mine && release.state === 'draft' && <button className="icon-text icon-text--primary" onClick={() => void previewPublish(release)}><Rocket size={15} /> 发布</button>}
+                      {mine && release.state === 'released' && <button className="icon-text" onClick={() => void deprecate(release)}>废弃</button>}
+                    </div>
+                  </div>;
+                })}
               </div> : <EmptyState title="尚无发布版本" description="创建 Draft 并配置安装、验证和升级动作。" />}
             </article>
 
             <ComponentMappingOverview releases={releases} components={components ?? []} />
-            <div className="two-column">
-              <article className="panel">
-                <header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
-                  {releases.length > 1 ? <label className="release-switcher"><span>查看版本</span><select aria-label="查看版本合同" value={contractRelease?.id ?? ''} onChange={(event) => setContractReleaseId(event.target.value)}>{releases.map((release) => <option key={release.id} value={release.id}>{release.version} · {mappingCount(release)} 个映射</option>)}</select></label> : null}
-                </header>
-                {!contractReleaseId && selected.latestRelease && contractRelease && selected.latestRelease.id !== contractRelease.id ? <p className="mapping-empty contract-hint">当前展示 {contractRelease.version}，因为它有参数映射。最新版本 {selected.latestRelease.version} 没有映射。</p> : null}
-                <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
-              </article>
-              <article className="panel">
-                <header className="panel__header"><div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>公开参数可被下游引用；内部参数只给本组件使用</p></div></div>
-                  {mine && editableDraft ? <button className="button button--secondary" onClick={() => setEditRelease(editableDraft)}><PencilLine size={15} /> 编辑可见性</button> : mine ? <button className="button button--quiet" onClick={() => setVersionBase(selected)}>创建新版本以修改</button> : null}
-                </header>
-                <ParameterContractList release={contractRelease} components={components ?? []} />
-              </article>
-            </div>
+            {!contractReleaseId && selected.latestRelease && contractRelease && selected.latestRelease.id !== contractRelease.id ? <p className="mapping-empty contract-hint">当前展示 {contractRelease.version}，因为它有参数映射。最新版本 {selected.latestRelease.version} 没有映射。</p> : null}
+            {showContractEditor && contractRelease ? (
+              <ReleaseContractEditor key={contractRelease.id} release={contractRelease} components={components ?? []} focusSection={contractFocus} onCancel={() => { setEditingContract(false); setContractFocus(undefined); }} onSaved={() => { setEditingContract(false); setContractFocus(undefined); signalRefresh('components'); }} />
+            ) : (
+              <div className="two-column">
+                <article className="panel">
+                  <header className="panel__header">
+                    <div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
+                    {mine ? <button type="button" className="button button--quiet" aria-label="编辑直接依赖" onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> 编辑</button> : null}
+                  </header>
+                  <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
+                </article>
+                <article className="panel">
+                  <header className="panel__header">
+                    <div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>{contractRelease ? `${contractRelease.version} 的公开参数可被下游引用；内部参数只给本组件使用` : '公开参数可被下游引用；内部参数只给本组件使用'}</p></div></div>
+                    {mine ? <button type="button" className="button button--quiet" aria-label="编辑参数合同" onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> 编辑</button> : null}
+                  </header>
+                  <ParameterContractList release={contractRelease} components={components ?? []} />
+                </article>
+              </div>
+            )}
           </section> : <section className="panel"><EmptyState title="请选择组件" /></section>}
         </div>
         </>
@@ -161,8 +239,8 @@ export function ComponentsPage() {
 
       {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('components'); }} />}
       {editComponent && <EditComponentModal component={editComponent} onClose={() => setEditComponent(undefined)} onDone={() => { setEditComponent(undefined); signalRefresh('components'); }} />}
-      {versionBase && <NewVersionModal component={versionBase} baseRelease={contractRelease ?? versionBase.latestRelease} onClose={() => setVersionBase(undefined)} onDone={(release) => { setVersionBase(undefined); signalRefresh('components'); if (release) { setContractReleaseId(release.id); setEditRelease(release); } }} />}
-      {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setEditRelease(inspectRelease); setInspectRelease(undefined); } : undefined} />}
+      {versionBase && <NewVersionModal component={versionBase} baseRelease={contractRelease ?? versionBase.latestRelease} onClose={() => setVersionBase(undefined)} onDone={(release) => { setVersionBase(undefined); signalRefresh('components'); if (release) { setContractReleaseId(release.id); setEditingContract(true); setContractFocus(undefined); } }} />}
+      {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setInspectRelease(undefined); setContractReleaseId(inspectRelease.id); setEditingContract(true); } : undefined} />}
       {editRelease && <EditReleaseModal release={editRelease} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }} />}
       {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(['components', 'runs']); }} />}
       {publishRelease && <Modal title={`发布 ${publishRelease.version}`} description="发布后版本不可修改；影响通知将发送给下游组件和场景 Owner。" onClose={() => setPublishRelease(undefined)}>
@@ -173,6 +251,63 @@ export function ComponentsPage() {
         </div>
         <footer className="modal-actions"><button className="button button--quiet" onClick={() => setPublishRelease(undefined)}>取消</button><button disabled={busy} className="button button--primary" onClick={() => void confirmPublish()}>{busy ? '发布中…' : '确认发布并通知'}</button></footer>
       </Modal>}
+    </div>
+  );
+}
+
+function ReleaseContractEditor({ release, components, focusSection, onCancel, onSaved }: { release: ComponentRelease; components: Component[]; focusSection?: ContractSection; onCancel: () => void; onSaved: () => void }) {
+  const { notify } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [parameters, setParameters] = useState<ParameterDefinition[]>(release.parameters ?? []);
+  const [dependencies, setDependencies] = useState<ComponentDependency[]>(release.dependencies ?? []);
+  const dependenciesRef = useRef<HTMLElement>(null);
+  const parametersRef = useRef<HTMLElement>(null);
+  const contractErrors = parameterContractErrors(parameters, dependencies, components.flatMap((item) => item.releases ?? []));
+  useEffect(() => {
+    const node = focusSection === 'parameters' ? parametersRef.current : focusSection === 'dependencies' ? dependenciesRef.current : null;
+    if (!node) return;
+    node.focus({ preventScroll: true });
+    node.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [focusSection, release.id]);
+  async function save() {
+    if (contractErrors.length) {
+      notify('error', '参数合同无效', contractErrors.join('；'));
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.updateReleaseContract(release.id, { parameters, dependencies });
+      notify('success', '依赖和参数已保存', 'Draft 的直接依赖与参数合同已更新。');
+      onSaved();
+    } catch (reason) {
+      notify('error', '保存失败', displayError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="contract-panels contract-panels--editing">
+      <article className="panel" id="contract-dependencies" ref={dependenciesRef} tabIndex={-1}>
+        <header className="panel__header">
+          <div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{release.version} 可编辑的上游锁定和公开参数映射</p></div></div>
+        </header>
+        <div className="contract-editor">
+          <DependencyEditor dependencies={dependencies} components={components} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} />
+        </div>
+      </article>
+      <article className="panel" id="contract-parameters" ref={parametersRef} tabIndex={-1}>
+        <header className="panel__header">
+          <div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>为每个参数选择内部或公开；公开参数可被下游引用</p></div></div>
+        </header>
+        <div className="contract-editor">
+          <ParameterTable parameters={parameters} onChange={setParameters} />
+        </div>
+      </article>
+      {contractErrors.length ? <div className="form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}
+      <div className="contract-editor-actions">
+        <button type="button" className="button button--quiet" onClick={onCancel}>取消</button>
+        <button type="button" className="button button--primary" disabled={busy} onClick={() => void save()}>{busy ? '保存中…' : '保存依赖和参数'}</button>
+      </div>
     </div>
   );
 }
@@ -227,10 +362,40 @@ function ClassificationFields({ component }: { component?: Component }) {
 }
 
 function NewVersionModal({ component, baseRelease, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
-  const { notify } = useApp(); const [busy, setBusy] = useState(false);
+  const { notify } = useApp();
+  const [busy, setBusy] = useState(false);
   const source = baseRelease ?? component.latestRelease;
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget); const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on' }; try { const release = source ? await api.cloneRelease(source.id, input) : await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' }); notify('success', 'Draft 已创建', '接下来为每个参数选择内部或公开，并映射上游公开参数。'); onDone(release); } catch (reason) { notify('error', '创建版本失败', displayError(reason)); } finally { setBusy(false); } }
-  return <Modal title={`更新 ${component.name}`} description={source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。'} onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={source?.type ?? (component.kind === 'software_bundle' ? 'bundle' : 'atomic')} disabled={Boolean(source)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer></form></Modal>;
+  const [constraints, setConstraints] = useState(() => parseConstraintSelection(source?.environmentConstraints));
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    const environmentConstraints = serializeConstraintSelection(constraints);
+    const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on', environmentConstraints };
+    try {
+      const release = source
+        ? await api.cloneRelease(source.id, input)
+        : await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' });
+      notify('success', 'Draft 已创建', '接下来为每个参数选择内部或公开，并映射上游公开参数。');
+      onDone(release);
+    } catch (reason) {
+      notify('error', '创建版本失败', displayError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <Modal size="wide" title={`更新 ${component.name}`} description={source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。'} onClose={onClose}>
+    <form onSubmit={(event) => void submit(event)}>
+      <div className="form-grid">
+        <label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label>
+        <label><span>Release 类型</span><select name="releaseType" defaultValue={source?.type ?? (component.kind === 'software_bundle' ? 'bundle' : 'atomic')} disabled={Boolean(source)}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label>
+        <label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label>
+        <label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label>
+        <div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div>
+      </div>
+      <footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建 Draft'}</button></footer>
+    </form>
+  </Modal>;
 }
 
 function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {
@@ -261,7 +426,7 @@ function EditReleaseModal({ release, onClose, onDone }: { release: ComponentRele
   const { notify } = useApp();
   const { data: components } = useApiData((signal) => api.components(signal), [], 'components');
   const [busy, setBusy] = useState(false);
-  const [constraints, setConstraints] = useState(JSON.stringify(release.environmentConstraints ?? {}, null, 2));
+  const [constraints, setConstraints] = useState(() => parseConstraintSelection(release.environmentConstraints));
   const [parameters, setParameters] = useState<ParameterDefinition[]>(release.parameters ?? []);
   const [dependencies, setDependencies] = useState<ComponentDependency[]>(release.dependencies ?? []);
   const [actions, setActions] = useState(JSON.stringify(release.actions ?? [], null, 2));
@@ -276,21 +441,25 @@ function EditReleaseModal({ release, onClose, onDone }: { release: ComponentRele
         type: String(form.get('releaseType')) as ComponentRelease['type'],
         releaseNotes: String(form.get('notes')),
         breaking: form.get('breaking') === 'on',
-        environmentConstraints: JSON.parse(constraints),
+        environmentConstraints: serializeConstraintSelection(constraints),
         parameters,
         dependencies,
         actions: JSON.parse(actions),
       });
       notify('success', 'Draft 配置已保存', '参数合同、依赖映射和 Ansible 动作已更新。'); onDone();
-    } catch (reason) { notify('error', '保存 Draft 失败', reason instanceof SyntaxError ? '约束和动作必须是有效 JSON。' : displayError(reason)); }
+    } catch (reason) { notify('error', '保存 Draft 失败', reason instanceof SyntaxError ? '动作必须是有效 JSON。' : displayError(reason)); }
     finally { setBusy(false); }
   }
-  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="为每个参数选择内部或公开；依赖映射只能选择上游已发布版本的公开参数。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={release.type ?? 'atomic'}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><label className="span-2"><span>环境约束 JSON</span><textarea className="code-editor code-editor--small" value={constraints} onChange={(event) => setConstraints(event.target.value)} /></label><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}<label className="span-2"><span>Ansible 动作 JSON（kind/type、playbook、hostGroup、timeoutSeconds、requiredCredentials）</span><textarea className="code-editor code-editor--small" value={actions} onChange={(event) => setActions(event.target.value)} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
+  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="为每个参数选择内部或公开；依赖映射只能选择上游已发布版本的公开参数。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>Release 类型</span><select name="releaseType" defaultValue={release.type ?? 'atomic'}><option value="atomic">atomic · 原子组件</option><option value="bundle">bundle · 组合组件</option></select></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}<label className="span-2"><span>Ansible 动作 JSON（kind/type、playbook、hostGroup、timeoutSeconds、requiredCredentials）</span><textarea className="code-editor code-editor--small" value={actions} onChange={(event) => setActions(event.target.value)} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
 }
 
 function InspectReleaseModal({ release, components, onClose, onEdit }: { release: ComponentRelease; components: Component[]; onClose: () => void; onEdit?: () => void }) {
   return <Modal size="wide" title={`${release.version} 参数合同`} description="查看每个参数的可见性，以及本组件引用了哪个上游组件的哪个公开参数。" onClose={onClose}>
     <div className="modal-body inspect-contract">
+      <section className="contract-section">
+        <h3>适配环境</h3>
+        <EnvironmentConstraints constraints={release.environmentConstraints} />
+      </section>
       <ParameterContractList release={release} components={components} />
       <section className="contract-section">
         <h3>依赖映射</h3>
@@ -306,6 +475,17 @@ function InspectReleaseModal({ release, components, onClose, onEdit }: { release
 
 function publicCount(release: ComponentRelease) {
   return (release.parameters ?? []).filter((item) => item.visibility === 'public').length;
+}
+
+function EnvironmentConstraints({ constraints }: { constraints?: Record<string, unknown> }) {
+  const groups = environmentConstraintGroups(constraints);
+  if (!groups.length) return <div className="env-constraints env-constraints--empty">未声明适配环境</div>;
+  return <div className="env-constraints">{groups.map((group) => (
+    <span className="env-constraint" key={group.key}>
+      <em>{group.label}</em>
+      {group.values.map((value) => <b key={value}>{value}</b>)}
+    </span>
+  ))}</div>;
 }
 
 function SaveIcon() { return <PencilLine size={15} />; }

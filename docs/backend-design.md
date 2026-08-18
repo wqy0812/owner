@@ -412,6 +412,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | GET / PATCH | `/components/{id}` | 详情 / 修改元数据 |
 | POST | `/components/{id}/releases` | 创建首个或新 Release Draft |
 | PUT | `/component-releases/{id}` | 更新 Draft |
+| PUT | `/component-releases/{id}/contract` | 仅替换 Draft 的直接依赖与参数合同，保留动作和其他版本字段 |
 | POST | `/component-releases/{id}/clone` | 克隆为新 Draft |
 | GET | `/component-releases/{id}/impact` | 发布影响预览 |
 | POST | `/component-releases/{id}/publish` | 发布 |

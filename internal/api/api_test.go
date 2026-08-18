@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -394,6 +395,99 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	owner, _ := f.database.GetUser(context.Background(), seed.ComponentOwnerRuntimeID)
 	if _, err := f.platform.UpdateRelease(context.Background(), owner, releaseID, release); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("draft edit during active component test=%v, want conflict", err)
+	}
+}
+
+func TestUpdatingReleaseContractPreservesActionsAndRejectsDraftUpstream(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Contract Edit", "contract-edit"), alice)
+	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
+	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
+		"version": "1.0.0", "type": "atomic", "riskLevel": "medium",
+		"actions": []any{map[string]any{
+			"name": "custom-install", "kind": "install", "playbook": "tests/runtime/install.yml",
+			"limit": "runtime_nodes", "hostGroup": "test_nodes", "timeoutSeconds": 60, "riskLevel": "high",
+		}},
+	}, alice)
+	if createdRelease.Code != http.StatusCreated {
+		t.Fatalf("create release status=%d body=%s", createdRelease.Code, createdRelease.Body.String())
+	}
+	releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
+
+	updated := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
+		"parameters": []any{map[string]any{
+			"name": "runtimeRoot", "description": "runtime install root", "type": "string", "visibility": "public",
+		}},
+		"dependencies": []any{map[string]any{
+			"componentId": "component-test-runtime", "releaseId": "release-test-runtime-1.0.0", "purpose": "runtime",
+		}},
+	}, alice)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update contract status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	release, err := f.database.GetComponentRelease(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(release.Actions) != 1 || release.Actions[0].Name != "custom-install" || release.Actions[0].Limit != "runtime_nodes" || release.Actions[0].RiskLevel != domain.RiskHigh {
+		t.Fatalf("contract edit changed action metadata: %+v", release.Actions)
+	}
+	if len(release.Dependencies) != 1 || release.Dependencies[0].UpstreamReleaseID != "release-test-runtime-1.0.0" {
+		t.Fatalf("contract dependencies=%+v", release.Dependencies)
+	}
+
+	rejected := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
+		"parameters": []any{},
+		"dependencies": []any{map[string]any{
+			"componentId": "component-test-runtime", "releaseId": "release-test-runtime-1.1.0", "purpose": "draft must not be lockable",
+		}},
+	}, alice)
+	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "must lock a released version") {
+		t.Fatalf("draft upstream status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Clone Env", "clone-env"), alice)
+	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
+	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
+		"version": "1.0.0", "type": "atomic",
+		"environmentConstraints": map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"SUSE"}},
+		"actions":                []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60}},
+	}, alice)
+	if createdRelease.Code != http.StatusCreated {
+		t.Fatalf("create release status=%d body=%s", createdRelease.Code, createdRelease.Body.String())
+	}
+	releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
+	if response := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/publish", nil, alice); response.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", response.Code, response.Body.String())
+	}
+	cloned := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", map[string]any{
+		"version": "1.1.0", "releaseNotes": "add arm64",
+		"environmentConstraints": map[string]any{"architecture": []any{"amd64", "arm64"}, "operatingSystem": []any{"SUSE", "Kylin"}, "ipFamily": []any{"IPv4"}},
+	}, alice)
+	if cloned.Code != http.StatusCreated {
+		t.Fatalf("clone status=%d body=%s", cloned.Code, cloned.Body.String())
+	}
+	constraints := decodeEnvelope(t, cloned)["data"].(map[string]any)["environmentConstraints"].(map[string]any)
+	if !reflect.DeepEqual(constraints["architecture"], []any{"amd64", "arm64"}) {
+		t.Fatalf("cloned architecture=%#v", constraints["architecture"])
+	}
+	if !reflect.DeepEqual(constraints["ipFamily"], []any{"IPv4"}) {
+		t.Fatalf("cloned ipFamily=%#v", constraints["ipFamily"])
+	}
+	kept := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", map[string]any{
+		"version": "1.1.1", "releaseNotes": "keep source constraints",
+	}, alice)
+	if kept.Code != http.StatusCreated {
+		t.Fatalf("clone without constraints status=%d body=%s", kept.Code, kept.Body.String())
+	}
+	keptConstraints := decodeEnvelope(t, kept)["data"].(map[string]any)["environmentConstraints"].(map[string]any)
+	if !reflect.DeepEqual(keptConstraints["architecture"], []any{"amd64"}) {
+		t.Fatalf("source constraints were not kept: %#v", keptConstraints)
 	}
 }
 

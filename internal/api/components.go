@@ -55,6 +55,31 @@ type componentActionInput struct {
 	ToReleaseID         string            `json:"toReleaseId"`
 }
 
+type releaseContractInput struct {
+	Parameters   []domain.ParameterDefinition `json:"parameters"`
+	Dependencies []componentDependencyInput   `json:"dependencies"`
+}
+
+func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDependency {
+	dependencies := make([]domain.ComponentDependency, 0, len(inputs))
+	for _, dependency := range inputs {
+		componentID, releaseID := dependency.UpstreamComponent, dependency.UpstreamRelease
+		if componentID == "" {
+			componentID = dependency.ComponentID
+		}
+		if releaseID == "" {
+			releaseID = dependency.ReleaseID
+		}
+		dependencies = append(dependencies, domain.ComponentDependency{
+			UpstreamComponentID: componentID,
+			UpstreamReleaseID:   releaseID,
+			Purpose:             dependency.Purpose,
+			ParameterMappings:   dependency.ParameterMappings,
+		})
+	}
+	return dependencies
+}
+
 func (input releaseInput) domain() domain.ComponentRelease {
 	status := input.Status
 	if status == "" {
@@ -65,16 +90,7 @@ func (input releaseInput) domain() domain.ComponentRelease {
 		Breaking: input.Breaking, RiskLevel: input.RiskLevel,
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
-	for _, dependency := range input.Dependencies {
-		componentID, releaseID := dependency.UpstreamComponent, dependency.UpstreamRelease
-		if componentID == "" {
-			componentID = dependency.ComponentID
-		}
-		if releaseID == "" {
-			releaseID = dependency.ReleaseID
-		}
-		release.Dependencies = append(release.Dependencies, domain.ComponentDependency{UpstreamComponentID: componentID, UpstreamReleaseID: releaseID, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings})
-	}
+	release.Dependencies = dependencyInputs(input.Dependencies)
 	for _, inputAction := range input.Actions {
 		kind := inputAction.Kind
 		if kind == "" {
@@ -178,17 +194,34 @@ func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, release)
 }
 
+func (h *Handler) updateReleaseContract(w http.ResponseWriter, r *http.Request) {
+	var input releaseContractInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	release, err := h.platform.UpdateReleaseContract(
+		r.Context(), currentUser(r), r.PathValue("id"), input.Parameters, dependencyInputs(input.Dependencies),
+	)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
+}
+
 func (h *Handler) cloneRelease(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Version      string `json:"version"`
-		ReleaseNotes string `json:"releaseNotes"`
-		Breaking     bool   `json:"breaking"`
+		Version                string         `json:"version"`
+		ReleaseNotes           string         `json:"releaseNotes"`
+		Breaking               bool           `json:"breaking"`
+		EnvironmentConstraints map[string]any `json:"environmentConstraints"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input.Version, input.ReleaseNotes, input.Breaking)
+	release, err := h.platform.CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input.Version, input.ReleaseNotes, input.Breaking, input.EnvironmentConstraints)
 	if err != nil {
 		writeError(w, err)
 		return

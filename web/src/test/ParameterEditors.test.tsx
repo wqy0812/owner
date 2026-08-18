@@ -76,6 +76,19 @@ describe('parameter contract editor', () => {
       componentId: 'component-kubelet', releaseId: 'release-kubelet',
       parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
     }], [kubeletRelease])).toEqual([]);
+    expect(parameterContractErrors(parameters, [{
+      componentId: '', releaseId: '',
+      parameterMappings: [],
+    }], [kubeletRelease])).toContain('每项依赖必须锁定一个已发布的上游版本');
+    expect(parameterContractErrors(parameters, [{
+      componentId: 'component-kubelet', releaseId: 'draft-kubelet',
+      parameterMappings: [],
+    }], [{ ...kubeletRelease, id: 'draft-kubelet', state: 'draft' }])).toContain('依赖 component-kubelet 必须锁定该组件的已发布版本');
+    expect(parameterContractErrors(parameters, [{
+      componentId: 'component-kubelet', releaseId: 'release-kubelet', parameterMappings: [],
+    }, {
+      componentId: 'component-kubelet', releaseId: 'release-kubelet-alt', parameterMappings: [],
+    }], [kubeletRelease, { ...kubeletRelease, id: 'release-kubelet-alt' }])).toContain('组件 component-kubelet 只能添加一项直接依赖');
   });
 
   it('lets the owner add a parameter and mark it public', async () => {
@@ -88,12 +101,53 @@ describe('parameter contract editor', () => {
     expect(seen.at(-1)?.at(-1)).toEqual({ name: '', description: '', type: 'string', required: false, visibility: 'internal' });
   });
 
+  it('lets the owner pick a component before locking one of its released versions', async () => {
+    const kubeletV2: ComponentRelease = { ...kubeletRelease, id: 'release-kubelet-2', version: '1.18.0' };
+    const kubeletWithTwo: Component = { ...kubelet, releases: [kubeletRelease, kubeletV2] };
+    const containerd: Component = {
+      id: 'component-containerd',
+      name: 'containerd',
+      ownerId: 'alice',
+      layer: 'runtime_state',
+      category: 'runtime',
+      kind: 'software',
+      requiredness: 'profile_required',
+      releases: [{ id: 'release-containerd', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', parameters: [] }],
+    };
+    const seen: ComponentRelease['dependencies'][] = [];
+    const view = (dependencies: NonNullable<ComponentRelease['dependencies']>) => (
+      <DependencyEditor
+        dependencies={dependencies}
+        components={[kubeletWithTwo, containerd]}
+        currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal' }]}
+        currentComponentId="component-kube-proxy"
+        onChange={(next) => seen.push(next)}
+      />
+    );
+    const { rerender } = render(view([{ componentId: '', releaseId: '', purpose: '', parameterMappings: [] }]));
+    expect(screen.getByLabelText('已发布版本')).toBeDisabled();
+    expect(screen.getByLabelText('上游组件')).toContainHTML('kubelet');
+    expect(screen.getByLabelText('上游组件')).toContainHTML('containerd');
+    expect(screen.getByLabelText('已发布版本')).not.toContainHTML('1.17.5');
+    await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
+    expect(seen.at(-1)?.[0]).toMatchObject({ componentId: 'component-kubelet', releaseId: '' });
+    rerender(view([{ componentId: 'component-kubelet', releaseId: '', purpose: '', parameterMappings: [] }]));
+    const versionSelect = screen.getByLabelText('已发布版本');
+    expect(versionSelect).toBeEnabled();
+    expect(versionSelect).toContainHTML('1.17.5');
+    expect(versionSelect).toContainHTML('1.18.0');
+    expect(versionSelect).not.toContainHTML('v2.1.1');
+    await userEvent.selectOptions(versionSelect, 'release-kubelet-2');
+    expect(seen.at(-1)?.[0]).toMatchObject({ componentId: 'component-kubelet', releaseId: 'release-kubelet-2' });
+  });
+
   it('only offers upstream public parameters when mapping a dependency', async () => {
     const seen: ComponentRelease['dependencies'][] = [];
     render(<DependencyEditor
       dependencies={[{ componentId: 'component-kubelet', releaseId: 'release-kubelet', purpose: '', parameterMappings: [{ upstreamParameter: '', targetParameter: '' }] }]}
       components={[kubelet]}
       currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal' }]}
+      currentComponentId="component-kube-proxy"
       onChange={(dependencies) => seen.push(dependencies)}
     />);
     const source = screen.getByLabelText('上游公开参数');

@@ -186,7 +186,20 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	return p.store.GetComponentRelease(ctx, id)
 }
 
-func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID, version, notes string, breaking bool) (domain.ComponentRelease, error) {
+// UpdateReleaseContract replaces only a Draft release's dependency and
+// parameter contract. The remaining release definition is loaded from the
+// store so a focused UI edit cannot accidentally erase action metadata.
+func (p *Platform) UpdateReleaseContract(ctx context.Context, user domain.User, id string, parameters []domain.ParameterDefinition, dependencies []domain.ComponentDependency) (domain.ComponentRelease, error) {
+	release, err := p.store.GetComponentRelease(ctx, id)
+	if err != nil {
+		return release, err
+	}
+	release.Parameters = parameters
+	release.Dependencies = dependencies
+	return p.UpdateRelease(ctx, user, id, release)
+}
+
+func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID, version, notes string, breaking bool, constraints map[string]any) (domain.ComponentRelease, error) {
 	source, err := p.store.GetComponentRelease(ctx, sourceID)
 	if err != nil {
 		return source, err
@@ -202,6 +215,9 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	source.Version = version
 	source.ReleaseNotes = notes
 	source.Breaking = breaking
+	if constraints != nil {
+		source.EnvironmentConstraints = constraints
+	}
 	source.Status = domain.ReleaseDraft
 	source.Verified = false
 	source.CreatedAt = time.Now().UTC()
@@ -348,12 +364,12 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 
 func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
 	for _, dependency := range release.Dependencies {
-		if len(dependency.ParameterMappings) == 0 {
-			continue
-		}
 		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
 		if err != nil {
 			return fmt.Errorf("%w: locked upstream release %s does not exist", domain.ErrInvalid, dependency.UpstreamReleaseID)
+		}
+		if upstream.ComponentID != dependency.UpstreamComponentID || upstream.Status != domain.ReleaseReleased {
+			return fmt.Errorf("%w: upstream dependency must lock a released version of component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
 		}
 		for _, mapping := range dependency.ParameterMappings {
 			upstreamParameter, ok := domain.ParameterByName(upstream.Parameters, mapping.UpstreamParameter)

@@ -592,7 +592,7 @@ export const api = {
   async updateComponent(id: string, input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
-  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean }) {
+  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown> }) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
   },
   async createRelease(componentId: string, input: Partial<ComponentRelease>) {
@@ -600,6 +600,9 @@ export const api = {
   },
   async updateRelease(releaseId: string, input: Partial<ComponentRelease>) {
     return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}`, input));
+  },
+  async updateReleaseContract(releaseId: string, input: Pick<ComponentRelease, 'parameters' | 'dependencies'>) {
+    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}/contract`, input));
   },
   async releaseImpact(releaseId: string): Promise<ImpactPreview> {
     const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact`));

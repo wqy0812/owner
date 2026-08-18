@@ -74,6 +74,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("PATCH /api/v1/components/{id}", h.updateComponent)
 	h.router.HandleFunc("POST /api/v1/components/{id}/releases", h.createRelease)
 	h.router.HandleFunc("PUT /api/v1/component-releases/{id}", h.updateRelease)
+	h.router.HandleFunc("PUT /api/v1/component-releases/{id}/contract", h.updateReleaseContract)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/clone", h.cloneRelease)
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/impact", h.releaseImpact)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/publish", h.publishRelease)

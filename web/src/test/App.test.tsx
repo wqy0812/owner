@@ -167,8 +167,108 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText(/当前展示 1.17.5，因为它有参数映射/)).toBeInTheDocument();
     expect(screen.getAllByText(/本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot/).length).toBeGreaterThan(0);
     expect(screen.getByText(/1.17.5：本组件参数 kubeRoot/)).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('查看版本合同'), 'release-kube-proxy-new');
+    expect(screen.getByText(/1.17.5 的公开参数可被下游引用/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看 1.17.5 的依赖和参数合同' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('button', { name: '查看 1.34.3 的依赖和参数合同' }));
+    expect(screen.getByRole('button', { name: '查看 1.34.3 的依赖和参数合同' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('没有直接依赖')).toBeInTheDocument();
+    expect(screen.getByText(/1.34.3 锁定的上游/)).toBeInTheDocument();
+    expect(screen.getByText(/1.34.3 的公开参数可被下游引用/)).toBeInTheDocument();
+    expect(screen.queryByText(/当前展示 1.17.5，因为它有参数映射/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '查看 1.17.5 的依赖和参数合同' }));
+    expect(screen.getAllByText(/本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot/).length).toBeGreaterThan(0);
+  });
+
+  it('lets the owner edit dependencies and parameters on the component page', async () => {
+    const draft = {
+      id: 'release-kube-proxy-draft', componentId: 'component-kube-proxy', version: '1.17.6', state: 'draft', status: 'draft',
+      parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
+      dependencies: [] as Array<Record<string, unknown>>,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PUT') {
+        return json({ ...draft, ...JSON.parse(String(init.body)), state: 'draft', status: 'draft' });
+      }
+      if (url.endsWith('/components')) return json([{
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+      }, {
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        latestRelease: draft,
+        releases: [draft],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderApp('/components?selected=component-kube-proxy');
+    await userEvent.click(await screen.findByRole('button', { name: '编辑直接依赖' }));
+    expect(screen.getByRole('button', { name: '新增依赖' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
+    await userEvent.click(screen.getByRole('button', { name: '新增依赖' }));
+    await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
+    await userEvent.selectOptions(screen.getByLabelText('已发布版本'), 'release-kubelet');
+    await userEvent.click(screen.getByRole('button', { name: '增加映射' }));
+    await userEvent.selectOptions(screen.getByLabelText('上游公开参数'), 'kubeInstallRoot');
+    await userEvent.selectOptions(screen.getByLabelText('本 Release 目标参数'), 'kubeRoot');
+    await userEvent.click(screen.getByRole('button', { name: '保存依赖和参数' }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PUT');
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        parameters: [{ name: 'kubeRoot', visibility: 'public' }],
+        dependencies: [{
+          componentId: 'component-kubelet',
+          releaseId: 'release-kubelet',
+          parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
+        }],
+      });
+    });
+  });
+
+  it('asks the owner to create a draft before editing a released contract', async () => {
+    renderApp('/components');
+    expect(await screen.findByRole('button', { name: '创建 Draft 编辑合同' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '编辑直接依赖' }));
+    expect(screen.getByRole('dialog', { name: '更新 containerd' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建 Draft' })).toBeInTheDocument();
+  });
+
+  it('scrolls to the matching contract section when editing a draft', async () => {
+    const scrolled: string[] = [];
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+      scrolled.push(this.id);
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
+        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    try {
+      renderApp('/components?selected=component-kubelet');
+      await userEvent.click(await screen.findByRole('button', { name: '编辑参数合同' }));
+      expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
+      expect(document.getElementById('contract-parameters')).toBeInTheDocument();
+      expect(scrolled).toContain('contract-parameters');
+      await userEvent.click(screen.getByRole('button', { name: '取消' }));
+      scrolled.length = 0;
+      await userEvent.click(screen.getByRole('button', { name: '编辑直接依赖' }));
+      expect(screen.getByRole('button', { name: '新增依赖' })).toBeInTheDocument();
+      expect(scrolled).toContain('contract-dependencies');
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScroll;
+    }
   });
 
   it('lets the owner choose public vs internal visibility on a draft release', async () => {
@@ -184,7 +284,7 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     }));
     renderApp('/components?selected=component-kubelet');
-    await userEvent.click(await screen.findByRole('button', { name: '配置参数' }));
+    await userEvent.click(await screen.findByRole('button', { name: '配置合同' }));
     expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
     expect(screen.getByRole('radio', { name: /公开/ })).not.toBeChecked();
     await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
@@ -198,9 +298,101 @@ describe('platform shell and RBAC UI', () => {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(screen.getByText('可观测与节点管理层')).toBeInTheDocument();
-    expect(screen.getAllByText('本层暂无组件').length).toBeGreaterThan(0);
+    expect(screen.queryByText('本层暂无组件')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /L5.*可观测与节点管理层/ }));
+    expect(screen.getByText('本层暂无组件')).toBeInTheDocument();
 		expect(screen.getByText('0 个参数映射')).toBeInTheDocument();
     expect(screen.getByText('0 个公开参数')).toBeInTheDocument();
+  });
+
+  it('collapses unused catalog layers and can expand or fold them', async () => {
+    renderApp('/components');
+    expect(await screen.findByRole('button', { name: /containerd/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /L2.*容器运行时与状态存储层/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /L1.*主机基础与安全准备层/ })).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(screen.getByRole('button', { name: '全部折叠' }));
+    expect(screen.queryByRole('button', { name: /containerd/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /L2.*容器运行时与状态存储层/ }));
+    expect(screen.getByRole('button', { name: /containerd/ })).toBeInTheDocument();
+  });
+
+  it('shows each release environment constraints such as architecture', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        latestRelease: {
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE', 'Kylin'], ipFamily: ['IPv4'] },
+        },
+        releases: [{
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE', 'Kylin'], ipFamily: ['IPv4'] },
+        }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    renderApp('/components');
+    expect(await screen.findByText('适配环境')).toBeInTheDocument();
+    expect(screen.getByText('架构')).toBeInTheDocument();
+    expect(screen.getByText('x86/amd64')).toBeInTheDocument();
+    expect(screen.getByText('ARM/arm64')).toBeInTheDocument();
+    expect(screen.getByText('操作系统')).toBeInTheDocument();
+    expect(screen.getByText('SUSE')).toBeInTheDocument();
+    expect(screen.getByText('Kylin')).toBeInTheDocument();
+    expect(screen.getByText('IP 协议族')).toBeInTheDocument();
+    expect(screen.getByText('IPv4')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '查看合同' }));
+    expect(screen.getAllByText('架构').length).toBeGreaterThan(1);
+    expect(screen.getAllByText('x86/amd64').length).toBeGreaterThan(1);
+  });
+
+  it('lets the owner choose environment constraints when creating a version', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        latestRelease: {
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
+        },
+        releases: [{
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
+        }],
+      }]);
+      if (url.includes('/component-releases/release-containerd-2/clone')) {
+        return json({
+          id: 'release-containerd-3', componentId: 'component-containerd', version: 'v2.2.0', state: 'draft', status: 'draft',
+          environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], ipFamily: ['IPv4'] },
+        });
+      }
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '创建 Draft 编辑合同' }));
+    expect(screen.getByRole('dialog', { name: '更新 containerd' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'ARM/arm64' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'ARM/arm64' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'IPv4' }));
+    await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
+    await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '增加 ARM 适配');
+    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).includes('/clone') && init?.method === 'POST');
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        version: 'v2.2.0',
+        releaseNotes: '增加 ARM 适配',
+        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], ipFamily: ['IPv4'] },
+      });
+    });
   });
 
   it('submits the complete component classification contract', async () => {
