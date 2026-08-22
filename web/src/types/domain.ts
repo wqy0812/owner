@@ -54,16 +54,28 @@ export interface ResolvedParameter {
 
 export interface ActionDefinition {
   id?: string;
+  name?: string;
   type: 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
   playbook: string;
   tags?: string[];
+  limit?: string;
   hostGroup?: string;
   timeoutSeconds?: number;
   allowedParameters?: string[];
   requiredCredentials?: string[];
   risk?: 'normal' | 'destructive';
+  riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
+  destructive?: boolean;
   fromReleaseId?: string;
   toReleaseId?: string;
+}
+
+export interface PlaybookFile {
+  path: string;
+  filename: string;
+  content: string;
+  sha256: string;
+  updatedAt?: string;
 }
 
 export interface ComponentRelease {
@@ -83,6 +95,32 @@ export interface ComponentRelease {
   actions?: ActionDefinition[];
   createdAt?: string;
   releasedAt?: string;
+}
+
+export type ImageBuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface ImageBuildLog {
+  id: number;
+  buildId: string;
+  stream: 'stdout' | 'stderr' | 'system';
+  message: string;
+  createdAt: string;
+}
+
+export interface ComponentImageBuild {
+  id: string;
+  releaseId: string;
+  requestedBy: string;
+  status: ImageBuildStatus;
+  dockerfileSha256: string;
+  imageTag: string;
+  imageRef: string;
+  imageDigest?: string;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  logs?: ImageBuildLog[];
 }
 
 export interface Component {

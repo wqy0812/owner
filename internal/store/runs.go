@@ -337,6 +337,28 @@ func (s *Store) ListRunLogs(ctx context.Context, runID string, afterID int64, li
 	return out, rows.Err()
 }
 
+func (s *Store) ListRunLogTail(ctx context.Context, runID string, limit int) ([]domain.RunLog, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,step_id,stream,message,created_at FROM (SELECT id,run_id,step_id,stream,message,created_at FROM run_logs WHERE run_id=? ORDER BY id DESC LIMIT ?) ORDER BY id`, runID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.RunLog, 0)
+	for rows.Next() {
+		var l domain.RunLog
+		var created string
+		if err := rows.Scan(&l.ID, &l.RunID, &l.StepID, &l.Stream, &l.Message, &created); err != nil {
+			return nil, err
+		}
+		l.CreatedAt = parseTime(created)
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetApproval(ctx context.Context, id string) (domain.Approval, error) {
 	return scanApproval(s.db.QueryRowContext(ctx, `SELECT id,run_id,status,requested_at,decided_by,decision,reason,decided_at FROM approvals WHERE id=?`, id))
 }

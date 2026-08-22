@@ -491,6 +491,10 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许目录；当前 Runner 使用第一个配置项 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后的进程组终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单步骤日志上限 |
+| `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 时仅保留角色身份，不导入 Demo 目录数据 |
+| `NEWPLATFORM_IMAGE_REGISTRY` | 无 | Draft Dockerfile 构建的目标 Registry；空值禁用功能 |
+| `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | Dockerfile 临时构建上下文根目录 |
+| `NEWPLATFORM_DOCKER_BIN` | `docker` | Docker CLI 路径 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
 启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 打开并迁移数据库 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。

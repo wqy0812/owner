@@ -53,7 +53,12 @@ func run() error {
 			return fmt.Errorf("reset demo: %w", err)
 		}
 	}
-	if err := (seed.Seeder{Store: database}).Run(ctx); err != nil {
+	seeder := seed.Seeder{Store: database}
+	if strings.EqualFold(envOr("NEWPLATFORM_SEED_PROFILE", "demo"), "identities") {
+		if err := seeder.SeedUsers(ctx); err != nil {
+			return fmt.Errorf("seed identities: %w", err)
+		}
+	} else if err := seeder.Run(ctx); err != nil {
 		return fmt.Errorf("seed demo: %w", err)
 	}
 	if *seedOnly || *resetDemo {
@@ -73,6 +78,12 @@ func run() error {
 	runner.MaxLogBytes = envInt("NEWPLATFORM_MAX_LOG_BYTES", 2<<20)
 
 	platform := service.NewPlatform(database, runner, service.NewEventHub())
+	platform.ConfigurePlaybookRoot(allowedRoot)
+	platform.ConfigureImageBuilder(
+		envOr("NEWPLATFORM_IMAGE_REGISTRY", ""),
+		envOr("NEWPLATFORM_IMAGE_BUILD_ROOT", "./data/image-builds"),
+		envOr("NEWPLATFORM_DOCKER_BIN", "docker"),
+	)
 	defer platform.Close()
 	if err := platform.Start(ctx); err != nil {
 		return err

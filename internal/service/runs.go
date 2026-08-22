@@ -224,6 +224,12 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if node.Action != domain.ActionVerify {
 			verifyRelease, verifyVariables := release, variables
 			if node.Action == domain.ActionRollback {
+				// A rollback without version endpoints is the compensating job for
+				// this release's installation. It verifies its own postcondition and
+				// intentionally does not append the install-state verify action.
+				if action.FromReleaseID == "" && action.ToReleaseID == "" {
+					continue
+				}
 				target, targetErr := p.store.GetComponentRelease(ctx, action.ToReleaseID)
 				if targetErr != nil || target.ComponentID != release.ComponentID || (target.Status != domain.ReleaseReleased && target.Status != domain.ReleaseDeprecated) {
 					return domain.Run{}, fmt.Errorf("%w: rollback target must be a retained release of the same component", domain.ErrInvalid)

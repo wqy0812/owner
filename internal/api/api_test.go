@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -208,6 +211,98 @@ func (f *apiFixture) request(method, path string, body any, cookie *http.Cookie)
 	return response
 }
 
+func (f *apiFixture) multipartRequest(path string, fields map[string]string, filename string, contents []byte, cookie *http.Cookie) *httptest.ResponseRecorder {
+	return f.multipartFileRequest(path, fields, "dockerfile", filename, contents, cookie)
+}
+
+func (f *apiFixture) multipartFileRequest(path string, fields map[string]string, fieldName, filename string, contents []byte, cookie *http.Cookie) *httptest.ResponseRecorder {
+	f.t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for name, value := range fields {
+		if err := writer.WriteField(name, value); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	part, err := writer.CreateFormFile(fieldName, filename)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := part.Write(contents); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		f.t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, path, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if cookie != nil {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	f.platform.ConfigurePlaybookRoot(root)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	bob := f.session(seed.ComponentOwnerK8sID)
+	releasePath := "/api/v1/component-releases/release-test-runtime-1.1.0/playbook"
+
+	uploaded := f.multipartFileRequest(releasePath, nil, "playbook", "install.yml", []byte("---\n- hosts: all\n  tasks: []\n"), alice)
+	if uploaded.Code != http.StatusCreated {
+		t.Fatalf("upload Playbook status=%d body=%s", uploaded.Code, uploaded.Body.String())
+	}
+	data := decodeEnvelope(t, uploaded)["data"].(map[string]any)
+	managedPath, ok := data["path"].(string)
+	if !ok || managedPath != "managed/component-test-runtime/release-test-runtime-1.1.0/install.yml" {
+		t.Fatalf("managed Playbook path=%#v", data)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(managedPath)))
+	if err != nil || !strings.Contains(string(contents), "hosts: all") {
+		t.Fatalf("stored Playbook contents=%q err=%v", contents, err)
+	}
+
+	loaded := f.request(http.MethodGet, releasePath+"?path="+managedPath, nil, alice)
+	if loaded.Code != http.StatusOK || !strings.Contains(loaded.Body.String(), "hosts: all") {
+		t.Fatalf("load Playbook status=%d body=%s", loaded.Code, loaded.Body.String())
+	}
+	if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+		t.Fatal(err)
+	}
+	edited := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n- hosts: workers\n  tasks: []\n"}, alice)
+	if edited.Code != http.StatusOK || !strings.Contains(edited.Body.String(), "hosts: workers") {
+		t.Fatalf("edit Playbook status=%d body=%s", edited.Code, edited.Body.String())
+	}
+	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil || release.Verified {
+		t.Fatalf("Playbook edit did not invalidate verification: verified=%v err=%v", release.Verified, err)
+	}
+	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, bob); response.Code != http.StatusForbidden {
+		t.Fatalf("other owner edit Playbook status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook", map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, alice); response.Code != http.StatusConflict {
+		t.Fatalf("released Playbook edit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "notes.txt", "content": "not yaml"}, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid Playbook extension status=%d body=%s", response.Code, response.Body.String())
+	}
+	outside := filepath.Join(t.TempDir(), "outside.yml")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escapePath := filepath.Join(filepath.Dir(filepath.Join(root, filepath.FromSlash(managedPath))), "escape.yml")
+	if err := os.Symlink(outside, escapePath); err != nil {
+		t.Fatal(err)
+	}
+	if response := f.request(http.MethodGet, releasePath+"?path=managed/component-test-runtime/release-test-runtime-1.1.0/escape.yml", nil, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("escaping Playbook symlink status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func decodeEnvelope(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var output map[string]any
@@ -264,6 +359,57 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	var count int
 	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE metadata_json LIKE ?`, "%"+secret+"%").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("secret found in audit: count=%d err=%v", count, err)
+	}
+}
+
+func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
+	f := newAPIFixture(t)
+	binary := filepath.Join(t.TempDir(), "fake-docker")
+	script := "#!/bin/sh\nif [ \"$1\" = image ]; then printf '%s\\n' '192.168.88.54:5000/components/component-test-runtime:v1.1.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; else printf '%s ok\\n' \"$1\"; fi\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.platform.ConfigureImageBuilder("192.168.88.54:5000", t.TempDir(), binary)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	bob := f.session(seed.ComponentOwnerK8sID)
+
+	created := f.multipartRequest(
+		"/api/v1/component-releases/release-test-runtime-1.1.0/image-builds",
+		map[string]string{"tag": "V1.1.0"},
+		"Dockerfile",
+		[]byte("FROM scratch\nLABEL purpose=api-test\n"),
+		alice,
+	)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create image build status=%d body=%s", created.Code, created.Body.String())
+	}
+	data := decodeEnvelope(t, created)["data"].(map[string]any)
+	buildID := data["id"].(string)
+	if data["imageRef"] != "192.168.88.54:5000/components/component-test-runtime:v1.1.0" {
+		t.Fatalf("image reference was not forced to configured registry: %#v", data)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		build, err := f.database.GetComponentImageBuild(context.Background(), buildID)
+		if err == nil && build.Status == domain.ImageBuildSucceeded {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	visible := f.request(http.MethodGet, "/api/v1/image-builds/"+buildID, nil, alice)
+	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), "@sha256:aaaaaaaa") || !strings.Contains(visible.Body.String(), "build ok") {
+		t.Fatalf("completed build response status=%d body=%s", visible.Code, visible.Body.String())
+	}
+	if hidden := f.request(http.MethodGet, "/api/v1/image-builds/"+buildID, nil, bob); hidden.Code != http.StatusForbidden {
+		t.Fatalf("other component owner can inspect draft build: status=%d", hidden.Code)
+	}
+	released := f.multipartRequest(
+		"/api/v1/component-releases/release-test-runtime-1.0.0/image-builds",
+		map[string]string{"tag": "v1.0.0"}, "Dockerfile", []byte("FROM scratch\n"), alice,
+	)
+	if released.Code != http.StatusConflict {
+		t.Fatalf("released version image build status=%d body=%s", released.Code, released.Body.String())
 	}
 }
 
@@ -557,6 +703,7 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	carol := f.session(seed.ScenarioOwnerID)
+	dave := f.session(seed.EnvironmentOwnerID)
 	if response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice); response.Code != http.StatusOK {
 		t.Fatalf("publish rollback source status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -577,6 +724,14 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 		t.Fatalf("rollback test status=%d body=%s", runResponse.Code, runResponse.Body.String())
 	}
 	runID := decodeEnvelope(t, runResponse)["data"].(map[string]any)["id"].(string)
+	runData := decodeEnvelope(t, runResponse)["data"].(map[string]any)
+	if runData["status"] != string(domain.RunAwaitingApproval) || runData["destructive"] != true {
+		t.Fatalf("rollback run bypassed approval: %#v", runData)
+	}
+	approvalID := runData["approval"].(map[string]any)["id"].(string)
+	if response := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); response.Code != http.StatusOK {
+		t.Fatalf("approve rollback status=%d body=%s", response.Code, response.Body.String())
+	}
 	waitForRun(t, f.database, runID, domain.RunSucceeded)
 	f.runner.mu.Lock()
 	requests := append([]ansiblerunner.Request(nil), f.runner.requests...)

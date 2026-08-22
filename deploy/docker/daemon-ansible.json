@@ -1,0 +1,6 @@
+{
+  "insecure-registries": [
+    "dockerhub.icbc:5000",
+    "192.168.88.54:5000"
+  ]
+}

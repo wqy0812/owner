@@ -251,6 +251,15 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	if err := s.CreateRun(ctx, run1, &approval); err != nil {
 		t.Fatal(err)
 	}
+	for index, message := range []string{"one", "two", "three", "four", "five"} {
+		if _, err := s.AppendRunLog(ctx, domain.RunLog{RunID: run1.ID, Stream: "stdout", Message: message, CreatedAt: testNow.Add(time.Duration(index) * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logTail, err := s.ListRunLogTail(ctx, run1.ID, 2)
+	if err != nil || len(logTail) != 2 || logTail[0].Message != "four" || logTail[1].Message != "five" {
+		t.Fatalf("run log tail=%+v err=%v", logTail, err)
+	}
 	for _, test := range []struct {
 		userID string
 		want   bool
@@ -330,6 +339,18 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 	if active, err := s.HasActiveComponentTest(ctx, componentTest.ComponentReleaseID); err != nil || active {
 		t.Fatalf("terminal component test active=%v err=%v", active, err)
+	}
+}
+
+func TestEmptyImageBuildListsEncodeAsArrays(t *testing.T) {
+	s := newTestStore(t)
+	builds, err := s.ListComponentImageBuilds(context.Background(), "missing-release", 20)
+	if err != nil || builds == nil || len(builds) != 0 {
+		t.Fatalf("empty builds=%#v err=%v", builds, err)
+	}
+	logs, err := s.ListComponentImageBuildLogs(context.Background(), "missing-build", 20)
+	if err != nil || logs == nil || len(logs) != 0 {
+		t.Fatalf("empty build logs=%#v err=%v", logs, err)
 	}
 }
 

@@ -161,6 +161,41 @@ type ComponentRelease struct {
 	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
 }
 
+type ImageBuildStatus string
+
+const (
+	ImageBuildQueued      ImageBuildStatus = "queued"
+	ImageBuildRunning     ImageBuildStatus = "running"
+	ImageBuildSucceeded   ImageBuildStatus = "succeeded"
+	ImageBuildFailed      ImageBuildStatus = "failed"
+	ImageBuildCancelled   ImageBuildStatus = "cancelled"
+	ImageBuildInterrupted ImageBuildStatus = "interrupted"
+)
+
+type ComponentImageBuild struct {
+	ID               string           `json:"id"`
+	ReleaseID        string           `json:"releaseId"`
+	RequestedBy      string           `json:"requestedBy"`
+	Status           ImageBuildStatus `json:"status"`
+	DockerfileSHA256 string           `json:"dockerfileSha256"`
+	ImageTag         string           `json:"imageTag"`
+	ImageRef         string           `json:"imageRef"`
+	ImageDigest      string           `json:"imageDigest,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	StartedAt        *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time       `json:"finishedAt,omitempty"`
+	Logs             []ImageBuildLog  `json:"logs,omitempty"`
+}
+
+type ImageBuildLog struct {
+	ID        int64     `json:"id"`
+	BuildID   string    `json:"buildId"`
+	Stream    string    `json:"stream"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type ParameterVisibility string
 
 const (
@@ -284,7 +319,7 @@ type ActionDefinition struct {
 }
 
 func (a ActionDefinition) NeedsApproval() bool {
-	if a.Destructive || a.RiskLevel == RiskDestructive {
+	if a.Destructive || a.RiskLevel == RiskDestructive || a.Kind == ActionRollback {
 		return true
 	}
 	s := strings.ToLower(string(a.Kind) + " " + a.Name + " " + a.Playbook)

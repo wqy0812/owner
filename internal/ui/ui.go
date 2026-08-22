@@ -41,6 +41,11 @@ func Handler() http.Handler {
 		}
 		if strings.Contains(name, "/assets/") || strings.HasPrefix(name, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else if name == "index.html" {
+			// The SPA shell must never be restored with an asset graph from an
+			// earlier deployment. Hashed assets remain immutable above.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}

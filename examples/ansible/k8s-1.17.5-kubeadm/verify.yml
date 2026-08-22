@@ -1,0 +1,49 @@
+---
+- name: Verify the Kubernetes 1.17.5 cluster
+  hosts: primary_control_plane
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Wait for all nodes to become Ready
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=360s
+      changed_when: false
+
+    - name: Read node inventory
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o json
+      register: nodes_json
+      changed_when: false
+
+    - name: Validate node count and Kubernetes versions
+      assert:
+        that:
+          - (nodes_json.stdout | from_json)['items'] | length == 6
+          - ((nodes_json.stdout | from_json)['items'] | map(attribute='status.nodeInfo.kubeletVersion') | unique | list) == ['v1.17.5']
+        fail_msg: "Expected exactly six Ready Kubernetes v1.17.5 nodes"
+
+    - name: Read system pods
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system get pods --no-headers
+      register: system_pods
+      changed_when: false
+
+    - name: Validate core system pods
+      assert:
+        that:
+          - "'kube-apiserver-' in system_pods.stdout"
+          - "'kube-controller-manager-' in system_pods.stdout"
+          - "'kube-scheduler-' in system_pods.stdout"
+          - "'kube-proxy-' in system_pods.stdout"
+          - "'coredns-' in system_pods.stdout"
+        fail_msg: "One or more Kubernetes core components are missing"
+
+    - name: Read Flannel pods
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-flannel get pods --no-headers
+      register: flannel_pods
+      changed_when: false
+
+    - name: Report acceptance evidence
+      debug:
+        msg:
+          - "All six nodes are Ready on Kubernetes v1.17.5"
+          - "{{ system_pods.stdout_lines }}"
+          - "{{ flannel_pods.stdout_lines }}"

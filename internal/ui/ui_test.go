@@ -14,3 +14,18 @@ func TestHandlerWithoutBuiltAssetsReturnsNotFound(t *testing.T) {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
 }
+
+func TestHandlerDoesNotStoreSPAShell(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/components", nil)
+	rec := httptest.NewRecorder()
+	Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Skip("frontend assets have not been built")
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected SPA cache policy: %q", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("unexpected SPA pragma: %q", got)
+	}
+}

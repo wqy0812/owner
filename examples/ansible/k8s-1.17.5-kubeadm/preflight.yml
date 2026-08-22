@@ -1,0 +1,41 @@
+---
+- name: Validate Kubernetes 1.17.5 target hosts
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    expected_kubernetes_version: "1.17.5"
+  tasks:
+    - name: Validate operating system and architecture
+      assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_architecture in ['x86_64', 'amd64']
+          - ansible_memtotal_mb | int >= 1800
+        fail_msg: "Kubernetes 1.17.5 sample requires Ubuntu amd64 with at least 2 GiB RAM"
+
+    - name: Validate required inventory groups
+      assert:
+        that:
+          - groups['primary_control_plane'] | default([]) | length == 1
+          - groups['secondary_control_plane'] | default([]) | length == 2
+          - groups['worker_nodes'] | default([]) | length == 3
+        fail_msg: "Inventory must define one primary, two secondary control planes, and three workers"
+      run_once: true
+
+    - name: Validate node address
+      assert:
+        that:
+          - ansible_host is defined
+          - ansible_host | length > 0
+        fail_msg: "Every host requires an ansible_host address"
+
+    - name: Check Docker service
+      command: docker version --format {% raw %}'{{.Server.Version}}'{% endraw %}
+      register: docker_version
+      changed_when: false
+
+    - name: Report preflight identity
+      debug:
+        msg: "{{ inventory_hostname }}={{ ansible_host }} Ubuntu {{ ansible_distribution_version }}, Docker {{ docker_version.stdout }}, target Kubernetes {{ expected_kubernetes_version }}"

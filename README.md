@@ -4,7 +4,7 @@
 
 ## 能力
 
-- 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知。
+- 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知；Draft Playbook 支持上传和在线编辑。
 - 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
 - 环境 Owner：管理 Inventory、环境参数与凭据引用，审批高风险作业。
 - 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
@@ -15,6 +15,7 @@
 
 - [平台设计文档（后端为主）](docs/backend-design.md)
 - [平台操作手册（分角色）](docs/operation-manual.md)
+- [当前部署环境节点清单](docs/deployment-snapshot-2026-08-20.md)
 
 > 这是本地 Demo，不是生产控制面。身份切换不包含密码认证；凭据仅允许保存文件路径或环境变量引用。
 
@@ -82,6 +83,7 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 ## Ansible 安全边界
 
 - 只执行 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 下的相对 Playbook，拒绝路径穿越。
+- 前台上传/在线编辑的 Playbook 限 1 MiB UTF-8 YAML，并写入 `managed/<component-slug>/<release-id>/`；已发布版本不可改，内容变化会使原测试验证失效。
 - 每次运行使用独立工作区、0600 Inventory/变量文件和独立 `ANSIBLE_LOCAL_TEMP`。
 - Secret 运行时解析并脱敏，不写入数据库、快照或保留日志。
 - 每个环境同时只有一个活动执行；其他请求 FIFO 排队。
@@ -99,7 +101,16 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许执行的作业根目录；Demo 使用首个配置项 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后进程组强制终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单个 Ansible step 保留的脱敏日志上限 |
+| `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 仅创建角色切换账号，目录保持为空供人工录入 |
+| `NEWPLATFORM_IMAGE_REGISTRY` | 无 | 非空时启用 Draft Dockerfile 构建；平台强制推送到该仓库的 `components/<slug>:<tag>` |
+| `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | 单 Dockerfile 隔离构建上下文的临时根目录 |
+| `NEWPLATFORM_DOCKER_BIN` | `docker` | 构建和推送镜像所用的 Docker CLI |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | 批准执行 Kubernetes 1.17.5 作业时必需；32 字节密钥的 base64 值，仅以 CredentialRef 注入 |
+
+组件 Owner 可在 Draft 发布行选择“构建镜像”，上传不超过 1 MiB 的单个
+Dockerfile。平台不会接收本地构建目录或主机路径；构建、推送日志和最终
+RepoDigest 会记录在数据库中。Dockerfile 会由平台主机 Docker daemon 执行，
+因此只应上传可信内容。
 
 ## 示例来源
 

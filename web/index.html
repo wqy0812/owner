@@ -6,9 +6,51 @@
     <meta name="theme-color" content="#101b36" />
     <meta name="description" content="集群组件、场景和环境协作平台" />
     <title>ClusterForge · 集群交付平台</title>
+    <style>
+      .boot-fallback { min-height: 100vh; display: grid; place-content: center; gap: 10px; box-sizing: border-box; padding: 32px; background: #f5f7fb; color: #18233d; font: 15px/1.5 system-ui, sans-serif; text-align: center; }
+      .boot-fallback strong { font-size: 22px; }
+      .boot-fallback button { justify-self: center; border: 0; border-radius: 8px; padding: 9px 16px; background: #3157d5; color: white; cursor: pointer; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot-fallback" class="boot-fallback" role="status" aria-live="polite">
+        <strong>ClusterForge</strong>
+        <span id="boot-detail">正在加载组件平台…</span>
+        <button id="boot-reload" type="button" hidden>重新加载</button>
+        <noscript>此页面需要启用 JavaScript。</noscript>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const retryKey = 'clusterforge:boot-retry';
+        const showFailure = () => {
+          const detail = document.getElementById('boot-detail');
+          const reload = document.getElementById('boot-reload');
+          if (detail) detail.textContent = '前台资源加载失败，请重新加载。';
+          if (reload) {
+            reload.hidden = false;
+            reload.addEventListener('click', () => window.location.reload(), { once: true });
+          }
+        };
+        window.addEventListener('error', (event) => {
+          if (event.target instanceof HTMLScriptElement) showFailure();
+        }, true);
+        window.setTimeout(() => {
+          if (!document.getElementById('boot-fallback')) return;
+          try {
+            if (window.sessionStorage.getItem(retryKey) !== '1') {
+              window.sessionStorage.setItem(retryKey, '1');
+              window.location.reload();
+              return;
+            }
+          } catch (_) {
+            // Storage can be unavailable in hardened browser profiles.
+          }
+          showFailure();
+        }, 3000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

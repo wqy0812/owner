@@ -393,6 +393,9 @@ func (p *Platform) validateUpgradeRollbackMappingContracts(ctx context.Context, 
 		case domain.ActionUpgrade:
 			peer, err = p.store.GetComponentRelease(ctx, action.FromReleaseID)
 		case domain.ActionRollback:
+			if action.FromReleaseID == "" && action.ToReleaseID == "" {
+				continue
+			}
 			peer, err = p.store.GetComponentRelease(ctx, action.ToReleaseID)
 		default:
 			continue
@@ -426,6 +429,9 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 				return fmt.Errorf("%w: upgrade fromReleaseId must lock a released version of the same component", domain.ErrInvalid)
 			}
 		case domain.ActionRollback:
+			if action.FromReleaseID == "" && action.ToReleaseID == "" {
+				continue
+			}
 			if action.FromReleaseID != release.ID || action.ToReleaseID == release.ID {
 				return fmt.Errorf("%w: rollback action must point from this release to an earlier release", domain.ErrInvalid)
 			}

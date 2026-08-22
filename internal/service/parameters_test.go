@@ -36,6 +36,22 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 	}
 }
 
+func TestValidateReleaseAllowsStandaloneInstallRollback(t *testing.T) {
+	base := domain.ComponentRelease{
+		Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Actions: []domain.ActionDefinition{{
+			Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", TimeoutSeconds: 60,
+		}},
+	}
+	if err := validateRelease(base); err != nil {
+		t.Fatalf("standalone install rollback rejected: %v", err)
+	}
+	base.Actions[0].FromReleaseID = "release-current"
+	if err := validateRelease(base); err == nil || !strings.Contains(err.Error(), "both fromReleaseId and toReleaseId") {
+		t.Fatalf("half-configured version rollback accepted: %v", err)
+	}
+}
+
 func TestMappedParameterCannotBeLocallyOverridden(t *testing.T) {
 	release := domain.ComponentRelease{
 		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}},

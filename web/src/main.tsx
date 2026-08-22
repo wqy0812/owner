@@ -4,14 +4,23 @@ import { BrowserRouter } from 'react-router-dom';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
 import { App } from './App';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { AppProvider } from './context/AppContext';
+
+try {
+  window.sessionStorage.removeItem('clusterforge:boot-retry');
+} catch {
+  // Storage can be unavailable in hardened browser profiles.
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AppProvider>
-        <App />
-      </AppProvider>
+      <AppErrorBoundary>
+        <AppProvider>
+          <App />
+        </AppProvider>
+      </AppErrorBoundary>
     </BrowserRouter>
   </React.StrictMode>,
 );

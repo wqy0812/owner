@@ -45,6 +45,7 @@ function displayError(error: unknown): string {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User>(DEMO_USERS[0]);
+  const [sessionReady, setSessionReady] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [connected, setConnected] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -57,6 +58,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
   const refreshTimer = useRef<number>();
+  const sessionInitialization = useRef<Promise<{ user: User; switched: boolean }>>();
 
   const notify = useCallback((tone: Toast['tone'], title: string, message?: string) => {
     const id = Date.now() + Math.random();
@@ -106,21 +108,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    api
-      .me()
-      .then((me) => {
+    if (!sessionInitialization.current) sessionInitialization.current = (async () => {
+      try {
+        return { user: await api.me(), switched: false };
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 404)) {
+          return { user: await api.switchUser(DEMO_USERS[0].id), switched: true };
+        }
+        throw error;
+      }
+    })();
+    void sessionInitialization.current
+      .then(({ user: me, switched }) => {
         if (!active) return;
         const demo = DEMO_USERS.find((item) => item.id === me.id);
         setUser({ ...(demo ?? DEMO_USERS[0]), ...me });
+        if (switched) signalRefresh();
       })
-      .catch((error) => {
-        if (error instanceof ApiError && (error.status === 401 || error.status === 404)) {
-          api.switchUser(DEMO_USERS[0].id).then((me) => {
-            if (!active) return;
-            setUser({ ...DEMO_USERS[0], ...me });
-            signalRefresh();
-          }).catch(() => {});
-        }
+      .catch(() => {
+        // Protected page requests will surface a useful API error after
+        // initialization instead of racing the session bootstrap.
+      })
+      .finally(() => {
+        if (active) setSessionReady(true);
       });
     return () => {
       active = false;
@@ -128,6 +138,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [signalRefresh]);
 
   useEffect(() => {
+    if (!sessionReady) return;
     const stream = new EventSource(eventsURL(), { withCredentials: true });
     stream.onopen = () => setConnected(true);
     stream.onerror = () => setConnected(false);
@@ -150,7 +161,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       pendingRefreshTargets.current.clear();
     };
-  }, [scheduleRefresh, user.id]);
+  }, [scheduleRefresh, sessionReady, user.id]);
 
   const value = useMemo(
     () => ({ user, users: DEMO_USERS, switching, connected, switchUser, notify, refreshTokens, signalRefresh }),
@@ -159,7 +170,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider value={value}>
-      {children}
+      {sessionReady ? children : <div className="state-block" role="status">正在初始化 Demo 身份…</div>}
       <div className="toast-stack" aria-live="polite">
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast--${toast.tone}`}>

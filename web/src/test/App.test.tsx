@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
@@ -91,6 +92,29 @@ describe('platform shell and RBAC UI', () => {
   beforeEach(() => installFetch());
   afterEach(() => vi.unstubAllGlobals());
 
+  it('waits for Demo identity initialization before requesting protected resources', async () => {
+    let resolveSwitch!: (response: Response) => void;
+    const switchResponse = new Promise<Response>((resolve) => { resolveSwitch = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json({ error: { code: 'UNAUTHORIZED', message: '未登录' } }, 401);
+      if (url.endsWith('/session/switch')) return switchResponse;
+      if (url.endsWith('/components')) return json(components);
+      return json([]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StrictMode><MemoryRouter initialEntries={['/components']}><AppProvider><App /></AppProvider></MemoryRouter></StrictMode>);
+    expect(screen.getByRole('status')).toHaveTextContent('正在初始化 Demo 身份…');
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/session/switch'))).toBe(true));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/session/me'))).toHaveLength(1);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/components'))).toBe(false);
+
+    await act(async () => resolveSwitch(await json(alice)));
+    expect(await screen.findByRole('heading', { name: 'containerd' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components')).length).toBeGreaterThan(0);
+  });
+
   it('shows the dashboard summary and all primary navigation entries', async () => {
     renderApp();
     expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
@@ -166,6 +190,89 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '查看合同' }));
     expect(screen.getByRole('dialog', { name: '1.17.5 参数合同' })).toBeInTheDocument();
     expect(screen.getAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot').length).toBeGreaterThan(1);
+  });
+
+  it('closes a component release dialog when the selected route changes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-controller-manager', name: 'kube-controller-manager', slug: 'kube-controller-manager', ownerId: alice.id,
+        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', state: 'released', status: 'released' },
+        releases: [{ id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', state: 'released', status: 'released' }],
+      }, {
+        id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
+        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        latestRelease: { id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', state: 'released', status: 'released' },
+        releases: [{ id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', state: 'released', status: 'released' }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components?selected=component-controller-manager');
+    await userEvent.click(await screen.findByRole('button', { name: '查看合同' }));
+    expect(screen.getByRole('dialog', { name: 'controller-1.17.5 参数合同' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /kube-scheduler/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'kube-scheduler' })).toBeInTheDocument();
+  });
+
+  it('keeps component navigation locked until a Draft save finishes and its dialog unmounts', async () => {
+    const schedulerDraft = {
+      id: 'release-scheduler-draft', componentId: 'component-scheduler', version: '1.17.5-r2', type: 'atomic',
+      state: 'draft', status: 'draft', releaseNotes: 'Scheduler draft', parameters: [], dependencies: [],
+      actions: [{ name: 'rollback', type: 'rollback', playbook: 'managed/scheduler/kube-scheduler-rollback.yml', fromReleaseId: '1.17.5-r2', toReleaseId: '1.17.5' }],
+    };
+    const proxyDraft = {
+      id: 'release-proxy-draft', componentId: 'component-proxy', version: '1.17.5-r2', type: 'atomic',
+      state: 'draft', status: 'draft', releaseNotes: 'Proxy draft', parameters: [], dependencies: [], actions: [],
+    };
+    let resolveSave!: (response: Response) => void;
+    const saveResponse = new Promise<Response>((resolve) => { resolveSave = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-scheduler-draft') && init?.method === 'PUT') return saveResponse;
+      if (url.endsWith('/components')) return json([{
+        id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
+        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        latestRelease: schedulerDraft, releases: [schedulerDraft],
+      }, {
+        id: 'component-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id,
+        layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        latestRelease: proxyDraft, releases: [proxyDraft],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-scheduler');
+    await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
+    expect(screen.getByRole('dialog', { name: '配置 Draft 1.17.5-r2' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('kube-scheduler-rollback.yml')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+    expect(await screen.findByRole('button', { name: '保存中…' })).toBeDisabled();
+
+    const proxyButton = screen.getByRole('button', { name: /kube-proxy/ });
+    expect(proxyButton).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '关闭' }));
+    expect(screen.getByRole('dialog', { name: '配置 Draft 1.17.5-r2' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'kube-scheduler' })).toBeInTheDocument();
+
+    await act(async () => resolveSave(await json(schedulerDraft)));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    expect(proxyButton).toBeEnabled();
+    await userEvent.click(proxyButton);
+    expect(await screen.findByRole('heading', { name: 'kube-proxy' })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('kube-scheduler-rollback.yml')).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input, init]) => String(input).includes('/component-releases/') && init?.method === 'PUT')).toHaveLength(1);
   });
 
   it('switches the visible contract when a component has multiple releases', async () => {
@@ -450,6 +557,112 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.type(screen.getByPlaceholderText('containerd'), 'demo');
     await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
     expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
+  });
+
+  it('persists multiple lifecycle actions with distinct managed Playbooks', async () => {
+    const previousRelease = {
+      id: 'release-docker-previous', componentId: 'component-docker', version: '25.0.0', type: 'atomic',
+      state: 'released', status: 'released', releaseNotes: 'Previous Docker Runtime', parameters: [], dependencies: [], actions: [],
+    };
+    let draft = {
+      id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0', type: 'atomic',
+      state: 'draft', status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
+      actions: [{ name: 'install', type: 'install', playbook: 'managed/docker/release-docker-draft/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
+    };
+    let submittedActions: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.includes('/component-releases/release-docker-draft/playbook?path=') && (!init?.method || init.method === 'GET')) {
+        return json({
+          path: 'managed/docker/release-docker-draft/install.yml',
+          filename: 'install.yml',
+          content: '---\n- name: Install Docker\n  hosts: all\n  tasks: []\n',
+          sha256: 'existing-playbook-sha256',
+        });
+      }
+      if (url.endsWith('/component-releases/release-docker-draft/playbook') && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        return json({
+          path: `managed/docker/release-docker-draft/${body.filename}`,
+          filename: body.filename,
+          content: body.content,
+          sha256: 'playbook-sha256',
+        });
+      }
+      if (url.endsWith('/component-releases/release-docker-draft') && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        submittedActions = body.actions;
+        draft = { ...draft, ...body, state: 'draft', status: 'draft' };
+        return json(draft);
+      }
+      if (url.endsWith('/components')) return json([{
+        id: 'component-docker', name: 'Docker Runtime', slug: 'docker', ownerId: alice.id,
+        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        latestRelease: draft, releases: [draft, previousRelease],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-docker');
+    await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
+    expect(screen.getByRole('textbox', { name: 'Playbook 文件名' })).toHaveAttribute('pattern', '[A-Za-z0-9][A-Za-z0-9._\\-]*\\.(yml|yaml)');
+
+    await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
+    expect(await screen.findByDisplayValue(/Install Docker/)).toBeInTheDocument();
+    expect(screen.getByText('内容已保存')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+
+    const playbookEditor = screen.getByRole('textbox', { name: 'Playbook 在线编辑器' });
+    fireEvent.change(playbookEditor, { target: { value: 'temporary local edit' } });
+    fireEvent.change(playbookEditor, { target: { value: '---\n- name: Install Docker\n  hosts: all\n  tasks: []\n' } });
+    expect(screen.getByText('内容已保存')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+
+    fireEvent.change(playbookEditor, {
+      target: { value: '---\n- name: Locally changed install\n  hosts: all\n  tasks: []\n' },
+    });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirm);
+    await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
+    expect(confirm).toHaveBeenCalledWith('当前 Playbook 有未保存内容，确认放弃并新增动作？');
+    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: '安装' }).at(-1)).toHaveClass('active');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '动作类型' }), 'verify');
+    expect(screen.getByRole('textbox', { name: 'Playbook 文件名' })).toHaveValue('verify.yml');
+    await userEvent.click(screen.getByRole('button', { name: '保存 Playbook' }));
+    await screen.findByText('Playbook 已保存');
+
+    await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
+    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: '安装' }).at(-1)).toHaveClass('active');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '动作类型' }), 'rollback');
+    expect(screen.getByRole('textbox', { name: 'Playbook 文件名' })).toHaveValue('rollback.yml');
+    const sourceRelease = screen.getByRole('combobox', { name: '来源 Release' });
+    const targetRelease = screen.getByRole('combobox', { name: '目标 Release' });
+    expect(within(sourceRelease).getByRole('option', { name: '26.1.0 · release-docker-draft' })).toBeInTheDocument();
+    expect(within(targetRelease).getByRole('option', { name: '25.0.0 · release-docker-previous' })).toBeInTheDocument();
+    await userEvent.selectOptions(sourceRelease, 'release-docker-draft');
+    await userEvent.selectOptions(targetRelease, 'release-docker-previous');
+    await userEvent.click(screen.getByRole('button', { name: '保存 Playbook' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+
+    await waitFor(() => expect(submittedActions).toHaveLength(3));
+    expect(submittedActions.map((action) => action.type)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions.map((action) => action.name)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions.map((action) => action.playbook)).toEqual([
+      'managed/docker/release-docker-draft/install.yml',
+      'managed/docker/release-docker-draft/verify.yml',
+      'managed/docker/release-docker-draft/rollback.yml',
+    ]);
+    expect(submittedActions[2]).toMatchObject({ fromReleaseId: 'release-docker-draft', toReleaseId: 'release-docker-previous' });
+    expect(await screen.findByText('动作 3/3：安装、验证、回滚')).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
+    expect(screen.getByRole('button', { name: '安装' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '验证' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '回滚' })).toBeInTheDocument();
   });
 
   it('adapts the backend graph DTO into an editable React Flow node', async () => {

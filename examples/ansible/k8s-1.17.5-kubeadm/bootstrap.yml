@@ -1,0 +1,122 @@
+---
+- name: Initialize the primary Kubernetes control plane
+  hosts: primary_control_plane
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    control_plane_endpoint: "192.168.88.59:6443"
+    pod_network_cidr: "10.244.0.0/16"
+    service_cidr: "10.96.0.0/12"
+    image_repository: "registry.cn-hangzhou.aliyuncs.com/google_containers"
+  tasks:
+    - name: Initialize Kubernetes 1.17.5
+      command: >-
+        kubeadm init
+        --kubernetes-version=v1.17.5
+        --apiserver-advertise-address={{ ansible_host }}
+        --control-plane-endpoint={{ control_plane_endpoint }}
+        --pod-network-cidr={{ pod_network_cidr }}
+        --service-cidr={{ service_cidr }}
+        --image-repository={{ image_repository }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create worker join command
+      command: kubeadm token create --ttl 2h --print-join-command
+      register: worker_join
+      changed_when: false
+      no_log: true
+
+    - name: Upload control-plane certificates
+      command: kubeadm init phase upload-certs --upload-certs
+      register: certificate_upload
+      changed_when: true
+      no_log: true
+
+    - name: Store ephemeral join data for later plays
+      set_fact:
+        cluster_worker_join_command: "{{ worker_join.stdout | trim }}"
+        cluster_certificate_key: "{{ certificate_upload.stdout_lines | last | trim }}"
+      no_log: true
+
+    - name: Install root kubectl configuration
+      file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+
+    - name: Copy admin kubeconfig
+      copy:
+        remote_src: true
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        owner: root
+        group: root
+        mode: "0600"
+
+- name: Join secondary Kubernetes control planes
+  hosts: secondary_control_plane
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Join control plane
+      command: >-
+        {{ hostvars[groups['primary_control_plane'][0]].cluster_worker_join_command }}
+        --control-plane
+        --certificate-key {{ hostvars[groups['primary_control_plane'][0]].cluster_certificate_key }}
+        --apiserver-advertise-address={{ ansible_host }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+      no_log: true
+
+    - name: Install root kubectl configuration
+      file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+
+    - name: Copy admin kubeconfig
+      copy:
+        remote_src: true
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        owner: root
+        group: root
+        mode: "0600"
+
+- name: Join Kubernetes worker nodes
+  hosts: worker_nodes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Join worker
+      command: "{{ hostvars[groups['primary_control_plane'][0]].cluster_worker_join_command }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+      no_log: true
+
+- name: Install Flannel network
+  hosts: primary_control_plane
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    media_install_dir: /opt/clusterforge/k8s-1.17.5
+  tasks:
+    - name: Render Flannel manifest with selected pod CIDR
+      template:
+        src: templates/kube-flannel.yml.j2
+        dest: /etc/kubernetes/kube-flannel.yml
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Apply Flannel manifest
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /etc/kubernetes/kube-flannel.yml
+      register: flannel_apply
+      changed_when: "'created' in flannel_apply.stdout or 'configured' in flannel_apply.stdout"

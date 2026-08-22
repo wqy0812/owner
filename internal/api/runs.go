@@ -140,13 +140,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 			"requestedAt": run.Approval.RequestedAt, "decidedAt": run.Approval.DecidedAt,
 		}
 	}
-	logs, _ := h.platform.Store().ListRunLogs(r.Context(), run.ID, 0, 500)
-	start := 0
-	if len(logs) > 200 {
-		start = len(logs) - 200
-	}
-	tail := make([]string, 0, len(logs)-start)
-	for _, logLine := range logs[start:] {
+	logs, _ := h.platform.Store().ListRunLogTail(r.Context(), run.ID, 200)
+	tail := make([]string, 0, len(logs))
+	for _, logLine := range logs {
 		tail = append(tail, fmt.Sprintf("[%s] %s", logLine.Stream, logLine.Message))
 	}
 	output["logTail"] = tail

@@ -59,6 +59,7 @@ func TestValidateGraphRejectsCycleAndMissingFields(t *testing.T) {
 func TestActionNeedsApprovalUsesExplicitAndDefensiveMarkers(t *testing.T) {
 	for _, action := range []ActionDefinition{
 		{Kind: ActionUninstall},
+		{Kind: ActionRollback},
 		{Name: "cluster recovery"},
 		{Playbook: "roles/clean.yml"},
 		{RiskLevel: RiskDestructive},

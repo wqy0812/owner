@@ -1,0 +1,19 @@
+[Unit]
+Description=ClusterForge component delivery demo platform
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/clusterforge/platform
+EnvironmentFile=/etc/clusterforge/platform.env
+ExecStart=/opt/clusterforge/platform/clusterforge-platform
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

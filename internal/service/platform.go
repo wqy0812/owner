@@ -21,9 +21,13 @@ type Runner interface {
 }
 
 type Platform struct {
-	store  *store.Store
-	runner Runner
-	hub    *EventHub
+	store          *store.Store
+	runner         Runner
+	hub            *EventHub
+	playbookRoot   string
+	imageRegistry  string
+	imageBuildRoot string
+	dockerBinary   string
 
 	rootCtx context.Context
 	cancel  context.CancelFunc
@@ -47,7 +51,23 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 func (p *Platform) Store() *store.Store { return p.store }
 func (p *Platform) Hub() *EventHub      { return p.hub }
 
+// ConfigurePlaybookRoot enables owner-managed Playbooks below the same tree
+// used by the Ansible runner. Each Draft receives its own directory so online
+// edits cannot mutate a Playbook referenced by an immutable release.
+func (p *Platform) ConfigurePlaybookRoot(root string) {
+	p.playbookRoot = strings.TrimSpace(root)
+}
+
+func (p *Platform) ConfigureImageBuilder(registry, buildRoot, dockerBinary string) {
+	p.imageRegistry = strings.TrimSuffix(strings.TrimSpace(registry), "/")
+	p.imageBuildRoot = strings.TrimSpace(buildRoot)
+	p.dockerBinary = strings.TrimSpace(dockerBinary)
+}
+
 func (p *Platform) Start(ctx context.Context) error {
+	if err := p.store.MarkComponentImageBuildsInterrupted(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("recover interrupted image builds: %w", err)
+	}
 	if _, err := p.store.MarkRunningInterrupted(ctx, time.Now().UTC()); err != nil {
 		return fmt.Errorf("recover interrupted runs: %w", err)
 	}
@@ -155,8 +175,11 @@ func validateRelease(release domain.ComponentRelease) error {
 		if action.TimeoutSeconds <= 0 {
 			return fmt.Errorf("%w: action timeout must be positive", domain.ErrInvalid)
 		}
-		if (action.Kind == domain.ActionUpgrade || action.Kind == domain.ActionRollback) && (action.FromReleaseID == "" || action.ToReleaseID == "") {
-			return fmt.Errorf("%w: %s action must declare an explicit fromReleaseId and toReleaseId", domain.ErrInvalid, action.Kind)
+		if action.Kind == domain.ActionUpgrade && (action.FromReleaseID == "" || action.ToReleaseID == "") {
+			return fmt.Errorf("%w: upgrade action must declare an explicit fromReleaseId and toReleaseId", domain.ErrInvalid)
+		}
+		if action.Kind == domain.ActionRollback && (action.FromReleaseID == "") != (action.ToReleaseID == "") {
+			return fmt.Errorf("%w: rollback action must declare both fromReleaseId and toReleaseId, or leave both empty for an install rollback", domain.ErrInvalid)
 		}
 		for _, parameter := range action.AllowedParameters {
 			if isSensitiveKey(parameter) {

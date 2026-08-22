@@ -3,6 +3,7 @@ import type {
   Approval,
   Component,
   ComponentDependency,
+  ComponentImageBuild,
   ComponentRelease,
   CredentialRef,
   Environment,
@@ -10,6 +11,7 @@ import type {
   EnvironmentRevision,
   ImpactPreview,
   Notification,
+  PlaybookFile,
   Run,
   RunStep,
   Scenario,
@@ -46,7 +48,7 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json');
 
   let response: Response;
@@ -117,6 +119,7 @@ const ACTION_TYPES = ['inspect', 'preflight', 'install', 'configure', 'upgrade',
 const RUN_STATUSES = ['queued', 'awaiting_approval', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted', 'rejected'] as const;
 const STEP_STATUSES = [...RUN_STATUSES, 'pending', 'skipped'] as const;
 const CREDENTIAL_TYPES = ['sshKeyPath', 'envVarRef'] as const;
+const IMAGE_BUILD_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'] as const;
 
 function isRecord(value: unknown): value is LooseRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -231,16 +234,22 @@ function optionalObject(raw: LooseRecord, ...keys: string[]): Record<string, unk
 
 function normalizeAction(raw: LooseRecord): ActionDefinition {
   const risk = optionalEnum(raw, ['normal', 'destructive'] as const, 'risk');
+  const riskLevel = optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel', 'risk_level');
+  const destructive = optionalBoolean(raw, 'destructive');
   return {
     id: optionalString(raw, 'id'),
+    name: optionalString(raw, 'name'),
     type: requireEnum(raw, ACTION_TYPES, 'type', 'kind'),
     playbook: requireString(raw, 'playbook'),
     tags: optionalStringArray(raw, 'tags'),
+    limit: optionalString(raw, 'limit'),
     hostGroup: optionalString(raw, 'hostGroup', 'host_group'),
     timeoutSeconds: optionalNumber(raw, 'timeoutSeconds', 'timeout_seconds'),
     allowedParameters: optionalStringArray(raw, 'allowedParameters', 'allowed_parameters'),
     requiredCredentials: optionalStringArray(raw, 'requiredCredentials', 'required_credentials'),
-    risk: risk ?? (optionalBoolean(raw, 'destructive') ? 'destructive' : undefined),
+    risk: risk ?? (destructive ? 'destructive' : undefined),
+    riskLevel,
+    destructive,
     fromReleaseId: optionalString(raw, 'fromReleaseId', 'from_release_id'),
     toReleaseId: optionalString(raw, 'toReleaseId', 'to_release_id'),
   };
@@ -308,6 +317,41 @@ function normalizeRelease(raw: LooseRecord, componentID?: string): ComponentRele
 function normalizeReleaseActionResponse(value: unknown, componentID?: string): ComponentRelease {
   const raw = requireRecord(normalizeOptionalData(value), 'release');
   return normalizeRelease(raw, componentID);
+}
+
+function normalizeImageBuild(raw: LooseRecord): ComponentImageBuild {
+  const logs = optionalRecords(raw, 'logs')?.map((log) => ({
+    id: requireNumber(log, 'id'),
+    buildId: requireString(log, 'buildId', 'build_id'),
+    stream: requireEnum(log, ['stdout', 'stderr', 'system'] as const, 'stream'),
+    message: requireString(log, 'message'),
+    createdAt: requireString(log, 'createdAt', 'created_at'),
+  }));
+  return {
+    id: requireString(raw, 'id'),
+    releaseId: requireString(raw, 'releaseId', 'release_id'),
+    requestedBy: requireString(raw, 'requestedBy', 'requested_by'),
+    status: requireEnum(raw, IMAGE_BUILD_STATUSES, 'status'),
+    dockerfileSha256: requireString(raw, 'dockerfileSha256', 'dockerfile_sha256'),
+    imageTag: requireString(raw, 'imageTag', 'image_tag'),
+    imageRef: requireString(raw, 'imageRef', 'image_ref'),
+    imageDigest: optionalString(raw, 'imageDigest', 'image_digest'),
+    error: optionalString(raw, 'error', 'errorText', 'error_text'),
+    createdAt: requireString(raw, 'createdAt', 'created_at'),
+    startedAt: optionalString(raw, 'startedAt', 'started_at'),
+    finishedAt: optionalString(raw, 'finishedAt', 'finished_at'),
+    logs,
+  };
+}
+
+function normalizePlaybook(raw: LooseRecord): PlaybookFile {
+  return {
+    path: requireString(raw, 'path'),
+    filename: requireString(raw, 'filename'),
+    content: requireString(raw, 'content'),
+    sha256: requireString(raw, 'sha256'),
+    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+  };
 }
 
 function normalizeComponent(raw: LooseRecord): Component {
@@ -568,6 +612,7 @@ function narrowStringPaths(value: unknown): string[][] {
 const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal });
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+const postForm = <T>(path: string, body: FormData) => request<T>(path, { method: 'POST', body });
 const put = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 const patch = <T>(path: string, body: unknown) =>
@@ -604,6 +649,17 @@ export const api = {
   async updateReleaseContract(releaseId: string, input: Pick<ComponentRelease, 'parameters' | 'dependencies'>) {
     return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}/contract`, input));
   },
+  async playbook(releaseId: string, path: string, signal?: AbortSignal) {
+    return normalizePlaybook(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook?path=${encodeURIComponent(path)}`, signal)), 'Playbook'));
+  },
+  async savePlaybook(releaseId: string, filename: string, content: string) {
+    return normalizePlaybook(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook`, { filename, content })), 'Playbook'));
+  },
+  async uploadPlaybook(releaseId: string, file: File) {
+    const form = new FormData();
+    form.set('playbook', file, file.name);
+    return normalizePlaybook(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/playbook`, form)), 'Playbook'));
+  },
   async releaseImpact(releaseId: string): Promise<ImpactPreview> {
     const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact`));
     if (!isRecord(raw)) throw invalidResponse(200, '平台 API 返回了无效的影响分析响应。');
@@ -619,6 +675,18 @@ export const api = {
   },
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
+  },
+  async imageBuilds(releaseId: string) {
+    return unwrapList(await get<unknown>(`/component-releases/${releaseId}/image-builds`)).map((item) => normalizeImageBuild(requireRecord(item, 'image build')));
+  },
+  async startImageBuild(releaseId: string, dockerfile: File, tag: string) {
+    const form = new FormData();
+    form.set('dockerfile', dockerfile, dockerfile.name || 'Dockerfile');
+    form.set('tag', tag);
+    return normalizeImageBuild(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/image-builds`, form)), 'image build'));
+  },
+  async imageBuild(id: string, signal?: AbortSignal) {
+    return normalizeImageBuild(requireRecord(unwrap(await get<unknown>(`/image-builds/${id}`, signal)), 'image build'));
   },
   async testRelease(releaseId: string, environmentId: string, runInput: Record<string, unknown> = {}, dependencyFixtures: Record<string, unknown> = {}) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput, dependencyFixtures })), 'run'));

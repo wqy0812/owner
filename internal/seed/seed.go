@@ -66,6 +66,20 @@ func (s Seeder) Run(ctx context.Context) error {
 	})
 }
 
+// SeedUsers creates only the fixed demo identities used by the role switcher.
+// It intentionally leaves the component, scenario, and environment catalogs
+// empty so an operator can exercise the complete frontend authoring flow.
+func (s Seeder) SeedUsers(ctx context.Context) error {
+	if s.Store == nil {
+		return errors.New("seed store is required")
+	}
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
+	}
+	return s.seedUsers(ctx, now)
+}
+
 func (s Seeder) seedUsers(ctx context.Context, now time.Time) error {
 	for _, user := range demoUsers(now) {
 		if _, err := s.Store.GetUser(ctx, user.ID); err == nil {

@@ -1,0 +1,219 @@
+---
+- name: Install Kubernetes 1.17.5 media and node configuration
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    deploy_registry: "192.168.88.54:5000"
+    media_cache_dir: /var/cache/clusterforge/k8s-1.17.5
+    media_install_dir: /opt/clusterforge/k8s-1.17.5
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: true
+  tasks:
+    - name: Require immutable FSS media coordinates
+      assert:
+        that:
+          - media_archive_url is defined
+          - media_archive_url | length > 10
+          - media_archive_sha256 is defined
+          - media_archive_sha256 | length == 64
+        fail_msg: "media_archive_url and a 64-character media_archive_sha256 are required"
+
+    - name: Disable swap now
+      command: swapoff -a
+      changed_when: ansible_swaptotal_mb | int > 0
+
+    - name: Disable swap at boot
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*[^#\n]+\s+\S+\s+swap\s+.*)$'
+        replace: '# clusterforge disabled swap: \1'
+
+    - name: Load bridge netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Persist Kubernetes kernel settings
+      copy:
+        dest: /etc/sysctl.d/99-clusterforge-kubernetes.conf
+        mode: "0644"
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+      register: kubernetes_sysctl
+
+    - name: Apply Kubernetes kernel settings
+      command: sysctl --system
+      when: kubernetes_sysctl.changed
+
+    - name: Read existing Docker daemon configuration
+      slurp:
+        src: /etc/docker/daemon.json
+      register: docker_daemon_file
+      failed_when: false
+
+    - name: Parse existing Docker daemon configuration
+      set_fact:
+        docker_daemon_config: "{{ (docker_daemon_file.content | b64decode | from_json) if docker_daemon_file.content is defined else {} }}"
+
+    - name: Add deploy registry as a LAN insecure registry
+      copy:
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+        content: "{{ docker_daemon_config | combine({'insecure-registries': ((docker_daemon_config['insecure-registries'] | default([])) + [deploy_registry]) | unique}, recursive=True) | to_nice_json }}\n"
+      notify: Restart Docker
+
+    - name: Flush Docker restart before loading images
+      meta: flush_handlers
+
+    - name: Create media directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ media_cache_dir }}"
+        - "{{ media_install_dir }}"
+        - /opt/cni/bin
+        - /etc/cni/net.d
+        - /etc/systemd/system/kubelet.service.d
+
+    - name: Download immutable media archive from FSS
+      get_url:
+        url: "{{ media_archive_url }}"
+        dest: "{{ media_cache_dir }}/k8s-1.17.5-amd64.tar.gz"
+        checksum: "sha256:{{ media_archive_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+        timeout: 120
+      register: media_download
+
+    - name: Read installed media checksum marker
+      slurp:
+        src: "{{ media_install_dir }}/.archive-sha256"
+      register: media_marker
+      failed_when: false
+
+    - name: Refresh media installation
+      when: media_marker.content is not defined or (media_marker.content | b64decode | trim) != media_archive_sha256
+      block:
+        - name: Remove stale media contents
+          file:
+            path: "{{ media_install_dir }}"
+            state: absent
+
+        - name: Recreate media installation directory
+          file:
+            path: "{{ media_install_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Extract Kubernetes media
+          unarchive:
+            src: "{{ media_cache_dir }}/k8s-1.17.5-amd64.tar.gz"
+            dest: "{{ media_install_dir }}"
+            remote_src: true
+
+        - name: Record installed media checksum
+          copy:
+            dest: "{{ media_install_dir }}/.archive-sha256"
+            content: "{{ media_archive_sha256 }}\n"
+            mode: "0644"
+
+    - name: Install Kubernetes binaries
+      copy:
+        remote_src: true
+        src: "{{ media_install_dir }}/bin/{{ item }}"
+        dest: "/usr/bin/{{ item }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+
+    - name: Find CNI binaries in installed media
+      find:
+        paths: "{{ media_install_dir }}/cni"
+        file_type: file
+      register: cni_binaries
+
+    - name: Install CNI binaries
+      copy:
+        remote_src: true
+        src: "{{ item.path }}"
+        dest: /opt/cni/bin/
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ cni_binaries.files }}"
+
+    - name: Install kubelet systemd unit
+      copy:
+        dest: /etc/systemd/system/kubelet.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=kubelet: The Kubernetes Node Agent
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          ExecStart=/usr/bin/kubelet
+          Restart=always
+          StartLimitInterval=0
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Install kubeadm kubelet drop-in
+      copy:
+        dest: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+        mode: "0644"
+        content: |
+          [Service]
+          Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
+          Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
+          EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+          EnvironmentFile=-/etc/default/kubelet
+          ExecStart=
+          ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
+
+    - name: Pin kubelet to inventory address
+      copy:
+        dest: /etc/default/kubelet
+        mode: "0644"
+        content: "KUBELET_EXTRA_ARGS=--node-ip={{ ansible_host }}\n"
+
+    - name: Load Kubernetes and Flannel images
+      command: "docker load --input {{ media_install_dir }}/images/k8s-1.17.5-images.tar"
+      register: image_load
+      changed_when: true
+      when: media_marker.content is not defined or (media_marker.content | b64decode | trim) != media_archive_sha256
+
+    - name: Enable kubelet
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Verify installed Kubernetes version
+      command: kubeadm version -o short
+      register: kubeadm_version
+      changed_when: false
+      failed_when: kubeadm_version.stdout | trim != 'v1.17.5'
