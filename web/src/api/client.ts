@@ -5,6 +5,8 @@ import type {
   ComponentDependency,
   ComponentImageBuild,
   ComponentRelease,
+  ComponentTestPlan,
+  ComponentTestRequest,
   CredentialRef,
   Environment,
   EnvironmentHost,
@@ -57,6 +59,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init,
       headers,
       credentials: 'include',
+      cache: 'no-store',
     });
   } catch (reason) {
     if (isAbortError(reason)) throw reason;
@@ -330,6 +333,8 @@ function normalizeImageBuild(raw: LooseRecord): ComponentImageBuild {
   return {
     id: requireString(raw, 'id'),
     releaseId: requireString(raw, 'releaseId', 'release_id'),
+    environmentId: optionalString(raw, 'environmentId', 'environment_id'),
+    environmentRevisionId: optionalString(raw, 'environmentRevisionId', 'environment_revision_id'),
     requestedBy: requireString(raw, 'requestedBy', 'requested_by'),
     status: requireEnum(raw, IMAGE_BUILD_STATUSES, 'status'),
     dockerfileSha256: requireString(raw, 'dockerfileSha256', 'dockerfile_sha256'),
@@ -472,6 +477,11 @@ function normalizeCredential(raw: LooseRecord): CredentialRef {
 }
 
 function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
+  const variableValues = optionalRecord(raw, 'variables') ?? {};
+  const variables = Object.fromEntries(Object.entries(variableValues).map(([name, value]) => {
+    if (typeof value !== 'string') throw invalidResponse(200, `环境变量 ${name} 不是字符串。`);
+    return [name, value];
+  }));
   return {
     id: requireString(raw, 'id'),
     environmentId: requireString(raw, 'environmentId', 'environment_id'),
@@ -479,6 +489,7 @@ function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
     facts: requireRecord(raw.facts, 'facts'),
     hosts: requireRecords(raw, 'hosts').map(normalizeHost),
     parameters: requireRecord(raw.parameters, 'parameters'),
+    variables,
     credentialRefs: requireRecords(raw, 'credentialRefs').map(normalizeCredential),
     maxConcurrentRuns: optionalNumber(raw, 'maxConcurrentRuns', 'max_concurrent_runs', 'maxConcurrent'),
     createdAt: optionalString(raw, 'createdAt'),
@@ -529,6 +540,17 @@ function normalizeRun(raw: LooseRecord): Run {
   const logTail = optionalStringArray(source, 'logTail', 'log_tail');
   const steps = optionalRecords(source, 'steps')?.map(normalizeRunStep);
   const approval = optionalRecord(source, 'approval');
+  const backups = optionalRecords(source, 'backups')?.map((backup) => ({
+    nodeId: optionalString(backup, 'nodeId'),
+    componentId: requireString(backup, 'componentId'),
+    componentName: optionalString(backup, 'componentName'),
+    releaseId: requireString(backup, 'releaseId'),
+    action: requireString(backup, 'action'),
+    backupRef: requireString(backup, 'backupRef'),
+    installRunId: requireString(backup, 'installRunId'),
+    capturedAt: requireString(backup, 'capturedAt'),
+    playbookSha256: requireString(backup, 'playbookSha256'),
+  }));
   return {
     id: requireString(source, 'id'),
     kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run'] as const, 'kind'),
@@ -551,9 +573,41 @@ function normalizeRun(raw: LooseRecord): Run {
     approval: approval ? normalizeApproval(approval) : undefined,
     logTail,
     resolvedParametersByNode: optionalRecord(source, 'resolvedParametersByNode') as Run['resolvedParametersByNode'],
+    backups,
     createdAt: optionalString(source, 'createdAt'),
     startedAt: optionalString(source, 'startedAt'),
     finishedAt: optionalString(source, 'finishedAt'),
+  };
+}
+
+function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
+  const source = optionalRecord(raw, 'data') ?? raw;
+  const steps = optionalRecords(source, 'steps')?.map((step) => ({
+    order: requireNumber(step, 'order'),
+    componentId: requireString(step, 'componentId'),
+    componentName: requireString(step, 'componentName'),
+    releaseId: requireString(step, 'releaseId'),
+    releaseVersion: requireString(step, 'releaseVersion'),
+    action: requireEnum(step, ACTION_TYPES, 'action'),
+    playbook: requireString(step, 'playbook'),
+    limit: optionalString(step, 'limit'),
+    needsApproval: requireBoolean(step, 'needsApproval'),
+    fromReleaseId: optionalString(step, 'fromReleaseId'),
+    fromReleaseVersion: optionalString(step, 'fromReleaseVersion'),
+    toReleaseId: optionalString(step, 'toReleaseId'),
+    toReleaseVersion: optionalString(step, 'toReleaseVersion'),
+    backupRef: optionalString(step, 'backupRef'),
+    backupInstallRunId: optionalString(step, 'backupInstallRunId'),
+    backupCapturedAt: optionalString(step, 'backupCapturedAt'),
+    backupPlaybookSha256: optionalString(step, 'backupPlaybookSha256'),
+  })) ?? [];
+  return {
+    environmentId: requireString(source, 'environmentId'),
+    environmentRevisionId: requireString(source, 'environmentRevisionId'),
+    destructive: requireBoolean(source, 'destructive'),
+    requiresApproval: requireBoolean(source, 'requiresApproval'),
+    planDigest: requireString(source, 'planDigest'),
+    steps,
   };
 }
 
@@ -679,17 +733,21 @@ export const api = {
   async imageBuilds(releaseId: string) {
     return unwrapList(await get<unknown>(`/component-releases/${releaseId}/image-builds`)).map((item) => normalizeImageBuild(requireRecord(item, 'image build')));
   },
-  async startImageBuild(releaseId: string, dockerfile: File, tag: string) {
+  async startImageBuild(releaseId: string, environmentId: string, dockerfile: File, tag: string) {
     const form = new FormData();
     form.set('dockerfile', dockerfile, dockerfile.name || 'Dockerfile');
+    form.set('environmentId', environmentId);
     form.set('tag', tag);
     return normalizeImageBuild(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/image-builds`, form)), 'image build'));
   },
   async imageBuild(id: string, signal?: AbortSignal) {
     return normalizeImageBuild(requireRecord(unwrap(await get<unknown>(`/image-builds/${id}`, signal)), 'image build'));
   },
-  async testRelease(releaseId: string, environmentId: string, runInput: Record<string, unknown> = {}, dependencyFixtures: Record<string, unknown> = {}) {
-    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, { environmentId, runInput, dependencyFixtures })), 'run'));
+  async previewReleaseTest(releaseId: string, input: ComponentTestRequest) {
+    return normalizeComponentTestPlan(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-plan`, input)), 'component test plan'));
+  },
+  async testRelease(releaseId: string, input: ComponentTestRequest) {
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, input)), 'run'));
   },
   async scenarios(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/scenarios', signal)).map((item) => normalizeScenario(requireRecord(item, 'scenario')));
@@ -749,6 +807,9 @@ export const api = {
   },
   async updateParameters(environmentId: string, parameters: Record<string, unknown>) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/parameters`, { parameters })), 'environment'));
+  },
+  async updateVariables(environmentId: string, variables: Record<string, string>) {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/variables`, { variables })), 'environment'));
   },
   async updateFacts(environmentId: string, facts: Record<string, unknown>) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/facts`, { facts })), 'environment'));

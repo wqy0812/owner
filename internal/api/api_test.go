@@ -161,8 +161,32 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	}
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{map[string]any{"name": "localhost", "address": "127.0.0.1", "groups": []any{"test_nodes"}}}})
 	environment := domain.Environment{ID: "environment-test", Name: "Test Environment", OwnerID: seed.EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Parameters: map[string]any{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
+	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
 	if err := database.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture represents an environment currently running the Draft
+	// candidate so rollback tests have an exact installation-scoped baseline.
+	installedRun := domain.Run{
+		ID: "run-installed-runtime-1.1", Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
+		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID,
+		ComponentReleaseID: newRelease.ID, Action: domain.ActionUpgrade, InputSnapshot: map[string]any{},
+		ArtifactDigest: "fixed-tree-digest", CreatedAt: now, StartedAt: &now, FinishedAt: &now,
+	}
+	if err := database.CreateRun(ctx, installedRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
+		EnvironmentID: environment.ID, ComponentID: newRelease.ComponentID, ReleaseID: newRelease.ID,
+		InstallRunID: installedRun.ID,
+		BackupRef:    "/var/lib/clusterforge/backups/environment-test/component-test-runtime/release-test-runtime-1.1.0/run-installed-runtime-1.1",
+		Backup: domain.BackupMetadata{
+			EnvironmentID: environment.ID, ComponentID: newRelease.ComponentID, ReleaseID: newRelease.ID,
+			ActionID: "action-test-runtime-upgrade-1.1", InstallRunID: installedRun.ID, CapturedAt: now,
+			PlaybookSHA256: "playbook:tests/runtime/upgrade.yml", DependencySnapshot: map[string]any{"dependencies": []any{}},
+		},
+		TestOnly: true, InstalledAt: now,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -342,6 +366,21 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/parameters", map[string]any{"parameters": map[string]any{"region": "cn"}}, alice); response.Code != http.StatusForbidden {
 		t.Fatalf("component owner environment update status=%d", response.Code)
 	}
+	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "hijacked.invalid"}}, alice); response.Code != http.StatusForbidden {
+		t.Fatalf("component owner environment variable update status=%d", response.Code)
+	}
+	variablesUpdated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000/"}}, dave)
+	if variablesUpdated.Code != http.StatusOK || !strings.Contains(variablesUpdated.Body.String(), `"IMAGE_REGISTRY":"192.168.88.54:5000"`) {
+		t.Fatalf("environment variable update status=%d body=%s", variablesUpdated.Code, variablesUpdated.Body.String())
+	}
+	var variableAuditCount int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='environment.variables_updated' AND resource_id='environment-test'`).Scan(&variableAuditCount); err != nil || variableAuditCount != 1 {
+		t.Fatalf("environment variable audit count=%d err=%v", variableAuditCount, err)
+	}
+	invalidVariable := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"registry_password": "secret"}}, dave)
+	if invalidVariable.Code != http.StatusBadRequest || strings.Contains(invalidVariable.Body.String(), "secret") {
+		t.Fatalf("invalid environment variable status=%d body=%s", invalidVariable.Code, invalidVariable.Body.String())
+	}
 
 	secret := "this-secret-must-not-be-persisted"
 	rejected := f.request(http.MethodPut, "/api/v1/environments/environment-test/parameters", map[string]any{"parameters": map[string]any{"registryPassword": secret}}, dave)
@@ -369,13 +408,20 @@ func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	f.platform.ConfigureImageBuilder("192.168.88.54:5000", t.TempDir(), binary)
+	f.platform.ConfigureImageBuilder(t.TempDir(), binary)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	bob := f.session(seed.ComponentOwnerK8sID)
+	missingEnvironment := f.multipartRequest(
+		"/api/v1/component-releases/release-test-runtime-1.1.0/image-builds",
+		map[string]string{"tag": "v1.1.0"}, "Dockerfile", []byte("FROM scratch\n"), alice,
+	)
+	if missingEnvironment.Code != http.StatusBadRequest {
+		t.Fatalf("missing image-build environment status=%d body=%s", missingEnvironment.Code, missingEnvironment.Body.String())
+	}
 
 	created := f.multipartRequest(
 		"/api/v1/component-releases/release-test-runtime-1.1.0/image-builds",
-		map[string]string{"tag": "V1.1.0"},
+		map[string]string{"environmentId": "environment-test", "tag": "V1.1.0"},
 		"Dockerfile",
 		[]byte("FROM scratch\nLABEL purpose=api-test\n"),
 		alice,
@@ -387,6 +433,13 @@ func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 	buildID := data["id"].(string)
 	if data["imageRef"] != "192.168.88.54:5000/components/component-test-runtime:v1.1.0" {
 		t.Fatalf("image reference was not forced to configured registry: %#v", data)
+	}
+	if data["environmentId"] != "environment-test" || data["environmentRevisionId"] == "" {
+		t.Fatalf("image build did not lock the environment revision: %#v", data)
+	}
+	var auditCount int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='component.image_build_requested' AND metadata_json LIKE '%environmentRevisionId%'`).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("image build environment audit count=%d err=%v", auditCount, err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -406,7 +459,7 @@ func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 	}
 	released := f.multipartRequest(
 		"/api/v1/component-releases/release-test-runtime-1.0.0/image-builds",
-		map[string]string{"tag": "v1.0.0"}, "Dockerfile", []byte("FROM scratch\n"), alice,
+		map[string]string{"environmentId": "environment-test", "tag": "v1.0.0"}, "Dockerfile", []byte("FROM scratch\n"), alice,
 	)
 	if released.Code != http.StatusConflict {
 		t.Fatalf("released version image build status=%d body=%s", released.Code, released.Body.String())
@@ -541,6 +594,115 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	owner, _ := f.database.GetUser(context.Background(), seed.ComponentOwnerRuntimeID)
 	if _, err := f.platform.UpdateRelease(context.Background(), owner, releaseID, release); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("draft edit during active component test=%v, want conflict", err)
+	}
+}
+
+func TestDraftRequiredCredentialsDistinguishesOmittedFromExplicitEmpty(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Credential semantics", "credential-semantics"), alice)
+	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
+	definition := map[string]any{
+		"version": "1.0.0", "type": "atomic", "parameters": []any{},
+		"actions": []any{map[string]any{
+			"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60,
+			"requiredCredentials": []any{"K8S_BOOTSTRAP_TOKEN"},
+		}},
+	}
+	created := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", definition, alice)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create release status=%d body=%s", created.Code, created.Body.String())
+	}
+	releaseID := decodeEnvelope(t, created)["data"].(map[string]any)["id"].(string)
+	action := definition["actions"].([]any)[0].(map[string]any)
+	delete(action, "requiredCredentials")
+	omitted := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID, definition, alice)
+	if omitted.Code != http.StatusOK {
+		t.Fatalf("omitted credential update status=%d body=%s", omitted.Code, omitted.Body.String())
+	}
+	omittedAction := decodeEnvelope(t, omitted)["data"].(map[string]any)["actions"].([]any)[0].(map[string]any)
+	if got := omittedAction["requiredCredentials"].([]any); len(got) != 1 || got[0] != "K8S_BOOTSTRAP_TOKEN" {
+		t.Fatalf("omitted required credentials were not preserved: %#v", got)
+	}
+	action["required_credential_names"] = []any{}
+	cleared := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID, definition, alice)
+	if cleared.Code != http.StatusOK {
+		t.Fatalf("clear credential update status=%d body=%s", cleared.Code, cleared.Body.String())
+	}
+	clearedAction := decodeEnvelope(t, cleared)["data"].(map[string]any)["actions"].([]any)[0].(map[string]any)
+	if got := clearedAction["requiredCredentials"].([]any); len(got) != 0 {
+		t.Fatalf("explicit empty required credentials were not cleared: %#v", got)
+	}
+}
+
+func TestComponentInstallBackupsAreScopedToEachRun(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	var refs []string
+	for range 2 {
+		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+			"environmentId": "environment-test", "mode": "install_verify",
+		}, alice)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("install test status=%d body=%s", response.Code, response.Body.String())
+		}
+		data := decodeEnvelope(t, response)["data"].(map[string]any)
+		runID := data["id"].(string)
+		backups := data["backups"].([]any)
+		if len(backups) != 1 {
+			t.Fatalf("run backup metadata=%#v", backups)
+		}
+		backup := backups[0].(map[string]any)
+		if backup["installRunId"] != runID || backup["capturedAt"] == "" || backup["playbookSha256"] == "" {
+			t.Fatalf("run-scoped backup metadata=%#v", backup)
+		}
+		refs = append(refs, backup["backupRef"].(string))
+		waitForRun(t, f.database, runID, domain.RunSucceeded)
+	}
+	if refs[0] == refs[1] {
+		t.Fatalf("separate install Runs reused backup_ref %q", refs[0])
+	}
+	installation, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime")
+	if err != nil || installation.BackupRef != refs[1] {
+		t.Fatalf("current installation backup=%+v err=%v", installation, err)
+	}
+}
+
+func TestRollbackRefusesMismatchedInstallationMetadata(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	installation, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation.Backup.ReleaseID = "release-test-runtime-1.0.0"
+	if err := f.database.UpsertEnvironmentComponentInstallation(context.Background(), installation); err != nil {
+		t.Fatal(err)
+	}
+	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "rollback",
+	}, alice)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "backup release") {
+		t.Fatalf("mismatched backup was not rejected: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRollbackRefusesCapturedPlaybookHashMismatch(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	installation, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation.Backup.PlaybookSHA256 = "stale-playbook-sha256"
+	if err := f.database.UpsertEnvironmentComponentInstallation(context.Background(), installation); err != nil {
+		t.Fatal(err)
+	}
+	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "rollback",
+	}, alice)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "Playbook hash") {
+		t.Fatalf("stale captured Playbook was not rejected: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -741,6 +903,167 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 	}
 }
 
+func TestDraftComponentRollbackTestLocksRollbackAndTargetVerify(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	dave := f.session(seed.EnvironmentOwnerID)
+
+	invalid := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "unknown",
+	}, alice)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid component test mode status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "rollback",
+	}, alice)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("draft rollback test status=%d body=%s", response.Code, response.Body.String())
+	}
+	runData := decodeEnvelope(t, response)["data"].(map[string]any)
+	if runData["action"] != string(domain.ActionRollback) || runData["status"] != string(domain.RunAwaitingApproval) || runData["destructive"] != true {
+		t.Fatalf("draft rollback test bypassed rollback approval: %#v", runData)
+	}
+	runID := runData["id"].(string)
+	lockedRun, err := f.database.GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := lockedRun.InputSnapshot["steps"].([]any)
+	if len(steps) != 2 || steps[0].(map[string]any)["playbook"] != "tests/runtime/rollback.yml" || steps[1].(map[string]any)["playbook"] != "tests/runtime/verify.yml" || steps[1].(map[string]any)["releaseId"] != "release-test-runtime-1.0.0" {
+		t.Fatalf("draft rollback locked steps=%#v", steps)
+	}
+	approvalID := runData["approval"].(map[string]any)["id"].(string)
+	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); approved.Code != http.StatusOK {
+		t.Fatalf("approve draft rollback status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	waitForRun(t, f.database, runID, domain.RunSucceeded)
+	if _, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("successful test rollback retained its test backup record: %v", err)
+	}
+	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Verified {
+		t.Fatal("rollback-only component test incorrectly marked install verification as passed")
+	}
+}
+
+func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	now := time.Now().UTC()
+	for _, target := range []domain.ComponentRelease{
+		{
+			ID: "release-test-runtime-0.9.0", ComponentID: "component-test-runtime", Version: "v0.9.0", Type: domain.ReleaseAtomic,
+			Status: domain.ReleaseDeprecated, Verified: true, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now,
+			EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{{Name: "expected_version", Type: domain.ParameterTypeString, Required: true, DefaultValue: "0.9.0", Visibility: domain.ParameterInternal}},
+			Actions: []domain.ActionDefinition{{ID: "action-test-runtime-verify-0.9", ReleaseID: "release-test-runtime-0.9.0", Name: "verify", Kind: domain.ActionVerify, Playbook: "tests/runtime/verify.yml", HostGroup: "test_nodes", TimeoutSeconds: 60}},
+		},
+		{
+			ID: "release-test-runtime-bad-host", ComponentID: "component-test-runtime", Version: "v0.8.0", Type: domain.ReleaseAtomic,
+			Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow, CreatedAt: now.Add(-time.Second), ReleasedAt: &now,
+			EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{{Name: "expected_version", Type: domain.ParameterTypeString, Required: true, DefaultValue: "0.8.0", Visibility: domain.ParameterInternal}},
+			Actions: []domain.ActionDefinition{{ID: "action-test-runtime-verify-bad-host", ReleaseID: "release-test-runtime-bad-host", Name: "verify", Kind: domain.ActionVerify, Playbook: "tests/runtime/verify.yml", HostGroup: "k8smaster", TimeoutSeconds: 60}},
+		},
+		{
+			ID: "release-test-runtime-no-verify", ComponentID: "component-test-runtime", Version: "v0.7.0", Type: domain.ReleaseAtomic,
+			Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow, CreatedAt: now.Add(-2 * time.Second), ReleasedAt: &now,
+			EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, Actions: []domain.ActionDefinition{},
+		},
+	} {
+		if err := f.database.CreateComponentRelease(context.Background(), target); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var before int
+	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	preview := func(verification map[string]any) *httptest.ResponseRecorder {
+		return f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{
+			"environmentId": "environment-test", "mode": "rollback", "rollbackVerification": verification,
+		}, alice)
+	}
+
+	badHost := preview(map[string]any{"kind": "target_release", "releaseId": "release-test-runtime-bad-host"})
+	if badHost.Code != http.StatusBadRequest || !strings.Contains(badHost.Body.String(), "k8smaster") {
+		t.Fatalf("bad target host group preview status=%d body=%s", badHost.Code, badHost.Body.String())
+	}
+
+	rollbackOnly := preview(map[string]any{"kind": "rollback_only"})
+	if rollbackOnly.Code != http.StatusOK {
+		t.Fatalf("rollback-only preview status=%d body=%s", rollbackOnly.Code, rollbackOnly.Body.String())
+	}
+	rollbackOnlyData := decodeEnvelope(t, rollbackOnly)["data"].(map[string]any)
+	rollbackOnlySteps := rollbackOnlyData["steps"].([]any)
+	if rollbackOnlyData["requiresApproval"] != true || len(rollbackOnlySteps) != 1 || rollbackOnlySteps[0].(map[string]any)["releaseVersion"] != "v1.1.0" || rollbackOnlySteps[0].(map[string]any)["backupInstallRunId"] != "run-installed-runtime-1.1" {
+		t.Fatalf("rollback-only preview=%#v", rollbackOnlyData)
+	}
+
+	alternate := preview(map[string]any{"kind": "target_release", "releaseId": "release-test-runtime-0.9.0"})
+	if alternate.Code != http.StatusOK {
+		t.Fatalf("alternate target preview status=%d body=%s", alternate.Code, alternate.Body.String())
+	}
+	alternateData := decodeEnvelope(t, alternate)["data"].(map[string]any)
+	alternateSteps := alternateData["steps"].([]any)
+	if len(alternateSteps) != 2 {
+		t.Fatalf("alternate target steps=%#v", alternateSteps)
+	}
+	rollbackStep, verifyStep := alternateSteps[0].(map[string]any), alternateSteps[1].(map[string]any)
+	if rollbackStep["fromReleaseId"] != "release-test-runtime-1.1.0" || rollbackStep["toReleaseId"] != "release-test-runtime-1.0.0" || verifyStep["releaseId"] != "release-test-runtime-0.9.0" || verifyStep["releaseVersion"] != "v0.9.0" {
+		t.Fatalf("alternate target steps=%#v", alternateSteps)
+	}
+
+	for name, verification := range map[string]map[string]any{
+		"draft target":          {"kind": "target_release", "releaseId": "release-test-runtime-1.1.0"},
+		"cross component":       {"kind": "target_release", "releaseId": "release-test-consumer-1.0.0"},
+		"missing verify":        {"kind": "target_release", "releaseId": "release-test-runtime-no-verify"},
+		"rollback only with id": {"kind": "rollback_only", "releaseId": "release-test-runtime-1.0.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := preview(verification)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid target status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	var afterPreview int
+	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&afterPreview); err != nil {
+		t.Fatal(err)
+	}
+	if afterPreview != before {
+		t.Fatalf("plan preview persisted a Run: before=%d after=%d", before, afterPreview)
+	}
+
+	installation, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation.BackupRef += "-changed-after-preview"
+	if err := f.database.UpsertEnvironmentComponentInstallation(context.Background(), installation); err != nil {
+		t.Fatal(err)
+	}
+	stale := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "rollback",
+		"rollbackVerification": map[string]any{"kind": "rollback_only"}, "expectedPlanDigest": rollbackOnlyData["planDigest"],
+	}, alice)
+	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "execution plan changed") {
+		t.Fatalf("stale plan status=%d body=%s", stale.Code, stale.Body.String())
+	}
+	var afterStale int
+	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&afterStale); err != nil {
+		t.Fatal(err)
+	}
+	if afterStale != before {
+		t.Fatalf("stale plan persisted a Run: before=%d after=%d", before, afterStale)
+	}
+}
+
 func TestScenarioTestGateAndDestructiveApproval(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
@@ -790,6 +1113,20 @@ func TestScenarioTestGateAndDestructiveApproval(t *testing.T) {
 	}
 	if response := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/reject", map[string]any{"reason": "missing private artifacts"}, dave); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), string(domain.RunRejected)) {
 		t.Fatalf("environment rejection status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/reject", map[string]any{"reason": "retry"}, dave); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), string(domain.RunRejected)) {
+		t.Fatalf("idempotent rejection status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); response.Code != http.StatusConflict {
+		t.Fatalf("conflicting approval retry status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAPIWorkflowResponsesAreNotCacheable(t *testing.T) {
+	f := newAPIFixture(t)
+	response := f.request(http.MethodGet, "/api/v1/runs", nil, f.session(seed.EnvironmentOwnerID))
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("runs cache control status=%d header=%q", response.Code, response.Header().Get("Cache-Control"))
 	}
 }
 

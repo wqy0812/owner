@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +22,12 @@ import (
 
 const maxDockerfileBytes = 1 << 20
 
-var imageTagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+const imageRegistryVariable = "IMAGE_REGISTRY"
 
-func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.User, releaseID, tag string, dockerfile []byte) (domain.ComponentImageBuild, error) {
-	if p.imageRegistry == "" {
-		return domain.ComponentImageBuild{}, fmt.Errorf("%w: component image builder is not configured", domain.ErrConflict)
-	}
+var imageTagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+var imageRegistryPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
+
+func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.User, releaseID, environmentID, tag string, dockerfile []byte) (domain.ComponentImageBuild, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.ComponentImageBuild{}, err
@@ -40,6 +41,24 @@ func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.Use
 	}
 	if release.Status != domain.ReleaseDraft {
 		return domain.ComponentImageBuild{}, fmt.Errorf("%w: images can only be built for a draft release", domain.ErrConflict)
+	}
+	if strings.TrimSpace(environmentID) == "" {
+		return domain.ComponentImageBuild{}, fmt.Errorf("%w: image build requires an environment", domain.ErrInvalid)
+	}
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return domain.ComponentImageBuild{}, err
+	}
+	if environment.Revision == nil {
+		return domain.ComponentImageBuild{}, fmt.Errorf("%w: selected environment has no current revision", domain.ErrConflict)
+	}
+	registry, configured := environment.Revision.Variables[imageRegistryVariable]
+	if !configured {
+		return domain.ComponentImageBuild{}, fmt.Errorf("%w: selected environment does not define %s", domain.ErrConflict, imageRegistryVariable)
+	}
+	registry, err = normalizeImageRegistry(registry)
+	if err != nil {
+		return domain.ComponentImageBuild{}, err
 	}
 	tag = strings.ToLower(strings.TrimSpace(tag))
 	if !imageTagPattern.MatchString(tag) {
@@ -55,17 +74,36 @@ func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.Use
 	now := time.Now().UTC()
 	build := domain.ComponentImageBuild{
 		ID: newID("image-build"), ReleaseID: releaseID, RequestedBy: user.ID,
+		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		Status: domain.ImageBuildQueued, DockerfileSHA256: fmt.Sprintf("%x", digest[:]),
-		ImageTag: tag, ImageRef: p.imageRegistry + "/components/" + component.Slug + ":" + tag, CreatedAt: now,
+		ImageTag: tag, ImageRef: registry + "/components/" + component.Slug + ":" + tag, CreatedAt: now,
 	}
 	if err := p.store.CreateComponentImageBuild(ctx, build); err != nil {
 		return domain.ComponentImageBuild{}, err
 	}
-	p.audit(ctx, user, "component.image_build_requested", "component_release", releaseID, map[string]any{"buildId": build.ID, "imageRef": build.ImageRef, "dockerfileSha256": build.DockerfileSHA256})
+	p.audit(ctx, user, "component.image_build_requested", "component_release", releaseID, map[string]any{"buildId": build.ID, "environmentId": environment.ID, "environmentRevisionId": environment.CurrentRevisionID, "imageRef": build.ImageRef, "dockerfileSha256": build.DockerfileSHA256})
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": releaseID, "status": build.Status})
 	contents := append([]byte(nil), dockerfile...)
 	go p.executeComponentImageBuild(build, contents)
 	return build, nil
+}
+
+func normalizeImageRegistry(value string) (string, error) {
+	registry := strings.TrimSuffix(strings.TrimSpace(value), "/")
+	if registry == "" || strings.Contains(registry, "://") || strings.ContainsAny(registry, "@?#") || !imageRegistryPattern.MatchString(registry) {
+		return "", fmt.Errorf("%w: %s must be a Docker registry prefix without a URL scheme, tag or digest", domain.ErrInvalid, imageRegistryVariable)
+	}
+	host := registry
+	if slash := strings.IndexByte(host, '/'); slash >= 0 {
+		host = host[:slash]
+	}
+	if colon := strings.LastIndexByte(host, ':'); colon >= 0 {
+		port, err := strconv.Atoi(host[colon+1:])
+		if err != nil || port < 1 || port > 65535 {
+			return "", fmt.Errorf("%w: %s contains an invalid registry port", domain.ErrInvalid, imageRegistryVariable)
+		}
+	}
+	return registry, nil
 }
 
 func containsDockerfileFrom(dockerfile []byte) bool {

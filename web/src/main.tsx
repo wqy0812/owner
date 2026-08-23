@@ -5,6 +5,7 @@ import '@xyflow/react/dist/style.css';
 import './styles.css';
 import { App } from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { BuildVersionGuard } from './components/BuildVersionGuard';
 import { AppProvider } from './context/AppContext';
 
 try {
@@ -18,7 +19,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <AppErrorBoundary>
         <AppProvider>
-          <App />
+          <BuildVersionGuard>
+            <App />
+          </BuildVersionGuard>
         </AppProvider>
       </AppErrorBoundary>
     </BrowserRouter>

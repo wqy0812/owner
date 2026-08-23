@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"path"
 	"reflect"
 	"sort"
 	"strconv"
@@ -33,20 +34,28 @@ type workspaceRunner interface {
 }
 
 type lockedStep struct {
-	ID                  string            `json:"id"`
-	NodeID              string            `json:"nodeId"`
-	Name                string            `json:"name"`
-	ComponentName       string            `json:"componentName"`
-	ReleaseID           string            `json:"releaseId"`
-	Action              domain.ActionKind `json:"action"`
-	Playbook            string            `json:"playbook"`
-	PlaybookDigest      string            `json:"playbookDigest"`
-	Tags                []string          `json:"tags"`
-	Limit               string            `json:"limit"`
-	Variables           map[string]any    `json:"variables"`
-	RequiredCredentials []string          `json:"requiredCredentials"`
-	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	NeedsApproval       bool              `json:"needsApproval"`
+	ID                  string                 `json:"id"`
+	NodeID              string                 `json:"nodeId"`
+	Name                string                 `json:"name"`
+	ComponentID         string                 `json:"componentId"`
+	ComponentName       string                 `json:"componentName"`
+	ReleaseID           string                 `json:"releaseId"`
+	ReleaseVersion      string                 `json:"releaseVersion"`
+	ReleaseSpecDigest   string                 `json:"releaseSpecDigest"`
+	ActionID            string                 `json:"actionId"`
+	Action              domain.ActionKind      `json:"action"`
+	FromReleaseID       string                 `json:"fromReleaseId,omitempty"`
+	ToReleaseID         string                 `json:"toReleaseId,omitempty"`
+	Playbook            string                 `json:"playbook"`
+	PlaybookDigest      string                 `json:"playbookDigest"`
+	Tags                []string               `json:"tags"`
+	Limit               string                 `json:"limit"`
+	Variables           map[string]any         `json:"variables"`
+	RequiredCredentials []string               `json:"requiredCredentials"`
+	TimeoutSeconds      int                    `json:"timeoutSeconds"`
+	NeedsApproval       bool                   `json:"needsApproval"`
+	BackupRef           string                 `json:"backupRef,omitempty"`
+	Backup              *domain.BackupMetadata `json:"backup,omitempty"`
 }
 
 type lockedPlan struct {
@@ -54,62 +63,220 @@ type lockedPlan struct {
 	TreeDigest string       `json:"treeDigest"`
 }
 
-func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, releaseID, environmentID string, runInput, dependencyFixtures map[string]any) (domain.Run, error) {
-	release, err := p.store.GetComponentRelease(ctx, releaseID)
+type ComponentTestMode string
+
+type RollbackVerificationKind string
+
+const (
+	ComponentTestInstallVerify ComponentTestMode = "install_verify"
+	ComponentTestRollback      ComponentTestMode = "rollback"
+
+	RollbackVerificationTargetRelease RollbackVerificationKind = "target_release"
+	RollbackVerificationOnly          RollbackVerificationKind = "rollback_only"
+)
+
+type RollbackVerification struct {
+	Kind      RollbackVerificationKind `json:"kind"`
+	ReleaseID string                   `json:"releaseId,omitempty"`
+}
+
+type ComponentTestRequest struct {
+	EnvironmentID        string               `json:"environmentId"`
+	Mode                 ComponentTestMode    `json:"mode"`
+	RollbackVerification RollbackVerification `json:"rollbackVerification"`
+	RunInput             map[string]any       `json:"runInput"`
+	DependencyFixtures   map[string]any       `json:"dependencyFixtures"`
+	ExpectedPlanDigest   string               `json:"expectedPlanDigest,omitempty"`
+}
+
+type ComponentTestPlanStep struct {
+	Order              int               `json:"order"`
+	ComponentID        string            `json:"componentId"`
+	ComponentName      string            `json:"componentName"`
+	ReleaseID          string            `json:"releaseId"`
+	ReleaseVersion     string            `json:"releaseVersion"`
+	Action             domain.ActionKind `json:"action"`
+	Playbook           string            `json:"playbook"`
+	Limit              string            `json:"limit,omitempty"`
+	NeedsApproval      bool              `json:"needsApproval"`
+	FromReleaseID      string            `json:"fromReleaseId,omitempty"`
+	FromReleaseVersion string            `json:"fromReleaseVersion,omitempty"`
+	ToReleaseID        string            `json:"toReleaseId,omitempty"`
+	ToReleaseVersion   string            `json:"toReleaseVersion,omitempty"`
+	BackupRef          string            `json:"backupRef,omitempty"`
+	BackupInstallRunID string            `json:"backupInstallRunId,omitempty"`
+	BackupCapturedAt   *time.Time        `json:"backupCapturedAt,omitempty"`
+	BackupPlaybookSHA  string            `json:"backupPlaybookSha256,omitempty"`
+}
+
+type ComponentTestPlan struct {
+	EnvironmentID         string                  `json:"environmentId"`
+	EnvironmentRevisionID string                  `json:"environmentRevisionId"`
+	Destructive           bool                    `json:"destructive"`
+	RequiresApproval      bool                    `json:"requiresApproval"`
+	PlanDigest            string                  `json:"planDigest"`
+	Steps                 []ComponentTestPlanStep `json:"steps"`
+}
+
+type preparedComponentTest struct {
+	release     domain.ComponentRelease
+	environment domain.Environment
+	action      domain.ActionKind
+	steps       []lockedStep
+	provenance  map[string]map[string]resolvedParameter
+}
+
+func (p *Platform) PreviewComponentTest(ctx context.Context, user domain.User, releaseID string, input ComponentTestRequest) (ComponentTestPlan, error) {
+	prepared, err := p.prepareComponentTest(ctx, user, releaseID, input)
+	if err != nil {
+		return ComponentTestPlan{}, err
+	}
+	plan, digest, destructive, err := p.prepareLockedPlan(ctx, prepared.environment, domain.RunComponentTest, "preview", time.Time{}, prepared.steps)
+	if err != nil {
+		return ComponentTestPlan{}, err
+	}
+	return p.componentTestPlanDTO(ctx, prepared.environment, plan, digest, destructive), nil
+}
+
+func (p *Platform) StartComponentTest(ctx context.Context, user domain.User, releaseID string, input ComponentTestRequest) (domain.Run, error) {
+	prepared, err := p.prepareComponentTest(ctx, user, releaseID, input)
 	if err != nil {
 		return domain.Run{}, err
+	}
+	return p.createRun(ctx, user, prepared.environment, domain.RunComponentTest, prepared.release.ID, "", prepared.action, prepared.steps, prepared.provenance, input.ExpectedPlanDigest)
+}
+
+func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, releaseID string, input ComponentTestRequest) (preparedComponentTest, error) {
+	release, err := p.store.GetComponentRelease(ctx, releaseID)
+	if err != nil {
+		return preparedComponentTest{}, err
 	}
 	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 	if err != nil {
-		return domain.Run{}, err
+		return preparedComponentTest{}, err
 	}
 	if user.Role != domain.RoleEnvironmentOwner {
 		if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
-			return domain.Run{}, err
+			return preparedComponentTest{}, err
 		}
 	}
-	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	environment, err := p.store.GetEnvironment(ctx, input.EnvironmentID, false)
 	if err != nil {
-		return domain.Run{}, err
+		return preparedComponentTest{}, err
 	}
 	if environment.Revision == nil {
-		return domain.Run{}, fmt.Errorf("%w: environment has no revision", domain.ErrConflict)
+		return preparedComponentTest{}, fmt.Errorf("%w: environment has no revision", domain.ErrConflict)
 	}
 	if err := validateEnvironmentConstraints(release.EnvironmentConstraints, environment.Revision.Facts); err != nil {
-		return domain.Run{}, err
+		return preparedComponentTest{}, err
 	}
 
-	primary, found := primaryActionForComponentTest(release)
-	if !found {
-		return domain.Run{}, fmt.Errorf("%w: component test requires an executable primary action", domain.ErrInvalid)
+	if input.Mode == "" {
+		input.Mode = ComponentTestInstallVerify
 	}
-	actions := []domain.ActionDefinition{primary}
-	if verify, ok := findAction(release, domain.ActionVerify); ok {
-		actions = append(actions, verify)
+	var selected domain.ActionDefinition
+	switch input.Mode {
+	case ComponentTestInstallVerify:
+		if input.RollbackVerification.Kind != "" || input.RollbackVerification.ReleaseID != "" {
+			return preparedComponentTest{}, fmt.Errorf("%w: rollbackVerification is only valid for rollback tests", domain.ErrInvalid)
+		}
+		selected, _ = primaryActionForComponentTest(release)
+		if selected.Kind == "" {
+			return preparedComponentTest{}, fmt.Errorf("%w: install verification requires an executable primary action", domain.ErrInvalid)
+		}
+	case ComponentTestRollback:
+		selected, _ = findAction(release, domain.ActionRollback)
+		if selected.Kind == "" {
+			return preparedComponentTest{}, fmt.Errorf("%w: rollback verification requires a rollback action", domain.ErrInvalid)
+		}
+	default:
+		return preparedComponentTest{}, fmt.Errorf("%w: unsupported component test mode %q", domain.ErrInvalid, input.Mode)
 	}
-	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, environment.Revision.Parameters, runInput, primary.AllowedParameters)
+	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, environment.Revision.Parameters, input.RunInput, selected.AllowedParameters)
 	if err != nil {
-		return domain.Run{}, err
+		return preparedComponentTest{}, err
 	}
-	if err := applyDependencyFixtures(release, dependencyFixtures, variables, provenance); err != nil {
-		return domain.Run{}, err
+	if err := applyDependencyFixtures(release, input.DependencyFixtures, variables, provenance); err != nil {
+		return preparedComponentTest{}, err
 	}
 	if err := validateResolvedParameters(release.Parameters, variables); err != nil {
-		return domain.Run{}, err
+		return preparedComponentTest{}, err
 	}
-	steps := make([]lockedStep, 0, len(actions))
+	steps := make([]lockedStep, 0, 2)
 	nodeID := "component-" + component.ID
-	for _, action := range actions {
-		step, stepErr := p.lockAction(component.Name, nodeID, release, action, variables)
-		if stepErr != nil {
-			return domain.Run{}, stepErr
-		}
-		if action.Kind == domain.ActionVerify {
-			step.NodeID = nodeID + "-verify"
-		}
-		steps = append(steps, step)
+	step, err := p.lockAction(component, nodeID, release, selected, variables)
+	if err != nil {
+		return preparedComponentTest{}, err
 	}
-	return p.createRun(ctx, user, environment, domain.RunComponentTest, release.ID, "", primary.Kind, steps, map[string]map[string]resolvedParameter{nodeID: provenance})
+	steps = append(steps, step)
+	if input.Mode == ComponentTestInstallVerify {
+		if verify, ok := findAction(release, domain.ActionVerify); ok {
+			verifyStep, stepErr := p.lockAction(component, nodeID+"-verify", release, verify, variables)
+			if stepErr != nil {
+				return preparedComponentTest{}, stepErr
+			}
+			steps = append(steps, verifyStep)
+		}
+	} else {
+		if (selected.FromReleaseID == "") != (selected.ToReleaseID == "") {
+			return preparedComponentTest{}, fmt.Errorf("%w: rollback action must define both fromReleaseId and toReleaseId, or neither", domain.ErrInvalid)
+		}
+		if selected.FromReleaseID != "" && (selected.FromReleaseID != release.ID || selected.ToReleaseID == release.ID) {
+			return preparedComponentTest{}, fmt.Errorf("%w: rollback action must point from this draft to an earlier release", domain.ErrInvalid)
+		}
+		verification := input.RollbackVerification
+		if verification.Kind == "" {
+			if selected.ToReleaseID == "" {
+				verification.Kind = RollbackVerificationOnly
+			} else {
+				verification.Kind, verification.ReleaseID = RollbackVerificationTargetRelease, selected.ToReleaseID
+			}
+		}
+		switch verification.Kind {
+		case RollbackVerificationOnly:
+			if verification.ReleaseID != "" {
+				return preparedComponentTest{}, fmt.Errorf("%w: rollback_only must not include a releaseId", domain.ErrInvalid)
+			}
+		case RollbackVerificationTargetRelease:
+			if verification.ReleaseID == "" {
+				return preparedComponentTest{}, fmt.Errorf("%w: target_release requires a releaseId", domain.ErrInvalid)
+			}
+			target, targetErr := p.store.GetComponentRelease(ctx, verification.ReleaseID)
+			if targetErr != nil {
+				return preparedComponentTest{}, fmt.Errorf("%w: rollback verify target must be a retained release of the same component", domain.ErrInvalid)
+			}
+			if target.ComponentID != release.ComponentID || (target.Status != domain.ReleaseReleased && target.Status != domain.ReleaseDeprecated) {
+				return preparedComponentTest{}, fmt.Errorf("%w: rollback verify target must be a retained release of the same component", domain.ErrInvalid)
+			}
+			verify, ok := findAction(target, domain.ActionVerify)
+			if !ok {
+				return preparedComponentTest{}, fmt.Errorf("%w: rollback verify target must define a verify action", domain.ErrInvalid)
+			}
+			targetVariables, _, targetErr := resolveOwnParameters(target, domain.ScenarioNode{}, environment.Revision.Parameters, input.RunInput, selected.AllowedParameters)
+			if targetErr != nil {
+				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
+			}
+			targetProvenance := map[string]resolvedParameter{}
+			if targetErr = applyDependencyFixtures(target, input.DependencyFixtures, targetVariables, targetProvenance); targetErr != nil {
+				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
+			}
+			if targetErr = validateResolvedParameters(target.Parameters, targetVariables); targetErr != nil {
+				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
+			}
+			verify.Limit = selected.Limit
+			verifyStep, stepErr := p.lockAction(component, nodeID+"-verify", target, verify, targetVariables)
+			if stepErr != nil {
+				return preparedComponentTest{}, stepErr
+			}
+			steps = append(steps, verifyStep)
+		default:
+			return preparedComponentTest{}, fmt.Errorf("%w: unsupported rollback verification kind %q", domain.ErrInvalid, verification.Kind)
+		}
+	}
+	return preparedComponentTest{
+		release: release, environment: environment, action: selected.Kind, steps: steps,
+		provenance: map[string]map[string]resolvedParameter{nodeID: provenance},
+	}, nil
 }
 
 func primaryActionForComponentTest(release domain.ComponentRelease) (domain.ActionDefinition, bool) {
@@ -216,7 +383,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if node.HostGroup != "" {
 			action.Limit = node.HostGroup
 		}
-		step, stepErr := p.lockAction(component.Name, node.ID, release, action, variables)
+		step, stepErr := p.lockAction(component, node.ID, release, action, variables)
 		if stepErr != nil {
 			return domain.Run{}, stepErr
 		}
@@ -248,7 +415,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 			}
 			if verify, ok := findAction(verifyRelease, domain.ActionVerify); ok {
 				verify.Limit = action.Limit
-				verifyStep, verifyErr := p.lockAction(component.Name, node.ID+"-verify", verifyRelease, verify, verifyVariables)
+				verifyStep, verifyErr := p.lockAction(component, node.ID+"-verify", verifyRelease, verify, verifyVariables)
 				if verifyErr != nil {
 					return domain.Run{}, verifyErr
 				}
@@ -262,7 +429,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 			return domain.Run{}, err
 		}
 	}
-	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps, provenanceByNode)
+	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps, provenanceByNode, "")
 	if err != nil && kind == domain.RunScenarioTest {
 		_ = p.store.SetScenarioRevisionStatus(ctx, revisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 	}
@@ -447,10 +614,13 @@ func constraintMatches(expected, actual any) bool {
 	}
 }
 
-func (p *Platform) lockAction(componentName, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (lockedStep, error) {
+func (p *Platform) lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (lockedStep, error) {
 	step := lockedStep{
-		ID: newID("locked-step"), NodeID: nodeID, Name: componentName + " · " + string(action.Kind), ComponentName: componentName,
-		ReleaseID: release.ID, Action: action.Kind, Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
+		ID: newID("locked-step"), NodeID: nodeID, Name: component.Name + " · " + string(action.Kind),
+		ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, ReleaseVersion: release.Version,
+		ReleaseSpecDigest: componentReleaseSpecDigest(release), ActionID: action.ID,
+		Action: action.Kind, FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,
+		Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
 		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables),
 		RequiredCredentials: append([]string(nil), action.RequiredCredentials...), TimeoutSeconds: action.TimeoutSeconds,
 		NeedsApproval: action.NeedsApproval(),
@@ -458,25 +628,31 @@ func (p *Platform) lockAction(componentName, nodeID string, release domain.Compo
 	return step, nil
 }
 
-func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter) (domain.Run, error) {
+func (p *Platform) prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []lockedStep) (lockedPlan, string, bool, error) {
 	if p.runner == nil {
-		return domain.Run{}, fmt.Errorf("%w: Ansible runner is not configured", domain.ErrConflict)
+		return lockedPlan{}, "", false, fmt.Errorf("%w: Ansible runner is not configured", domain.ErrConflict)
 	}
 	if environment.Revision == nil {
-		return domain.Run{}, fmt.Errorf("%w: environment revision is required", domain.ErrInvalid)
-	}
-	for _, step := range steps {
-		if err := rejectSensitiveMap(step.Variables, "run parameter"); err != nil {
-			return domain.Run{}, err
-		}
-	}
-	if err := validateRequiredCredentials(environment.Revision.CredentialRefs, steps); err != nil {
-		return domain.Run{}, err
-	}
-	if err := validatePlanHostGroups(environment.Revision.Inventory, steps); err != nil {
-		return domain.Run{}, err
+		return lockedPlan{}, "", false, fmt.Errorf("%w: environment revision is required", domain.ErrInvalid)
 	}
 	plan := lockedPlan{Steps: append([]lockedStep(nil), steps...)}
+	for index := range plan.Steps {
+		plan.Steps[index].Variables = cloneMap(plan.Steps[index].Variables)
+	}
+	if err := injectEnvironmentVariables(*environment.Revision, plan.Steps); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	for _, step := range plan.Steps {
+		if err := rejectSensitiveMap(step.Variables, "run parameter"); err != nil {
+			return lockedPlan{}, "", false, err
+		}
+	}
+	if err := validateRequiredCredentials(environment.Revision.CredentialRefs, plan.Steps); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	if err := validatePlanHostGroups(environment.Revision.Inventory, plan.Steps); err != nil {
+		return lockedPlan{}, "", false, err
+	}
 	if digester, ok := p.runner.(planDigestRunner); ok {
 		playbooks := make([]string, 0, len(plan.Steps))
 		for _, step := range plan.Steps {
@@ -484,7 +660,7 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		}
 		digests, treeDigest, err := digester.DigestPlan(playbooks)
 		if err != nil {
-			return domain.Run{}, err
+			return lockedPlan{}, "", false, err
 		}
 		plan.TreeDigest = treeDigest
 		for i := range plan.Steps {
@@ -494,14 +670,135 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		for i := range plan.Steps {
 			playbookDigest, treeDigest, err := digester.Digest(plan.Steps[i].Playbook)
 			if err != nil {
-				return domain.Run{}, err
+				return lockedPlan{}, "", false, err
 			}
 			if plan.TreeDigest != "" && plan.TreeDigest != treeDigest {
-				return domain.Run{}, fmt.Errorf("%w: playbooks resolved to different executable trees", domain.ErrConflict)
+				return lockedPlan{}, "", false, fmt.Errorf("%w: playbooks resolved to different executable trees", domain.ErrConflict)
 			}
 			plan.Steps[i].PlaybookDigest = playbookDigest
 			plan.TreeDigest = treeDigest
 		}
+	}
+	if err := p.bindBackupPlan(ctx, environment.ID, runID, kind, capturedAt, &plan); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
+	destructive := false
+	for _, step := range plan.Steps {
+		if step.NeedsApproval {
+			destructive = true
+			break
+		}
+	}
+	return plan, planDigest, destructive, nil
+}
+
+func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) string {
+	type digestStep struct {
+		ComponentID         string
+		ReleaseID           string
+		ReleaseVersion      string
+		ReleaseSpecDigest   string
+		ActionID            string
+		Action              domain.ActionKind
+		FromReleaseID       string
+		ToReleaseID         string
+		Playbook            string
+		PlaybookDigest      string
+		Tags                []string
+		Limit               string
+		Variables           map[string]any
+		RequiredCredentials []string
+		TimeoutSeconds      int
+		NeedsApproval       bool
+		BackupRef           string
+		BackupInstallRunID  string
+		BackupPlaybookSHA   string
+		BackupCapturedAt    string
+	}
+	digestSteps := make([]digestStep, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		variables := cloneMap(step.Variables)
+		for _, name := range []string{
+			"clusterforge_backup_ref", "clusterforge_backup_marker", "clusterforge_backup_operation",
+			"clusterforge_backup_cleanup_on_success", "clusterforge_backup_metadata",
+		} {
+			delete(variables, name)
+		}
+		backupRef, backupInstallRunID, backupPlaybookSHA, backupCapturedAt := "", "", "", ""
+		if (step.Action == domain.ActionRollback || step.Action == domain.ActionUninstall) && step.Backup != nil {
+			backupRef, backupInstallRunID, backupPlaybookSHA = step.BackupRef, step.Backup.InstallRunID, step.Backup.PlaybookSHA256
+			backupCapturedAt = step.Backup.CapturedAt.UTC().Format(time.RFC3339Nano)
+		}
+		digestSteps = append(digestSteps, digestStep{
+			ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, ReleaseSpecDigest: step.ReleaseSpecDigest,
+			ActionID: step.ActionID, Action: step.Action, FromReleaseID: step.FromReleaseID, ToReleaseID: step.ToReleaseID,
+			Playbook: step.Playbook, PlaybookDigest: step.PlaybookDigest, Tags: step.Tags, Limit: step.Limit,
+			Variables: variables, RequiredCredentials: step.RequiredCredentials,
+			TimeoutSeconds: step.TimeoutSeconds, NeedsApproval: step.NeedsApproval,
+			BackupRef: backupRef, BackupInstallRunID: backupInstallRunID,
+			BackupPlaybookSHA: backupPlaybookSHA, BackupCapturedAt: backupCapturedAt,
+		})
+	}
+	encoded, _ := json.Marshal(struct {
+		EnvironmentRevisionID string
+		TreeDigest            string
+		Steps                 []digestStep
+	}{EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps})
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func (p *Platform) componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan lockedPlan, digest string, destructive bool) ComponentTestPlan {
+	versions := map[string]string{}
+	version := func(releaseID string) string {
+		if releaseID == "" {
+			return ""
+		}
+		if cached, ok := versions[releaseID]; ok {
+			return cached
+		}
+		release, err := p.store.GetComponentRelease(ctx, releaseID)
+		if err != nil {
+			return ""
+		}
+		versions[releaseID] = release.Version
+		return release.Version
+	}
+	steps := make([]ComponentTestPlanStep, 0, len(plan.Steps))
+	for index, step := range plan.Steps {
+		var backupInstallRunID, backupPlaybookSHA string
+		var backupCapturedAt *time.Time
+		if (step.Action == domain.ActionRollback || step.Action == domain.ActionUninstall) && step.Backup != nil {
+			backupInstallRunID, backupPlaybookSHA = step.Backup.InstallRunID, step.Backup.PlaybookSHA256
+			capturedAt := step.Backup.CapturedAt
+			backupCapturedAt = &capturedAt
+		}
+		steps = append(steps, ComponentTestPlanStep{
+			Order: index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName,
+			ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Action: step.Action,
+			Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval,
+			FromReleaseID: step.FromReleaseID, FromReleaseVersion: version(step.FromReleaseID),
+			ToReleaseID: step.ToReleaseID, ToReleaseVersion: version(step.ToReleaseID),
+			BackupRef: step.BackupRef, BackupInstallRunID: backupInstallRunID,
+			BackupCapturedAt: backupCapturedAt, BackupPlaybookSHA: backupPlaybookSHA,
+		})
+	}
+	return ComponentTestPlan{
+		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
+		Destructive: destructive, RequiresApproval: destructive, PlanDigest: digest, Steps: steps,
+	}
+}
+
+func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedPlanDigest string) (domain.Run, error) {
+	now := time.Now().UTC()
+	runID := newID("run")
+	plan, planDigest, destructive, err := p.prepareLockedPlan(ctx, environment, kind, runID, now, steps)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if expectedPlanDigest != "" && expectedPlanDigest != planDigest {
+		return domain.Run{}, fmt.Errorf("%w: execution plan changed after preview; refresh the plan before submitting", domain.ErrConflict)
 	}
 	snapshot := structToMap(plan)
 	if len(resolvedParametersByNode) > 0 {
@@ -520,18 +817,10 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 	}
 	snapshot["environmentRevisionId"] = environment.CurrentRevisionID
 	snapshot["credentialRefs"] = redactedRefs
-	destructive := false
-	for _, step := range plan.Steps {
-		if step.NeedsApproval {
-			destructive = true
-			break
-		}
-	}
 	status := domain.RunQueued
 	var approval *domain.Approval
-	now := time.Now().UTC()
 	run := domain.Run{
-		ID: newID("run"), Kind: kind, Status: status, RequestedBy: user.ID,
+		ID: runID, Kind: kind, Status: status, RequestedBy: user.ID,
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		ComponentReleaseID: releaseID, ScenarioRevisionID: revisionID, Action: action,
 		Destructive: destructive, InputSnapshot: snapshot, ArtifactDigest: plan.TreeDigest, CreatedAt: now,
@@ -553,6 +842,189 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		p.schedule(environment.ID)
 	}
 	return run, nil
+}
+
+func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []lockedStep) error {
+	credentialNames := make(map[string]struct{}, len(revision.CredentialRefs))
+	for _, ref := range revision.CredentialRefs {
+		credentialNames[ref.Name] = struct{}{}
+	}
+	for index := range steps {
+		if steps[index].Variables == nil {
+			steps[index].Variables = map[string]any{}
+		}
+		for name, value := range revision.Variables {
+			if _, exists := steps[index].Variables[name]; exists {
+				return fmt.Errorf("%w: environment variable %q conflicts with a component parameter", domain.ErrInvalid, name)
+			}
+			if _, exists := credentialNames[name]; exists {
+				return fmt.Errorf("%w: environment variable %q conflicts with a CredentialRef", domain.ErrInvalid, name)
+			}
+			steps[index].Variables[name] = value
+		}
+	}
+	return nil
+}
+
+func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
+	for index := range plan.Steps {
+		step := &plan.Steps[index]
+		switch step.Action {
+		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
+			release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
+			if err != nil {
+				return err
+			}
+			metadata := domain.BackupMetadata{
+				EnvironmentID: environmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID,
+				ActionID: step.ActionID, InstallRunID: runID, CapturedAt: capturedAt,
+				PlaybookSHA256: step.PlaybookDigest, DependencySnapshot: releaseDependencySnapshot(release),
+			}
+			step.BackupRef = path.Join("/var/lib/clusterforge/backups", safeBackupSegment(environmentID), safeBackupSegment(step.ComponentID), safeBackupSegment(step.ReleaseID), safeBackupSegment(runID))
+			step.Backup = &metadata
+			if current, currentErr := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID); currentErr == nil && current.BackupRef != step.BackupRef {
+				step.Variables["clusterforge_replaced_backup_ref"] = current.BackupRef
+				step.Variables["clusterforge_cleanup_replaced_backup_on_success"] = true
+			} else if currentErr != nil && !errors.Is(currentErr, domain.ErrNotFound) {
+				return currentErr
+			}
+			bindBackupVariables(step, "capture", kind != domain.RunScenario)
+		case domain.ActionRollback:
+			installation, err := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					return fmt.Errorf("%w: rollback refused: environment %s has no installed-component backup_ref for component %s", domain.ErrConflict, environmentID, step.ComponentID)
+				}
+				return err
+			}
+			expectedReleaseID := step.ReleaseID
+			if step.FromReleaseID != "" {
+				expectedReleaseID = step.FromReleaseID
+			}
+			if err := validateInstallationBackup(installation, environmentID, step.ComponentID, expectedReleaseID); err != nil {
+				return err
+			}
+			if err := p.validateCurrentInstallEvidence(ctx, installation); err != nil {
+				return err
+			}
+			step.BackupRef = installation.BackupRef
+			metadata := installation.Backup
+			step.Backup = &metadata
+			bindBackupVariables(step, "restore", kind != domain.RunScenario)
+		case domain.ActionUninstall:
+			installation, err := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					return fmt.Errorf("%w: uninstall refused: environment %s has no installed-component record for component %s", domain.ErrConflict, environmentID, step.ComponentID)
+				}
+				return err
+			}
+			if err := validateInstallationBackup(installation, environmentID, step.ComponentID, step.ReleaseID); err != nil {
+				return err
+			}
+			step.BackupRef = installation.BackupRef
+			metadata := installation.Backup
+			step.Backup = &metadata
+			bindBackupVariables(step, "cleanup", true)
+		}
+	}
+	return nil
+}
+
+func bindBackupVariables(step *lockedStep, operation string, cleanupOnSuccess bool) {
+	metadata := step.Backup
+	step.Variables["clusterforge_backup_ref"] = step.BackupRef
+	step.Variables["clusterforge_backup_marker"] = path.Join(step.BackupRef, ".captured")
+	step.Variables["clusterforge_backup_operation"] = operation
+	step.Variables["clusterforge_backup_cleanup_on_success"] = cleanupOnSuccess && (operation == "restore" || operation == "cleanup")
+	step.Variables["clusterforge_backup_metadata"] = map[string]any{
+		"environment_id":      metadata.EnvironmentID,
+		"component_id":        metadata.ComponentID,
+		"release_id":          metadata.ReleaseID,
+		"action_id":           metadata.ActionID,
+		"install_run_id":      metadata.InstallRunID,
+		"captured_at":         metadata.CapturedAt.UTC().Format(time.RFC3339Nano),
+		"playbook_sha256":     metadata.PlaybookSHA256,
+		"dependency_snapshot": metadata.DependencySnapshot,
+	}
+}
+
+func releaseDependencySnapshot(release domain.ComponentRelease) map[string]any {
+	dependencies := make([]map[string]any, 0, len(release.Dependencies))
+	for _, dependency := range release.Dependencies {
+		dependencies = append(dependencies, map[string]any{
+			"component_id":       dependency.UpstreamComponentID,
+			"release_id":         dependency.UpstreamReleaseID,
+			"parameter_mappings": dependency.ParameterMappings,
+		})
+	}
+	return map[string]any{"dependencies": dependencies}
+}
+
+func validateInstallationBackup(installation domain.EnvironmentComponentInstallation, environmentID, componentID, releaseID string) error {
+	metadata := installation.Backup
+	if installation.BackupRef == "" || installation.InstallRunID == "" || metadata.EnvironmentID == "" || metadata.ComponentID == "" || metadata.ReleaseID == "" || metadata.InstallRunID == "" || metadata.PlaybookSHA256 == "" || metadata.CapturedAt.IsZero() {
+		return fmt.Errorf("%w: rollback refused: installed-component backup metadata is incomplete", domain.ErrConflict)
+	}
+	if installation.EnvironmentID != environmentID || metadata.EnvironmentID != environmentID {
+		return fmt.Errorf("%w: rollback refused: backup environment does not match %s", domain.ErrConflict, environmentID)
+	}
+	if installation.ComponentID != componentID || metadata.ComponentID != componentID {
+		return fmt.Errorf("%w: rollback refused: backup component does not match %s", domain.ErrConflict, componentID)
+	}
+	if installation.ReleaseID != releaseID || metadata.ReleaseID != releaseID {
+		return fmt.Errorf("%w: rollback refused: backup release %s does not match %s", domain.ErrConflict, metadata.ReleaseID, releaseID)
+	}
+	if installation.InstallRunID != metadata.InstallRunID {
+		return fmt.Errorf("%w: rollback refused: backup install Run metadata does not match the installed-component record", domain.ErrConflict)
+	}
+	return nil
+}
+
+func (p *Platform) validateCurrentInstallEvidence(ctx context.Context, installation domain.EnvironmentComponentInstallation) error {
+	release, err := p.store.GetComponentRelease(ctx, installation.ReleaseID)
+	if err != nil {
+		return fmt.Errorf("%w: rollback refused: installed release no longer exists", domain.ErrConflict)
+	}
+	var capturedAction domain.ActionDefinition
+	for _, action := range release.Actions {
+		if action.ID == installation.Backup.ActionID {
+			capturedAction = action
+			break
+		}
+	}
+	if capturedAction.ID == "" {
+		return fmt.Errorf("%w: rollback refused: captured install action no longer matches release %s", domain.ErrConflict, release.ID)
+	}
+	digester, ok := p.runner.(digestRunner)
+	if !ok {
+		return fmt.Errorf("%w: rollback refused: runner cannot verify the captured Playbook hash", domain.ErrConflict)
+	}
+	currentDigest, _, err := digester.Digest(capturedAction.Playbook)
+	if err != nil {
+		return fmt.Errorf("%w: rollback refused: cannot verify captured Playbook: %v", domain.ErrConflict, err)
+	}
+	if currentDigest != installation.Backup.PlaybookSHA256 {
+		return fmt.Errorf("%w: rollback refused: captured Playbook hash does not match the current release definition", domain.ErrConflict)
+	}
+	return nil
+}
+
+func safeBackupSegment(value string) string {
+	if value != "" {
+		valid := true
+		for _, char := range value {
+			if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '.' && char != '_' && char != '-' {
+				valid = false
+				break
+			}
+		}
+		if valid && value != "." && value != ".." {
+			return value
+		}
+	}
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("id-%x", digest[:12])
 }
 
 func validateRequiredCredentials(refs []domain.CredentialRef, steps []lockedStep) error {
@@ -666,21 +1138,86 @@ func (p *Platform) schedule(environmentID string) {
 		p.mu.Unlock()
 		return
 	}
-	p.workers[environmentID] = struct{}{}
+	p.nextWorkerToken++
+	token := p.nextWorkerToken
+	p.workers[environmentID] = environmentWorkerState{token: token, heartbeat: time.Now()}
 	p.mu.Unlock()
-	go p.environmentWorker(environmentID)
+	go p.environmentWorker(environmentID, token)
 }
 
-func (p *Platform) environmentWorker(environmentID string) {
+const (
+	queueWatchdogInterval = 2 * time.Second
+	queueWorkerStaleAfter = 10 * time.Second
+)
+
+func (p *Platform) queueWatchdog() {
+	ticker := time.NewTicker(queueWatchdogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.rootCtx.Done():
+			return
+		case now := <-ticker.C:
+			if count, err := p.store.FailInvalidActiveRuns(p.rootCtx, now.UTC()); err != nil {
+				p.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
+			} else if count > 0 {
+				p.hub.Publish("run.updated", map[string]any{"status": domain.RunFailed, "reconciled": count})
+			}
+			environments, err := p.store.ListQueuedEnvironmentIDs(p.rootCtx)
+			if err != nil {
+				p.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
+				continue
+			}
+			for _, environmentID := range environments {
+				running, runErr := p.store.HasRunningRun(p.rootCtx, environmentID)
+				if runErr != nil || running {
+					continue
+				}
+				p.recoverEnvironmentWorker(environmentID, now.Add(-queueWorkerStaleAfter))
+			}
+		}
+	}
+}
+
+func (p *Platform) recoverEnvironmentWorker(environmentID string, staleBefore time.Time) {
+	p.mu.Lock()
+	state, exists := p.workers[environmentID]
+	if exists && state.heartbeat.After(staleBefore) {
+		p.mu.Unlock()
+		return
+	}
+	p.nextWorkerToken++
+	token := p.nextWorkerToken
+	p.workers[environmentID] = environmentWorkerState{token: token, heartbeat: time.Now()}
+	p.mu.Unlock()
+	go p.environmentWorker(environmentID, token)
+}
+
+func (p *Platform) touchEnvironmentWorker(environmentID string, token uint64) {
+	p.mu.Lock()
+	if state, ok := p.workers[environmentID]; ok && state.token == token {
+		state.heartbeat = time.Now()
+		p.workers[environmentID] = state
+	}
+	p.mu.Unlock()
+}
+
+func (p *Platform) environmentWorker(environmentID string, token uint64) {
 	defer func() {
 		p.mu.Lock()
-		delete(p.workers, environmentID)
+		if state, ok := p.workers[environmentID]; ok && state.token == token {
+			delete(p.workers, environmentID)
+		}
 		p.mu.Unlock()
 		// Close the narrow hand-off window where a run is queued after this
 		// worker's final empty claim but before it removes itself. Any enqueue
 		// after the removal schedules its own worker; an enqueue before removal
 		// is discovered here.
 		if p.rootCtx.Err() == nil {
+			running, err := p.store.HasRunningRun(context.Background(), environmentID)
+			if err != nil || running {
+				return
+			}
 			queued, err := p.store.ListQueuedEnvironmentIDs(context.Background())
 			if err == nil {
 				for _, id := range queued {
@@ -696,6 +1233,7 @@ func (p *Platform) environmentWorker(environmentID string) {
 		if p.rootCtx.Err() != nil {
 			return
 		}
+		p.touchEnvironmentWorker(environmentID, token)
 		run, err := p.store.ClaimNextRun(p.rootCtx, environmentID, time.Now().UTC())
 		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrConflict) {
 			return
@@ -705,6 +1243,7 @@ func (p *Platform) environmentWorker(environmentID string) {
 			return
 		}
 		p.executeRun(run)
+		p.touchEnvironmentWorker(environmentID, token)
 	}
 }
 
@@ -818,9 +1357,43 @@ func (p *Platform) executeRun(run domain.Run) {
 		if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
 			log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
 		}
+		if lifecycleErr := p.recordSuccessfulLifecycleStep(context.Background(), run, locked, finished); lifecycleErr != nil {
+			step.Status = domain.RunFailed
+			step.Summary = lifecycleErr.Error()
+			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
+				log.Printf("run %s: persist failed lifecycle step %s: %v", run.ID, step.ID, stepErr)
+			}
+			p.finishRun(run, domain.RunFailed, lifecycleErr)
+			return
+		}
 		p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "stepId": step.ID, "status": step.Status})
 	}
 	p.finishRun(run, domain.RunSucceeded, nil)
+}
+
+func (p *Platform) recordSuccessfulLifecycleStep(ctx context.Context, run domain.Run, step lockedStep, installedAt time.Time) error {
+	switch step.Action {
+	case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
+		if step.Backup == nil || step.BackupRef == "" {
+			return fmt.Errorf("%w: successful install action is missing its locked backup metadata", domain.ErrConflict)
+		}
+		return p.store.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
+			EnvironmentID: run.EnvironmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID,
+			InstallRunID: run.ID, BackupRef: step.BackupRef, Backup: *step.Backup,
+			TestOnly: run.Kind != domain.RunScenario, InstalledAt: installedAt,
+		})
+	case domain.ActionRollback, domain.ActionUninstall:
+		if step.Backup == nil {
+			return fmt.Errorf("%w: successful rollback action is missing its locked backup metadata", domain.ErrConflict)
+		}
+		err := p.store.DeleteEnvironmentComponentInstallation(ctx, run.EnvironmentID, step.ComponentID, step.Backup.InstallRunID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("%w: rollback backup_ref was replaced while the Run was active", domain.ErrConflict)
+		}
+		return err
+	default:
+		return nil
+	}
 }
 
 func (p *Platform) finishRun(run domain.Run, status domain.RunStatus, cause error) {
@@ -831,7 +1404,7 @@ func (p *Platform) finishRun(run domain.Run, status domain.RunStatus, cause erro
 	if err := p.store.UpdateRunStatus(context.Background(), run.ID, []domain.RunStatus{domain.RunRunning}, status, errText, time.Now().UTC()); err != nil {
 		log.Printf("finishRun %s: update status to %s: %v", run.ID, status, err)
 	}
-	if run.Kind == domain.RunComponentTest && status == domain.RunSucceeded {
+	if run.Kind == domain.RunComponentTest && run.Action != domain.ActionRollback && status == domain.RunSucceeded {
 		lockedDigest, _ := run.InputSnapshot["componentReleaseSpecDigest"].(string)
 		current, currentErr := p.store.GetComponentRelease(context.Background(), run.ComponentReleaseID)
 		if currentErr == nil && lockedDigest != "" && componentReleaseSpecDigest(current) == lockedDigest {
@@ -970,6 +1543,15 @@ func (p *Platform) DecideApproval(ctx context.Context, user domain.User, approva
 	}
 	if environment.OwnerID != user.ID {
 		return run, fmt.Errorf("%w: approval belongs to another owner's environment", domain.ErrForbidden)
+	}
+	if approval.Status != "pending" {
+		if approval.Status == decision && run.Status != domain.RunAwaitingApproval {
+			// Treat an identical retry as success. This makes the endpoint safe for
+			// double clicks and network retries without duplicating audit events or
+			// attempting to enqueue the run a second time.
+			return run, nil
+		}
+		return run, fmt.Errorf("%w: approval was already %s", domain.ErrConflict, approval.Status)
 	}
 	if err := p.store.DecideApproval(ctx, approvalID, user.ID, decision, reason, time.Now().UTC()); err != nil {
 		return run, err

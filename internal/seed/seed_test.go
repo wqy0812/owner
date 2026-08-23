@@ -236,7 +236,10 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 				}
 			}
 		}
-		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, environment.ID, nil, nil)
+		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, service.ComponentTestRequest{
+			EnvironmentID: environment.ID,
+			Mode:          service.ComponentTestInstallVerify,
+		})
 		if err != nil || componentRun.Status != domain.RunAwaitingApproval {
 			t.Fatalf("component test %s run=%+v err=%v", releaseID, componentRun, err)
 		}

@@ -137,7 +137,7 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。修改
 
 场景节点锁定 Release，但 Release 在图中不要求唯一。同一 Docker、Distribution、Flannel、kubelet 或 kube-proxy Release 可以分别用于 `k8smaster` 与 `k8snode`；依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
 
-组件测试优先选择 `upgrade`，不存在时选择 `install`，随后在定义了 `verify` 时追加验证步骤。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
+组件测试优先选择 `upgrade`，不存在时选择 `install`，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
 
 每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
 CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
@@ -181,10 +181,11 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 - Facts：架构、操作系统、网络等兼容性事实。
 - Inventory：主机名、地址、分组、SSH 用户和端口。
 - Parameters：可持久化的非敏感环境参数。
+- Variables：由 Environment Owner 维护的非敏感字符串环境变量；使用大写标识符名称并直接注入 Ansible extra-vars。
 - CredentialRefs：`envVarRef` 或 `sshKeyPath`。
 - `maxConcurrent`：当前结构保留该字段，但调度实现固定按每环境一个运行串行执行。
 
-每次保存 Inventory、Facts、Parameters 或 CredentialRefs 都会创建新 Environment Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改影响。
+每次保存 Inventory、Facts、Parameters、Variables 或 CredentialRefs 都会创建新 Environment Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改影响。
 
 ### 4.5 Run、Step、Approval 与 Log
 
@@ -236,7 +237,7 @@ SQLite 主要表如下：
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
 | `audit_events` | 审计记录 | 数据库触发器禁止更新和删除 |
 
-时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 为首版合同，不保留旧 `parameterSchema`。
+时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 为首版合同，不保留旧 `parameterSchema`。
 
 ## 6. 权限和可见性
 
@@ -297,12 +298,28 @@ SQLite 主要表如下：
 
 Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验必填、类型、enum 和 minLength。Upgrade/Rollback 发布时要求起止 Release 的映射合同一致。
 
-### 7.3 Run 规划与不可变快照
+Environment Revision 的 `Variables` 不参与参数合同优先级，而是在 Run 规划时以
+同名字符串直接写入每个步骤的 Ansible extra-vars。变量名必须符合
+`[A-Z_][A-Z0-9_]*`，敏感名称必须改用 CredentialRef；若变量名与组件参数或
+CredentialRef 重名，Run 在排队前失败，不做静默覆盖。
+
+### 7.3 环境锁定的镜像构建
+
+Draft Release 的镜像构建请求必须携带 `environmentId`。后端读取环境当前
+Revision 的 `IMAGE_REGISTRY`，校验其为不带协议、tag 或 digest 的 Docker
+Registry 前缀，然后生成 `IMAGE_REGISTRY/components/<slug>:<tag>`。构建记录保存
+Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`，因此环境
+后续修改不会改变已排队或历史构建。历史构建允许没有环境字段。
+
+### 7.4 Run 规划与不可变快照
+
+组件测试提交前可通过 `/component-releases/{id}/test-plan` 生成只读计划。该接口复用下列规划与校验，但不创建 Run、Approval 或审计执行事件；响应仅包含步骤版本、动作、Playbook、limit、审批要求等脱敏元数据。正式提交携带 `expectedPlanDigest`，后端重新规划并在摘要不一致时返回 Conflict。
 
 创建 Run 时，后端执行：
 
 - 校验发起权限、Release/Revision 状态、场景 DAG 和环境约束。
 - 按 DAG 拓扑排序生成步骤。
+- 把锁定 Environment Revision 的非敏感环境变量写入各步骤并检查变量冲突。
 - 校验目标 Host Group 在当前 Inventory 中存在。
 - 汇总锁定动作的 `requiredCredentials`，缺少任一 CredentialRef 时在排队前失败。
 - 锁定每个步骤的 Release ID、动作、Playbook、tags、limit、变量和超时。
@@ -310,7 +327,28 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 - 记录 Component Release 规格摘要、环境 Revision ID、步骤所需凭据名称和脱敏 CredentialRefs。
 - 判断是否需要审批并持久化 Run。
 
-### 7.4 危险动作审批
+### 7.5 安装备份与回滚绑定
+
+`install`、`configure` 和 `upgrade` 步骤会获得只属于当前安装 Run 的
+`clusterforge_backup_ref`：
+
+`/var/lib/clusterforge/backups/<environment>/<component>/<release>/<install-run-id>`
+
+平台同时锁定 `environment_id`、`component_id`、`release_id`、`action_id`、
+`install_run_id`、`captured_at`、安装 Playbook SHA-256 和依赖快照，并通过
+`clusterforge_backup_metadata` 传给 Playbook。负责捕获文件的 Playbook 必须把
+该对象写入 `clusterforge_backup_marker`（即备份目录的 `.captured`），不得把
+固定版本目录是否存在当作跳过捕获的条件。
+
+安装步骤成功后，平台把 `backup_ref` 写入环境当前安装组件记录。回滚规划只读
+取这条记录，不扫描同版本目录；环境、组件、Release、安装 Run、元数据完整性
+或当前安装 Playbook 哈希有任一不匹配即在排队前返回 Conflict。运行详情展示
+备份来源 Run、捕获时间和 Playbook 摘要。测试安装标记为 `testOnly`，测试回滚
+收到 `clusterforge_backup_cleanup_on_success=true`；回滚成功后平台删除对应测试
+安装记录，Playbook 应同步删除远端测试备份。正式安装记录保留到后续安装替换
+或卸载/回滚消费它。
+
+### 7.6 危险动作审批
 
 满足任一条件即需要审批：
 
@@ -320,7 +358,7 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 
 危险 Run 初始为 `awaiting_approval`。只有目标环境的 Owner 能批准或拒绝；批准后进入 `queued`，拒绝后进入 `rejected`。审批记录与审计记录都会持久化。
 
-### 7.5 环境 FIFO 调度
+### 7.7 环境 FIFO 调度
 
 - 每个环境对应一个进程内 Worker。
 - Worker 使用数据库事务检查该环境是否已有 Running Run。
@@ -333,7 +371,7 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 
 `ExecutionPolicy` 会随 Scenario Revision 持久化，但当前 Planner 尚未执行其中的 `failurePolicy`、`maxUnavailableNodes` 等策略；实际行为仍是拓扑串行、遇到首个失败即终止。
 
-### 7.6 Ansible 执行
+### 7.8 Ansible 执行
 
 每个锁定步骤执行三个阶段：
 
@@ -368,6 +406,9 @@ Run Input 只能覆盖节点或动作显式声明允许的键。解析后校验�
 - 实际 secret 不写入数据库 Run 快照；日志写入前按 secret 字面值脱敏。
 - Release 动作的 `requiredCredentials` 只是一组名称。环境中同名引用缺失时，
   组件运行和场景运行都会在创建 Run 之前 fail-closed。
+- Draft 更新中省略 `requiredCredentials` 表示保留原值，显式提交空数组（也接受
+  `required_credential_names: []`）表示清空；持久化和响应都规范化为空数组而非
+  `null`。
 
 注意：`sshKeyPath` 的路径本身会保存到数据库，私钥内容不会保存。当前 Runner 将该路径作为同名 Ansible 变量传入，是否由 Playbook 用作连接私钥取决于作业定义。
 
@@ -417,6 +458,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | GET | `/component-releases/{id}/impact` | 发布影响预览 |
 | POST | `/component-releases/{id}/publish` | 发布 |
 | POST | `/component-releases/{id}/deprecate` | 废弃 |
+| POST | `/component-releases/{id}/test-plan` | 只读预览组件测试执行计划 |
 | POST | `/component-releases/{id}/test-runs` | 发起组件测试 |
 
 ### 9.3 场景
@@ -492,7 +534,6 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后的进程组终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单步骤日志上限 |
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 时仅保留角色身份，不导入 Demo 目录数据 |
-| `NEWPLATFORM_IMAGE_REGISTRY` | 无 | Draft Dockerfile 构建的目标 Registry；空值禁用功能 |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | Dockerfile 临时构建上下文根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | Docker CLI 路径 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |

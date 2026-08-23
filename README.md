@@ -6,7 +6,7 @@
 
 - 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知；Draft Playbook 支持上传和在线编辑。
 - 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
-- 环境 Owner：管理 Inventory、环境参数与凭据引用，审批高风险作业。
+- 环境 Owner：管理 Inventory、环境参数、非敏感环境变量与凭据引用，审批高风险作业。
 - 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
 - 示例：OpenFuyao 管理集群和 Kubernetes 1.17.5 集群搭建作业快照。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
@@ -51,6 +51,29 @@ make build
 
 `make build` 先构建前端，再将静态资源嵌入 `bin/newplatform`。
 
+## 部署到 192.168.88.55 测试环境
+
+部署当前工作区（包括未提交改动）：
+
+```bash
+./scripts/deploy-test-88-55.sh
+```
+
+脚本默认执行 Go/React 测试和 `git diff --check`，构建嵌入前端的 Linux amd64
+二进制，然后通过 SSH 部署到 `root@192.168.88.55`。切换前会检查活动 Run，备份
+现有二进制、SQLite 数据库和环境配置；服务未在 15 秒内恢复时会自动回退。
+前台构建会同时生成不缓存的 `version.json`；已经加载版本守卫的 SPA 会在后续部署后阻断旧页面操作并提示刷新。
+
+可选参数：
+
+```bash
+./scripts/deploy-test-88-55.sh --help
+./scripts/deploy-test-88-55.sh --skip-tests
+./scripts/deploy-test-88-55.sh --target root@192.168.88.55 --ssh-port 22
+```
+
+只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
+
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 
 ## 组件分层
@@ -87,6 +110,8 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 - 每次运行使用独立工作区、0600 Inventory/变量文件和独立 `ANSIBLE_LOCAL_TEMP`。
 - Secret 运行时解析并脱敏，不写入数据库、快照或保留日志。
 - 每个环境同时只有一个活动执行；其他请求 FIFO 排队。
+- 安装备份按环境、组件、Release 和安装 Run 隔离；回滚只消费环境当前安装记录
+  的 `backup_ref`，拒绝元数据或 Playbook 哈希不匹配的旧基线。
 - `recovery`、`clean`、`destroy`、`uninstall` 以及显式 destructive 动作必须由环境 Owner 审批。
 - OpenFuyao build 包含 `rcv`，因此默认被视为 destructive；没有合格主机、内部介质和仓库时不要批准执行。
 
@@ -102,15 +127,21 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后进程组强制终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单个 Ansible step 保留的脱敏日志上限 |
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 仅创建角色切换账号，目录保持为空供人工录入 |
-| `NEWPLATFORM_IMAGE_REGISTRY` | 无 | 非空时启用 Draft Dockerfile 构建；平台强制推送到该仓库的 `components/<slug>:<tag>` |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | 单 Dockerfile 隔离构建上下文的临时根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | 构建和推送镜像所用的 Docker CLI |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | 批准执行 Kubernetes 1.17.5 作业时必需；32 字节密钥的 base64 值，仅以 CredentialRef 注入 |
 
-组件 Owner 可在 Draft 发布行选择“构建镜像”，上传不超过 1 MiB 的单个
-Dockerfile。平台不会接收本地构建目录或主机路径；构建、推送日志和最终
-RepoDigest 会记录在数据库中。Dockerfile 会由平台主机 Docker daemon 执行，
-因此只应上传可信内容。
+Environment Owner 在环境页面维护非敏感大写环境变量；每次保存都会生成新的
+Environment Revision。变量会以同名 Ansible extra-vars 注入组件作业，例如
+Playbook 可直接使用 `{{ IMAGE_REGISTRY }}`。变量名与组件参数或 CredentialRef
+冲突时，平台会在创建 Run 前拒绝执行。
+
+组件 Owner 可在 Draft 发布行选择“构建镜像”，选择一个已配置
+`IMAGE_REGISTRY` 的环境，再上传不超过 1 MiB 的单个 Dockerfile。平台锁定所选
+Environment Revision，并推送到 `IMAGE_REGISTRY/components/<slug>:<tag>`；之后
+环境变量变化不会改写已提交构建。平台不会接收本地构建目录或主机路径；构建、
+推送日志和最终 RepoDigest 会记录在数据库中。Dockerfile 会由平台主机 Docker
+daemon 执行，因此只应上传可信内容。
 
 ## 示例来源
 

@@ -137,12 +137,19 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(a.Tags), a.Limit, a.HostGroup, jsonText(a.AllowedParameters), jsonText(a.RequiredCredentials), a.TimeoutSeconds, a.RiskLevel, a.Destructive, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(nonNilStrings(a.Tags)), a.Limit, a.HostGroup, jsonText(nonNilStrings(a.AllowedParameters)), jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
 		if err != nil {
 			return mapSQLError(err)
 		}
 	}
 	return nil
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func nullString(v string) any {
@@ -284,9 +291,9 @@ func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.Act
 		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &tags, &a.Limit, &a.HostGroup, &allowed, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &from, &to); err != nil {
 			return nil, err
 		}
-		a.Tags = decodeJSON(tags, []string{})
-		a.AllowedParameters = decodeJSON(allowed, []string{})
-		a.RequiredCredentials = decodeJSON(requiredCredentials, []string{})
+		a.Tags = nonNilStrings(decodeJSON(tags, []string{}))
+		a.AllowedParameters = nonNilStrings(decodeJSON(allowed, []string{}))
+		a.RequiredCredentials = nonNilStrings(decodeJSON(requiredCredentials, []string{}))
 		a.Destructive = destructive != 0
 		a.FromReleaseID = from.String
 		a.ToReleaseID = to.String

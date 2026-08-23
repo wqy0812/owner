@@ -149,10 +149,34 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	if resolved, ok := run.InputSnapshot["resolvedParametersByNode"]; ok {
 		output["resolvedParametersByNode"] = resolved
 	}
+	if backups := lockedBackupMetadata(run.InputSnapshot); len(backups) > 0 {
+		output["backups"] = backups
+	}
 	if run.Status == domain.RunQueued {
 		var position int
 		_ = h.platform.Store().DB().QueryRowContext(r.Context(), `SELECT COUNT(*) FROM runs WHERE environment_id=? AND status='queued' AND created_at<=?`, run.EnvironmentID, run.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")).Scan(&position)
 		output["queuePosition"] = position
+	}
+	return output
+}
+
+func lockedBackupMetadata(snapshot map[string]any) []map[string]any {
+	output := make([]map[string]any, 0)
+	steps, _ := snapshot["steps"].([]any)
+	for _, raw := range steps {
+		step, _ := raw.(map[string]any)
+		backup, _ := step["backup"].(map[string]any)
+		backupRef, _ := step["backupRef"].(string)
+		if backupRef == "" || backup == nil {
+			continue
+		}
+		item := map[string]any{
+			"nodeId": step["nodeId"], "componentId": step["componentId"], "componentName": step["componentName"],
+			"releaseId": step["releaseId"], "action": step["action"], "backupRef": backupRef,
+			"installRunId": backup["installRunId"], "capturedAt": backup["capturedAt"],
+			"playbookSha256": backup["playbookSha256"],
+		}
+		output = append(output, item)
 	}
 	return output
 }

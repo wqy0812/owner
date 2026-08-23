@@ -293,6 +293,10 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if err != nil {
 			return err
 		}
+		variables, err := json.Marshal(revision.Variables)
+		if err != nil {
+			return err
+		}
 		credentialRefs, err := json.Marshal(revision.CredentialRefs)
 		if err != nil {
 			return err
@@ -305,8 +309,8 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if maxConcurrent < 1 {
 			maxConcurrent = 1
 		}
-		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,parameters_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(parameters), string(credentialRefs), maxConcurrent, seedTime(revision.CreatedAt))
+		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,parameters_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(parameters), string(variables), string(credentialRefs), maxConcurrent, seedTime(revision.CreatedAt))
 		return err
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err

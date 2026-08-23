@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/service"
 )
 
 type componentDTO struct {
@@ -38,21 +39,23 @@ type componentDependencyInput struct {
 }
 
 type componentActionInput struct {
-	Name                string            `json:"name"`
-	Kind                domain.ActionKind `json:"kind"`
-	Type                domain.ActionKind `json:"type"`
-	Playbook            string            `json:"playbook"`
-	Tags                []string          `json:"tags"`
-	Limit               string            `json:"limit"`
-	HostGroup           string            `json:"hostGroup"`
-	AllowedParameters   []string          `json:"allowedParameters"`
-	RequiredCredentials []string          `json:"requiredCredentials"`
-	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
-	Risk                string            `json:"risk"`
-	Destructive         bool              `json:"destructive"`
-	FromReleaseID       string            `json:"fromReleaseId"`
-	ToReleaseID         string            `json:"toReleaseId"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	Kind                    domain.ActionKind `json:"kind"`
+	Type                    domain.ActionKind `json:"type"`
+	Playbook                string            `json:"playbook"`
+	Tags                    []string          `json:"tags"`
+	Limit                   string            `json:"limit"`
+	HostGroup               string            `json:"hostGroup"`
+	AllowedParameters       []string          `json:"allowedParameters"`
+	RequiredCredentials     *[]string         `json:"requiredCredentials"`
+	RequiredCredentialNames *[]string         `json:"required_credential_names"`
+	TimeoutSeconds          int               `json:"timeoutSeconds"`
+	RiskLevel               domain.RiskLevel  `json:"riskLevel"`
+	Risk                    string            `json:"risk"`
+	Destructive             bool              `json:"destructive"`
+	FromReleaseID           string            `json:"fromReleaseId"`
+	ToReleaseID             string            `json:"toReleaseId"`
 }
 
 type releaseContractInput struct {
@@ -80,7 +83,7 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 	return dependencies
 }
 
-func (input releaseInput) domain() domain.ComponentRelease {
+func (input releaseInput) domain(existing *domain.ComponentRelease) domain.ComponentRelease {
 	status := input.Status
 	if status == "" {
 		status = input.State
@@ -91,7 +94,7 @@ func (input releaseInput) domain() domain.ComponentRelease {
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
 	release.Dependencies = dependencyInputs(input.Dependencies)
-	for _, inputAction := range input.Actions {
+	for index, inputAction := range input.Actions {
 		kind := inputAction.Kind
 		if kind == "" {
 			kind = inputAction.Type
@@ -104,10 +107,28 @@ func (input releaseInput) domain() domain.ComponentRelease {
 				risk = domain.RiskLow
 			}
 		}
+		requiredCredentials := inputAction.RequiredCredentials
+		if requiredCredentials == nil {
+			requiredCredentials = inputAction.RequiredCredentialNames
+		}
+		if requiredCredentials == nil && existing != nil {
+			for existingIndex := range existing.Actions {
+				candidate := &existing.Actions[existingIndex]
+				if (inputAction.ID != "" && candidate.ID == inputAction.ID) || (inputAction.ID == "" && existingIndex == index) {
+					preserved := append([]string(nil), candidate.RequiredCredentials...)
+					requiredCredentials = &preserved
+					break
+				}
+			}
+		}
+		if requiredCredentials == nil {
+			empty := []string{}
+			requiredCredentials = &empty
+		}
 		release.Actions = append(release.Actions, domain.ActionDefinition{
 			Name: inputAction.Name, Kind: kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
 			Limit: inputAction.Limit, HostGroup: inputAction.HostGroup, AllowedParameters: inputAction.AllowedParameters,
-			RequiredCredentials: inputAction.RequiredCredentials,
+			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
 			Destructive:   inputAction.Destructive || inputAction.Risk == "destructive",
 			FromReleaseID: inputAction.FromReleaseID, ToReleaseID: inputAction.ToReleaseID,
@@ -172,7 +193,7 @@ func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.CreateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain())
+	release, err := h.platform.CreateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(nil))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -186,7 +207,12 @@ func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain())
+	existing, err := h.platform.Store().GetComponentRelease(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	release, err := h.platform.UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(&existing))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -257,21 +283,31 @@ func (h *Handler) deprecateRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) testRelease(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		EnvironmentID      string         `json:"environmentId"`
-		RunInput           map[string]any `json:"runInput"`
-		DependencyFixtures map[string]any `json:"dependencyFixtures"`
-	}
+	var input service.ComponentTestRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput, input.DependencyFixtures)
+	run, err := h.platform.StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeData(w, http.StatusAccepted, h.runDTO(r, run))
+}
+
+func (h *Handler) previewReleaseTest(w http.ResponseWriter, r *http.Request) {
+	var input service.ComponentTestRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	plan, err := h.platform.PreviewComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, plan)
 }
 
 func (h *Handler) componentDTO(r *http.Request, component domain.Component) componentDTO {

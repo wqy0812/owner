@@ -26,7 +26,7 @@ func (h *Handler) startComponentImageBuild(w http.ResponseWriter, r *http.Reques
 		writeError(w, fmt.Errorf("%w: read Dockerfile: %v", domain.ErrInvalid, err))
 		return
 	}
-	build, err := h.platform.StartComponentImageBuild(r.Context(), currentUser(r), r.PathValue("id"), strings.TrimSpace(r.FormValue("tag")), contents)
+	build, err := h.platform.StartComponentImageBuild(r.Context(), currentUser(r), r.PathValue("id"), strings.TrimSpace(r.FormValue("environmentId")), strings.TrimSpace(r.FormValue("tag")), contents)
 	if err != nil {
 		writeError(w, err)
 		return

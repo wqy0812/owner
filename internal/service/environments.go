@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,7 +39,7 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
-		Facts: facts, Inventory: inventory, Parameters: map[string]any{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now,
+		Facts: facts, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
 	if err := p.store.CreateEnvironment(ctx, environment, revision); err != nil {
@@ -97,6 +99,53 @@ func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User,
 	}, "environment.facts_updated")
 }
 
+var environmentVariablePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+func normalizeEnvironmentVariables(variables map[string]string, refs []domain.CredentialRef) (map[string]string, error) {
+	credentialNames := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		credentialNames[ref.Name] = struct{}{}
+	}
+	keys := make([]string, 0, len(variables))
+	for name := range variables {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	normalized := make(map[string]string, len(variables))
+	for _, name := range keys {
+		if !environmentVariablePattern.MatchString(name) {
+			return nil, fmt.Errorf("%w: environment variable %q must be an uppercase identifier", domain.ErrInvalid, name)
+		}
+		if isSensitiveKey(name) {
+			return nil, fmt.Errorf("%w: sensitive environment variable %q must use a CredentialRef", domain.ErrInvalid, name)
+		}
+		if _, exists := credentialNames[name]; exists {
+			return nil, fmt.Errorf("%w: environment variable %q conflicts with a CredentialRef", domain.ErrInvalid, name)
+		}
+		value := variables[name]
+		if name == imageRegistryVariable {
+			registry, err := normalizeImageRegistry(value)
+			if err != nil {
+				return nil, err
+			}
+			value = registry
+		}
+		normalized[name] = value
+	}
+	return normalized, nil
+}
+
+func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string) (domain.Environment, error) {
+	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
+		normalized, err := normalizeEnvironmentVariables(variables, revision.CredentialRefs)
+		if err != nil {
+			return err
+		}
+		revision.Variables = normalized
+		return nil
+	}, "environment.variables_updated")
+}
+
 func rejectSensitiveMap(values map[string]any, label string) error {
 	if path, ok := findSensitiveParameter(values, ""); ok {
 		return fmt.Errorf("%w: sensitive %s %q must use a CredentialRef", domain.ErrInvalid, label, path)
@@ -139,6 +188,9 @@ func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, e
 		return domain.Environment{}, err
 	}
 	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
+		if _, err := normalizeEnvironmentVariables(revision.Variables, refs); err != nil {
+			return err
+		}
 		revision.CredentialRefs = refs
 		return nil
 	}, "environment.credentials_updated")
@@ -159,6 +211,7 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	revision.CredentialRefs = append([]domain.CredentialRef(nil), revision.CredentialRefs...)
 	revision.Parameters = cloneMap(revision.Parameters)
 	revision.Facts = cloneMap(revision.Facts)
+	revision.Variables = cloneStringMap(revision.Variables)
 	if err := mutate(&revision); err != nil {
 		return environment, err
 	}
@@ -173,6 +226,14 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = revision.ID, &revision, revision.CreatedAt
 	p.audit(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next})
 	return environment, nil
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 func cloneMap(input map[string]any) map[string]any {

@@ -139,6 +139,13 @@ describe('platform shell and RBAC UI', () => {
     for (const label of ['1. 组件 Release', '2. 场景 Revision', '3. 环境 Revision', '4. Run']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    expect(screen.getByRole('heading', { name: '场景节点数不等于环境主机数' })).toBeInTheDocument();
+    expect(screen.getByText(/实际数量以当前已发布 Revision 为准/)).toBeInTheDocument();
+    const commonButtons = screen.getByRole('region', { name: '全员公共按钮操作目录' });
+    expect(commonButtons).toHaveTextContent('切换演示身份');
+    expect(commonButtons).toHaveTextContent('刷新使用新版本');
+    expect(commonButtons).toHaveTextContent('全部已读 / 标为已读');
+    expect(commonButtons).toHaveTextContent('重新加载');
     expect(screen.getByRole('link', { name: /查看我的操作手册/ })).toHaveAttribute('href', '/manual/role');
   });
 
@@ -146,18 +153,41 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/manual/role');
     expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
+    let buttonDirectory = screen.getByRole('region', { name: '组件 Owner 按钮操作目录' });
+    for (const label of ['新建组件', '保存依赖和参数', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
+      expect(buttonDirectory).toHaveTextContent(label);
+    }
 
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), carol.id);
 
     expect(await screen.findByRole('heading', { name: '场景 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '场景 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '组件 Owner 操作路径' })).not.toBeInTheDocument();
+    buttonDirectory = screen.getByRole('region', { name: '场景 Owner 按钮操作目录' });
+    for (const label of ['新建场景 / 创建场景', '保存草稿', '放大 / 缩小 / 适配视图', '环境测试 / 开始完整测试']) {
+      expect(buttonDirectory).toHaveTextContent(label);
+    }
 
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
 
     expect(await screen.findByRole('heading', { name: '环境 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
+    buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
+    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '保存新 Revision', '拒绝', '批准执行']) {
+      expect(buttonDirectory).toHaveTextContent(label);
+    }
+  });
+
+  it('documents deployment handoff and version refresh steps by role', async () => {
+    renderApp('/manual/deployment');
+    expect(await screen.findAllByRole('heading', { name: '部署与版本切换交接' })).toHaveLength(2);
+    for (const heading of ['平台部署人员', '组件 Owner', '场景 Owner', '环境 Owner', '交接证据']) {
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    }
+    expect(screen.getByText(/旧应用区域已经 inert/)).toBeInTheDocument();
+    expect(screen.getByText(/旧 planDigest 不再使用/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '部署交接检查清单' })).toHaveTextContent('业务记录计数未被只读验收改变');
   });
 
   it('shows which upstream component parameter a release depends on', async () => {
@@ -557,6 +587,206 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.type(screen.getByPlaceholderText('containerd'), 'demo');
     await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
     expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
+  });
+
+  it('previews rollback versions, invalidates stale plans, and submits rollback-only with the digest', async () => {
+    const draft = {
+      id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1', type: 'atomic',
+      state: 'draft', status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
+      actions: [
+        { name: 'install', type: 'install', playbook: 'managed/runtime/install.yml' },
+        { name: 'verify', type: 'verify', playbook: 'managed/runtime/verify.yml' },
+        { name: 'rollback', type: 'rollback', playbook: 'managed/runtime/rollback.yml', fromReleaseId: 'release-runtime-draft', toReleaseId: 'release-runtime-stable' },
+      ],
+    };
+    const previews: Array<Record<string, unknown>> = [];
+    let submitted: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-runtime-draft/test-plan') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        previews.push(body);
+        const rollbackVerification = body.rollbackVerification as { kind: string };
+        const rollbackStep = {
+          order: 1, componentId: 'component-runtime', componentName: 'Runtime', releaseId: 'release-runtime-draft', releaseVersion: '2.0.0-rc1',
+          action: 'rollback', playbook: 'managed/runtime/rollback.yml', limit: 'runtime_nodes', needsApproval: true,
+          fromReleaseId: 'release-runtime-draft', fromReleaseVersion: '2.0.0-rc1', toReleaseId: 'release-runtime-stable', toReleaseVersion: '1.9.0',
+        };
+        return json({
+          environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, requiresApproval: true,
+          planDigest: rollbackVerification.kind === 'rollback_only' ? 'digest-rollback-only' : 'digest-target',
+          steps: rollbackVerification.kind === 'rollback_only' ? [rollbackStep] : [rollbackStep, {
+            order: 2, componentId: 'component-runtime', componentName: 'Runtime', releaseId: 'release-runtime-stable', releaseVersion: '1.9.0',
+            action: 'verify', playbook: 'managed/runtime/verify.yml', limit: 'runtime_nodes', needsApproval: false,
+          }],
+        });
+      }
+      if (url.endsWith('/component-releases/release-runtime-draft/test-runs') && init?.method === 'POST') {
+        submitted = JSON.parse(String(init.body));
+        return json({ id: 'run-rollback-draft', kind: 'component_test', status: 'awaiting_approval', environmentId: 'environment-test', destructive: true });
+      }
+      if (url.endsWith('/components')) return json([{
+        id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: alice.id,
+        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        latestRelease: draft, releases: [draft, {
+          id: 'release-runtime-stable', componentId: 'component-runtime', version: '1.9.0', type: 'atomic',
+          state: 'released', status: 'released', releaseNotes: 'Stable', parameters: [], dependencies: [],
+          actions: [{ name: 'verify', type: 'verify', playbook: 'managed/runtime/verify.yml', hostGroup: 'runtime_nodes' }],
+        }],
+      }]);
+      if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Six node test', ownerId: dave.id, status: 'ready' }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-runtime');
+    await userEvent.click((await screen.findAllByRole('button', { name: '测试' }))[0]);
+    expect(screen.getByRole('option', { name: '安装验证（主动作 + verify）' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: '回滚验证（rollback + 可选目标版本 verify）' })).toBeEnabled();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '测试模式' }), 'rollback');
+    expect(screen.getByText('回滚将修改环境状态')).toBeInTheDocument();
+    expect(screen.getByText('来源：2.0.0-rc1 · Draft')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '1.9.0 · released · 合同目标' })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '测试环境' }), 'environment-test');
+    await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
+
+    expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 2.0.0-rc1');
+    expect(screen.getByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 1.9.0');
+    expect(screen.getByRole('button', { name: '确认提交回滚验证' })).toBeEnabled();
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '回滚验证策略' }), 'rollback_only');
+    expect(screen.queryByRole('region', { name: '完整执行计划' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认提交回滚验证' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
+    expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('managed/runtime/rollback.yml');
+    expect(screen.getByRole('region', { name: '完整执行计划' })).not.toHaveTextContent('managed/runtime/verify.yml');
+    await userEvent.click(screen.getByRole('button', { name: '确认提交回滚验证' }));
+
+    await waitFor(() => expect(submitted).toMatchObject({
+      environmentId: 'environment-test', mode: 'rollback',
+      rollbackVerification: { kind: 'rollback_only' }, expectedPlanDigest: 'digest-rollback-only',
+    }));
+    expect(previews).toHaveLength(2);
+    expect(previews[0]).toMatchObject({ rollbackVerification: { kind: 'target_release', releaseId: 'release-runtime-stable' } });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('lets an environment owner maintain environment variables in a new revision', async () => {
+    let submitted: Record<string, string> | undefined;
+    const environment = (variables: Record<string, string>) => ({
+      id: 'environment-test', name: 'Test Environment', ownerId: dave.id,
+      currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: {}, variables, credentialRefs: [] },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments/environment-test/variables') && init?.method === 'PUT') {
+        submitted = JSON.parse(String(init.body)).variables;
+        return json(environment(submitted ?? {}));
+      }
+      if (url.endsWith('/environments')) return json([environment({})]);
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '环境变量' }));
+    await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '环境变量名' }), 'image_registry');
+    await userEvent.type(screen.getByRole('textbox', { name: /环境变量 IMAGE_REGISTRY 的值/ }), '192.168.88.54:5000/');
+    await userEvent.click(screen.getByRole('button', { name: '保存新 Revision' }));
+
+    await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: '192.168.88.54:5000/' }));
+    expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
+  });
+
+  it('locks the selected environment when submitting a Dockerfile image build', async () => {
+    const draft = {
+      id: 'release-image-draft', componentId: 'component-image', version: '1.0.0-rc1', type: 'atomic',
+      state: 'draft', status: 'draft', releaseNotes: 'Image candidate', parameters: [], dependencies: [], actions: [],
+    };
+    let submitted: FormData | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-image-draft/image-builds') && init?.method === 'POST') {
+        submitted = init.body as FormData;
+        return json({
+          id: 'image-build-test', releaseId: draft.id, environmentId: 'environment-build', environmentRevisionId: 'environment-build-r3',
+          requestedBy: alice.id, status: 'queued', dockerfileSha256: 'a'.repeat(64), imageTag: '1.0.0-rc1',
+          imageRef: '192.168.88.54:5000/components/image:1.0.0-rc1', createdAt: new Date().toISOString(),
+        });
+      }
+      if (url.endsWith('/component-releases/release-image-draft/image-builds')) return json([]);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-image', name: 'Image component', slug: 'image', ownerId: alice.id,
+        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required', latestRelease: draft, releases: [draft],
+      }]);
+      if (url.endsWith('/environments')) return json([{
+        id: 'environment-build', name: 'Build Environment', ownerId: dave.id,
+        currentRevision: { id: 'environment-build-r3', environmentId: 'environment-build', revision: 3, facts: {}, hosts: [], parameters: {}, variables: { IMAGE_REGISTRY: '192.168.88.54:5000' }, credentialRefs: [] },
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-image');
+    await userEvent.click(await screen.findByRole('button', { name: '构建镜像' }));
+    expect(await screen.findByText('IMAGE_REGISTRY=192.168.88.54:5000')).toBeInTheDocument();
+    await userEvent.upload(screen.getByLabelText('Dockerfile'), new File(['FROM scratch\n'], 'Dockerfile', { type: 'text/plain' }));
+    const submitButton = screen.getByRole('button', { name: '上传并构建' });
+    await waitFor(() => expect(submitButton).toBeEnabled());
+    fireEvent.submit(submitButton.closest('form')!);
+
+    await waitFor(() => expect(submitted).toBeDefined());
+    expect(submitted?.get('environmentId')).toBe('environment-build');
+    expect(submitted?.get('tag')).toBe('1.0.0-rc1');
+  });
+
+  it('sends an explicit empty CredentialRef list and keeps it cleared after reopening', async () => {
+    let draft = {
+      id: 'release-credential-draft', componentId: 'component-credential', version: '1.0.0-rc1', type: 'atomic' as const,
+      state: 'draft' as const, status: 'draft' as const, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
+      actions: [{ id: 'action-install', name: 'install', type: 'install' as const, playbook: 'managed/credential/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
+    };
+    let submitted: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-credential-draft') && init?.method === 'PUT') {
+        submitted = JSON.parse(String(init.body));
+        draft = { ...draft, ...submitted, state: 'draft', status: 'draft' } as typeof draft;
+        return json(draft);
+      }
+      if (url.endsWith('/components')) return json([{
+        id: 'component-credential', name: 'Credential component', slug: 'credential', ownerId: alice.id,
+        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        latestRelease: draft, releases: [draft],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-credential');
+    await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
+    expect(screen.getByText('K8S_BOOTSTRAP_TOKEN')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '清空全部' }));
+    expect(screen.getByText('动作配置有未保存变更')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+
+    await waitFor(() => expect(submitted).toBeDefined());
+    expect((submitted?.actions as Array<Record<string, unknown>>)[0].requiredCredentials).toEqual([]);
+    expect(await screen.findByText(/已清除 1 个 CredentialRef/)).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
+    expect(screen.getByText('未声明 CredentialRef')).toBeInTheDocument();
+    expect(screen.queryByText('K8S_BOOTSTRAP_TOKEN')).not.toBeInTheDocument();
   });
 
   it('persists multiple lifecycle actions with distinct managed Playbooks', async () => {

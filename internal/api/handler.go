@@ -51,6 +51,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.static.ServeHTTP(w, r)
 		return
 	}
+	// API responses describe live workflow state. They must never be reused by
+	// the browser cache: a cached awaiting_approval detail can otherwise outlive
+	// an approved list response and expose an already-consumed approval action.
+	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Path == "/api/v1/session/switch" {
 		h.router.ServeHTTP(w, r)
 		return
@@ -82,6 +86,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/impact", h.releaseImpact)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/publish", h.publishRelease)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/deprecate", h.deprecateRelease)
+	h.router.HandleFunc("POST /api/v1/component-releases/{id}/test-plan", h.previewReleaseTest)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/test-runs", h.testRelease)
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/image-builds", h.listComponentImageBuilds)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/image-builds", h.startComponentImageBuild)
@@ -103,6 +108,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/inventory", h.updateInventory)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/facts", h.updateFacts)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/parameters", h.updateParameters)
+	h.router.HandleFunc("PUT /api/v1/environments/{id}/variables", h.updateVariables)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/credential-refs", h.updateCredentialRefs)
 
 	h.router.HandleFunc("GET /api/v1/runs", h.listRuns)

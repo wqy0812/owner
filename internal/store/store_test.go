@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,9 +242,13 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 
 	inventory, _ := json.Marshal(map[string]any{"all": map[string]any{"hosts": map[string]any{"localhost": map[string]any{"ansible_connection": "local"}}}})
 	env := domain.Environment{ID: "lab", Name: "Lab", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"arch": "amd64"}, Inventory: inventory, Parameters: map[string]any{}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
+	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"arch": "amd64"}, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, env, envRev); err != nil {
 		t.Fatal(err)
+	}
+	storedEnvironment, err := s.GetEnvironment(ctx, env.ID, false)
+	if err != nil || storedEnvironment.Revision == nil || storedEnvironment.Revision.Variables["IMAGE_REGISTRY"] != "192.168.88.54:5000" {
+		t.Fatalf("stored environment variables=%+v err=%v", storedEnvironment.Revision, err)
 	}
 
 	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
@@ -351,6 +356,44 @@ func TestEmptyImageBuildListsEncodeAsArrays(t *testing.T) {
 	logs, err := s.ListComponentImageBuildLogs(context.Background(), "missing-build", 20)
 	if err != nil || logs == nil || len(logs) != 0 {
 		t.Fatalf("empty build logs=%#v err=%v", logs, err)
+	}
+}
+
+func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if err := s.CreateComponent(ctx, componentFixture("reconcile-component", "component-alice")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateComponentRelease(ctx, releaseFixture("reconcile-release", "reconcile-component", "1.0.0", domain.ReleaseReleased)); err != nil {
+		t.Fatal(err)
+	}
+	environment := domain.Environment{ID: "reconcile-env", Name: "Reconcile", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	revision := domain.EnvironmentRevision{ID: "reconcile-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), Parameters: map[string]any{}, MaxConcurrent: 1, CreatedAt: testNow}
+	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
+		t.Fatal(err)
+	}
+	plan := map[string]any{"steps": []any{map[string]any{"releaseId": "reconcile-release"}}}
+	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-alice", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, InputSnapshot: plan, CreatedAt: testNow}
+	if err := s.CreateRun(ctx, invalid, nil); err != nil {
+		t.Fatal(err)
+	}
+	valid := invalid
+	valid.ID = "valid-awaiting"
+	valid.CreatedAt = testNow.Add(time.Second)
+	approval := domain.Approval{ID: "valid-approval", RunID: valid.ID, Status: "pending", RequestedAt: valid.CreatedAt}
+	if err := s.CreateRun(ctx, valid, &approval); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := s.FailInvalidActiveRuns(ctx, testNow.Add(time.Minute))
+	if err != nil || count != 1 {
+		t.Fatalf("reconciled count=%d err=%v", count, err)
+	}
+	failed, _ := s.GetRun(ctx, invalid.ID)
+	kept, _ := s.GetRun(ctx, valid.ID)
+	if failed.Status != domain.RunFailed || !strings.Contains(failed.Error, "invalid active run") || kept.Status != domain.RunAwaitingApproval {
+		t.Fatalf("reconciled invalid=%+v valid=%+v", failed, kept)
 	}
 }
 

@@ -1,6 +1,6 @@
 # ClusterForge 平台操作手册（分角色）
 
-> 文档基线：2026-08-13 当前工作区代码  
+> 文档基线：2026-08-23 当前工作区代码
 > 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员  
 > 重要提示：这是本地 Demo。身份可无密码切换，不应直接作为生产权限系统使用。
 
@@ -56,6 +56,8 @@ make build
 
 左下角“实时通道在线”表示 SSE 已连接。SSE 只负责提示刷新，实际状态以页面重新读取的后端数据为准。
 
+前台会在启动、每 60 秒及页面重新获得焦点时读取不缓存的构建版本。检测到服务端已部署新前台后，页面会阻断旧界面的继续操作并提示“刷新使用新版本”；刷新完成前不要继续确认测试计划、审批或其他写操作。刚部署版本守卫时，部署前已经打开的更老页面本身不包含检测代码，需要手工刷新一次；此后的部署可以自动提示。
+
 ## 2. 通用操作规则
 
 ### 2.1 资产不可变规则
@@ -84,6 +86,52 @@ make build
 - 动作名称或 Playbook 包含 recovery、clean、destroy、uninstall、rcv 等标记。
 
 只有目标环境的 Owner 可以批准。批准意味着允许平台实际调用 Ansible，并不表示作业已经通过真实环境安全评审。
+
+### 2.4 部署与版本切换交接（分角色）
+
+#### 平台部署人员
+
+1. 部署前确认目标地址、当前分支和工作区，并确认没有 `running`、`queued` 或 `awaiting_approval` 的活动 Run。
+2. 运行 Go、前端测试、生产构建和差异检查；缺少 Ansible 等依赖时必须写成“未验证”，不能写成“通过”。
+3. 切换服务前备份二进制、数据库和环境配置；失败时三者一起恢复。
+4. 部署后核对服务状态、HTTP、二进制 SHA-256、HTML 构建版本及 `Cache-Control: no-store` 的 `version.json`。
+5. 用已经加载版本守卫的旧页面验证升级提示：旧应用区域应为 `inert`，刷新后页面版本应与服务端一致。
+6. 默认验收只读取页面和调用计划预览；没有额外授权时，不发布 Release、不提交破坏性 Run、不修改 Inventory。
+
+首次上线版本守卫时，部署前已经打开的页面没有检测代码，需要通知所有角色手工刷新一次。从该版本开始，后续部署会自动阻断旧页面。
+
+#### 组件 Owner
+
+- 计划内部署前保存 Draft；出现版本提示后刷新并重新打开组件和 Release。
+- 复核 rollback 的不可变 from/to、verify 目标及环境；旧 `planDigest` 作废，必须重新预览。
+- 不修改 Released Release、Environment Revision 或 Inventory 来绕过计划校验。
+
+#### 场景 Owner
+
+- 计划内部署前保存 DAG Draft；未保存的画布状态不会跨刷新保留。
+- 刷新后重新确认 Revision、节点锁定 Release、连线、主机组和运行输入，再执行校验或测试。
+- 已创建 Run 使用锁定快照，不要因为前台升级重复提交同一场景。
+
+#### 环境 Owner
+
+- 版本提示出现后先刷新，再处理审批、拒绝、取消或环境编辑。
+- 审批前重新核对 Run 状态、Environment Revision、主机组、步骤所属版本和破坏性动作。
+- 不篡改 Inventory、安装备份记录或 Revision 来消除计划错误；应修复真实合同或重新建立合格基线。
+
+#### 交接证据
+
+- 记录部署前后构建版本、二进制 SHA-256、备份目录、服务状态和 HTTP 状态。
+- 对比 Run、Approval、审计事件与 Environment Revision 数量，证明只读验收没有产生业务写入。
+- 分开报告代码测试、生产构建、Ansible 门禁和真实环境验收，不能相互替代。
+
+### 2.5 场景节点、组件和环境主机的数量关系
+
+- “六节点集群”表示目标环境 Inventory 中有六台主机，不表示场景画布必须有六个节点。
+- 场景节点是逻辑执行单元；一个 bundle 或交付阶段可以通过 Playbook 操作多个软件组件和多台主机。
+- 历史的“Kubernetes 1.17.5 六节点集群搭建”Released Revision 使用“主机预检 → 节点准备 → 集群引导 → 集群验收”四个聚合节点，其中“集群引导”是 bundle。
+- 当前代码中的细粒度核心模板有 21 个节点，分别表达控制面和工作节点上的 Docker、Flannel、kubelet、kube-proxy 等动作；部署环境使用 `NEWPLATFORM_SEED_PROFILE=identities` 时不会把该模板写入已有数据库。
+- Released Scenario Revision 不可原地扩容或替换节点；需要克隆/新建 Revision，加入精确 Release，重新校验、真实环境测试并发布。
+- 判断真实执行内容时应查看节点的 Release、Action、Host Group 与最终 Run Steps，不能只看场景节点总数。
 
 ## 3. 组件 Owner 操作手册
 
@@ -175,20 +223,36 @@ make build
 - Upgrade 和 Rollback 还必须配置正确的 `fromReleaseId` 和 `toReleaseId`，且映射合同必须与对端 Release 一致。
 - 保存 Draft 会使之前的组件测试证据失效，需要重新测试。
 
-### 3.5 发起组件测试
+### 3.5 构建并发布镜像
+
+1. 确认目标环境的 Environment Owner 已在“环境变量”中配置 `IMAGE_REGISTRY`。
+2. 在 Draft 发布行单击“构建镜像”。
+3. 选择目标环境；界面会显示该 Environment Revision 的仓库地址。
+4. 选择不超过 1 MiB、UTF-8 且包含 `FROM` 的 Dockerfile，填写小写 tag。
+5. 单击“上传并构建”，查看 build、push 日志和最终 RepoDigest。
+
+平台把目标固定为 `IMAGE_REGISTRY/components/<组件 slug>:<tag>`，并锁定提交时的
+Environment Revision。环境 Owner 后续修改仓库地址不会改变已有构建。构建上下文
+只包含 Dockerfile，依赖本地文件的 `COPY`/`ADD` 会失败；Dockerfile 在平台构建机
+执行，只应上传可信内容。
+
+### 3.6 发起组件测试
 
 1. 在发布历史中单击目标 Release 的“测试”。
-2. 选择共享环境。
-3. 填写动作声明允许的运行参数。
-4. 如果该 Release 声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
-5. 单击“开始测试”。
-6. 进入“运行”查看状态、步骤、解析参数来源和日志。
+2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；可以选择一个同组件的 Released/Deprecated Release 追加其 Verify，也可以选择“仅执行 Draft rollback”。Verify 目标不会覆盖 rollback 合同。
+3. 选择共享环境并填写动作声明允许的运行参数。
+4. 如果该 Release 或所选 Verify 目标声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
+5. 单击“预览执行计划”，确认每一步所属版本、Playbook、目标主机组和审批要求。
+6. 只有预览成功后才能确认提交；任何环境、策略、目标版本或输入变化都会使旧计划失效，需要重新预览。
+7. 进入“运行”查看状态、步骤、解析参数来源和日志。
 
 平台优先测试 Upgrade；没有 Upgrade 时测试 Install。如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
 
+计划预览执行与正式提交相同的权限、参数、CredentialRef、备份、Playbook 摘要和 Inventory 校验，但不会创建 Run 或 Approval。确认提交时后端重新规划并核对 `planDigest`；若 Draft、环境 Revision、输入或可执行内容已变化，会返回 Conflict，必须刷新计划。
+
 环境 Owner 也可以发起任意可见组件的测试，用于基础设施侧验证。
 
-### 3.6 发布组件版本
+### 3.7 发布组件版本
 
 1. 找到 Draft，单击“发布”。
 2. 查看影响预览：下游组件 Owner、场景 Owner、受影响场景和依赖路径。
@@ -207,7 +271,7 @@ make build
 
 未验证版本也允许发布，但下游会看到风险。发布后平台只发送通知，不会自动升级场景中的锁定版本。
 
-### 3.7 废弃组件版本
+### 3.8 废弃组件版本
 
 1. 找到 Released 版本。
 2. 单击“废弃”。
@@ -215,7 +279,7 @@ make build
 
 废弃不会删除 Release，历史 Run 仍可追溯。当前平台不会在废弃前强制阻止已有场景引用，因此操作前应先检查影响通知和关联场景。
 
-### 3.8 处理组件影响通知
+### 3.9 处理组件影响通知
 
 1. 进入“通知”。
 2. 查看版本变化、Breaking 标记和影响路径。
@@ -401,7 +465,24 @@ make build
 
 不要填写 `password`、`secret`、`token`、`privateKey`、`encryptionKey`、`credential` 等敏感键；后端会拒绝保存。
 
-### 5.5 配置凭据引用
+### 5.5 配置非敏感环境变量
+
+1. 打开“环境变量”。
+2. 单击“添加变量”，填写大写变量名和字符串值。
+3. 保存新 Revision。
+
+变量会直接成为每个组件作业的同名 Ansible extra-vars。例如配置：
+
+```text
+IMAGE_REGISTRY=192.168.88.54:5000
+```
+
+Playbook 可以直接使用 `{{ IMAGE_REGISTRY }}`。变量名只允许大写字母、数字和
+下划线，且不能以数字开头；不得使用 password、secret、token、private key、
+credential 等敏感名称，也不能与组件参数或 CredentialRef 重名。`IMAGE_REGISTRY`
+必须是不带 `http://`、`https://`、tag 或 digest 的 Registry 前缀。
+
+### 5.6 配置凭据引用
 
 1. 打开“凭据引用”。
 2. 单击“添加引用”。
@@ -425,7 +506,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 不要把密钥值写入 `.env.example`、seed、环境 Parameters 或 Run Input。
 
-### 5.6 审批危险 Run
+### 5.7 审批危险 Run
 
 1. 进入“运行”。
 2. 选择状态为“等待审批”的 Run。
@@ -445,7 +526,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 拒绝后 Run 终止为 Rejected；场景 Draft 测试会回到 Draft。当前界面的拒绝动作没有填写理由的输入框，API 支持 reason 字段，但页面会提交空理由。
 
-### 5.7 查看环境运行和审计
+### 5.8 查看环境运行和审计
 
 环境详情显示最近四个相关 Run。完整记录请进入“运行”。
 
@@ -546,6 +627,12 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 - 检查网络、仓库和介质服务地址。
 - 明确备份、变更窗口和回退流程。
 
+安装 Run 的运行详情会显示备份基线目录、来源 Run、捕获时间和 Playbook 哈希。
+回滚只能使用环境当前安装组件记录中的这条引用；看到“backup metadata does not
+match”时应重新执行安装验证并捕获新基线，不要手工指向旧版本目录或复制旧
+`.captured`。测试回滚成功后应确认远端测试备份已按
+`clusterforge_backup_cleanup_on_success` 清理。
+
 核心场景只含 PKI、Docker、etcd、Kubernetes 核心进程、Flannel 和 CoreDNS；Extended 场景再加入日志、监控、HAProxy、AMC、GlusterFS、pprof 和 RBAC 附加能力。恢复、清理、卸载、Housekeeping 不属于任何安装 Action。该快照尚未在真实 Kubernetes 1.17.5 SUSE 三控制节点加工作节点环境完成安装和收敛验收。
 
 ## 9. 常见问题排查
@@ -582,6 +669,8 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 - Playbook 不在允许目录中。
 - 排队后 Playbook 或目录树发生变化，摘要不匹配。
 - Inventory 为空或缺少 Host Group。
+- 回滚找不到当前安装记录的 `backup_ref`，或备份元数据与环境、Release、安装
+  Run、当前 Playbook 哈希不一致。
 - Ansible 命令未安装或配置错误。
 
 ### 9.6 Run 执行中失败

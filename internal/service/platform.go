@@ -25,15 +25,20 @@ type Platform struct {
 	runner         Runner
 	hub            *EventHub
 	playbookRoot   string
-	imageRegistry  string
 	imageBuildRoot string
 	dockerBinary   string
 
-	rootCtx context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	workers map[string]struct{}
-	active  map[string]context.CancelFunc
+	rootCtx         context.Context
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+	workers         map[string]environmentWorkerState
+	nextWorkerToken uint64
+	active          map[string]context.CancelFunc
+}
+
+type environmentWorkerState struct {
+	token     uint64
+	heartbeat time.Time
 }
 
 func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform {
@@ -44,7 +49,7 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 	return &Platform{
 		store: database, runner: runner, hub: hub,
 		rootCtx: ctx, cancel: cancel,
-		workers: make(map[string]struct{}), active: make(map[string]context.CancelFunc),
+		workers: make(map[string]environmentWorkerState), active: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -58,8 +63,7 @@ func (p *Platform) ConfigurePlaybookRoot(root string) {
 	p.playbookRoot = strings.TrimSpace(root)
 }
 
-func (p *Platform) ConfigureImageBuilder(registry, buildRoot, dockerBinary string) {
-	p.imageRegistry = strings.TrimSuffix(strings.TrimSpace(registry), "/")
+func (p *Platform) ConfigureImageBuilder(buildRoot, dockerBinary string) {
 	p.imageBuildRoot = strings.TrimSpace(buildRoot)
 	p.dockerBinary = strings.TrimSpace(dockerBinary)
 }
@@ -71,6 +75,9 @@ func (p *Platform) Start(ctx context.Context) error {
 	if _, err := p.store.MarkRunningInterrupted(ctx, time.Now().UTC()); err != nil {
 		return fmt.Errorf("recover interrupted runs: %w", err)
 	}
+	if _, err := p.store.FailInvalidActiveRuns(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("reconcile invalid active runs: %w", err)
+	}
 	environments, err := p.store.ListQueuedEnvironmentIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("list queued runs: %w", err)
@@ -78,6 +85,7 @@ func (p *Platform) Start(ctx context.Context) error {
 	for _, environmentID := range environments {
 		p.schedule(environmentID)
 	}
+	go p.queueWatchdog()
 	return nil
 }
 

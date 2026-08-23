@@ -110,6 +110,8 @@ export interface ImageBuildLog {
 export interface ComponentImageBuild {
   id: string;
   releaseId: string;
+  environmentId?: string;
+  environmentRevisionId?: string;
   requestedBy: string;
   status: ImageBuildStatus;
   dockerfileSha256: string;
@@ -219,6 +221,7 @@ export interface EnvironmentRevision {
   facts: Record<string, unknown>;
   hosts: EnvironmentHost[];
   parameters: Record<string, unknown>;
+  variables: Record<string, string>;
   credentialRefs: CredentialRef[];
   maxConcurrentRuns?: number;
   createdAt?: string;
@@ -257,6 +260,18 @@ export interface RunStep {
   summary?: string;
 }
 
+export interface RunBackup {
+  nodeId?: string;
+  componentId: string;
+  componentName?: string;
+  releaseId: string;
+  action: string;
+  backupRef: string;
+  installRunId: string;
+  capturedAt: string;
+  playbookSha256: string;
+}
+
 export interface Approval {
   id: string;
   runId: string;
@@ -288,9 +303,54 @@ export interface Run {
   approval?: Approval;
   logTail?: string[];
   resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
+  backups?: RunBackup[];
   createdAt?: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export type ComponentTestMode = 'install_verify' | 'rollback';
+
+export type RollbackVerification =
+  | { kind: 'target_release'; releaseId: string }
+  | { kind: 'rollback_only' };
+
+export interface ComponentTestRequest {
+  environmentId: string;
+  mode: ComponentTestMode;
+  rollbackVerification?: RollbackVerification;
+  runInput?: Record<string, unknown>;
+  dependencyFixtures?: Record<string, unknown>;
+  expectedPlanDigest?: string;
+}
+
+export interface ComponentTestPlanStep {
+  order: number;
+  componentId: string;
+  componentName: string;
+  releaseId: string;
+  releaseVersion: string;
+  action: ActionDefinition['type'];
+  playbook: string;
+  limit?: string;
+  needsApproval: boolean;
+  fromReleaseId?: string;
+  fromReleaseVersion?: string;
+  toReleaseId?: string;
+  toReleaseVersion?: string;
+  backupRef?: string;
+  backupInstallRunId?: string;
+  backupCapturedAt?: string;
+  backupPlaybookSha256?: string;
+}
+
+export interface ComponentTestPlan {
+  environmentId: string;
+  environmentRevisionId: string;
+  destructive: boolean;
+  requiresApproval: boolean;
+  planDigest: string;
+  steps: ComponentTestPlanStep[];
 }
 
 export interface Notification {

@@ -87,6 +87,22 @@ func (h *Handler) updateFacts(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
 }
 
+func (h *Handler) updateVariables(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Variables map[string]string `json:"variables"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	environment, err := h.platform.UpdateEnvironmentVariables(r.Context(), currentUser(r), r.PathValue("id"), input.Variables)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
+}
+
 func (h *Handler) updateCredentialRefs(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		CredentialRefs []struct {
@@ -140,7 +156,7 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 			"id": environment.Revision.ID, "environmentId": environment.Revision.EnvironmentID,
 			"revision": environment.Revision.Revision, "facts": environment.Revision.Facts,
 			"hosts": hosts, "inventory": json.RawMessage(environment.Revision.Inventory),
-			"parameters": environment.Revision.Parameters, "credentialRefs": refs,
+			"parameters": environment.Revision.Parameters, "variables": environment.Revision.Variables, "credentialRefs": refs,
 			"maxConcurrent": environment.Revision.MaxConcurrent, "maxConcurrentRuns": environment.Revision.MaxConcurrent,
 			"createdAt": environment.Revision.CreatedAt,
 		}

@@ -13,7 +13,10 @@ import (
 // client-side routes. In development web/dist may not exist; Vite is expected
 // to serve the UI and proxy /api requests to the Go server.
 func Handler() http.Handler {
-	assets := assetFS()
+	return handler(assetFS())
+}
+
+func handler(assets fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.NotFound(w, r)
@@ -41,9 +44,10 @@ func Handler() http.Handler {
 		}
 		if strings.Contains(name, "/assets/") || strings.HasPrefix(name, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		} else if name == "index.html" {
+		} else if name == "index.html" || name == "version.json" {
 			// The SPA shell must never be restored with an asset graph from an
-			// earlier deployment. Hashed assets remain immutable above.
+			// earlier deployment. The build-version probe must likewise bypass
+			// caches so an already-open SPA can detect a newly deployed binary.
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Pragma", "no-cache")
 		} else {

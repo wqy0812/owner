@@ -26,6 +26,23 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('component_releases') WHERE name='parameter_schema_json'`).Scan(&schemaColumn); err != nil || schemaColumn != 0 {
 		t.Fatalf("legacy parameter_schema_json still present: count=%d err=%v", schemaColumn, err)
 	}
+	var installationTable int
+	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='environment_component_installations'`).Scan(&installationTable); err != nil || installationTable != 1 {
+		t.Fatalf("environment component installation table count=%d err=%v", installationTable, err)
+	}
+	for table, column := range map[string]string{
+		"environment_revisions":                  "variables_json",
+		"component_image_builds":                 "environment_id",
+		"component_image_builds environment rev": "environment_revision_id",
+	} {
+		if table == "component_image_builds environment rev" {
+			table = "component_image_builds"
+		}
+		var count int
+		if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s.%s column count=%d err=%v", table, column, count, err)
+		}
+	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}

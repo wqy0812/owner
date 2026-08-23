@@ -209,6 +209,82 @@ WHERE status='running' AND run_id IN (SELECT id FROM runs WHERE status='running'
 	return count, nil
 }
 
+const invalidActiveRunPredicate = `
+runs.status IN ('awaiting_approval','queued') AND (
+  NOT EXISTS (SELECT 1 FROM users u WHERE u.id=runs.requested_by)
+  OR NOT EXISTS (SELECT 1 FROM environments e WHERE e.id=runs.environment_id)
+  OR NOT EXISTS (
+    SELECT 1 FROM environment_revisions er
+    WHERE er.id=runs.environment_revision_id AND er.environment_id=runs.environment_id
+  )
+  OR (runs.component_release_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM component_releases cr WHERE cr.id=runs.component_release_id
+  ))
+  OR (runs.scenario_revision_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM scenario_revisions sr WHERE sr.id=runs.scenario_revision_id
+  ))
+  OR json_type(runs.input_snapshot_json, '$.steps') IS NOT 'array'
+  OR json_array_length(runs.input_snapshot_json, '$.steps')=0
+  OR EXISTS (
+    SELECT 1 FROM json_each(runs.input_snapshot_json, '$.steps') locked_step
+    WHERE COALESCE(json_extract(locked_step.value, '$.releaseId'), '')=''
+       OR NOT EXISTS (
+         SELECT 1 FROM component_releases cr
+         WHERE cr.id=json_extract(locked_step.value, '$.releaseId')
+       )
+  )
+  OR (runs.status='awaiting_approval' AND NOT EXISTS (
+    SELECT 1 FROM approvals a WHERE a.run_id=runs.id AND a.status='pending'
+  ))
+  OR (runs.status='queued' AND runs.destructive=1 AND NOT EXISTS (
+    SELECT 1 FROM approvals a WHERE a.run_id=runs.id AND a.status='approved'
+  ))
+)`
+
+// FailInvalidActiveRuns removes corrupt historical entries from the active
+// environment queue without deleting their audit trail. Normal foreign keys
+// prevent most of these states, but older databases may have been written by
+// connections that did not enable SQLite foreign-key enforcement.
+func (s *Store) FailInvalidActiveRuns(ctx context.Context, at time.Time) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE scenario_revisions
+SET status='draft',test_passed_at=NULL
+WHERE status='testing' AND id IN (
+  SELECT scenario_revision_id FROM runs
+  WHERE scenario_revision_id IS NOT NULL AND `+invalidActiveRunPredicate+`
+)`); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE runs
+SET status='failed',
+    error_text='invalid active run: referenced entity, approval, or locked plan is missing or inconsistent',
+    finished_at=?
+WHERE `+invalidActiveRunPredicate, timeText(at))
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) HasRunningRun(ctx context.Context, environmentID string) (bool, error) {
+	var running int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE environment_id=? AND status='running')`, environmentID).Scan(&running)
+	return running != 0, err
+}
+
 func (s *Store) ListQueuedEnvironmentIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT environment_id FROM runs WHERE status='queued' ORDER BY created_at`)
 	if err != nil {

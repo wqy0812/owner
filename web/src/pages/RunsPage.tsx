@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Ban, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, ListFilter, PlayCircle, ScrollText, ShieldAlert, Square, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -19,6 +19,7 @@ export function RunsPage() {
   const [detailError, setDetailError] = useState<string>();
   const [detailRetry, setDetailRetry] = useState(0);
   const [busy, setBusy] = useState<string>();
+  const actionInFlight = useRef(false);
   const selectedId = searchParams.get('selected') ?? runs?.[0]?.id;
 
   useEffect(() => {
@@ -39,15 +40,26 @@ export function RunsPage() {
     return () => controller.abort();
   }, [detailRetry, refreshTokens.runs, selectedId]);
 
+  const selectedSummary = runs?.find((run) => run.id === selectedId);
+  useEffect(() => {
+    if (!selectedSummary) return;
+    setDetail((current) => current?.id === selectedSummary.id ? { ...current, ...selectedSummary } : current);
+  }, [selectedSummary]);
+
   const filtered = useMemo(() => (runs ?? []).filter((run) => filter === 'all' || (filter === 'active' ? ACTIVE.has(run.status) : !ACTIVE.has(run.status))), [filter, runs]);
 
   async function action(kind: 'cancel' | 'approve' | 'reject') {
-    if (!detail) return; setBusy(kind);
+    if (!detail || actionInFlight.current) return;
+    actionInFlight.current = true;
+    setBusy(kind);
     try {
-      if (kind === 'cancel') await api.cancelRun(detail.id);
-      else if (detail.approval?.id) await (kind === 'approve' ? api.approve(detail.approval.id) : api.reject(detail.approval.id));
+      let updated: Run | undefined;
+      if (kind === 'cancel') updated = await api.cancelRun(detail.id);
+      else if (detail.approval?.id) updated = await (kind === 'approve' ? api.approve(detail.approval.id) : api.reject(detail.approval.id));
+      if (!updated) throw new Error('审批记录已失效，请刷新后重试。');
+      setDetail(updated);
       notify('success', kind === 'approve' ? '已批准执行' : kind === 'reject' ? '已拒绝执行' : '取消请求已发送'); signalRefresh(['runs', 'environments', 'scenarios']);
-    } catch (reason) { notify('error', '操作失败', displayError(reason)); } finally { setBusy(undefined); }
+    } catch (reason) { notify('error', '操作失败', displayError(reason)); } finally { actionInFlight.current = false; setBusy(undefined); }
   }
 
   const progress = detail?.progress ?? (detail?.status === 'succeeded' ? 100 : detail?.steps?.length ? Math.round(detail.steps.filter((step) => step.status === 'succeeded').length / detail.steps.length * 100) : 0);
@@ -69,6 +81,7 @@ export function RunsPage() {
         </article>
         {detail.status === 'awaiting_approval' && <article className="approval-banner"><ShieldAlert size={24} /><div><strong>危险作业等待环境 Owner 审批</strong><p>{detail.approval?.riskReason ?? '动作包含 recovery / clean / destroy / uninstall，可能改变或删除目标环境数据。'}</p></div>{user.role === 'environment_owner' ? <div><button disabled={Boolean(busy)} className="button button--quiet" onClick={() => void action('reject')}><X size={15} /> 拒绝</button><button disabled={Boolean(busy)} className="button button--primary" onClick={() => void action('approve')}><Check size={15} /> 批准执行</button></div> : <span>仅环境 Owner 可审批</span>}</article>}
         <article className="panel"><header className="panel__header"><div><span className="panel__icon"><Clock3 size={18} /></span><div><h2>执行步骤</h2><p>Preflight → syntax-check → list-hosts → execute → verify</p></div></div></header>{detail.steps?.length ? <div className="step-timeline">{detail.steps.map((step, index) => <div key={step.id} className={`step step--${step.status}`}><span className="step__index">{step.status === 'succeeded' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : index + 1}</span><span className="step__line" /><div><div><strong>{step.name}</strong><StatusPill status={step.status} /></div><p>{step.componentName ? `${step.componentName} · ` : ''}{step.action ?? ''}{step.summary ? ` · ${step.summary}` : ''}</p><small>{formatTime(step.startedAt)}{step.finishedAt ? ` → ${formatTime(step.finishedAt)}` : ''}</small></div></div>)}</div> : <EmptyState title="步骤尚未生成" description={detail.status === 'awaiting_approval' ? '审批通过后进入环境队列。' : 'Planner 正在生成执行步骤。'} />}</article>
+        {detail.backups?.length ? <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ShieldAlert size={18} /></span><div><h2>备份基线</h2><p>每个引用只绑定到创建它的安装 Run；回滚不会按版本猜测目录。</p></div></div></header><div className="backup-list">{detail.backups.map((backup) => <section key={`${backup.nodeId ?? backup.componentId}-${backup.backupRef}`}><div><strong>{backup.componentName ?? backup.componentId} · {backup.action}</strong><StatusPill status={backup.action === 'rollback' ? 'rollback' : 'captured'}>{backup.action === 'rollback' ? '用于回滚' : '已锁定'}</StatusPill></div><p>{backup.backupRef}</p><small>来自 Run {backup.installRunId} · 捕获于 {formatTime(backup.capturedAt)} · Playbook {backup.playbookSha256.slice(0, 16)}…</small></section>)}</div></article> : null}
         {detail.resolvedParametersByNode && Object.keys(detail.resolvedParametersByNode).length > 0 && <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ListFilter size={18} /></span><div><h2>解析参数</h2><p>下游参数值及其上游来源，不包含 CredentialRef 实际值</p></div></div></header><div className="resolved-parameters">{Object.entries(detail.resolvedParametersByNode).map(([nodeId, parameters]) => <section key={nodeId}><strong>{nodeId}</strong>{Object.entries(parameters).map(([name, item]) => <div key={name} className="parameter-preview__item"><span>{name}</span><small>{item.value === undefined ? '（空）' : String(item.value)}</small>{item.upstreamParameter ? <small className="parameter-lineage">{item.targetParameter ?? name} 来自节点 {item.sourceNodeId ?? '上游'} 的公开参数 {item.upstreamParameter}</small> : <small>{item.source ?? 'local'}{item.sourceNodeId ? ` · ${item.sourceNodeId}` : ''}</small>}</div>)}</section>)}</div></article>}
         <article className="panel log-panel"><header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><ScrollText size={18} /></span><div><h2>实时日志</h2><p>stdout / stderr · 凭据自动脱敏</p></div></div><span className="live-badge"><span /> LIVE</span></header><pre>{detail.logTail?.length ? detail.logTail.join('\n') : `[platform] Run ${detail.id}\n[platform] status=${detail.status}\n[platform] 等待 Ansible 输出…`}</pre></article>
       </section> : <section className="panel"><EmptyState title="选择一个运行" description="查看步骤、审批和日志详情。" /></section>}

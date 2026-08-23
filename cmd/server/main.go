@@ -80,7 +80,6 @@ func run() error {
 	platform := service.NewPlatform(database, runner, service.NewEventHub())
 	platform.ConfigurePlaybookRoot(allowedRoot)
 	platform.ConfigureImageBuilder(
-		envOr("NEWPLATFORM_IMAGE_REGISTRY", ""),
 		envOr("NEWPLATFORM_IMAGE_BUILD_ROOT", "./data/image-builds"),
 		envOr("NEWPLATFORM_DOCKER_BIN", "docker"),
 	)

@@ -109,7 +109,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "component_image_build_logs", "component_image_builds", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
+	tables := []string{"sessions", "component_image_build_logs", "component_image_builds", "environment_component_installations", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

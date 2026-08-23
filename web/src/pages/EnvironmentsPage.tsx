@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CloudCog, Cpu, HardDrive, KeyRound, LockKeyhole, Network, Plus, Save, Server, Trash2, UserRound } from 'lucide-react';
+import { Braces, CloudCog, Cpu, HardDrive, KeyRound, LockKeyhole, Network, Plus, Save, Server, Trash2, UserRound } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { CredentialRef, EnvironmentHost } from '../types/domain';
 
-type Tab = 'inventory' | 'facts' | 'parameters' | 'credentials';
+type Tab = 'inventory' | 'facts' | 'parameters' | 'variables' | 'credentials';
+type EnvironmentVariableRow = { name: string; value: string };
 
 export function EnvironmentsPage() {
   const { user, notify, signalRefresh } = useApp();
@@ -18,6 +19,7 @@ export function EnvironmentsPage() {
   const [hosts, setHosts] = useState<EnvironmentHost[]>([]);
   const [factsText, setFactsText] = useState('{}');
   const [parameters, setParameters] = useState('{}');
+  const [variables, setVariables] = useState<EnvironmentVariableRow[]>([]);
   const [credentials, setCredentials] = useState<CredentialRef[]>([]);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -27,6 +29,7 @@ export function EnvironmentsPage() {
     setHosts(selected?.currentRevision?.hosts ?? []);
     setFactsText(JSON.stringify(selected?.currentRevision?.facts ?? {}, null, 2));
     setParameters(JSON.stringify(selected?.currentRevision?.parameters ?? {}, null, 2));
+    setVariables(Object.entries(selected?.currentRevision?.variables ?? {}).map(([name, value]) => ({ name, value })));
     setCredentials(selected?.currentRevision?.credentialRefs ?? []);
   }, [selected?.currentRevision?.id, selected?.id]);
 
@@ -37,6 +40,12 @@ export function EnvironmentsPage() {
       if (tab === 'inventory') await api.updateInventory(selected.id, hosts);
       if (tab === 'facts') await api.updateFacts(selected.id, JSON.parse(factsText) as Record<string, unknown>);
       if (tab === 'parameters') await api.updateParameters(selected.id, JSON.parse(parameters) as Record<string, unknown>);
+      if (tab === 'variables') {
+        const names = variables.map((item) => item.name.trim());
+        if (names.some((name) => !/^[A-Z_][A-Z0-9_]*$/.test(name))) throw new Error('环境变量名必须是大写标识符。');
+        if (new Set(names).size !== names.length) throw new Error('环境变量名不能重复。');
+        await api.updateVariables(selected.id, Object.fromEntries(variables.map((item) => [item.name.trim(), item.value])));
+      }
       if (tab === 'credentials') await api.updateCredentialRefs(selected.id, credentials.map(({ name, type, reference }) => ({ name, type, reference })));
       notify('success', '环境 Revision 已更新', '后续运行会锁定新的环境快照。'); signalRefresh('environments');
     } catch (reason) {
@@ -71,10 +80,11 @@ export function EnvironmentsPage() {
           <article><Server size={18} /><span>主机</span><strong>{hosts.length}</strong></article>
         </section>
         <article className="panel environment-editor">
-          <div className="tabs" role="tablist"><button className={tab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}><Server size={16} /> Inventory</button><button className={tab === 'facts' ? 'active' : ''} onClick={() => setTab('facts')}><Cpu size={16} /> 环境事实</button><button className={tab === 'parameters' ? 'active' : ''} onClick={() => setTab('parameters')}><CloudCog size={16} /> 环境参数</button><button className={tab === 'credentials' ? 'active' : ''} onClick={() => setTab('credentials')}><KeyRound size={16} /> 凭据引用</button></div>
+          <div className="tabs" role="tablist"><button className={tab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}><Server size={16} /> Inventory</button><button className={tab === 'facts' ? 'active' : ''} onClick={() => setTab('facts')}><Cpu size={16} /> 环境事实</button><button className={tab === 'parameters' ? 'active' : ''} onClick={() => setTab('parameters')}><CloudCog size={16} /> 环境参数</button><button className={tab === 'variables' ? 'active' : ''} onClick={() => setTab('variables')}><Braces size={16} /> 环境变量</button><button className={tab === 'credentials' ? 'active' : ''} onClick={() => setTab('credentials')}><KeyRound size={16} /> 凭据引用</button></div>
           {tab === 'inventory' && <div className="editor-section"><div className="section-title"><div><h3>主机与分组</h3><p>保存后创建新的 Environment Revision。</p></div>{editable && <button className="button button--quiet" onClick={() => setHosts((items) => [...items, { name: '', address: '', groups: ['all'], port: 22, user: 'root' }])}><Plus size={15} /> 添加主机</button>}</div><div className="host-table"><div className="host-table__head"><span>主机名</span><span>地址</span><span>主机组</span><span>SSH 用户 / 端口</span><span /></div>{hosts.map((host, index) => <div className="host-row" key={`${host.name}-${index}`}><input value={host.name} disabled={!editable} onChange={(event) => updateHost(index, { name: event.target.value })} /><input value={host.address} disabled={!editable} onChange={(event) => updateHost(index, { address: event.target.value })} /><input value={host.groups.join(', ')} disabled={!editable} onChange={(event) => updateHost(index, { groups: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /><div className="split-input"><input value={host.user ?? ''} disabled={!editable} onChange={(event) => updateHost(index, { user: event.target.value })} /><input type="number" value={host.port ?? 22} disabled={!editable} onChange={(event) => updateHost(index, { port: Number(event.target.value) })} /></div>{editable && <button className="icon-button icon-button--danger" aria-label="删除主机" onClick={() => setHosts((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!hosts.length && <EmptyState title="没有主机" description={editable ? '添加一台测试主机。' : '环境 Owner 尚未配置 Inventory。'} />}</div>}
           {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>环境事实</h3><p>架构、操作系统和网络栈会参与组件兼容性预检。</p></div></div><textarea className="code-editor" value={factsText} disabled={!editable} onChange={(event) => setFactsText(event.target.value)} spellCheck={false} /></div>}
           {tab === 'parameters' && <div className="editor-section"><div className="section-title"><div><h3>非敏感环境参数</h3><p>优先级高于场景节点参数。秘密值不得写入这里。</p></div></div><textarea className="code-editor" value={parameters} disabled={!editable} onChange={(event) => setParameters(event.target.value)} spellCheck={false} /></div>}
+          {tab === 'variables' && <div className="editor-section"><div className="section-title"><div><h3>组件作业环境变量</h3><p>以同名 Ansible extra-vars 注入作业；镜像构建读取 IMAGE_REGISTRY。</p></div>{editable && <button className="button button--quiet" onClick={() => setVariables((items) => [...items, { name: '', value: '' }])}><Plus size={15} /> 添加变量</button>}</div><div className="environment-variable-list">{variables.map((variable, index) => <div key={index}><span className="variable-icon"><Braces size={17} /></span><input aria-label="环境变量名" value={variable.name} disabled={!editable} placeholder="IMAGE_REGISTRY" onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value.toUpperCase() } : item))} /><input aria-label={`环境变量 ${variable.name || index} 的值`} value={variable.value} disabled={!editable} placeholder={variable.name === 'IMAGE_REGISTRY' ? '192.168.88.54:5000' : '非敏感字符串值'} onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`删除环境变量 ${variable.name || index}`} onClick={() => setVariables((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!variables.length && <EmptyState title="尚未配置环境变量" description={editable ? '添加 IMAGE_REGISTRY 后即可从组件页面构建并发布镜像。' : '环境 Owner 尚未配置环境变量。'} />}</div>}
           {tab === 'credentials' && <div className="editor-section"><div className="section-title"><div><h3>CredentialRef</h3><p>数据库和 API 只保存引用，其他角色只看到脱敏值。</p></div>{editable && <button className="button button--quiet" onClick={() => setCredentials((items) => [...items, { name: '', type: 'envVarRef', reference: '' }])}><Plus size={15} /> 添加引用</button>}</div><div className="credential-list">{credentials.map((credential, index) => <div key={`${credential.name}-${index}`}><span className="credential-icon"><LockKeyhole size={17} /></span><input aria-label="凭据名称" value={credential.name} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} /><select value={credential.type} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, type: event.target.value as CredentialRef['type'] } : item))}><option value="envVarRef">envVarRef</option><option value="sshKeyPath">sshKeyPath</option></select><input value={editable ? credential.reference ?? '' : credential.maskedReference ?? '••••••••'} disabled={!editable} placeholder={credential.type === 'envVarRef' ? 'ANSIBLE_SSH_KEY' : '/path/to/key'} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, reference: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" onClick={() => setCredentials((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div></div>}
           {editable && <footer className="editor-footer"><span><LockKeyhole size={14} /> 保存期间不会读取凭据实际内容</span><button className="button button--primary" disabled={busy} onClick={() => void saveCurrent()}><Save size={16} /> {busy ? '保存中…' : '保存新 Revision'}</button></footer>}
         </article>

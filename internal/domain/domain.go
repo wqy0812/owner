@@ -173,19 +173,21 @@ const (
 )
 
 type ComponentImageBuild struct {
-	ID               string           `json:"id"`
-	ReleaseID        string           `json:"releaseId"`
-	RequestedBy      string           `json:"requestedBy"`
-	Status           ImageBuildStatus `json:"status"`
-	DockerfileSHA256 string           `json:"dockerfileSha256"`
-	ImageTag         string           `json:"imageTag"`
-	ImageRef         string           `json:"imageRef"`
-	ImageDigest      string           `json:"imageDigest,omitempty"`
-	Error            string           `json:"error,omitempty"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	StartedAt        *time.Time       `json:"startedAt,omitempty"`
-	FinishedAt       *time.Time       `json:"finishedAt,omitempty"`
-	Logs             []ImageBuildLog  `json:"logs,omitempty"`
+	ID                    string           `json:"id"`
+	ReleaseID             string           `json:"releaseId"`
+	EnvironmentID         string           `json:"environmentId,omitempty"`
+	EnvironmentRevisionID string           `json:"environmentRevisionId,omitempty"`
+	RequestedBy           string           `json:"requestedBy"`
+	Status                ImageBuildStatus `json:"status"`
+	DockerfileSHA256      string           `json:"dockerfileSha256"`
+	ImageTag              string           `json:"imageTag"`
+	ImageRef              string           `json:"imageRef"`
+	ImageDigest           string           `json:"imageDigest,omitempty"`
+	Error                 string           `json:"error,omitempty"`
+	CreatedAt             time.Time        `json:"createdAt"`
+	StartedAt             *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt            *time.Time       `json:"finishedAt,omitempty"`
+	Logs                  []ImageBuildLog  `json:"logs,omitempty"`
 }
 
 type ImageBuildLog struct {
@@ -486,15 +488,41 @@ type Environment struct {
 }
 
 type EnvironmentRevision struct {
-	ID             string          `json:"id"`
-	EnvironmentID  string          `json:"environmentId"`
-	Revision       int             `json:"revision"`
-	Facts          map[string]any  `json:"facts"`
-	Inventory      json.RawMessage `json:"inventory"`
-	Parameters     map[string]any  `json:"parameters"`
-	CredentialRefs []CredentialRef `json:"credentialRefs"`
-	MaxConcurrent  int             `json:"maxConcurrent"`
-	CreatedAt      time.Time       `json:"createdAt"`
+	ID             string            `json:"id"`
+	EnvironmentID  string            `json:"environmentId"`
+	Revision       int               `json:"revision"`
+	Facts          map[string]any    `json:"facts"`
+	Inventory      json.RawMessage   `json:"inventory"`
+	Parameters     map[string]any    `json:"parameters"`
+	Variables      map[string]string `json:"variables"`
+	CredentialRefs []CredentialRef   `json:"credentialRefs"`
+	MaxConcurrent  int               `json:"maxConcurrent"`
+	CreatedAt      time.Time         `json:"createdAt"`
+}
+
+// BackupMetadata binds a remote backup to the exact installation that
+// captured it. Playbooks persist this value in their .captured marker while
+// the platform keeps the authoritative reference on the environment.
+type BackupMetadata struct {
+	EnvironmentID      string         `json:"environmentId"`
+	ComponentID        string         `json:"componentId"`
+	ReleaseID          string         `json:"releaseId"`
+	ActionID           string         `json:"actionId"`
+	InstallRunID       string         `json:"installRunId"`
+	CapturedAt         time.Time      `json:"capturedAt"`
+	PlaybookSHA256     string         `json:"playbookSha256"`
+	DependencySnapshot map[string]any `json:"dependencySnapshot"`
+}
+
+type EnvironmentComponentInstallation struct {
+	EnvironmentID string         `json:"environmentId"`
+	ComponentID   string         `json:"componentId"`
+	ReleaseID     string         `json:"releaseId"`
+	InstallRunID  string         `json:"installRunId"`
+	BackupRef     string         `json:"backupRef"`
+	Backup        BackupMetadata `json:"backup"`
+	TestOnly      bool           `json:"testOnly"`
+	InstalledAt   time.Time      `json:"installedAt"`
 }
 
 type CredentialRef struct {
