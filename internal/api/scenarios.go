@@ -26,7 +26,6 @@ type flowNodeInput struct {
 		Action            domain.ActionKind `json:"action"`
 		HostGroup         string            `json:"hostGroup"`
 		Values            map[string]any    `json:"values"`
-		Bindings          map[string]string `json:"bindings"`
 		RunInputs         []string          `json:"runInputs"`
 		DependencySources map[string]string `json:"dependencySources"`
 	} `json:"data"`
@@ -43,7 +42,7 @@ func (input graphInput) domain() (domain.ScenarioGraph, error) {
 			graph.Nodes = append(graph.Nodes, domain.ScenarioNode{
 				ID: flow.ID, Name: flow.Data.Label, ReleaseID: flow.Data.ReleaseID,
 				Action: flow.Data.Action, HostGroup: flow.Data.HostGroup,
-				Values: flow.Data.Values, Bindings: flow.Data.Bindings, RunInputs: flow.Data.RunInputs,
+				Values: flow.Data.Values, RunInputs: flow.Data.RunInputs,
 				DependencySources: flow.Data.DependencySources, Position: flow.Position,
 			})
 			continue
@@ -96,6 +95,15 @@ func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.writeRevisionDTO(w, r, http.StatusCreated, revision)
+}
+
+func (h *Handler) abandonScenarioRevision(w http.ResponseWriter, r *http.Request) {
+	scenario, err := h.platform.AbandonScenarioRevision(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	h.writeScenarioDTO(w, r, http.StatusOK, scenario)
 }
 
 func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +247,7 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	for _, node := range revision.Graph.Nodes {
 		data := map[string]any{
 			"label": node.Name, "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
-			"values": node.Values, "bindings": node.Bindings, "runInputs": node.RunInputs,
+			"values": node.Values, "runInputs": node.RunInputs,
 			"dependencySources": node.DependencySources,
 		}
 		if release, ok := releases[node.ReleaseID]; ok {
@@ -250,11 +258,15 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 		}
 		nodes = append(nodes, map[string]any{"id": node.ID, "type": "component", "position": node.Position, "data": data})
 	}
+	state := revision.Status
+	if revision.AbandonedAt != nil {
+		state = "abandoned"
+	}
 	return map[string]any{
 		"id": revision.ID, "scenarioId": revision.ScenarioID, "revision": revision.Revision,
-		"state": revision.Status, "status": revision.Status, "nodes": nodes, "edges": revision.Graph.Edges,
+		"state": state, "status": state, "nodes": nodes, "edges": revision.Graph.Edges,
 		"graph": map[string]any{"nodes": nodes, "edges": revision.Graph.Edges}, "executionPolicy": revision.ExecutionPolicy,
-		"testedAt": revision.TestPassedAt, "testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "createdAt": revision.CreatedAt,
+		"testedAt": revision.TestPassedAt, "testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}
 }
 

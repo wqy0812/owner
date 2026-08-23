@@ -6,7 +6,7 @@
 
 - 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知；Draft Playbook 支持上传和在线编辑。
 - 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
-- 环境 Owner：管理 Inventory、环境参数、非敏感环境变量与凭据引用，审批高风险作业。
+- 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，审批高风险作业和跨仓平移。
 - 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
 - 示例：OpenFuyao 管理集群和 Kubernetes 1.17.5 集群搭建作业快照。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。

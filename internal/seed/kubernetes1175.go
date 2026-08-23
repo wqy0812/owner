@@ -76,7 +76,7 @@ func kubernetes1175ReleaseParameters(componentID string) []domain.ParameterDefin
 		parameters = append(parameters, domain.ParameterDefinition{
 			Name: "kubeInstallRoot", Description: "kubelet 安装根目录", Type: domain.ParameterTypeString,
 			Required: true, DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic,
-			EnvironmentPath: "kubernetes.installRoot", MinLength: 1,
+			MinLength: 1,
 		})
 	case "component-kube-proxy":
 		parameters = append(parameters, domain.ParameterDefinition{
@@ -151,7 +151,7 @@ func kubernetes1175Node(id, name, releaseID, group string, x, y float64) domain.
 			break
 		}
 	}
-	node := domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}, Destructive: action != domain.ActionPreflight}
+	node := domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group, Values: map[string]any{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}, Destructive: action != domain.ActionPreflight}
 	switch id {
 	case "k8s1175-proxy-master":
 		node.DependencySources = map[string]string{"dependency-kube-proxy-1": "k8s1175-kubelet-master"}
@@ -262,26 +262,6 @@ func (s Seeder) seedKubernetes1175Scenarios(ctx context.Context, now time.Time) 
 	return nil
 }
 
-func kubernetes1175EnvironmentParameters() map[string]any {
-	return map[string]any{
-		"K8S_VERSION": "v1.17.5", "K8S1175_ARTIFACTS_VERIFIED": false,
-		"K8S1175_OPTIONAL_ARTIFACTS_VERIFIED": false, "K8S1175_DOCKER_RUNTIME_VERIFIED": false,
-		"K8S1175_DOCKER_VERSION": "18.09.7", "ENABLE_VM_CHECK": false,
-		"IHS_IP": "192.0.2.80", "IHS_PORT": 8080,
-		"K8SMASTER_1175_CERT":        "file-station/kubernetes-1.17.5/kubernetes-server-linux-amd64.tar.gz",
-		"K8SNODE_1175_CERT":          "file-station/kubernetes-1.17.5/kubernetes-node-linux-amd64.tar.gz",
-		"ETCD_MEDPATH_SERVERLESS":    "file-station/k8sServerless/etcd-v3.3.10-linux-amd64.tar.gz",
-		"FLANNEL_MEDPATH_SERVERLESS": "file-station/k8sServerless/flannel-v0.11.0-linux-amd64.tar.gz",
-		"NODE_EXPORTER_MEDPATH_AMD":  "node_exporter-0.18.0.linux-amd64.tar.gz",
-		"CFSSL_MEDPATH":              "", "HAPROXY_MEDPATH": "", "GLUSTERFS_MEDPATH": "", "GO_PPROF_PATH": "",
-		"K8SMASTER_1175_CERT_SHA256": "", "K8SNODE_1175_CERT_SHA256": "", "ETCD_MEDPATH_SERVERLESS_SHA256": "",
-		"FLANNEL_MEDPATH_SERVERLESS_SHA256": "", "DOCKER_18_09_7_MEDPATH": "", "DOCKER_18_09_7_SHA256": "", "NODE_EXPORTER_MEDPATH_AMD_SHA256": "",
-		"CFSSL_MEDPATH_SHA256": "", "HAPROXY_MEDPATH_SHA256": "", "BLACKBOX_EXPORTER_MEDPATH": "", "BLACKBOX_EXPORTER_SHA256": "",
-		"GLUSTERFS_MEDPATH_SHA256": "", "GO_PPROF_SHA256": "",
-		"COREDNS_IMAGE_DIGEST": "", "METRICS_SERVER_IMAGE_DIGEST": "", "METRICS_SERVER_ADDON_RESIZER_IMAGE_DIGEST": "", "HAPROXY_IMAGE_DIGEST": "",
-	}
-}
-
 func (s Seeder) seedKubernetes1175Environment(ctx context.Context, now time.Time) error {
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{
 		map[string]any{"name": "cert-controller", "address": "127.0.0.1", "groups": []any{"k8s_cert_controller"}},
@@ -291,7 +271,7 @@ func (s Seeder) seedKubernetes1175Environment(ctx context.Context, now time.Time
 		map[string]any{"name": "worker-1", "address": "192.0.2.21", "groups": []any{"k8snode"}, "port": 22, "user": "sysop"},
 	}})
 	environment := domain.Environment{ID: "environment-k8s-1.17.5-template", Name: "Kubernetes 1.17.5 SUSE Template", Description: "TEST-NET 脱敏模板；未知校验和和镜像 digest 保持为空，安装入口 fail-closed。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "SUSE", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Parameters: kubernetes1175EnvironmentParameters(), CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, MaxConcurrent: 1, CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "SUSE", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.80:8080"}, CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, MaxConcurrent: 1, CreatedAt: now}
 	if err := s.createEnvironmentIfMissing(ctx, environment, revision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 environment: %w", err)
 	}

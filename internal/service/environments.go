@@ -39,7 +39,7 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
-		Facts: facts, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now,
+		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
 	if err := p.store.CreateEnvironment(ctx, environment, revision); err != nil {
@@ -77,16 +77,6 @@ func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, enviro
 		revision.Inventory = document
 		return nil
 	}, "environment.inventory_updated")
-}
-
-func (p *Platform) UpdateEnvironmentParameters(ctx context.Context, user domain.User, environmentID string, parameters map[string]any) (domain.Environment, error) {
-	if err := rejectSensitiveMap(parameters, "environment parameter"); err != nil {
-		return domain.Environment{}, err
-	}
-	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
-		revision.Parameters = parameters
-		return nil
-	}, "environment.parameters_updated")
 }
 
 func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User, environmentID string, facts map[string]any) (domain.Environment, error) {
@@ -209,7 +199,6 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	}
 	revision := *environment.Revision
 	revision.CredentialRefs = append([]domain.CredentialRef(nil), revision.CredentialRefs...)
-	revision.Parameters = cloneMap(revision.Parameters)
 	revision.Facts = cloneMap(revision.Facts)
 	revision.Variables = cloneStringMap(revision.Variables)
 	if err := mutate(&revision); err != nil {

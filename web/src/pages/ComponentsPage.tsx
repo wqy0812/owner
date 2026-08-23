@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Beaker, Boxes, ChevronDown, ChevronRight, Container, FileCode2, GitBranch, PencilLine, Plus, Rocket, Shield, Trash2, Upload, UserRound } from 'lucide-react';
+import { AlertTriangle, Archive, Beaker, Boxes, ChevronDown, ChevronRight, Container, FileCode2, GitBranch, PencilLine, Plus, Rocket, Shield, Trash2, Upload, UserRound } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
@@ -16,9 +16,10 @@ import {
 import { ComponentMappingOverview, defaultContractRelease, defaultFixtureValues, DependencyContractList, DependencyEditor, mappedParameterNames, mappingCount, ParameterContractList, ParameterTable, parameterContractErrors } from '../components/ParameterEditors';
 import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
 import { environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
-import type { ActionDefinition, Component, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition } from '../types/domain';
+import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition } from '../types/domain';
 
 type ContractSection = 'dependencies' | 'parameters';
+type ContractEditIntent = ContractSection | 'all';
 
 const REQUIRED_LIFECYCLE_ACTIONS: Array<{ type: ActionDefinition['type']; label: string }> = [
   { type: 'install', label: '安装' },
@@ -50,9 +51,12 @@ export function ComponentsPage() {
   const [testRelease, setTestRelease] = useState<ComponentRelease>();
   const [inspectRelease, setInspectRelease] = useState<ComponentRelease>();
   const [imageRelease, setImageRelease] = useState<ComponentRelease>();
+  const [artifactRelease, setArtifactRelease] = useState<ComponentRelease>();
   const [contractReleaseId, setContractReleaseId] = useState<string>();
   const [editingContract, setEditingContract] = useState(false);
   const [contractFocus, setContractFocus] = useState<ContractSection>();
+  const [contractDraftIntent, setContractDraftIntent] = useState<ContractEditIntent>();
+  const [pendingContractRelease, setPendingContractRelease] = useState<ComponentRelease>();
   const [layerOpen, setLayerOpen] = useState<Partial<Record<ComponentLayer, boolean>>>({});
   const [busy, setBusy] = useState(false);
 
@@ -61,7 +65,9 @@ export function ComponentsPage() {
     [components, selectedId],
   );
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
-  const contractRelease = releases.find((release) => release.id === contractReleaseId) ?? defaultContractRelease(releases, selected?.latestRelease);
+  const contractRelease = releases.find((release) => release.id === contractReleaseId)
+    ?? (pendingContractRelease?.id === contractReleaseId ? pendingContractRelease : undefined)
+    ?? defaultContractRelease(releases, selected?.latestRelease);
   const editableDraft = releases.find((release) => release.state === 'draft');
   const visibleEditRelease = editRelease?.componentId === selected?.id ? editRelease : undefined;
   const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
@@ -71,6 +77,8 @@ export function ComponentsPage() {
     setContractReleaseId(undefined);
     setEditingContract(false);
     setContractFocus(undefined);
+    setContractDraftIntent(undefined);
+    setPendingContractRelease(undefined);
     setEditComponent(undefined);
     setPublishRelease(undefined);
     setImpact(undefined);
@@ -78,10 +86,12 @@ export function ComponentsPage() {
     setInspectRelease(undefined);
     setEditRelease(undefined);
     setImageRelease(undefined);
+    setArtifactRelease(undefined);
   }, [selected?.id]);
   function selectContractRelease(id: string) {
     const release = releases.find((item) => item.id === id);
     setContractReleaseId(id);
+    if (pendingContractRelease?.id !== id) setPendingContractRelease(undefined);
     if (release?.state !== 'draft') {
       setEditingContract(false);
       setContractFocus(undefined);
@@ -90,17 +100,21 @@ export function ComponentsPage() {
   function startEditingContract(section?: ContractSection) {
     if (!selected || !mine) return;
     if (contractRelease?.state === 'draft') {
+      setPendingContractRelease(undefined);
       setEditingContract(true);
       setContractFocus(section);
       return;
     }
     if (editableDraft) {
+      setPendingContractRelease(undefined);
       setContractReleaseId(editableDraft.id);
       setEditingContract(true);
       setContractFocus(section);
       notify('info', '已切换到可编辑 Draft', `${contractRelease?.version ?? '当前版本'} 已不可修改，正在编辑 ${editableDraft.version}。`);
       return;
     }
+    setContractFocus(section);
+    setContractDraftIntent(section ?? 'all');
     setVersionBase(selected);
   }
   const layeredComponents = COMPONENT_LAYERS.map((layer) => ({
@@ -235,6 +249,7 @@ export function ComponentsPage() {
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => { selectContractRelease(release.id); setEditingContract(true); }}><PencilLine size={15} /> 配置合同</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setEditRelease(release)}><FileCode2 size={15} /> Playbook</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setImageRelease(release)}><Container size={15} /> 构建镜像</button>}
+                      {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setArtifactRelease(release)}><Archive size={15} /> 组件介质</button>}
                       {mine && release.state === 'draft' && <button className="icon-text icon-text--primary" onClick={() => void previewPublish(release)}><Rocket size={15} /> 发布</button>}
                       {mine && release.state === 'released' && <button className="icon-text" onClick={() => void deprecate(release)}>废弃</button>}
                     </div>
@@ -252,14 +267,14 @@ export function ComponentsPage() {
                 <article className="panel">
                   <header className="panel__header">
                     <div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
-                    {mine ? <button type="button" className="button button--quiet" aria-label="编辑直接依赖" onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> 编辑</button> : null}
+                    {mine ? <button type="button" className="button button--quiet" aria-label={editableDraft || contractRelease?.state === 'draft' ? '编辑直接依赖' : '创建 Draft 编辑直接依赖'} onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> {editableDraft || contractRelease?.state === 'draft' ? '编辑' : '创建 Draft 后编辑'}</button> : null}
                   </header>
                   <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
                 </article>
                 <article className="panel">
                   <header className="panel__header">
                     <div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>{contractRelease ? `${contractRelease.version} 的公开参数可被下游引用；内部参数只给本组件使用` : '公开参数可被下游引用；内部参数只给本组件使用'}</p></div></div>
-                    {mine ? <button type="button" className="button button--quiet" aria-label="编辑参数合同" onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> 编辑</button> : null}
+                    {mine ? <button type="button" className="button button--quiet" aria-label={editableDraft || contractRelease?.state === 'draft' ? '编辑参数合同' : '创建 Draft 编辑参数合同'} onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> {editableDraft || contractRelease?.state === 'draft' ? '编辑' : '创建 Draft 后编辑'}</button> : null}
                   </header>
                   <ParameterContractList release={contractRelease} components={components ?? []} />
                 </article>
@@ -270,13 +285,28 @@ export function ComponentsPage() {
         </>
       )}
 
-      {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={(component) => { setCreateOpen(false); setSearchParams({ selected: component.id }); setVersionBase(component); signalRefresh('components'); }} />}
+      {createOpen && <CreateComponentModal onClose={() => setCreateOpen(false)} onDone={(component) => { setCreateOpen(false); setSearchParams({ selected: component.id }); setContractDraftIntent(undefined); setVersionBase(component); signalRefresh('components'); }} />}
       {editComponent && <EditComponentModal component={editComponent} onClose={() => setEditComponent(undefined)} onDone={() => { setEditComponent(undefined); signalRefresh('components'); }} />}
-      {versionBase && <NewVersionModal component={versionBase} baseRelease={contractRelease ?? versionBase.latestRelease} onClose={() => setVersionBase(undefined)} onDone={(release) => { setVersionBase(undefined); signalRefresh('components'); if (release) { setContractReleaseId(release.id); setEditRelease(release); } }} />}
+      {versionBase && <NewVersionModal component={versionBase} baseRelease={contractRelease ?? versionBase.latestRelease} contractIntent={contractDraftIntent} onClose={() => { setVersionBase(undefined); setContractDraftIntent(undefined); setContractFocus(undefined); }} onDone={(release) => {
+        const intent = contractDraftIntent;
+        setVersionBase(undefined);
+        setContractDraftIntent(undefined);
+        signalRefresh('components');
+        if (!release) return;
+        setContractReleaseId(release.id);
+        if (intent) {
+          setPendingContractRelease(release);
+          setContractFocus(intent === 'all' ? undefined : intent);
+          setEditingContract(true);
+        } else {
+          setEditRelease(release);
+        }
+      }} />}
       {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setInspectRelease(undefined); setContractReleaseId(inspectRelease.id); setEditingContract(true); } : undefined} />}
       {visibleEditRelease && <EditReleaseModal key={visibleEditRelease.id} release={visibleEditRelease} releases={releases} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }} />}
       {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(['components', 'runs']); }} />}
       {imageRelease && <ImageBuildModal release={imageRelease} onClose={() => setImageRelease(undefined)} />}
+      {artifactRelease && <ArtifactModal release={artifactRelease} onClose={() => setArtifactRelease(undefined)} />}
       {publishRelease && <Modal title={`发布 ${publishRelease.version}`} description="发布后版本不可修改；影响通知将发送给下游组件和场景 Owner。" onClose={() => setPublishRelease(undefined)}>
         <div className="modal-body">
           {!publishRelease.verified && publishRelease.verification !== 'passed' && <div className="warning-callout"><AlertTriangle size={19} /><div><strong>此版本尚未验证</strong><p>组件允许以 Unverified 状态发布，下游会在通知中看到该风险。</p></div></div>}
@@ -377,6 +407,91 @@ function ImageBuildModal({ release, onClose }: { release: ComponentRelease; onCl
           <div className="image-build-ref"><span>目标镜像</span><code>{selectedBuild.imageRef}</code>{selectedBuild.environmentId ? <><span>环境快照</span><code>{selectedBuild.environmentId} · {selectedBuild.environmentRevisionId ?? '历史记录未保存 Revision'}</code></> : null}{selectedBuild.imageDigest ? <code>{selectedBuild.imageDigest}</code> : null}{selectedBuild.error ? <p>{selectedBuild.error}</p> : null}</div>
           <pre aria-label="镜像构建日志">{logs || (ACTIVE_IMAGE_BUILD_STATUSES.has(selectedBuild.status) ? '等待构建日志…' : '无日志')}</pre>
         </div> : <EmptyState title="尚未选择构建" description="上传 Dockerfile 后可在这里查看实时日志与镜像摘要。" />}
+      </section>
+    </div>
+    <footer className="modal-actions"><button className="button button--quiet" type="button" onClick={onClose}>关闭</button></footer>
+  </Modal>;
+}
+
+function ArtifactModal({ release, onClose }: { release: ComponentRelease; onClose: () => void }) {
+  const { user, notify, signalRefresh } = useApp();
+  const { data: environments, loading } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
+  const [mode, setMode] = useState<'upload' | 'register'>('upload');
+  const [environmentId, setEnvironmentId] = useState('');
+  const [alias, setAlias] = useState('media');
+  const [sha256, setSha256] = useState('');
+  const [relativePath, setRelativePath] = useState('');
+  const [file, setFile] = useState<File>();
+  const [checksumFile, setChecksumFile] = useState<File>();
+  const [artifacts, setArtifacts] = useState<ComponentArtifact[]>(release.artifacts ?? []);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!environmentId && environments?.length) {
+      setEnvironmentId(environments.find((item) => item.currentRevision?.variables.FILE_STATION)?.id ?? environments[0].id);
+    }
+  }, [environmentId, environments]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      let saved: ComponentArtifact;
+      if (mode === 'upload') {
+        if (!file) throw new Error('请选择介质文件。');
+        saved = await api.uploadArtifact(release.id, { environmentId, alias, sha256: sha256.trim() || undefined, artifact: file, checksumFile });
+      } else {
+        saved = await api.registerArtifact(release.id, { environmentId, alias, relativePath, sha256 });
+      }
+      setArtifacts((items) => [saved, ...items.filter((item) => item.alias !== saved.alias)].sort((a, b) => a.alias.localeCompare(b.alias)));
+      notify('success', '组件介质已保存', `${saved.alias} · sha256:${saved.sha256}`);
+      signalRefresh('components');
+    } catch (reason) {
+      notify('error', '保存组件介质失败', displayError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadChecksum(next?: File) {
+    setChecksumFile(next);
+    if (!next) return;
+    const value = (await next.text()).trim().split(/\s+/)[0] ?? '';
+    setSha256(value);
+  }
+
+  async function detach(item: ComponentArtifact) {
+    setBusy(true);
+    try {
+      await api.deleteArtifact(release.id, item.alias);
+      setArtifacts((items) => items.filter((artifact) => artifact.alias !== item.alias));
+      notify('success', '介质引用已移除', 'file-station 上的物理文件未删除。');
+      signalRefresh('components');
+    } catch (reason) {
+      notify('error', '移除介质引用失败', displayError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedEnvironment = environments?.find((item) => item.id === environmentId);
+  const station = selectedEnvironment?.currentRevision?.variables.FILE_STATION;
+  return <Modal title={`组件介质 · ${release.version}`} description="介质固定保存到 components/组件 slug/版本/文件名；发布后不可修改。" onClose={onClose} size="wide">
+    <div className="image-build-layout">
+      <form onSubmit={(event) => void submit(event)}>
+        <div className="tabs" role="tablist"><button type="button" className={mode === 'upload' ? 'active' : ''} onClick={() => setMode('upload')}>上传文件</button><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>登记已有路径</button></div>
+        <div className="form-grid image-build-form">
+          <label className="span-2"><span>介质所在环境</span><select required value={environmentId} disabled={loading} onChange={(event) => setEnvironmentId(event.target.value)}><option value="">请选择环境</option>{environments?.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · r{environment.currentRevision?.revision ?? '?'}</option>)}</select><small>{station ? `FILE_STATION=${station}` : selectedEnvironment ? '该环境尚未配置 FILE_STATION，请联系 Environment Owner。' : '正在读取可用环境…'}</small></label>
+          <label><span>介质别名</span><input required pattern="[a-z][a-z0-9_]*" value={alias} onChange={(event) => setAlias(event.target.value.toLowerCase())} /><small>运行时注入 alias_path、alias_url、alias_sha256</small></label>
+          {mode === 'register' ? <label><span>file-station 相对路径</span><input required value={relativePath} placeholder="imports/example.tar.gz" onChange={(event) => setRelativePath(event.target.value)} /></label> : <label><span>介质文件</span><input type="file" required onChange={(event) => setFile(event.target.files?.[0])} /></label>}
+          <label><span>SHA-256</span><input required={!checksumFile} value={sha256} pattern="[A-Fa-f0-9]{64}" placeholder="64 位十六进制" onChange={(event) => setSha256(event.target.value)} /></label>
+          <label><span>SHA-256 文件</span><input type="file" accept=".sha256,text/plain" onChange={(event) => void loadChecksum(event.target.files?.[0])} /><small>可上传常见的 “hash 文件名” 格式</small></label>
+        </div>
+        <button disabled={busy || !environmentId || !station || (mode === 'upload' && !file)} className="button button--primary" type="submit"><Upload size={16} /> {busy ? '保存中…' : mode === 'upload' ? '上传并校验' : '登记并校验'}</button>
+      </form>
+      <section className="image-build-results">
+        <div className="image-build-history"><strong>当前介质</strong>{artifacts.length ? artifacts.map((item) => <div key={item.alias}><span>{item.alias}</span><button type="button" className="icon-button icon-button--danger" disabled={busy} aria-label={`移除介质 ${item.alias}`} onClick={() => void detach(item)}><Trash2 size={14} /></button></div>) : <span>尚未录入介质</span>}</div>
+        <div className="image-build-detail"><div className="image-build-ref"><span>规则</span><code>FILE_STATION/components/&lt;slug&gt;/&lt;version&gt;/&lt;filename&gt;</code><p>实际环境的 FILE_STATION 不同时，Run 会先进入环境管理员审批；批准后平台平移并校验 SHA-256，再执行 Playbook。目标已存在同一指纹时复用。</p>{artifacts.map((item) => <div key={item.id}><span>{item.alias}</span><code>http://{item.fileStation}/{item.relativePath}</code><code>sha256:{item.sha256} · {item.sizeBytes} bytes</code></div>)}</div></div>
       </section>
     </div>
     <footer className="modal-actions"><button className="button button--quiet" type="button" onClick={onClose}>关闭</button></footer>
@@ -702,7 +817,7 @@ function ClassificationFields({ component }: { component?: Component }) {
   </>;
 }
 
-function NewVersionModal({ component, baseRelease, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
+function NewVersionModal({ component, baseRelease, contractIntent, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; contractIntent?: ContractEditIntent; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
   const { notify } = useApp();
   const [busy, setBusy] = useState(false);
   const source = baseRelease ?? component.latestRelease;
@@ -725,7 +840,12 @@ function NewVersionModal({ component, baseRelease, onClose, onDone }: { componen
       setBusy(false);
     }
   }
-  return <Modal size="wide" title={`更新 ${component.name}`} description={source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。'} onClose={onClose}>
+  const contractLabel = contractIntent === 'dependencies' ? '直接依赖' : contractIntent === 'parameters' ? '参数合同' : '依赖和参数';
+  const title = contractIntent ? `创建 Draft 编辑${contractLabel}` : `更新 ${component.name}`;
+  const description = contractIntent && source
+    ? `${source.version} 已发布且不可直接修改。请先克隆为新 Draft，创建后将自动进入${contractLabel}编辑。`
+    : source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。';
+  return <Modal size="wide" title={title} description={description} onClose={onClose}>
     <form onSubmit={(event) => void submit(event)}>
       <div className="form-grid">
         <label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label>

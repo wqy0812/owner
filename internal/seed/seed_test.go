@@ -128,16 +128,8 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 			t.Fatalf("OpenFuyao inventory is missing group %s", group)
 		}
 	}
-	for _, section := range []string{"operation", "network", "versions", "artifact_sources", "certificates", "addon_params"} {
-		if _, ok := environment.Revision.Parameters[section].(map[string]any); !ok {
-			t.Fatalf("OpenFuyao environment is missing grouped parameter section %s", section)
-		}
-	}
-	parametersJSON, _ := json.Marshal(environment.Revision.Parameters)
-	for _, forbidden := range []string{"callback_url", "callback_token", "task_id", "ENV_DOCKER_SECRET_PASSWORD", "ENV_CHART_PULL_PASSWORD"} {
-		if strings.Contains(string(parametersJSON), forbidden) {
-			t.Fatalf("OpenFuyao environment parameters contain forbidden key %s", forbidden)
-		}
+	if environment.Revision.Variables["IMAGE_REGISTRY"] != "registry.example.invalid" || environment.Revision.Variables["FILE_STATION"] != "192.0.2.70:443" {
+		t.Fatalf("OpenFuyao environment variables=%+v", environment.Revision.Variables)
 	}
 
 	scenarios := []struct {
@@ -184,7 +176,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 			if variables["cluster_role"] != expectation.role || variables["cluster_id"] != expectation.clusterID {
 				t.Fatalf("scenario %s variables role=%v cluster=%v", expectation.revisionID, variables["cluster_role"], variables["cluster_id"])
 			}
-			if variables["target_host_group"] == "" || variables["strategy"] != "StatelessFlatNetworkStrategy" {
+			if variables["target_host_group"] == "" {
 				t.Fatalf("scenario %s incomplete locked variables=%#v", expectation.revisionID, variables)
 			}
 			for credentialName := range map[string]bool{"ansible_ssh_pass": true, "ENV_DOCKER_SECRET_PASSWORD": true, "ENV_CHART_PULL_PASSWORD": true} {
@@ -416,28 +408,8 @@ func TestKubernetes1175EnvironmentIsSanitizedAndComplete(t *testing.T) {
 			t.Fatalf("group %s has %d hosts, want at least %d", group, groupCounts[group], minimum)
 		}
 	}
-	if revision.Parameters["K8S_VERSION"] != "v1.17.5" || revision.Parameters["K8S1175_ARTIFACTS_VERIFIED"] != false || revision.Parameters["K8S1175_DOCKER_RUNTIME_VERIFIED"] != false || revision.Parameters["K8S1175_DOCKER_VERSION"] != "18.09.7" || revision.Parameters["ENABLE_VM_CHECK"] != false {
-		t.Fatalf("unsafe version or verification parameters: %+v", revision.Parameters)
-	}
-	for _, key := range []string{"K8SMASTER_1175_CERT", "K8SNODE_1175_CERT"} {
-		value, _ := revision.Parameters[key].(string)
-		if !strings.Contains(value, "1.17.5") || strings.Contains(value, "://") || strings.HasPrefix(value, "/") || strings.Contains(value, "..") {
-			t.Fatalf("unsafe or ambiguous media path %s=%q", key, value)
-		}
-	}
-	for _, key := range []string{"ETCD_MEDPATH_SERVERLESS", "FLANNEL_MEDPATH_SERVERLESS", "NODE_EXPORTER_MEDPATH_AMD"} {
-		value, _ := revision.Parameters[key].(string)
-		if value == "" || strings.Contains(value, "://") || strings.HasPrefix(value, "/") || strings.Contains(value, "..") {
-			t.Fatalf("unsafe or missing media path %s=%q", key, value)
-		}
-	}
-	for _, key := range []string{"K8SMASTER_1175_CERT_SHA256", "K8SNODE_1175_CERT_SHA256", "ETCD_MEDPATH_SERVERLESS_SHA256", "FLANNEL_MEDPATH_SERVERLESS_SHA256", "COREDNS_IMAGE_DIGEST", "METRICS_SERVER_IMAGE_DIGEST"} {
-		if revision.Parameters[key] != "" {
-			t.Fatalf("unknown verification value %s must remain empty, got %v", key, revision.Parameters[key])
-		}
-	}
-	if _, leaked := revision.Parameters["K8S_ENCRYPTION_KEY"]; leaked {
-		t.Fatal("encryption key must not be stored in ordinary parameters")
+	if revision.Variables["FILE_STATION"] != "192.0.2.80:8080" {
+		t.Fatalf("file station variable=%+v", revision.Variables)
 	}
 	if len(revision.CredentialRefs) != 1 {
 		t.Fatalf("credential refs=%+v", revision.CredentialRefs)

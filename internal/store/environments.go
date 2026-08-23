@@ -31,7 +31,7 @@ func insertEnvironmentRevision(ctx context.Context, tx *sql.Tx, r domain.Environ
 	if r.MaxConcurrent < 1 {
 		r.MaxConcurrent = 1
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,parameters_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Parameters), jsonText(r.Variables), jsonText(r.CredentialRefs), r.MaxConcurrent, timeText(r.CreatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Variables), jsonText(r.CredentialRefs), r.MaxConcurrent, timeText(r.CreatedAt))
 	return mapSQLError(err)
 }
 
@@ -130,11 +130,10 @@ func (s *Store) ListEnvironments(ctx context.Context) ([]domain.Environment, err
 
 func scanEnvironmentRevision(row scanner) (domain.EnvironmentRevision, error) {
 	var r domain.EnvironmentRevision
-	var facts, inventory, parameters, variables, refs, created string
-	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &parameters, &variables, &refs, &r.MaxConcurrent, &created)
+	var facts, inventory, variables, refs, created string
+	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &variables, &refs, &r.MaxConcurrent, &created)
 	r.Facts = decodeJSON(facts, map[string]any{})
 	r.Inventory = []byte(inventory)
-	r.Parameters = decodeJSON(parameters, map[string]any{})
 	r.Variables = decodeJSON(variables, map[string]string{})
 	r.CredentialRefs = decodeJSON(refs, []domain.CredentialRef{})
 	r.CreatedAt = parseTime(created)
@@ -142,12 +141,12 @@ func scanEnvironmentRevision(row scanner) (domain.EnvironmentRevision, error) {
 }
 
 func (s *Store) GetEnvironmentRevision(ctx context.Context, id string) (domain.EnvironmentRevision, error) {
-	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,parameters_json,variables_json,credential_refs_json,max_concurrent,created_at FROM environment_revisions WHERE id=?`, id))
+	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_at FROM environment_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListEnvironmentRevisions(ctx context.Context, environmentID string) ([]domain.EnvironmentRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,parameters_json,variables_json,credential_refs_json,max_concurrent,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
 	if err != nil {
 		return nil, err
 	}

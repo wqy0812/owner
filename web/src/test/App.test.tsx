@@ -395,12 +395,33 @@ describe('platform shell and RBAC UI', () => {
     });
   });
 
-  it('asks the owner to create a draft before editing a released contract', async () => {
+  it.each([
+    { button: '创建 Draft 编辑直接依赖', dialog: '创建 Draft 编辑直接依赖', target: 'contract-dependencies' },
+    { button: '创建 Draft 编辑参数合同', dialog: '创建 Draft 编辑参数合同', target: 'contract-parameters' },
+  ])('creates a draft and continues to $target', async ({ button, dialog, target }) => {
+    const released = components[0].releases[0];
+    const draft = { ...released, id: 'release-containerd-draft', version: 'v2.1.2', state: 'draft', status: 'draft', parameters: [], dependencies: [] };
+    let created = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: created ? draft : released, releases: created ? [draft, released] : [released] }]);
+      if (url.includes('/component-releases/release-containerd-2/clone')) { created = true; return json(draft); }
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
     renderApp('/components');
-    expect(await screen.findByRole('button', { name: '创建 Draft 编辑合同' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '编辑直接依赖' }));
-    expect(screen.getByRole('dialog', { name: '更新 containerd' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '创建 Draft' })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: button }));
+    expect(screen.getByRole('dialog', { name: dialog })).toBeInTheDocument();
+    expect(screen.getByText(/已发布且不可直接修改/)).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.2');
+    await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '调整合同');
+    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+
+    expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('id', target));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('scrolls to the matching contract section when editing a draft', async () => {
@@ -541,7 +562,7 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '创建 Draft 编辑合同' }));
-    expect(screen.getByRole('dialog', { name: '更新 containerd' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'ARM/arm64' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
@@ -904,6 +925,88 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByDisplayValue('bootstrap_host')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'rollback' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'uninstall' })).not.toBeInTheDocument();
+  });
+
+  it('confirms before creating a revision and does not submit when cancelled', async () => {
+    const released = {
+      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released', status: 'released',
+      nodes: [], edges: [], executionPolicy: {},
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(carol);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST') {
+        return json({ ...released, id: 'scenario-confirm-r2', revision: 2, state: 'draft', status: 'draft' }, 201);
+      }
+      if (url.endsWith('/scenarios')) return json([{
+        id: 'scenario-confirm', slug: 'scenario-confirm', name: 'Confirm Scenario', ownerId: carol.id,
+        currentRevisionId: released.id, currentRevision: released, revisions: [released],
+      }]);
+      if (url.endsWith('/environments')) return json([]);
+      if (url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirm);
+    renderApp('/scenarios');
+
+    await userEvent.click(await screen.findByRole('button', { name: '新 Revision' }));
+    expect(confirm).toHaveBeenCalledWith('确认从 Revision 1 创建 Revision 2？\n新 Revision 将立即成为当前草稿。');
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST')).toBe(false);
+
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole('button', { name: '新 Revision' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST')).toBe(true));
+  });
+
+  it('shows revision history and can abandon the current draft', async () => {
+    const released = {
+      id: 'scenario-history-r1', scenarioId: 'scenario-history', revision: 1, state: 'released', status: 'released',
+      nodes: [], edges: [], executionPolicy: {},
+    };
+    const draft = {
+      id: 'scenario-history-r2', scenarioId: 'scenario-history', revision: 2, state: 'draft', status: 'draft',
+      nodes: [], edges: [], executionPolicy: {},
+    };
+    const abandoned = { ...draft, state: 'abandoned', status: 'abandoned' };
+    let scenario = {
+      id: 'scenario-history', slug: 'scenario-history', name: 'History Scenario', ownerId: carol.id,
+      currentRevisionId: draft.id, currentRevision: draft, revisions: [draft, released],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(carol);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/scenario-revisions/scenario-history-r2/abandon') && init?.method === 'POST') {
+        scenario = { ...scenario, currentRevisionId: released.id, currentRevision: released, revisions: [abandoned, released] };
+        return json(scenario);
+      }
+      if (url.endsWith('/scenarios')) return json([scenario]);
+      if (url.endsWith('/environments')) return json([]);
+      if (url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirm);
+    renderApp('/scenarios');
+
+    const revisionSelect = await screen.findByRole('combobox', { name: 'Revision' });
+    expect(within(revisionSelect).getByRole('option', { name: 'r2 · 草稿 · 当前' })).toBeInTheDocument();
+    expect(within(revisionSelect).getByRole('option', { name: 'r1 · 已发布' })).toBeInTheDocument();
+    await userEvent.selectOptions(revisionSelect, released.id);
+    expect(screen.getByRole('button', { name: '环境运行' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '放弃草稿' })).not.toBeInTheDocument();
+    await userEvent.selectOptions(revisionSelect, draft.id);
+    await userEvent.click(screen.getByRole('button', { name: '放弃草稿' }));
+
+    expect(confirm).toHaveBeenCalledWith('确认放弃 Revision 2 草稿？\n系统将恢复到最近的不可变 Revision，当前草稿会保留在历史记录中。');
+    expect(await screen.findByText('草稿已放弃')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Revision' })).toHaveValue(released.id));
+    expect(within(screen.getByRole('combobox', { name: 'Revision' })).getByRole('option', { name: 'r2 · 已放弃' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新 Revision' })).toBeInTheDocument();
   });
 
   it('allows the same release to be added more than once with independent host groups', async () => {

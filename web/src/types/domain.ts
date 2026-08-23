@@ -24,7 +24,6 @@ export interface ParameterDefinition {
   required?: boolean;
   defaultValue?: unknown;
   visibility: ParameterVisibility;
-  environmentPath?: string;
   enum?: unknown[];
   minLength?: number;
 }
@@ -93,8 +92,25 @@ export interface ComponentRelease {
   environmentConstraints?: Record<string, unknown>;
   parameters?: ParameterDefinition[];
   actions?: ActionDefinition[];
+  artifacts?: ComponentArtifact[];
   createdAt?: string;
   releasedAt?: string;
+}
+
+export interface ComponentArtifact {
+  id: string;
+  releaseId: string;
+  alias: string;
+  fileStation: string;
+  relativePath: string;
+  filename: string;
+  sha256: string;
+  sizeBytes: number;
+  sourceMode: 'upload' | 'register';
+  environmentId: string;
+  environmentRevisionId: string;
+  createdBy: string;
+  createdAt: string;
 }
 
 export type ImageBuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
@@ -142,7 +158,7 @@ export interface Component {
   updatedAt?: string;
 }
 
-export type ScenarioState = 'draft' | 'testing' | 'test_passed' | 'released' | 'deprecated';
+export type ScenarioState = 'draft' | 'testing' | 'test_passed' | 'released' | 'deprecated' | 'abandoned';
 
 export interface ScenarioNodeData extends Record<string, unknown> {
   label: string;
@@ -152,7 +168,6 @@ export interface ScenarioNodeData extends Record<string, unknown> {
   action?: ActionDefinition['type'];
   hostGroup?: string;
   values?: Record<string, unknown>;
-  bindings?: Record<string, string>;
   runInputs?: string[];
   dependencySources?: Record<string, string>;
   layer?: ComponentLayer;
@@ -194,6 +209,7 @@ export interface Scenario {
   description?: string;
   ownerId: string;
   ownerName?: string;
+  currentRevisionId?: string;
   currentRevision?: ScenarioRevision;
   revisions?: ScenarioRevision[];
   updatedAt?: string;
@@ -220,7 +236,6 @@ export interface EnvironmentRevision {
   revision: number;
   facts: Record<string, unknown>;
   hosts: EnvironmentHost[];
-  parameters: Record<string, unknown>;
   variables: Record<string, string>;
   credentialRefs: CredentialRef[];
   maxConcurrentRuns?: number;
@@ -304,6 +319,8 @@ export interface Run {
   logTail?: string[];
   resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
   backups?: RunBackup[];
+  artifactTransfers?: Array<{ alias: string; sourceStation: string; targetStation: string; relativePath: string; sha256: string }>;
+  imageTransfers?: Array<{ sourceRegistry: string; targetRegistry: string; sourceDigest: string; targetDigest: string }>;
   createdAt?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -388,6 +405,7 @@ export const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   released: '已发布',
   deprecated: '已废弃',
+  abandoned: '已放弃',
   unverified: '未验证',
   testing: '测试中',
   test_passed: '测试通过',

@@ -229,6 +229,9 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	if err := p.store.CreateComponentRelease(ctx, source); err != nil {
 		return source, err
 	}
+	if err := p.store.CloneComponentArtifacts(ctx, sourceID, source.ID); err != nil {
+		return source, err
+	}
 	p.audit(ctx, user, "component_release.cloned", "component_release", source.ID, map[string]any{"sourceReleaseId": sourceID, "version": version})
 	return source, nil
 }

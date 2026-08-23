@@ -134,11 +134,23 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		output["progress"] = succeeded * 100 / total
 	}
 	if run.Approval != nil {
+		riskReason := "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。"
+		artifactTransfers, _ := run.InputSnapshot["artifactTransfers"].([]any)
+		imageTransfers, _ := run.InputSnapshot["imageTransfers"].([]any)
+		if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
+			riskReason = fmt.Sprintf("目标环境与版本来源不一致：需平移 %d 个镜像、%d 个介质。批准后平台先传输并校验指纹，再执行组件动作。", len(imageTransfers), len(artifactTransfers))
+		}
 		output["approval"] = map[string]any{
 			"id": run.Approval.ID, "runId": run.Approval.RunID, "status": run.Approval.Status,
-			"riskReason":  "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。",
+			"riskReason":  riskReason,
 			"requestedAt": run.Approval.RequestedAt, "decidedAt": run.Approval.DecidedAt,
 		}
+	}
+	if value, ok := run.InputSnapshot["artifactTransfers"]; ok {
+		output["artifactTransfers"] = value
+	}
+	if value, ok := run.InputSnapshot["imageTransfers"]; ok {
+		output["imageTransfers"] = value
 	}
 	logs, _ := h.platform.Store().ListRunLogTail(r.Context(), run.ID, 200)
 	tail := make([]string, 0, len(logs))

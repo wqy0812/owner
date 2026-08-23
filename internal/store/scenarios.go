@@ -26,7 +26,7 @@ func (s *Store) CreateScenario(ctx context.Context, sc domain.Scenario, rev doma
 }
 
 func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRevision) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.ExecutionPolicy), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.ExecutionPolicy), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
 	return mapSQLError(err)
 }
 
@@ -172,24 +172,25 @@ func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, 
 func scanScenarioRevision(row scanner) (domain.ScenarioRevision, error) {
 	var r domain.ScenarioRevision
 	var graph, policy, created string
-	var tested, released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &graph, &policy, &created, &tested, &released, &deprecated)
+	var tested, released, deprecated, abandoned sql.NullString
+	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &graph, &policy, &created, &tested, &released, &deprecated, &abandoned)
 	r.Graph = decodeJSON(graph, domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}})
 	r.ExecutionPolicy = decodeJSON(policy, map[string]any{})
 	r.CreatedAt = parseTime(created)
 	r.TestPassedAt = parseNullTime(tested)
 	r.ReleasedAt = parseNullTime(released)
 	r.DeprecatedAt = parseNullTime(deprecated)
+	r.AbandonedAt = parseNullTime(abandoned)
 	return r, err
 }
 
 func (s *Store) GetScenarioRevision(ctx context.Context, id string) (domain.ScenarioRevision, error) {
-	r, err := scanScenarioRevision(s.db.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at FROM scenario_revisions WHERE id=?`, id))
+	r, err := scanScenarioRevision(s.db.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, releasedOnly bool) ([]domain.ScenarioRevision, error) {
-	q := `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at FROM scenario_revisions WHERE scenario_id=?`
+	q := `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE scenario_id=?`
 	if releasedOnly {
 		q += ` AND status='released'`
 	}
@@ -264,6 +265,55 @@ func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at tim
 		return fmt.Errorf("%w: only released scenario revisions can be deprecated", domain.ErrConflict)
 	}
 	return nil
+}
+
+func (s *Store) AbandonScenarioRevision(ctx context.Context, id string, at time.Time) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var scenarioID, status, currentID string
+	if err := tx.QueryRowContext(ctx, `
+SELECT r.scenario_id,r.status,s.current_revision_id
+FROM scenario_revisions r JOIN scenarios s ON s.id=r.scenario_id
+WHERE r.id=?`, id).Scan(&scenarioID, &status, &currentID); err != nil {
+		return "", mapSQLError(err)
+	}
+	if currentID != id || domain.RevisionStatus(status) != domain.RevisionDraft {
+		return "", fmt.Errorf("%w: only the current draft revision can be abandoned", domain.ErrConflict)
+	}
+
+	var restoredID string
+	if err := tx.QueryRowContext(ctx, `
+SELECT id FROM scenario_revisions
+WHERE scenario_id=? AND id<>? AND status IN ('released','deprecated') AND abandoned_at IS NULL
+ORDER BY revision DESC LIMIT 1`, scenarioID, id).Scan(&restoredID); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("%w: scenario has no immutable revision to restore", domain.ErrConflict)
+		}
+		return "", err
+	}
+
+	res, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='deprecated',deprecated_at=?,abandoned_at=? WHERE id=? AND status='draft'`, timeText(at), timeText(at), id)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", fmt.Errorf("%w: only a draft revision can be abandoned", domain.ErrConflict)
+	}
+	res, err = tx.ExecContext(ctx, `UPDATE scenarios SET current_revision_id=?,updated_at=? WHERE id=? AND current_revision_id=?`, restoredID, timeText(at), scenarioID, id)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", fmt.Errorf("%w: scenario current revision changed", domain.ErrConflict)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return restoredID, nil
 }
 
 type ScenarioReference struct{ ScenarioID, ScenarioName, OwnerID, RevisionID, ComponentReleaseID string }

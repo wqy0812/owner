@@ -1,21 +1,24 @@
 [Unit]
-Description=ClusterForge read-only file station
+Description=ClusterForge file station
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
+User=clusterforge-fss
+Group=clusterforge-fss
 WorkingDirectory=/srv/clusterforge-fss
-ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+Environment=CLUSTERFORGE_FSS_ROOT=/srv/clusterforge-fss
+Environment=CLUSTERFORGE_FSS_ADDR=0.0.0.0:8080
+Environment=CLUSTERFORGE_FSS_WRITE_ALLOW_CIDRS=192.168.88.55/32
+ExecStart=/usr/local/bin/clusterforge-fss
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/srv/clusterforge-fss
+ReadWritePaths=/srv/clusterforge-fss
 
 [Install]
 WantedBy=multi-user.target

@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
+	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"reflect"
 	"sort"
@@ -59,8 +63,27 @@ type lockedStep struct {
 }
 
 type lockedPlan struct {
-	Steps      []lockedStep `json:"steps"`
-	TreeDigest string       `json:"treeDigest"`
+	Steps             []lockedStep             `json:"steps"`
+	ArtifactTransfers []lockedArtifactTransfer `json:"artifactTransfers,omitempty"`
+	ImageTransfers    []lockedImageTransfer    `json:"imageTransfers,omitempty"`
+	TreeDigest        string                   `json:"treeDigest"`
+}
+
+type lockedArtifactTransfer struct {
+	Alias         string `json:"alias"`
+	SourceStation string `json:"sourceStation"`
+	TargetStation string `json:"targetStation"`
+	RelativePath  string `json:"relativePath"`
+	SHA256        string `json:"sha256"`
+	SizeBytes     int64  `json:"sizeBytes"`
+}
+
+type lockedImageTransfer struct {
+	SourceRegistry string `json:"sourceRegistry"`
+	TargetRegistry string `json:"targetRegistry"`
+	SourceDigest   string `json:"sourceDigest"`
+	TargetRef      string `json:"targetRef"`
+	TargetDigest   string `json:"targetDigest"`
 }
 
 type ComponentTestMode string
@@ -192,7 +215,7 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 	default:
 		return preparedComponentTest{}, fmt.Errorf("%w: unsupported component test mode %q", domain.ErrInvalid, input.Mode)
 	}
-	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, environment.Revision.Parameters, input.RunInput, selected.AllowedParameters)
+	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, input.RunInput, selected.AllowedParameters)
 	if err != nil {
 		return preparedComponentTest{}, err
 	}
@@ -252,7 +275,7 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 			if !ok {
 				return preparedComponentTest{}, fmt.Errorf("%w: rollback verify target must define a verify action", domain.ErrInvalid)
 			}
-			targetVariables, _, targetErr := resolveOwnParameters(target, domain.ScenarioNode{}, environment.Revision.Parameters, input.RunInput, selected.AllowedParameters)
+			targetVariables, _, targetErr := resolveOwnParameters(target, domain.ScenarioNode{}, input.RunInput, selected.AllowedParameters)
 			if targetErr != nil {
 				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
 			}
@@ -368,7 +391,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if actionErr != nil {
 			return domain.Run{}, actionErr
 		}
-		variables, provenance, resolveErr := resolveOwnParameters(release, node, environment.Revision.Parameters, runInputForNode(node, runInput), node.RunInputs)
+		variables, provenance, resolveErr := resolveOwnParameters(release, node, runInputForNode(node, runInput), node.RunInputs)
 		if resolveErr != nil {
 			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, resolveErr)
 		}
@@ -402,7 +425,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 					return domain.Run{}, fmt.Errorf("%w: rollback target must be a retained release of the same component", domain.ErrInvalid)
 				}
 				verifyRelease = target
-				verifyVariables, _, targetErr = resolveOwnParameters(target, node, environment.Revision.Parameters, runInputForNode(node, runInput), node.RunInputs)
+				verifyVariables, _, targetErr = resolveOwnParameters(target, node, runInputForNode(node, runInput), node.RunInputs)
 				if targetErr != nil {
 					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, targetErr)
 				}
@@ -538,28 +561,6 @@ func runInputForNode(node domain.ScenarioNode, runInput map[string]any) map[stri
 	return selected
 }
 
-func resolveEnvironmentBinding(environment map[string]any, key string) (any, bool) {
-	if value, ok := environment[key]; ok {
-		return value, true
-	}
-	parts := strings.Split(key, ".")
-	if len(parts) < 2 {
-		return nil, false
-	}
-	var current any = environment
-	for _, part := range parts {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = object[part]
-		if !ok {
-			return nil, false
-		}
-	}
-	return deepCopy(current), true
-}
-
 func validateEnvironmentConstraints(constraints, facts map[string]any) error {
 	aliases := map[string][]string{
 		"architecture":    {"architecture", "arch"},
@@ -639,6 +640,12 @@ func (p *Platform) prepareLockedPlan(ctx context.Context, environment domain.Env
 	for index := range plan.Steps {
 		plan.Steps[index].Variables = cloneMap(plan.Steps[index].Variables)
 	}
+	if err := p.bindComponentArtifacts(ctx, *environment.Revision, &plan); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	if err := p.bindComponentImages(ctx, *environment.Revision, &plan); err != nil {
+		return lockedPlan{}, "", false, err
+	}
 	if err := injectEnvironmentVariables(*environment.Revision, plan.Steps); err != nil {
 		return lockedPlan{}, "", false, err
 	}
@@ -683,7 +690,7 @@ func (p *Platform) prepareLockedPlan(ctx context.Context, environment domain.Env
 		return lockedPlan{}, "", false, err
 	}
 	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
-	destructive := false
+	destructive := len(plan.ArtifactTransfers) > 0 || len(plan.ImageTransfers) > 0
 	for _, step := range plan.Steps {
 		if step.NeedsApproval {
 			destructive = true
@@ -744,7 +751,9 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		EnvironmentRevisionID string
 		TreeDigest            string
 		Steps                 []digestStep
-	}{EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps})
+		ArtifactTransfers     []lockedArtifactTransfer
+		ImageTransfers        []lockedImageTransfer
+	}{EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }
@@ -864,6 +873,146 @@ func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []loc
 		}
 	}
 	return nil
+}
+
+func (p *Platform) bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+	targetStation := strings.TrimSpace(revision.Variables[fileStationVariable])
+	seenTransfers := map[string]bool{}
+	for index := range plan.Steps {
+		step := &plan.Steps[index]
+		release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
+		if err != nil {
+			return err
+		}
+		if len(release.Artifacts) == 0 {
+			continue
+		}
+		if targetStation == "" {
+			return fmt.Errorf("%w: environment must define %s before running release %s", domain.ErrConflict, fileStationVariable, release.Version)
+		}
+		targetStation, err = normalizeFileStation(targetStation)
+		if err != nil {
+			return err
+		}
+		for _, artifact := range release.Artifacts {
+			for suffix, value := range map[string]any{
+				"_path":   artifact.RelativePath,
+				"_url":    artifactURL(targetStation, artifact.RelativePath),
+				"_sha256": artifact.SHA256,
+			} {
+				name := artifact.Alias + suffix
+				if _, exists := step.Variables[name]; exists {
+					return fmt.Errorf("%w: generated artifact variable %q conflicts with a component parameter", domain.ErrInvalid, name)
+				}
+				step.Variables[name] = value
+			}
+			if artifact.FileStation == targetStation {
+				continue
+			}
+			mirrored, err := p.store.HasComponentArtifactMirror(ctx, targetStation, artifact.RelativePath, artifact.SHA256)
+			if err != nil {
+				return err
+			}
+			key := targetStation + "\x00" + artifact.RelativePath + "\x00" + artifact.SHA256
+			if mirrored || seenTransfers[key] {
+				continue
+			}
+			seenTransfers[key] = true
+			plan.ArtifactTransfers = append(plan.ArtifactTransfers, lockedArtifactTransfer{
+				Alias: artifact.Alias, SourceStation: artifact.FileStation, TargetStation: targetStation,
+				RelativePath: artifact.RelativePath, SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes,
+			})
+		}
+	}
+	return nil
+}
+
+func artifactURL(station, relativePath string) string {
+	return (&url.URL{Scheme: "http", Host: station, Path: "/" + strings.TrimPrefix(relativePath, "/")}).String()
+}
+
+func (p *Platform) bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+	targetRegistry := strings.TrimSpace(revision.Variables[imageRegistryVariable])
+	seenTransfers := map[string]bool{}
+	for index := range plan.Steps {
+		step := &plan.Steps[index]
+		build, err := p.store.LatestSucceededComponentImageBuild(ctx, step.ReleaseID)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if targetRegistry == "" {
+			return fmt.Errorf("%w: environment must define %s before running release %s", domain.ErrConflict, imageRegistryVariable, step.ReleaseVersion)
+		}
+		targetRegistry, err = normalizeImageRegistry(targetRegistry)
+		if err != nil {
+			return err
+		}
+		sourceRegistry, err := p.sourceRegistryForBuild(ctx, build)
+		if err != nil {
+			return err
+		}
+		suffix := strings.TrimPrefix(build.ImageRef, sourceRegistry+"/")
+		if suffix == build.ImageRef || suffix == "" {
+			return fmt.Errorf("%w: image %s is outside its source registry %s", domain.ErrConflict, build.ImageRef, sourceRegistry)
+		}
+		targetRef := targetRegistry + "/" + suffix
+		digestIndex := strings.LastIndex(build.ImageDigest, "@sha256:")
+		if digestIndex < 0 {
+			return fmt.Errorf("%w: successful image build %s has no immutable digest", domain.ErrConflict, build.ID)
+		}
+		targetRepository := targetRef
+		if tagIndex := strings.LastIndex(targetRepository, ":"); tagIndex > strings.LastIndex(targetRepository, "/") {
+			targetRepository = targetRepository[:tagIndex]
+		}
+		targetDigest := targetRepository + build.ImageDigest[digestIndex:]
+		if sourceRegistry != targetRegistry {
+			mirroredDigest, mirrored, err := p.store.GetComponentImageMirror(ctx, targetRegistry, build.ImageDigest)
+			if err != nil {
+				return err
+			}
+			if mirrored {
+				targetDigest = mirroredDigest
+			} else {
+				key := targetRegistry + "\x00" + build.ImageDigest
+				if !seenTransfers[key] {
+					seenTransfers[key] = true
+					plan.ImageTransfers = append(plan.ImageTransfers, lockedImageTransfer{
+						SourceRegistry: sourceRegistry, TargetRegistry: targetRegistry, SourceDigest: build.ImageDigest,
+						TargetRef: targetRef, TargetDigest: targetDigest,
+					})
+				}
+			}
+		}
+		for name, value := range map[string]any{"component_image_ref": targetRef, "component_image_digest": targetDigest} {
+			if _, exists := step.Variables[name]; exists {
+				return fmt.Errorf("%w: generated image variable %q conflicts with a component parameter", domain.ErrInvalid, name)
+			}
+			step.Variables[name] = value
+		}
+	}
+	return nil
+}
+
+func (p *Platform) sourceRegistryForBuild(ctx context.Context, build domain.ComponentImageBuild) (string, error) {
+	if build.EnvironmentRevisionID != "" {
+		revision, err := p.store.GetEnvironmentRevision(ctx, build.EnvironmentRevisionID)
+		if err == nil {
+			if registry := strings.TrimSpace(revision.Variables[imageRegistryVariable]); registry != "" {
+				return normalizeImageRegistry(registry)
+			}
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return "", err
+		}
+	}
+	marker := "/components/"
+	index := strings.Index(build.ImageRef, marker)
+	if index <= 0 {
+		return "", fmt.Errorf("%w: cannot determine source registry for image %s", domain.ErrConflict, build.ImageRef)
+	}
+	return normalizeImageRegistry(build.ImageRef[:index])
 }
 
 func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
@@ -1264,6 +1413,14 @@ func (p *Platform) executeRun(run domain.Run) {
 		p.finishRun(run, domain.RunFailed, err)
 		return
 	}
+	if err := p.mirrorRunImages(ctx, run.ID, plan.ImageTransfers); err != nil {
+		p.finishRun(run, domain.RunFailed, err)
+		return
+	}
+	if err := p.mirrorRunArtifacts(ctx, run.ID, plan.ArtifactTransfers); err != nil {
+		p.finishRun(run, domain.RunFailed, err)
+		return
+	}
 	environmentRevision, err := p.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
 	if err != nil {
 		p.finishRun(run, domain.RunFailed, err)
@@ -1371,6 +1528,117 @@ func (p *Platform) executeRun(run domain.Run) {
 	p.finishRun(run, domain.RunSucceeded, nil)
 }
 
+func (p *Platform) mirrorRunImages(ctx context.Context, runID string, transfers []lockedImageTransfer) error {
+	docker := p.dockerBinary
+	if docker == "" {
+		docker = "docker"
+	}
+	for _, transfer := range transfers {
+		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("mirroring image from %s to %s", transfer.SourceRegistry, transfer.TargetRegistry), CreatedAt: time.Now().UTC()})
+		for _, args := range [][]string{{"pull", transfer.SourceDigest}, {"tag", transfer.SourceDigest, transfer.TargetRef}, {"push", transfer.TargetRef}, {"pull", transfer.TargetDigest}} {
+			output, err := exec.CommandContext(ctx, docker, args...).CombinedOutput()
+			message := strings.TrimSpace(string(output))
+			if len(message) > 16*1024 {
+				message = message[len(message)-(16*1024):]
+			}
+			if message != "" {
+				_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: Redact(message).(string), CreatedAt: time.Now().UTC()})
+			}
+			if err != nil {
+				return fmt.Errorf("docker %s failed: %w", args[0], err)
+			}
+		}
+		if err := p.store.RecordComponentImageMirror(ctx, transfer.TargetRegistry, transfer.SourceDigest, transfer.TargetRef, transfer.TargetDigest, time.Now().UTC()); err != nil {
+			return err
+		}
+		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: "image is ready at " + transfer.TargetDigest, CreatedAt: time.Now().UTC()})
+	}
+	return nil
+}
+
+func (p *Platform) mirrorRunArtifacts(ctx context.Context, runID string, transfers []lockedArtifactTransfer) error {
+	for _, transfer := range transfers {
+		message := fmt.Sprintf("mirroring media %s from %s to %s", transfer.Alias, transfer.SourceStation, transfer.TargetStation)
+		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: message, CreatedAt: time.Now().UTC()})
+
+		registered, err := verifyArtifactAtStation(ctx, transfer.TargetStation, transfer.RelativePath, transfer.SHA256)
+		if err != nil {
+			return fmt.Errorf("verify target media %s: %w", transfer.Alias, err)
+		}
+		if !registered {
+			if err := copyArtifactBetweenStations(ctx, transfer); err != nil {
+				return fmt.Errorf("mirror media %s: %w", transfer.Alias, err)
+			}
+		}
+		if err := p.store.RecordComponentArtifactMirror(ctx, transfer.SourceStation, transfer.TargetStation, transfer.RelativePath, transfer.SHA256, time.Now().UTC()); err != nil {
+			return fmt.Errorf("record mirrored media %s: %w", transfer.Alias, err)
+		}
+		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("media %s is ready on %s (sha256:%s)", transfer.Alias, transfer.TargetStation, transfer.SHA256), CreatedAt: time.Now().UTC()})
+	}
+	return nil
+}
+
+func verifyArtifactAtStation(ctx context.Context, station, relativePath, sha256Value string) (bool, error) {
+	payload, _ := json.Marshal(map[string]string{"path": relativePath, "sha256": sha256Value})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+station+"/api/v1/register", strings.NewReader(string(payload)))
+	if err != nil {
+		return false, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusOK {
+		return true, nil
+	}
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnprocessableEntity {
+		return false, nil
+	}
+	message, _ := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+	return false, fmt.Errorf("file station returned %s: %s", response.Status, strings.TrimSpace(string(message)))
+}
+
+func copyArtifactBetweenStations(ctx context.Context, transfer lockedArtifactTransfer) error {
+	sourceRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, artifactURL(transfer.SourceStation, transfer.RelativePath), nil)
+	if err != nil {
+		return err
+	}
+	sourceResponse, err := http.DefaultClient.Do(sourceRequest)
+	if err != nil {
+		return err
+	}
+	defer sourceResponse.Body.Close()
+	if sourceResponse.StatusCode != http.StatusOK {
+		message, _ := io.ReadAll(io.LimitReader(sourceResponse.Body, 8<<10))
+		return fmt.Errorf("source file station returned %s: %s", sourceResponse.Status, strings.TrimSpace(string(message)))
+	}
+	targetURL := "http://" + transfer.TargetStation + "/api/v1/files?path=" + url.QueryEscape(transfer.RelativePath) + "&sha256=" + transfer.SHA256
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, targetURL, sourceResponse.Body)
+	if err != nil {
+		return err
+	}
+	request.ContentLength = sourceResponse.ContentLength
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+		return fmt.Errorf("target file station returned %s: %s", response.Status, strings.TrimSpace(string(message)))
+	}
+	var metadata fssFileMetadata
+	if err := json.NewDecoder(response.Body).Decode(&metadata); err != nil {
+		return err
+	}
+	if metadata.SHA256 != transfer.SHA256 || metadata.RelativePath != transfer.RelativePath {
+		return fmt.Errorf("target file station returned mismatched metadata")
+	}
+	return nil
+}
+
 func (p *Platform) recordSuccessfulLifecycleStep(ctx context.Context, run domain.Run, step lockedStep, installedAt time.Time) error {
 	switch step.Action {
 	case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
@@ -1461,10 +1729,11 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		Parameters             []domain.ParameterDefinition `json:"parameters"`
 		Dependencies           []dependencySpec             `json:"dependencies"`
 		Actions                []actionSpec                 `json:"actions"`
+		Artifacts              []domain.ComponentArtifact   `json:"artifacts"`
 	}{
 		Version: release.Version, Type: release.Type, ReleaseNotes: release.ReleaseNotes,
 		Breaking: release.Breaking, RiskLevel: release.RiskLevel,
-		EnvironmentConstraints: release.EnvironmentConstraints, Parameters: release.Parameters,
+		EnvironmentConstraints: release.EnvironmentConstraints, Parameters: release.Parameters, Artifacts: release.Artifacts,
 	}
 	for _, dependency := range release.Dependencies {
 		spec.Dependencies = append(spec.Dependencies, dependencySpec{

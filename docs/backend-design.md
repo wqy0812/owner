@@ -149,7 +149,7 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 `Scenario` 是稳定标识；`ScenarioRevision` 保存 DAG 和执行策略：
 
 - 状态：`draft -> testing -> test_passed -> released -> deprecated`。
-- DAG 节点锁定一个组件 Release、一个动作、目标主机组、节点参数、环境参数绑定、允许的运行输入，以及多来源时的 `dependencySources`。
+- DAG 节点锁定一个组件 Release、一个动作、目标主机组、节点参数、允许的运行输入，以及多来源时的 `dependencySources`。
 - DAG 边表达执行先后关系。
 
 场景面板按组件层级分组并在节点上显示层级标签，但 `ScenarioNode` 不锁定分类元数据。分层不参与调度，不自动生成边；真实执行顺序只由 Release 依赖和 DAG 边决定。
@@ -162,15 +162,13 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 - 边的源和目标必须存在，图中不能有环。
 - 节点只能使用已发布 Release；已发布场景可继续引用已废弃但保留的 Release。
 - 节点动作必须由对应 Release 定义。
-- Release 所需参数必须有默认值、节点值、环境绑定、声明的运行输入，或来自上游映射。
+- Release 所需参数必须有默认值、节点值、声明的运行输入，或来自上游映射。
 - 上游依赖 Release 必须出现在图中，而且在拓扑上先于下游节点。
 - 带参数映射的依赖：只有一个可达上游节点时自动绑定；多个可达节点时必须在 `dependencySources` 中明确选择。
-- 映射目标不得同时出现在节点值、环境绑定或 Run Input 中。
+- 映射目标不得同时出现在节点值或 Run Input 中。
 
-环境绑定先查找完整顶层键，再把 `operation.cluster_id` 视为点路径逐层读取；
-因此旧的扁平键继续有效，新的环境模板可以保存分组参数。`verify` 节点观察的
-是环境中已存在的 Release，不要求在同一场景中重新执行该 Release 的安装期
-依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
+`verify` 节点观察的是环境中已存在的 Release，不要求在同一场景中重新执行该
+Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
 
 只有当前 Revision 可以编辑和测试。完整测试成功后进入 `test_passed`，再次校验通过才能发布。Released Revision 不可修改，后续变更必须创建新 Revision。
 
@@ -180,12 +178,11 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 
 - Facts：架构、操作系统、网络等兼容性事实。
 - Inventory：主机名、地址、分组、SSH 用户和端口。
-- Parameters：可持久化的非敏感环境参数。
-- Variables：由 Environment Owner 维护的非敏感字符串环境变量；使用大写标识符名称并直接注入 Ansible extra-vars。
+- Variables：由 Environment Owner 维护的非敏感字符串环境变量；使用大写标识符名称并直接注入 Ansible extra-vars。`IMAGE_REGISTRY` 和 `FILE_STATION` 分别指定镜像仓库和介质站。
 - CredentialRefs：`envVarRef` 或 `sshKeyPath`。
 - `maxConcurrent`：当前结构保留该字段，但调度实现固定按每环境一个运行串行执行。
 
-每次保存 Inventory、Facts、Parameters、Variables 或 CredentialRefs 都会创建新 Environment Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改影响。
+每次保存 Inventory、Facts、Variables 或 CredentialRefs 都会创建新 Environment Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改影响。
 
 ### 4.5 Run、Step、Approval 与 Log
 
@@ -237,7 +234,7 @@ SQLite 主要表如下：
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
 | `audit_events` | 审计记录 | 数据库触发器禁止更新和删除 |
 
-时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 为首版合同，不保留旧 `parameterSchema`。
+时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同；Environment Revision 不再包含普通参数。
 
 ## 6. 权限和可见性
 
@@ -286,11 +283,10 @@ SQLite 主要表如下：
 节点先按自身合同解析，再应用依赖映射。自身优先级从低到高为：
 
 1. Release 参数默认值。
-2. 场景节点 `values` 与环境绑定。
-3. Environment Revision 的同名 Parameters，以及尚未被节点值/绑定占用的 `environmentPath`。
-4. 本次 Run Input。
+2. 场景节点 `values`。
+3. 本次 Run Input。
 
-随后按 DAG 拓扑把上游节点**本次运行的最终值**写入映射目标。映射值不可被本地覆盖；同名环境参数对映射目标不生效。支持 A → B → C 连续传递。传给 Ansible 的 extra-vars 只用下游参数名。
+随后按 DAG 拓扑把上游节点**本次运行的最终值**写入映射目标。映射值不可被本地覆盖。支持 A → B → C 连续传递。传给 Ansible 的 extra-vars 只用下游参数名。
 
 组件独立测试不能读取上游节点，必须通过 `dependencyFixtures` 提供映射目标；API 不会用上游默认值静默补全。Fixture 只证明组件能消费参数，不能替代场景完整测试。
 
@@ -302,6 +298,11 @@ Environment Revision 的 `Variables` 不参与参数合同优先级，而是在 
 同名字符串直接写入每个步骤的 Ansible extra-vars。变量名必须符合
 `[A-Z_][A-Z0-9_]*`，敏感名称必须改用 CredentialRef；若变量名与组件参数或
 CredentialRef 重名，Run 在排队前失败，不做静默覆盖。
+
+Environment Revision 不再保存普通 Parameters。`IMAGE_REGISTRY` 与 `FILE_STATION`
+是两个仓库入口变量。Release 的镜像和介质来源与目标环境不同时，Planner 把平移
+写入锁定计划并要求目标环境 Owner 审批；批准后先按 digest/SHA-256 平移和校验，
+再执行 Ansible。已记录的同目标同指纹制品直接复用。
 
 ### 7.3 环境锁定的镜像构建
 

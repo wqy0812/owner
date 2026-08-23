@@ -55,22 +55,6 @@ func (h *Handler) updateInventory(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
 }
 
-func (h *Handler) updateParameters(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Parameters map[string]any `json:"parameters"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	environment, err := h.platform.UpdateEnvironmentParameters(r.Context(), currentUser(r), r.PathValue("id"), input.Parameters)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
-}
-
 func (h *Handler) updateFacts(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Facts map[string]any `json:"facts"`
@@ -156,7 +140,7 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 			"id": environment.Revision.ID, "environmentId": environment.Revision.EnvironmentID,
 			"revision": environment.Revision.Revision, "facts": environment.Revision.Facts,
 			"hosts": hosts, "inventory": json.RawMessage(environment.Revision.Inventory),
-			"parameters": environment.Revision.Parameters, "variables": environment.Revision.Variables, "credentialRefs": refs,
+			"variables": environment.Revision.Variables, "credentialRefs": refs,
 			"maxConcurrent": environment.Revision.MaxConcurrent, "maxConcurrentRuns": environment.Revision.MaxConcurrent,
 			"createdAt": environment.Revision.CreatedAt,
 		}

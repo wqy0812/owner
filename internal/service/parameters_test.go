@@ -57,7 +57,7 @@ func TestMappedParameterCannotBeLocallyOverridden(t *testing.T) {
 		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}},
 		Dependencies: []domain.ComponentDependency{{ID: "dep-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
 	}
-	node := domain.ScenarioNode{ID: "proxy", Values: map[string]any{"kubeRoot": "/tmp"}, Bindings: map[string]string{"kubeRoot": "kubernetes.installRoot"}, RunInputs: []string{"kubeRoot"}}
+	node := domain.ScenarioNode{ID: "proxy", Values: map[string]any{"kubeRoot": "/tmp"}, RunInputs: []string{"kubeRoot"}}
 	if conflicts := nodeOverridesMappedParameter(node, release); len(conflicts) != 1 || conflicts[0] != "kubeRoot" {
 		t.Fatalf("conflicts=%v", conflicts)
 	}
@@ -98,12 +98,12 @@ func TestSelectDependencySourceUniqueAndAmbiguous(t *testing.T) {
 	}
 }
 
-func TestPlannerPassesUpstreamFinalValueAndBlocksEnvironmentAlias(t *testing.T) {
+func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) {
 	kubelet := domain.ComponentRelease{
 		ID: "rel-kubelet",
 		Parameters: []domain.ParameterDefinition{{
 			Name: "kubeInstallRoot", Description: "root", Type: domain.ParameterTypeString, Required: true,
-			DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, EnvironmentPath: "kubernetes.installRoot",
+			DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic,
 		}},
 	}
 	proxy := domain.ComponentRelease{
@@ -123,28 +123,21 @@ func TestPlannerPassesUpstreamFinalValueAndBlocksEnvironmentAlias(t *testing.T) 
 		},
 		Edges: []domain.ScenarioEdge{{Source: "kubelet", Target: "proxy"}},
 	}
-	environment := map[string]any{
-		"kubernetes": map[string]any{"installRoot": "/from-env"},
-		"kubeRoot":   "/env-alias-should-not-win",
-	}
-	kubeletVars, kubeletProv, err := resolveOwnParameters(kubelet, graph.Nodes[0], environment, nil, nil)
+	kubeletVars, kubeletProv, err := resolveOwnParameters(kubelet, graph.Nodes[0], nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kubeletVars["kubeInstallRoot"] != "/from-env" || kubeletProv["kubeInstallRoot"].Source != parameterSourceEnvironment {
+	if kubeletVars["kubeInstallRoot"] != "/approot1/paas/kube" || kubeletProv["kubeInstallRoot"].Source != parameterSourceDefault {
 		t.Fatalf("kubelet vars=%#v prov=%#v", kubeletVars, kubeletProv)
 	}
-	proxyVars, proxyProv, err := resolveOwnParameters(proxy, graph.Nodes[1], environment, nil, nil)
+	proxyVars, proxyProv, err := resolveOwnParameters(proxy, graph.Nodes[1], nil, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, leaked := proxyVars["kubeRoot"]; leaked && proxyProv["kubeRoot"].Source == parameterSourceEnvironment {
-		t.Fatalf("environment alias leaked into mapped target: %#v", proxyProv["kubeRoot"])
 	}
 	if err := applyParameterMappings(proxy, graph.Nodes[1], graph, map[string]domain.ComponentRelease{"kubelet": kubelet, "proxy": proxy}, map[string]map[string]any{"kubelet": kubeletVars}, proxyVars, proxyProv); err != nil {
 		t.Fatal(err)
 	}
-	if proxyVars["kubeRoot"] != "/from-env" {
+	if proxyVars["kubeRoot"] != "/approot1/paas/kube" {
 		t.Fatalf("mapped value=%v", proxyVars["kubeRoot"])
 	}
 	if proxyProv["kubeRoot"].Source != parameterSourceDependencyMapping || proxyProv["kubeRoot"].SourceNodeID != "kubelet" {
@@ -152,30 +145,15 @@ func TestPlannerPassesUpstreamFinalValueAndBlocksEnvironmentAlias(t *testing.T) 
 	}
 }
 
-func TestPlannerOnlyPassesDeclaredEnvironmentParameters(t *testing.T) {
+func TestPlannerDoesNotReadEnvironmentParameters(t *testing.T) {
 	release := domain.ComponentRelease{Parameters: []domain.ParameterDefinition{
-		{Name: "region", Description: "target region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
-		{Name: "installRoot", Description: "install root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, EnvironmentPath: "platform.installRoot"},
+		{Name: "region", Description: "target region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "default-region"},
 	}}
-	environment := map[string]any{
-		"region": "cn-east", "unrelated": "must-not-leak",
-		"platform": map[string]any{"installRoot": "/opt/platform", "other": "must-not-leak"},
-	}
-
-	resolved, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, environment, nil, nil)
+	resolved, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["region"] != "cn-east" || resolved["installRoot"] != "/opt/platform" {
-		t.Fatalf("declared environment parameters=%#v", resolved)
-	}
-	if _, ok := resolved["unrelated"]; ok {
-		t.Fatalf("undeclared environment parameter leaked: %#v", resolved)
-	}
-	if _, ok := resolved["platform"]; ok {
-		t.Fatalf("environment container leaked: %#v", resolved)
-	}
-	if provenance["region"].Source != parameterSourceEnvironment || provenance["installRoot"].Source != parameterSourceEnvironment {
+	if resolved["region"] != "default-region" || provenance["region"].Source != parameterSourceDefault {
 		t.Fatalf("provenance=%#v", provenance)
 	}
 }
@@ -192,7 +170,7 @@ func TestPlannerSupportsChainedPublicParameters(t *testing.T) {
 	byNode := map[string]domain.ComponentRelease{"a": a, "b": b, "c": c}
 	for _, node := range graph.Nodes {
 		release := byNode[node.ID]
-		vars, prov, err := resolveOwnParameters(release, node, nil, nil, nil)
+		vars, prov, err := resolveOwnParameters(release, node, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,7 +206,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 		Nodes: []domain.ScenarioNode{{ID: "up", ReleaseID: "up"}, {ID: "down", ReleaseID: "down"}},
 		Edges: []domain.ScenarioEdge{{Source: "up", Target: "down"}},
 	}
-	vars, prov, err := resolveOwnParameters(downstream, graph.Nodes[1], nil, nil, nil)
+	vars, prov, err := resolveOwnParameters(downstream, graph.Nodes[1], nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +216,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 	}
 
 	downstream.Dependencies[0].ParameterMappings = []domain.ParameterMapping{{UpstreamParameter: "optional", TargetParameter: "optionalTarget"}}
-	vars, prov, err = resolveOwnParameters(downstream, graph.Nodes[1], nil, nil, nil)
+	vars, prov, err = resolveOwnParameters(downstream, graph.Nodes[1], nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

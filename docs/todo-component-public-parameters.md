@@ -24,7 +24,6 @@
       "required": true,
       "defaultValue": "/approot1/paas/kube",
       "visibility": "public",
-      "environmentPath": "kubernetes.installRoot",
       "enum": [],
       "minLength": 1
     }
@@ -37,7 +36,7 @@
 - `name`、`description`、`type`、`visibility` 必填。
 - `type` 仅允许 `string`、`boolean`、`integer`、`number`、`object`、`array`。
 - `visibility` 仅允许 `internal` 或 `public`，不存在默认值。
-- `defaultValue`、`environmentPath`、`enum`、`minLength` 可选。
+- `defaultValue`、`enum`、`minLength` 可选。环境取值不再进入组件参数合同。
 - 敏感参数禁止进入普通参数合同，继续使用 `CredentialRef`。
 
 依赖增加参数映射：

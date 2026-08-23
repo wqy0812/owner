@@ -17,9 +17,11 @@ The four frontend components should point at these playbooks in order:
 3. `bootstrap.yml` (`install`, `k8s_cluster`)
 4. `verify.yml` (`verify`, `primary_control_plane`)
 
-Required environment parameters are `media_archive_url` and
-`media_archive_sha256`. The archive is published separately on the FSS node
-and must contain `bin/kubeadm`, `bin/kubelet`, `bin/kubectl`, `cni/*`, and
+Register the archive as a Component Release artifact with alias
+`media_archive`. The platform supplies `media_archive_url` and
+`media_archive_sha256` from that immutable artifact record and the target
+environment's `FILE_STATION`. The archive must contain `bin/kubeadm`,
+`bin/kubelet`, `bin/kubectl`, `cni/*`, and
 `images/k8s-1.17.5-images.tar`.
 
 Optional parameters have LAN defaults: `control_plane_endpoint`,

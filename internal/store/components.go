@@ -170,6 +170,10 @@ func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.Comp
 		return r, err
 	}
 	r.Actions, err = s.listActions(ctx, id)
+	if err != nil {
+		return r, err
+	}
+	r.Artifacts, err = s.ListComponentArtifacts(ctx, id)
 	return r, err
 }
 
@@ -250,6 +254,10 @@ func (s *Store) ListComponentReleases(ctx context.Context, componentID string, r
 			return nil, err
 		}
 		out[i].Actions, err = s.listActions(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Artifacts, err = s.ListComponentArtifacts(ctx, out[i].ID)
 		if err != nil {
 			return nil, err
 		}

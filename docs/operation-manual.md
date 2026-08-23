@@ -236,7 +236,18 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 只包含 Dockerfile，依赖本地文件的 `COPY`/`ADD` 会失败；Dockerfile 在平台构建机
 执行，只应上传可信内容。
 
-### 3.6 发起组件测试
+### 3.6 录入组件介质
+
+1. 确认介质环境已配置 `FILE_STATION=host:port`。
+2. 在 Draft 发布行单击“组件介质”，填写小写下划线别名。
+3. 选择“上传文件”或“登记已有路径”，并输入 SHA-256 文本或上传 `.sha256` 文件。
+4. 平台调用 file-station 重新计算指纹；Release 只保存站点、固定相对路径和 SHA-256。
+
+上传路径固定为 `components/<组件 slug>/<版本>/<文件名>`。运行时会注入
+`<alias>_path`、`<alias>_url`、`<alias>_sha256`。发布后介质不可修改；Draft
+移除操作只解除引用，不删除 file-station 上的物理文件。
+
+### 3.7 发起组件测试
 
 1. 在发布历史中单击目标 Release 的“测试”。
 2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；可以选择一个同组件的 Released/Deprecated Release 追加其 Verify，也可以选择“仅执行 Draft rollback”。Verify 目标不会覆盖 rollback 合同。
@@ -309,16 +320,11 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
    - 主机组。
    - 依赖参数来源：唯一上游自动绑定，多个可达节点时必须选择。
    - 节点参数 JSON。已被上游映射的参数不能再填。
-   - 环境参数绑定 JSON。
-   - 允许的运行时输入。
+	- 允许的运行时输入。
 4. 根据需要编辑“执行策略 JSON”。
 5. 单击“保存草稿”。
 
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
-
-环境参数绑定支持点路径。例如 `cluster_id` 可以绑定到
-`operation.work_cluster_id`。解析时完整顶层键优先，因此原有扁平键仍兼容；
-路径不存在或中间节点不是对象时，该参数保持未绑定并在必填校验阶段失败。
 
 当前界面虽然显示并允许选择 Bootstrap / Management Cluster“阶段”，但后端不会持久化这个字段；重新读取时会根据主机组名称推导显示。阶段不决定执行顺序，请用 DAG 连线表达顺序。执行策略 JSON 当前也只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
 
@@ -329,14 +335,11 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
   "values": {
     "runtime": "containerd"
   },
-  "bindings": {
-    "cluster_version": "clusterVersion"
-  },
-  "runInputs": ["install_root"]
+	"runInputs": ["install_root"]
 }
 ```
 
-含义：`runtime` 使用节点固定值；`cluster_version` 从环境参数 `clusterVersion` 读取；`install_root` 允许发起运行时填写。
+含义：`runtime` 使用节点固定值；`install_root` 允许发起运行时填写。环境不再提供普通参数覆盖。
 
 ### 4.3 校验场景
 
@@ -396,9 +399,12 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 当当前 Revision 已发布或已废弃时：
 
 1. 单击“新 Revision”。
-2. 系统复制现有图和执行策略为新 Draft。
-3. 更新组件节点、依赖顺序或参数。
-4. 重新保存、校验、完整测试和发布。
+2. 确认将创建的 Revision 编号以及它会立即成为当前草稿。
+3. 系统复制现有图和执行策略为新 Draft；同一场景不能重复创建活动 Draft。
+4. 更新组件节点、依赖顺序或参数。
+5. 重新保存、校验、完整测试和发布。
+
+如果误建或不再需要当前 Draft，单击“放弃草稿”并确认。系统保留该 Revision 为“已放弃”历史记录，同时恢复最近的 Released/Deprecated Revision。可以通过 Revision 选择器查看历史版本；历史 Draft 不能编辑或测试，Released Revision 仍可正式运行。
 
 ### 4.8 废弃场景 Revision
 
@@ -455,17 +461,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 平台会用这些事实匹配组件环境约束。键支持部分别名，例如 architecture/arch、os/operatingSystem/distribution、network/ipFamily。
 
-### 5.4 配置普通环境参数
-
-1. 打开“环境参数”。
-2. 填写不敏感 JSON。
-3. 保存新 Revision。
-
-环境参数的优先级高于参数合同默认值和场景节点值。只有发起时显式允许的 Run Input 能进一步覆盖。
-
-不要填写 `password`、`secret`、`token`、`privateKey`、`encryptionKey`、`credential` 等敏感键；后端会拒绝保存。
-
-### 5.5 配置非敏感环境变量
+### 5.4 配置非敏感环境变量
 
 1. 打开“环境变量”。
 2. 单击“添加变量”，填写大写变量名和字符串值。
@@ -475,14 +471,16 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 ```text
 IMAGE_REGISTRY=192.168.88.54:5000
+FILE_STATION=192.168.88.57:8080
 ```
 
 Playbook 可以直接使用 `{{ IMAGE_REGISTRY }}`。变量名只允许大写字母、数字和
 下划线，且不能以数字开头；不得使用 password、secret、token、private key、
 credential 等敏感名称，也不能与组件参数或 CredentialRef 重名。`IMAGE_REGISTRY`
-必须是不带 `http://`、`https://`、tag 或 digest 的 Registry 前缀。
+必须是不带 `http://`、`https://`、tag 或 digest 的 Registry 前缀；`FILE_STATION`
+同样填写不带协议和路径的 `host:port`。
 
-### 5.6 配置凭据引用
+### 5.5 配置凭据引用
 
 1. 打开“凭据引用”。
 2. 单击“添加引用”。
@@ -506,7 +504,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 不要把密钥值写入 `.env.example`、seed、环境 Parameters 或 Run Input。
 
-### 5.7 审批危险 Run
+### 5.6 审批危险 Run
 
 1. 进入“运行”。
 2. 选择状态为“等待审批”的 Run。
@@ -526,7 +524,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 拒绝后 Run 终止为 Rejected；场景 Draft 测试会回到 Draft。当前界面的拒绝动作没有填写理由的输入框，API 支持 reason 字段，但页面会提交空理由。
 
-### 5.8 查看环境运行和审计
+### 5.7 查看环境运行和审计
 
 环境详情显示最近四个相关 Run。完整记录请进入“运行”。
 

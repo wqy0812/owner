@@ -219,7 +219,7 @@ func (s Seeder) seedScenarios(ctx context.Context, now time.Time) error {
 }
 
 func scenarioNode(id, name, releaseID, group string, x, y float64) domain.ScenarioNode {
-	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}}
+	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, Values: map[string]any{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}}
 }
 
 func (s Seeder) seedEnvironments(ctx context.Context, now time.Time) error {
@@ -289,10 +289,6 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if err != nil {
 			return err
 		}
-		parameters, err := json.Marshal(revision.Parameters)
-		if err != nil {
-			return err
-		}
 		variables, err := json.Marshal(revision.Variables)
 		if err != nil {
 			return err
@@ -309,8 +305,8 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if maxConcurrent < 1 {
 			maxConcurrent = 1
 		}
-		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,parameters_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(parameters), string(variables), string(credentialRefs), maxConcurrent, seedTime(revision.CreatedAt))
+		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(variables), string(credentialRefs), maxConcurrent, seedTime(revision.CreatedAt))
 		return err
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err

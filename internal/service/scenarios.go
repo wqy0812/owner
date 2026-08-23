@@ -56,17 +56,43 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 	if source.ID == "" {
 		return source, fmt.Errorf("%w: scenario has no source revision", domain.ErrConflict)
 	}
+	if source.Status != domain.RevisionReleased && source.Status != domain.RevisionDeprecated {
+		return source, fmt.Errorf("%w: finish or abandon the current draft before creating a new revision", domain.ErrConflict)
+	}
+	for _, revision := range scenario.Revisions {
+		if revision.Status == domain.RevisionDraft || revision.Status == domain.RevisionTesting || revision.Status == domain.RevisionTestPassed {
+			return source, fmt.Errorf("%w: scenario already has an active draft revision", domain.ErrConflict)
+		}
+	}
 	next, err := p.store.NextScenarioRevision(ctx, scenarioID)
 	if err != nil {
 		return source, err
 	}
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
-	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt = time.Now().UTC(), nil, nil, nil
+	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
 	if err := p.store.CreateScenarioRevision(ctx, source); err != nil {
 		return source, err
 	}
 	p.audit(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next})
 	return source, nil
+}
+
+func (p *Platform) AbandonScenarioRevision(ctx context.Context, user domain.User, revisionID string) (domain.Scenario, error) {
+	revision, scenario, err := p.ownedScenarioRevision(ctx, user, revisionID)
+	if err != nil {
+		return scenario, err
+	}
+	if scenario.CurrentRevisionID != revisionID || revision.Status != domain.RevisionDraft {
+		return scenario, fmt.Errorf("%w: only the current draft revision can be abandoned", domain.ErrConflict)
+	}
+	restoredID, err := p.store.AbandonScenarioRevision(ctx, revisionID, time.Now().UTC())
+	if err != nil {
+		return scenario, err
+	}
+	p.audit(ctx, user, "scenario_revision.abandoned", "scenario_revision", revisionID, map[string]any{
+		"scenarioId": scenario.ID, "revision": revision.Revision, "restoredRevisionId": restoredID,
+	})
+	return p.store.GetScenario(ctx, scenario.ID, true)
 }
 
 func (p *Platform) ListScenarios(ctx context.Context, user domain.User) ([]domain.Scenario, error) {
@@ -111,11 +137,6 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 	for _, node := range graph.Nodes {
 		if err := rejectSensitiveMap(node.Values, "scenario node value"); err != nil {
 			return revision, err
-		}
-		for parameter, environmentKey := range node.Bindings {
-			if isSensitiveKey(parameter) || isSensitiveKey(environmentKey) {
-				return revision, fmt.Errorf("%w: sensitive scenario binding %q must use a CredentialRef", domain.ErrInvalid, parameter)
-			}
 		}
 		for _, parameter := range node.RunInputs {
 			if isSensitiveKey(parameter) {
@@ -248,8 +269,7 @@ func sourceIssueCode(err error) string {
 
 func validateRequiredKey(key string, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {
 	_, inValues := node.Values[key]
-	_, inBindings := node.Bindings[key]
-	if !inValues && !inBindings && !contains(node.RunInputs, key) {
+	if !inValues && !contains(node.RunInputs, key) {
 		*issues = append(*issues, domain.ValidationIssue{Code: "required_parameter", Message: fmt.Sprintf("required parameter %q is not bound", key), NodeID: node.ID})
 	}
 }

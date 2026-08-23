@@ -368,7 +368,7 @@ h1, h2, h3, p { margin-top: 0; }
 .status-pill--draft, .status-pill--queued, .status-pill--pending { color: #5c67a0; background: #eef0fb; }
 .status-pill--running, .status-pill--testing { color: #4561c3; background: #eaf0ff; }
 .status-pill--awaiting_approval, .status-pill--unverified, .status-pill--locked { color: #a56b14; background: #fff3dd; }
-.status-pill--failed, .status-pill--cancelled, .status-pill--interrupted, .status-pill--rejected, .status-pill--deprecated, .status-pill--offline { color: #b44257; background: #ffedf1; }
+.status-pill--failed, .status-pill--cancelled, .status-pill--interrupted, .status-pill--rejected, .status-pill--deprecated, .status-pill--abandoned, .status-pill--offline { color: #b44257; background: #ffedf1; }
 
 .scenario-toolbar { display: flex; align-items: flex-end; gap: 15px; min-height: 65px; margin-bottom: 13px; padding: 12px 14px; }
 .scenario-toolbar label { min-width: 260px; }

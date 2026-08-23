@@ -3,8 +3,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -18,10 +20,133 @@ import (
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/fss"
 	"codex/platform-demo/internal/seed"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
 )
+
+func TestComponentArtifactUploadAndDetach(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	stationHandler, err := fss.New(root, []string{"127.0.0.1/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stationServer := httptest.NewServer(stationHandler)
+	defer stationServer.Close()
+	station := strings.TrimPrefix(stationServer.URL, "http://")
+
+	dave := f.session(seed.EnvironmentOwnerID)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000", "FILE_STATION": station}}, dave)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("configure file station status=%d body=%s", updated.Code, updated.Body.String())
+	}
+
+	contents := []byte("runtime-media")
+	digest := sha256.Sum256(contents)
+	checksum := fmt.Sprintf("%x", digest[:])
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("environmentId", "environment-test")
+	_ = writer.WriteField("alias", "runtime_media")
+	_ = writer.WriteField("sha256", checksum)
+	part, _ := writer.CreateFormFile("artifact", "runtime.tar.gz")
+	_, _ = part.Write(contents)
+	_ = writer.Close()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/artifacts/upload", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.AddCookie(alice)
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), checksum) {
+		t.Fatalf("artifact upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil || len(release.Artifacts) != 1 || release.Artifacts[0].RelativePath != "components/component-test-runtime/v1.1.0/runtime.tar.gz" {
+		t.Fatalf("release artifacts=%+v err=%v", release.Artifacts, err)
+	}
+	if stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(release.Artifacts[0].RelativePath))); err != nil || !bytes.Equal(stored, contents) {
+		t.Fatalf("stored artifact=%q err=%v", stored, err)
+	}
+	targetRoot := t.TempDir()
+	targetHandler, err := fss.New(targetRoot, []string{"127.0.0.1/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetServer := httptest.NewServer(targetHandler)
+	defer targetServer.Close()
+	targetStation := strings.TrimPrefix(targetServer.URL, "http://")
+	targetRevision := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000", "FILE_STATION": targetStation}}, dave)
+	if targetRevision.Code != http.StatusOK {
+		t.Fatalf("configure target file station status=%d body=%s", targetRevision.Code, targetRevision.Body.String())
+	}
+	preview := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{"environmentId": "environment-test", "mode": "install_verify"}, alice)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("artifact transfer preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	plan := decodeEnvelope(t, preview)["data"].(map[string]any)
+	if plan["requiresApproval"] != true {
+		t.Fatalf("artifact transfer plan bypassed approval: %#v", plan)
+	}
+	runResponse := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{"environmentId": "environment-test", "mode": "install_verify", "expectedPlanDigest": plan["planDigest"]}, alice)
+	if runResponse.Code != http.StatusAccepted {
+		t.Fatalf("artifact transfer run status=%d body=%s", runResponse.Code, runResponse.Body.String())
+	}
+	runData := decodeEnvelope(t, runResponse)["data"].(map[string]any)
+	if runData["status"] != string(domain.RunAwaitingApproval) || !strings.Contains(runData["approval"].(map[string]any)["riskReason"].(string), "平移") {
+		t.Fatalf("artifact transfer approval=%#v", runData)
+	}
+	approvalID := runData["approval"].(map[string]any)["id"].(string)
+	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); approved.Code != http.StatusOK {
+		t.Fatalf("approve artifact transfer status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	waitForRun(t, f.database, runData["id"].(string), domain.RunSucceeded)
+	if mirrored, err := os.ReadFile(filepath.Join(targetRoot, filepath.FromSlash(release.Artifacts[0].RelativePath))); err != nil || !bytes.Equal(mirrored, contents) {
+		t.Fatalf("mirrored artifact=%q err=%v", mirrored, err)
+	}
+
+	secondPreview := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{"environmentId": "environment-test", "mode": "install_verify"}, alice)
+	if secondPreview.Code != http.StatusOK {
+		t.Fatalf("reused artifact preview status=%d body=%s", secondPreview.Code, secondPreview.Body.String())
+	}
+	reusedPlan := decodeEnvelope(t, secondPreview)["data"].(map[string]any)
+	if reusedPlan["requiresApproval"] != false {
+		t.Fatalf("existing mirrored artifact requested approval again: %#v", reusedPlan)
+	}
+
+	detached := f.request(http.MethodDelete, "/api/v1/component-releases/release-test-runtime-1.1.0/artifacts/runtime_media", nil, alice)
+	if detached.Code != http.StatusOK {
+		t.Fatalf("artifact detach status=%d body=%s", detached.Code, detached.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(release.Artifacts[0].RelativePath))); err != nil {
+		t.Fatalf("detach deleted physical media: %v", err)
+	}
+	imageHash := strings.Repeat("a", 64)
+	imageBuild := domain.ComponentImageBuild{
+		ID: "image-build-cross-registry", ReleaseID: release.ID, RequestedBy: seed.ComponentOwnerRuntimeID,
+		Status: domain.ImageBuildSucceeded, DockerfileSHA256: strings.Repeat("b", 64), ImageTag: "v1.1.0",
+		ImageRef:    "192.168.88.53:5000/components/component-test-runtime:v1.1.0",
+		ImageDigest: "192.168.88.53:5000/components/component-test-runtime@sha256:" + imageHash,
+		CreatedAt:   time.Now().UTC(), FinishedAt: func() *time.Time { value := time.Now().UTC(); return &value }(),
+	}
+	if err := f.database.CreateComponentImageBuild(context.Background(), imageBuild); err != nil {
+		t.Fatal(err)
+	}
+	imagePreview := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{"environmentId": "environment-test", "mode": "install_verify"}, alice)
+	if imagePreview.Code != http.StatusOK || decodeEnvelope(t, imagePreview)["data"].(map[string]any)["requiresApproval"] != true {
+		t.Fatalf("cross-registry image preview status=%d body=%s", imagePreview.Code, imagePreview.Body.String())
+	}
+	targetDigest := "192.168.88.54:5000/components/component-test-runtime@sha256:" + imageHash
+	if err := f.database.RecordComponentImageMirror(context.Background(), "192.168.88.54:5000", imageBuild.ImageDigest, "192.168.88.54:5000/components/component-test-runtime:v1.1.0", targetDigest, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	reusedImagePreview := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{"environmentId": "environment-test", "mode": "install_verify"}, alice)
+	if reusedImagePreview.Code != http.StatusOK || decodeEnvelope(t, reusedImagePreview)["data"].(map[string]any)["requiresApproval"] != false {
+		t.Fatalf("mirrored image requested approval again status=%d body=%s", reusedImagePreview.Code, reusedImagePreview.Body.String())
+	}
+}
 
 type fakeRunner struct {
 	mu       sync.Mutex
@@ -145,7 +270,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	scenario := domain.Scenario{ID: "scenario-test-runtime", Slug: "scenario-test-runtime", Name: "Test Runtime Lifecycle", OwnerID: seed.ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
 	revision1 := domain.ScenarioRevision{
 		ID: "scenario-test-runtime-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionReleased,
-		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime-install", Name: "Install runtime", ReleaseID: oldRelease.ID, Action: domain.ActionInstall, HostGroup: "test_nodes", Values: map[string]any{}, Bindings: map[string]string{}}}, Edges: []domain.ScenarioEdge{}},
+		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime-install", Name: "Install runtime", ReleaseID: oldRelease.ID, Action: domain.ActionInstall, HostGroup: "test_nodes", Values: map[string]any{}}}, Edges: []domain.ScenarioEdge{}},
 		ExecutionPolicy: map[string]any{}, CreatedAt: now, TestPassedAt: &testedAt, ReleasedAt: &releasedAt,
 	}
 	if err := database.CreateScenario(ctx, scenario, revision1); err != nil {
@@ -153,7 +278,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	}
 	revision2 := domain.ScenarioRevision{
 		ID: "scenario-test-runtime-r2", ScenarioID: scenario.ID, Revision: 2, Status: domain.RevisionDraft,
-		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime-upgrade", Name: "Upgrade runtime", ReleaseID: newRelease.ID, Action: domain.ActionUpgrade, HostGroup: "test_nodes", Values: map[string]any{}, Bindings: map[string]string{}}}, Edges: []domain.ScenarioEdge{}},
+		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime-upgrade", Name: "Upgrade runtime", ReleaseID: newRelease.ID, Action: domain.ActionUpgrade, HostGroup: "test_nodes", Values: map[string]any{}}}, Edges: []domain.ScenarioEdge{}},
 		ExecutionPolicy: map[string]any{}, CreatedAt: now.Add(time.Second),
 	}
 	if err := database.CreateScenarioRevision(ctx, revision2); err != nil {
@@ -161,7 +286,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	}
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{map[string]any{"name": "localhost", "address": "127.0.0.1", "groups": []any{"test_nodes"}}}})
 	environment := domain.Environment{ID: "environment-test", Name: "Test Environment", OwnerID: seed.EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
+	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now}
 	if err := database.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
@@ -363,8 +488,8 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	if response := f.request(http.MethodPost, "/api/v1/components", invalidClassification, alice); response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid classification status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/parameters", map[string]any{"parameters": map[string]any{"region": "cn"}}, alice); response.Code != http.StatusForbidden {
-		t.Fatalf("component owner environment update status=%d", response.Code)
+	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/parameters", map[string]any{"parameters": map[string]any{"region": "cn"}}, alice); response.Code != http.StatusNotFound {
+		t.Fatalf("removed environment parameter endpoint status=%d", response.Code)
 	}
 	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "hijacked.invalid"}}, alice); response.Code != http.StatusForbidden {
 		t.Fatalf("component owner environment variable update status=%d", response.Code)
@@ -384,8 +509,8 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 
 	secret := "this-secret-must-not-be-persisted"
 	rejected := f.request(http.MethodPut, "/api/v1/environments/environment-test/parameters", map[string]any{"parameters": map[string]any{"registryPassword": secret}}, dave)
-	if rejected.Code != http.StatusBadRequest || strings.Contains(rejected.Body.String(), secret) {
-		t.Fatalf("secret parameter response status=%d body=%s", rejected.Code, rejected.Body.String())
+	if rejected.Code != http.StatusNotFound || strings.Contains(rejected.Body.String(), secret) {
+		t.Fatalf("removed parameter endpoint status=%d body=%s", rejected.Code, rejected.Body.String())
 	}
 	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/credential-refs", map[string]any{"credentialRefs": []any{map[string]any{"name": "registry", "type": "envVarRef", "reference": "TEST_REGISTRY_TOKEN"}}}, dave)
 	if updated.Code != http.StatusOK {
@@ -829,9 +954,37 @@ func TestPublishRejectsCrossReleaseTransitionMismatch(t *testing.T) {
 func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 	f := newAPIFixture(t)
 	carol := f.session(seed.ScenarioOwnerID)
+	blockedClone := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol)
+	if blockedClone.Code != http.StatusConflict {
+		t.Fatalf("clone with active draft status=%d body=%s", blockedClone.Code, blockedClone.Body.String())
+	}
+	abandoned := f.request(http.MethodPost, "/api/v1/scenario-revisions/scenario-test-runtime-r2/abandon", nil, carol)
+	if abandoned.Code != http.StatusOK {
+		t.Fatalf("abandon draft status=%d body=%s", abandoned.Code, abandoned.Body.String())
+	}
+	abandonedScenario := decodeEnvelope(t, abandoned)["data"].(map[string]any)
+	if abandonedScenario["currentRevisionId"] != "scenario-test-runtime-r1" {
+		t.Fatalf("restored current revision=%#v", abandonedScenario["currentRevisionId"])
+	}
+	foundAbandoned := false
+	for _, raw := range abandonedScenario["revisions"].([]any) {
+		revision := raw.(map[string]any)
+		if revision["id"] == "scenario-test-runtime-r2" && revision["state"] == "abandoned" {
+			foundAbandoned = true
+		}
+	}
+	if !foundAbandoned {
+		t.Fatalf("abandoned revision missing from history: %#v", abandonedScenario["revisions"])
+	}
 	cloned := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol)
 	if cloned.Code != http.StatusCreated {
 		t.Fatalf("clone revision status=%d body=%s", cloned.Code, cloned.Body.String())
+	}
+	if revision := decodeEnvelope(t, cloned)["data"].(map[string]any); revision["revision"] != float64(3) {
+		t.Fatalf("cloned revision=%#v", revision)
+	}
+	if duplicate := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol); duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate active draft clone status=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
 	oldGraphEdit := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r2/graph", map[string]any{
 		"nodes": []any{map[string]any{"id": "old", "releaseId": "release-test-runtime-1.0.0", "action": "install", "hostGroup": "test_nodes"}},
@@ -843,6 +996,10 @@ func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 	oldTest := f.request(http.MethodPost, "/api/v1/scenario-revisions/scenario-test-runtime-r2/test-runs", map[string]any{"environmentId": "environment-test"}, carol)
 	if oldTest.Code != http.StatusConflict {
 		t.Fatalf("non-current scenario test status=%d body=%s", oldTest.Code, oldTest.Body.String())
+	}
+	var auditCount int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='scenario_revision.abandoned' AND resource_id='scenario-test-runtime-r2'`).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("abandon audit count=%d err=%v", auditCount, err)
 	}
 }
 
@@ -875,7 +1032,7 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 		ID: "scenario-rollback-target-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft,
 		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{
 			ID: "rollback", Name: "Rollback", ReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionRollback,
-			HostGroup: "test_nodes", Values: map[string]any{}, Bindings: map[string]string{}, RunInputs: []string{"agent_root"},
+			HostGroup: "test_nodes", Values: map[string]any{}, RunInputs: []string{"agent_root"},
 		}}, Edges: []domain.ScenarioEdge{}}, ExecutionPolicy: map[string]any{}, CreatedAt: now,
 	}
 	if err := f.database.CreateScenario(context.Background(), scenario, revision); err != nil {

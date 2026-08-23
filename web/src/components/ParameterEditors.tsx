@@ -136,7 +136,6 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
         </fieldset>
         <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })} /><span>运行时必须有值</span></label>
         <label><span>默认值</span><DefaultValueEditor parameter={parameter} disabled={disabled} onChange={(defaultValue) => update(index, { defaultValue })} /></label>
-        <label><span>环境参数路径</span><input aria-label="环境参数路径" placeholder="kubernetes.installRoot" value={parameter.environmentPath ?? ''} disabled={disabled} onChange={(event) => update(index, { environmentPath: event.target.value })} /></label>
         <label><span>枚举</span><input aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>
         {parameter.type === 'string' ? <label><span>最小长度</span><input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })} /></label> : <span />}
       </div>

@@ -109,7 +109,7 @@ API 多数双向兼容。危险点：
 - 分层只用于展示/检索，不参与调度。顺序只看 Release 依赖 + DAG 边
 - Released Release / Revision 不可改，必须克隆
 - Secret 只能走 CredentialRef；参数合同禁止敏感键
-- 参数优先级：默认值 → 节点值 → 绑定 → 同名环境参数（覆盖节点值）→ 未占用的 environmentPath → Run Input → 上游映射（不可本地覆盖）
+- 参数优先级：默认值 → 节点值 → Run Input → 上游映射（不可本地覆盖）；环境普通参数和旧场景绑定字段已移除
 - 同一环境 FIFO 单跑；Playbook 必须在 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 内
 - 公开参数合同已落地，不要再引入 `parameterSchema`
 

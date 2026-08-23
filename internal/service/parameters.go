@@ -11,8 +11,6 @@ import (
 const (
 	parameterSourceDefault           = "default"
 	parameterSourceNodeValue         = "node_value"
-	parameterSourceBinding           = "binding"
-	parameterSourceEnvironment       = "environment"
 	parameterSourceRunInput          = "run_input"
 	parameterSourceDependencyMapping = "dependency_mapping"
 	parameterSourceDependencyFixture = "dependency_fixture"
@@ -45,7 +43,7 @@ func validateReleaseParameters(release domain.ComponentRelease) error {
 		if _, exists := seen[name]; exists {
 			return fmt.Errorf("%w: duplicate parameter %q", domain.ErrInvalid, name)
 		}
-		if isSensitiveKey(name) || isSensitiveKey(parameter.EnvironmentPath) {
+		if isSensitiveKey(name) {
 			return fmt.Errorf("%w: sensitive parameter %q must use a CredentialRef", domain.ErrInvalid, name)
 		}
 		if parameter.HasDefault() && !matchesParameterType(parameter.DefaultValue, string(parameter.Type)) {
@@ -122,19 +120,6 @@ func parameterDefaults(parameters []domain.ParameterDefinition) map[string]any {
 	return out
 }
 
-func parameterEnvironmentValues(parameters []domain.ParameterDefinition, environment map[string]any) map[string]any {
-	out := cloneMap(environment)
-	for _, parameter := range parameters {
-		if parameter.EnvironmentPath == "" {
-			continue
-		}
-		if value, ok := resolveEnvironmentBinding(environment, parameter.EnvironmentPath); ok {
-			out[parameter.Name] = value
-		}
-	}
-	return out
-}
-
 func validateResolvedParameters(parameters []domain.ParameterDefinition, resolved map[string]any) error {
 	for _, parameter := range parameters {
 		value, exists := resolved[parameter.Name]
@@ -163,7 +148,7 @@ func validateResolvedParameters(parameters []domain.ParameterDefinition, resolve
 func resolveOwnParameters(
 	release domain.ComponentRelease,
 	node domain.ScenarioNode,
-	environment, runInput map[string]any,
+	runInput map[string]any,
 	allowedRunInput []string,
 ) (map[string]any, map[string]resolvedParameter, error) {
 	mapped := domain.MappedTargets(release.Dependencies)
@@ -187,38 +172,6 @@ func resolveOwnParameters(
 		}
 		assign(name, value, parameterSourceNodeValue)
 	}
-	for name, environmentKey := range node.Bindings {
-		if _, skip := mapped[name]; skip {
-			continue
-		}
-		if value, ok := resolveEnvironmentBinding(environment, environmentKey); ok {
-			assign(name, value, parameterSourceBinding)
-		}
-	}
-
-	for _, parameter := range release.Parameters {
-		if _, skip := mapped[parameter.Name]; skip {
-			continue
-		}
-		if value, ok := environment[parameter.Name]; ok {
-			assign(parameter.Name, value, parameterSourceEnvironment)
-		}
-	}
-	for _, parameter := range release.Parameters {
-		if parameter.EnvironmentPath == "" {
-			continue
-		}
-		if _, skip := mapped[parameter.Name]; skip {
-			continue
-		}
-		if existing, ok := provenance[parameter.Name]; ok && (existing.Source == parameterSourceBinding || existing.Source == parameterSourceNodeValue) {
-			continue
-		}
-		if value, ok := resolveEnvironmentBinding(environment, parameter.EnvironmentPath); ok {
-			assign(parameter.Name, value, parameterSourceEnvironment)
-		}
-	}
-
 	allowed := make(map[string]struct{}, len(allowedRunInput))
 	for _, key := range allowedRunInput {
 		allowed[key] = struct{}{}
@@ -374,9 +327,6 @@ func nodeOverridesMappedParameter(node domain.ScenarioNode, release domain.Compo
 	var conflicts []string
 	for name := range domain.MappedTargets(release.Dependencies) {
 		if _, ok := node.Values[name]; ok {
-			conflicts = append(conflicts, name)
-		}
-		if _, ok := node.Bindings[name]; ok {
 			conflicts = append(conflicts, name)
 		}
 		if contains(node.RunInputs, name) {

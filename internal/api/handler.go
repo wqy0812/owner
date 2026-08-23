@@ -90,6 +90,9 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/test-runs", h.testRelease)
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/image-builds", h.listComponentImageBuilds)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/image-builds", h.startComponentImageBuild)
+	h.router.HandleFunc("POST /api/v1/component-releases/{id}/artifacts/upload", h.uploadComponentArtifact)
+	h.router.HandleFunc("POST /api/v1/component-releases/{id}/artifacts/register", h.registerComponentArtifact)
+	h.router.HandleFunc("DELETE /api/v1/component-releases/{id}/artifacts/{alias}", h.deleteComponentArtifact)
 	h.router.HandleFunc("GET /api/v1/image-builds/{id}", h.getComponentImageBuild)
 
 	h.router.HandleFunc("GET /api/v1/scenarios", h.listScenarios)
@@ -102,12 +105,12 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/runs", h.runScenario)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/publish", h.publishScenario)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/deprecate", h.deprecateScenario)
+	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/abandon", h.abandonScenarioRevision)
 
 	h.router.HandleFunc("GET /api/v1/environments", h.listEnvironments)
 	h.router.HandleFunc("POST /api/v1/environments", h.createEnvironment)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/inventory", h.updateInventory)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/facts", h.updateFacts)
-	h.router.HandleFunc("PUT /api/v1/environments/{id}/parameters", h.updateParameters)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/variables", h.updateVariables)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/credential-refs", h.updateCredentialRefs)
 

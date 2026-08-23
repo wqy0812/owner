@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -104,7 +105,10 @@ func init() {
 	}
 	for name, path := range openFuyaoEnvironmentPaths {
 		if definition, ok := openFuyaoParameterDefs[name]; ok {
-			definition.EnvironmentPath = path
+			if value, found := seedParameterValue(openFuyaoLegacyParameters(), path); found {
+				definition.DefaultValue = value
+				definition.Required = false
+			}
 			openFuyaoParameterDefs[name] = definition
 		}
 	}
@@ -140,15 +144,6 @@ func openFuyaoParameterDefault(parameters []domain.ParameterDefinition, key stri
 		}
 		parameters[i].DefaultValue = value
 		parameters[i].Required = false
-	}
-	return parameters
-}
-
-func openFuyaoParameterEnvironmentPath(parameters []domain.ParameterDefinition, key, path string) []domain.ParameterDefinition {
-	for i := range parameters {
-		if parameters[i].Name == key {
-			parameters[i].EnvironmentPath = path
-		}
 	}
 	return parameters
 }
@@ -196,7 +191,7 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 		parameters := openFuyaoParameterDefault(openFuyaoParameters(item.parameters...), "target_host_group", item.group)
 		if item.slug == "bke-nodes" {
 			parameters = openFuyaoParameterDefault(parameters, "cluster_role", "work")
-			parameters = openFuyaoParameterEnvironmentPath(parameters, "cluster_id", "operation.work_cluster_id")
+			parameters = openFuyaoParameterDefault(parameters, "cluster_id", "demo-work-cluster")
 		}
 		release := domain.ComponentRelease{
 			ID: releaseID, ComponentID: item.id, Version: "v25.12", Type: item.kind, Status: domain.ReleaseReleased,
@@ -228,36 +223,19 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 	return items
 }
 
-func openFuyaoBindings(releaseID, clusterPath string) map[string]string {
-	bindings := map[string]string{}
-	for _, item := range openFuyaoComponents(time.Time{}, map[string]any{}) {
-		if item.releases[0].ID != releaseID {
-			continue
-		}
-		for _, parameter := range item.releases[0].Parameters {
-			if parameter.EnvironmentPath != "" {
-				bindings[parameter.Name] = parameter.EnvironmentPath
-			}
-		}
-		break
-	}
-	if clusterPath != "" {
-		bindings["cluster_id"] = clusterPath
-	}
-	bindings["strategy"] = "operation.strategy"
-	delete(bindings, "cluster_role")
-	delete(bindings, "target_host_group")
-	return bindings
-}
-
 func openFuyaoNode(id, name, releaseID, group, role, clusterPath string, action domain.ActionKind, x float64) domain.ScenarioNode {
 	values := map[string]any{"target_host_group": group}
 	if role != "" {
 		values["cluster_role"] = role
 	}
+	if clusterPath != "" {
+		if value, ok := seedParameterValue(openFuyaoLegacyParameters(), clusterPath); ok {
+			values["cluster_id"] = value
+		}
+	}
 	return domain.ScenarioNode{
 		ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group,
-		Values: values, Bindings: openFuyaoBindings(releaseID, clusterPath), RunInputs: []string{},
+		Values: values, RunInputs: []string{},
 		Position: domain.GraphPosition{X: x, Y: 100}, Destructive: action != domain.ActionVerify,
 	}
 }
@@ -318,14 +296,8 @@ func openFuyaoExecutionPolicy() map[string]any {
 	return map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}
 }
 
-func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) error {
-	inventory, _ := json.Marshal(map[string]any{"hosts": []any{
-		map[string]any{"name": "bootstrap-1", "address": "192.0.2.10", "groups": []any{"bootstrap_host"}, "port": 22, "user": "sysop"},
-		map[string]any{"name": "manager-1", "address": "192.0.2.20", "groups": []any{"management_cluster_k8smaster"}, "port": 22, "user": "sysop"},
-		map[string]any{"name": "work-master-1", "address": "192.0.2.30", "groups": []any{"work_cluster_k8smaster"}, "port": 22, "user": "sysop"},
-		map[string]any{"name": "work-node-1", "address": "192.0.2.40", "groups": []any{"work_cluster_k8snode"}, "port": 22, "user": "sysop"},
-	}})
-	parameters := map[string]any{
+func openFuyaoLegacyParameters() map[string]any {
+	return map[string]any{
 		"operation": map[string]any{"management_cluster_id": "demo-management-cluster", "work_cluster_id": "demo-work-cluster", "strategy": "StatelessFlatNetworkStrategy"},
 		"artifact_sources": map[string]any{
 			"registry":         map[string]any{"domain": "registry.example.invalid", "ip": "192.0.2.60", "port": 443, "project": "openfuyao"},
@@ -349,6 +321,30 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 		"certificates": map[string]any{"output_path": "/tmp/newplatform-demo-certs", "output_file": "cluster-certs.tar.gz", "config_path": "/etc/openFuyao/certs/cert_config", "expiry": "8760h"},
 		"addon_params": map[string]any{"amc": map[string]any{}, "clusterconfig": map[string]any{}, "clustermonitor": map[string]any{}, "monitcontrollermanager": map[string]any{}, "housekeeping": map[string]any{}, "openstack-vlan": map[string]any{}},
 	}
+}
+
+func seedParameterValue(values map[string]any, dotted string) (any, bool) {
+	var current any = values
+	for _, segment := range strings.Split(dotted, ".") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[segment]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) error {
+	inventory, _ := json.Marshal(map[string]any{"hosts": []any{
+		map[string]any{"name": "bootstrap-1", "address": "192.0.2.10", "groups": []any{"bootstrap_host"}, "port": 22, "user": "sysop"},
+		map[string]any{"name": "manager-1", "address": "192.0.2.20", "groups": []any{"management_cluster_k8smaster"}, "port": 22, "user": "sysop"},
+		map[string]any{"name": "work-master-1", "address": "192.0.2.30", "groups": []any{"work_cluster_k8smaster"}, "port": 22, "user": "sysop"},
+		map[string]any{"name": "work-node-1", "address": "192.0.2.40", "groups": []any{"work_cluster_k8snode"}, "port": 22, "user": "sysop"},
+	}})
 	credentialRefs := []domain.CredentialRef{
 		{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_SSH_PASSWORD", Configured: true},
 		{Name: "ENV_DOCKER_SECRET_USERNAME", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_REGISTRY_USERNAME", Configured: true},
@@ -358,6 +354,6 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 	}
 	sort.Slice(credentialRefs, func(i, j int) bool { return credentialRefs[i].Name < credentialRefs[j].Name })
 	environment := domain.Environment{ID: "environment-openfuyao-template", Name: "OpenFuyao Preflight Template", Description: "包含管理集群、业务控制面和业务节点的 TEST-NET 脱敏模板；不会连接真实基础设施。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "Kylin V10", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Parameters: parameters, CredentialRefs: credentialRefs, MaxConcurrent: 1, CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "Kylin V10", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, MaxConcurrent: 1, CreatedAt: now}
 	return s.createEnvironmentIfMissing(ctx, environment, revision)
 }

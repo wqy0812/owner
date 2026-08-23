@@ -14,7 +14,7 @@ import {
   type Node,
   type NodeProps,
 } from '@xyflow/react';
-import { Beaker, Boxes, CheckCircle2, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Trash2 } from 'lucide-react';
+import { Beaker, Boxes, CheckCircle2, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Trash2, Undo2 } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
 import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
@@ -60,7 +60,9 @@ export function ScenariosPage() {
   const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>();
   const selectedScenario = useMemo(() => scenarios?.find((item) => item.id === selectedScenarioId) ?? scenarios?.[0], [scenarios, selectedScenarioId]);
-  const revision = selectedScenario?.currentRevision;
+  const currentRevision = selectedScenario?.currentRevision;
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string>();
+  const revision = useMemo(() => selectedScenario?.revisions?.find((item) => item.id === selectedRevisionId) ?? currentRevision, [currentRevision, selectedRevisionId, selectedScenario?.revisions]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
@@ -72,8 +74,16 @@ export function ScenariosPage() {
 	const [executionPolicy, setExecutionPolicy] = useState('{}');
   const [busy, setBusy] = useState<string>();
 
-  const editable = Boolean(user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'draft');
+  const isCurrentRevision = Boolean(revision && revision.id === (selectedScenario?.currentRevisionId ?? currentRevision?.id));
+  const editable = Boolean(user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'draft');
   const canLaunch = Boolean((user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id) || user.role === 'environment_owner');
+  const canLaunchRevision = Boolean(canLaunch && revision && (isCurrentRevision || revision.state === 'released'));
+  const canAbandonDraft = Boolean(editable && selectedScenario?.revisions?.some((item) => item.id !== revision?.id && (item.state === 'released' || item.state === 'deprecated')));
+  const nextRevisionNumber = Math.max(0, ...(selectedScenario?.revisions?.map((item) => item.revision) ?? [])) + 1;
+
+  useEffect(() => {
+    setSelectedRevisionId(currentRevision?.id);
+  }, [currentRevision?.id, selectedScenario?.id]);
 
   useEffect(() => {
     setNodes((revision?.nodes ?? []).map((node) => ({ ...node, type: 'component' })) as FlowNode[]);
@@ -178,9 +188,19 @@ export function ScenariosPage() {
   }
 
   async function cloneRevision() {
-    if (!selectedScenario) return; setBusy('clone');
-    try { await api.cloneScenarioRevision(selectedScenario.id); notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。'); signalRefresh('scenarios'); }
+    if (!selectedScenario || !revision || !window.confirm(`确认从 Revision ${revision.revision} 创建 Revision ${nextRevisionNumber}？\n新 Revision 将立即成为当前草稿。`)) return; setBusy('clone');
+    try { const created = await api.cloneScenarioRevision(selectedScenario.id); setSelectedRevisionId(created.id); notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。'); signalRefresh('scenarios'); }
     catch (reason) { notify('error', '创建 Revision 失败', displayError(reason)); } finally { setBusy(undefined); }
+  }
+
+  async function abandonDraft() {
+    if (!revision || !window.confirm(`确认放弃 Revision ${revision.revision} 草稿？\n系统将恢复到最近的不可变 Revision，当前草稿会保留在历史记录中。`)) return; setBusy('abandon');
+    try {
+      const scenario = await api.abandonScenarioRevision(revision.id);
+      setSelectedRevisionId(scenario.currentRevision?.id);
+      notify('success', '草稿已放弃', `已恢复到 Revision ${scenario.currentRevision?.revision ?? '—'}。`);
+      signalRefresh('scenarios');
+    } catch (reason) { notify('error', '放弃草稿失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function deprecateRevision() {
@@ -195,14 +215,16 @@ export function ScenariosPage() {
     {loading && !scenarios ? <LoadingBlock label="正在加载场景图…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <>
       <div className="scenario-toolbar panel">
         <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSelectedScenarioId(event.target.value)}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
-        {revision && <div className="scenario-revision"><span>Revision {revision.revision}</span><StatusPill status={revision.state} /></div>}
+        {revision && <label><span>Revision</span><select aria-label="Revision" value={revision.id} onChange={(event) => setSelectedRevisionId(event.target.value)}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
+        {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前 Revision' : '历史 Revision'}</span><StatusPill status={revision.state} /></div>}
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>
           {editable && <button className="button button--secondary" disabled={busy === 'save'} onClick={() => void save()}><Save size={16} /> 保存草稿</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && (revision?.state === 'released' || revision?.state === 'deprecated') && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 新 Revision</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && (revision?.state === 'released' || revision?.state === 'deprecated') && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 新 Revision</button>}
+          {canAbandonDraft && <button className="button button--danger-soft" disabled={busy === 'abandon'} onClick={() => void abandonDraft()}><Undo2 size={16} /> 放弃草稿</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && <button className="button button--danger-soft" disabled={busy === 'deprecate'} onClick={() => void deprecateRevision()}>废弃</button>}
-          {canLaunch && <button className="button button--secondary" disabled={!revision} onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> 发布</button>}
+          {canLaunchRevision && <button className="button button--secondary" onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> 发布</button>}
         </div>
       </div>
       {selectedScenario ? <div className="scenario-editor">
@@ -235,7 +257,7 @@ export function ScenariosPage() {
                 ? <label><span>来源节点</span><input value={options[0] ? `${options[0].data.label} · ${options[0].data.version} · ${options[0].data.hostGroup}` : '自动绑定'} disabled /></label>
                 : <label><span>来源节点</span><select required value={selectedSource ?? ''} disabled={!editable} onChange={(event) => updateSelected({ dependencySources: { ...selectedNode.data.dependencySources, [dependency.id ?? '']: event.target.value } })}><option value="">请选择来源节点</option>{options.map((option) => <option key={option.id} value={option.id}>{option.data.label} · {option.data.version} · {option.data.hostGroup}</option>)}</select></label>}
             </div>;
-          })}</div> : null}{mappedTargets.size ? <p className="palette-hint">已由上游映射的参数不可再配置：{[...mappedTargets].join(', ')}</p> : null}<label><span>节点参数 JSON</span><textarea key={`${selectedNode.id}-values`} className="code-editor code-editor--small" defaultValue={JSON.stringify(Object.fromEntries(Object.entries(selectedNode.data.values ?? {}).filter(([key]) => !mappedTargets.has(key))), null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ values: Object.fromEntries(Object.entries(JSON.parse(event.target.value) as Record<string, unknown>).filter(([key]) => !mappedTargets.has(key))) }); } catch { notify('error', '节点参数不是有效 JSON'); } }} /></label><label><span>环境参数绑定 JSON</span><textarea key={`${selectedNode.id}-bindings`} className="code-editor code-editor--small" defaultValue={JSON.stringify(Object.fromEntries(Object.entries(selectedNode.data.bindings ?? {}).filter(([key]) => !mappedTargets.has(key))), null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ bindings: Object.fromEntries(Object.entries(JSON.parse(event.target.value) as Record<string, string>).filter(([key]) => !mappedTargets.has(key))) }); } catch { notify('error', '参数绑定不是有效 JSON'); } }} /></label><label><span>运行时输入（逗号分隔）</span><input value={(selectedNode.data.runInputs ?? []).filter((item) => !mappedTargets.has(item)).join(', ')} disabled={!editable} onChange={(event) => updateSelected({ runInputs: event.target.value.split(',').map((item) => item.trim()).filter((item) => item && !mappedTargets.has(item)) })} /></label>{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和参数绑定。" />}
+          })}</div> : null}{mappedTargets.size ? <p className="palette-hint">已由上游映射的参数不可再配置：{[...mappedTargets].join(', ')}</p> : null}<label><span>节点参数 JSON</span><textarea key={`${selectedNode.id}-values`} className="code-editor code-editor--small" defaultValue={JSON.stringify(Object.fromEntries(Object.entries(selectedNode.data.values ?? {}).filter(([key]) => !mappedTargets.has(key))), null, 2)} disabled={!editable} onBlur={(event) => { try { updateSelected({ values: Object.fromEntries(Object.entries(JSON.parse(event.target.value) as Record<string, unknown>).filter(([key]) => !mappedTargets.has(key))) }); } catch { notify('error', '节点参数不是有效 JSON'); } }} /></label><label><span>运行时输入（逗号分隔）</span><input value={(selectedNode.data.runInputs ?? []).filter((item) => !mappedTargets.has(item)).join(', ')} disabled={!editable} onChange={(event) => updateSelected({ runInputs: event.target.value.split(',').map((item) => item.trim()).filter((item) => item && !mappedTargets.has(item)) })} /></label>{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和节点参数。" />}
         </aside>
       </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由场景 Owner 创建一个场景。" /></div>}
     </>}

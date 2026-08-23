@@ -28,47 +28,6 @@ func TestResolveParametersPrecedenceAndAllowList(t *testing.T) {
 	}
 }
 
-func TestEnvironmentBindingSupportsExactKeysAndDottedPaths(t *testing.T) {
-	environment := map[string]any{
-		"operation.cluster_id": "exact-wins",
-		"operation": map[string]any{
-			"cluster_id": "nested-value",
-			"broken":     "not-an-object",
-		},
-	}
-	for _, test := range []struct {
-		name, key string
-		want      any
-		found     bool
-	}{
-		{"exact key", "operation.cluster_id", "exact-wins", true},
-		{"dotted path", "operation.broken", "not-an-object", true},
-		{"missing path", "operation.missing", nil, false},
-		{"non-object middle", "operation.broken.child", nil, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, ok := resolveEnvironmentBinding(environment, test.key)
-			if ok != test.found || !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("resolve %q = %#v, %v; want %#v, %v", test.key, got, ok, test.want, test.found)
-			}
-		})
-	}
-}
-
-func TestParameterEnvironmentValuesUsesDottedPaths(t *testing.T) {
-	parameters := []domain.ParameterDefinition{
-		{Name: "cluster_id", Type: domain.ParameterTypeString, EnvironmentPath: "operation.cluster_id"},
-		{Name: "plain", Type: domain.ParameterTypeString},
-	}
-	got := parameterEnvironmentValues(parameters, map[string]any{
-		"operation": map[string]any{"cluster_id": "work-a"},
-		"plain":     "compatible-flat-value",
-	})
-	if got["cluster_id"] != "work-a" || got["plain"] != "compatible-flat-value" {
-		t.Fatalf("parameter environment values=%#v", got)
-	}
-}
-
 func TestRequiredCredentialsAreCheckedByDeclaredName(t *testing.T) {
 	steps := []lockedStep{{RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}}}
 	refs := []domain.CredentialRef{{Name: "ansible_ssh_pass"}}
@@ -137,7 +96,7 @@ func TestRequiredParameterWithDefaultIsStaticallyBound(t *testing.T) {
 		{Name: "endpoint", Type: domain.ParameterTypeString, Required: true, DefaultValue: "localhost", Visibility: domain.ParameterInternal, Description: "api"},
 	}}
 	var issues []domain.ValidationIssue
-	validateRequiredParameters(release, domain.ScenarioNode{ID: "node", Values: map[string]any{}, Bindings: map[string]string{}}, &issues)
+	validateRequiredParameters(release, domain.ScenarioNode{ID: "node", Values: map[string]any{}}, &issues)
 	if len(issues) != 0 {
 		t.Fatalf("required parameter with default reported unbound: %+v", issues)
 	}

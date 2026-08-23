@@ -135,7 +135,6 @@ func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 	upstream.Parameters = []domain.ParameterDefinition{{
 		Name: "kubeInstallRoot", Description: "kubelet install root", Type: domain.ParameterTypeString,
 		Required: true, DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, MinLength: 1,
-		EnvironmentPath: "kubernetes.installRoot",
 	}}
 	if err := s.CreateComponentRelease(ctx, upstream); err != nil {
 		t.Fatal(err)
@@ -242,7 +241,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 
 	inventory, _ := json.Marshal(map[string]any{"all": map[string]any{"hosts": map[string]any{"localhost": map[string]any{"ansible_connection": "local"}}}})
 	env := domain.Environment{ID: "lab", Name: "Lab", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"arch": "amd64"}, Inventory: inventory, Parameters: map[string]any{}, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
+	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"arch": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, env, envRev); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +368,7 @@ func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := domain.Environment{ID: "reconcile-env", Name: "Reconcile", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	revision := domain.EnvironmentRevision{ID: "reconcile-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), Parameters: map[string]any{}, MaxConcurrent: 1, CreatedAt: testNow}
+	revision := domain.EnvironmentRevision{ID: "reconcile-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), MaxConcurrent: 1, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +405,7 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := domain.Environment{ID: "restart-env", Name: "Restart Env", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	environmentRevision := domain.EnvironmentRevision{ID: "restart-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), Parameters: map[string]any{}, MaxConcurrent: 1, CreatedAt: testNow}
+	environmentRevision := domain.EnvironmentRevision{ID: "restart-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), MaxConcurrent: 1, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}

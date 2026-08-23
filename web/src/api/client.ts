@@ -3,6 +3,7 @@ import type {
   Approval,
   Component,
   ComponentDependency,
+  ComponentArtifact,
   ComponentImageBuild,
   ComponentRelease,
   ComponentTestPlan,
@@ -269,9 +270,26 @@ function normalizeParameter(raw: LooseRecord): import('../types/domain').Paramet
     required: optionalBoolean(raw, 'required') ?? false,
     defaultValue: raw.defaultValue,
     visibility,
-    environmentPath: optionalString(raw, 'environmentPath', 'environment_path'),
     enum: Array.isArray(enumValues) ? enumValues : undefined,
     minLength: optionalNumber(raw, 'minLength', 'min_length'),
+  };
+}
+
+function normalizeArtifact(raw: LooseRecord): ComponentArtifact {
+  return {
+    id: requireString(raw, 'id'),
+    releaseId: requireString(raw, 'releaseId', 'release_id'),
+    alias: requireString(raw, 'alias'),
+    fileStation: requireString(raw, 'fileStation', 'file_station'),
+    relativePath: requireString(raw, 'relativePath', 'relative_path'),
+    filename: requireString(raw, 'filename'),
+    sha256: requireString(raw, 'sha256'),
+    sizeBytes: requireNumber(raw, 'sizeBytes', 'size_bytes'),
+    sourceMode: requireEnum(raw, ['upload', 'register'] as const, 'sourceMode', 'source_mode'),
+    environmentId: requireString(raw, 'environmentId', 'environment_id'),
+    environmentRevisionId: requireString(raw, 'environmentRevisionId', 'environment_revision_id'),
+    createdBy: requireString(raw, 'createdBy', 'created_by'),
+    createdAt: requireString(raw, 'createdAt', 'created_at'),
   };
 }
 
@@ -312,6 +330,7 @@ function normalizeRelease(raw: LooseRecord, componentID?: string): ComponentRele
     environmentConstraints: optionalObject(raw, 'environmentConstraints', 'environment_constraints'),
     parameters: optionalRecords(raw, 'parameters')?.map(normalizeParameter) ?? [],
     actions,
+    artifacts: optionalRecords(raw, 'artifacts')?.map(normalizeArtifact) ?? [],
     createdAt: optionalString(raw, 'createdAt', 'created_at'),
     releasedAt: optionalString(raw, 'releasedAt', 'released_at'),
   };
@@ -384,15 +403,6 @@ function normalizePosition(raw: LooseRecord): { x: number; y: number } {
   return { x: requireNumber(raw, 'x'), y: requireNumber(raw, 'y') };
 }
 
-function normalizeBindings(raw: LooseRecord): Record<string, string> {
-  const bindings: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value !== 'string') throw invalidResponse(200, `平台 API 的 bindings.${key} 必须是字符串。`);
-    bindings[key] = value;
-  }
-  return bindings;
-}
-
 function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
   const data = requireRecord(raw.data, 'node.data');
   return {
@@ -407,7 +417,6 @@ function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
       action: optionalEnum(data, ACTION_TYPES, 'action'),
       hostGroup: optionalString(data, 'hostGroup'),
       values: optionalObject(data, 'values'),
-      bindings: optionalRecord(data, 'bindings') ? normalizeBindings(optionalRecord(data, 'bindings')!) : undefined,
       runInputs: optionalStringArray(data, 'runInputs'),
       dependencySources: optionalRecord(data, 'dependencySources') as Record<string, string> | undefined,
       layer: optionalEnum(data, COMPONENT_LAYERS, 'layer'),
@@ -429,7 +438,7 @@ function normalizeRevision(raw: LooseRecord): ScenarioRevision {
     id: requireString(raw, 'id'),
     scenarioId: requireString(raw, 'scenarioId', 'scenario_id'),
     revision: requireNumber(raw, 'revision'),
-    state: requireEnum(raw, ['draft', 'testing', 'test_passed', 'released', 'deprecated'] as const, 'state', 'status'),
+    state: requireEnum(raw, ['draft', 'testing', 'test_passed', 'released', 'deprecated', 'abandoned'] as const, 'state', 'status'),
     nodes: requireRecords(raw, 'nodes').map(normalizeScenarioNode),
     edges: requireRecords(raw, 'edges').map(normalizeScenarioEdge),
     runInputs: optionalStringArray(raw, 'runInputs', 'run_inputs'),
@@ -451,6 +460,7 @@ function normalizeScenario(raw: LooseRecord): Scenario {
     description: optionalString(raw, 'description'),
     ownerId: requireString(raw, 'ownerId', 'owner_id'),
     ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    currentRevisionId: currentID,
     currentRevision: current ? normalizeRevision(current) : revisions?.find((revision) => revision.id === currentID) ?? revisions?.[0],
     revisions,
     updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
@@ -488,7 +498,6 @@ function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
     revision: requireNumber(raw, 'revision'),
     facts: requireRecord(raw.facts, 'facts'),
     hosts: requireRecords(raw, 'hosts').map(normalizeHost),
-    parameters: requireRecord(raw.parameters, 'parameters'),
     variables,
     credentialRefs: requireRecords(raw, 'credentialRefs').map(normalizeCredential),
     maxConcurrentRuns: optionalNumber(raw, 'maxConcurrentRuns', 'max_concurrent_runs', 'maxConcurrent'),
@@ -551,6 +560,14 @@ function normalizeRun(raw: LooseRecord): Run {
     capturedAt: requireString(backup, 'capturedAt'),
     playbookSha256: requireString(backup, 'playbookSha256'),
   }));
+  const artifactTransfers = optionalRecords(source, 'artifactTransfers')?.map((item) => ({
+    alias: requireString(item, 'alias'), sourceStation: requireString(item, 'sourceStation'), targetStation: requireString(item, 'targetStation'),
+    relativePath: requireString(item, 'relativePath'), sha256: requireString(item, 'sha256'),
+  }));
+  const imageTransfers = optionalRecords(source, 'imageTransfers')?.map((item) => ({
+    sourceRegistry: requireString(item, 'sourceRegistry'), targetRegistry: requireString(item, 'targetRegistry'),
+    sourceDigest: requireString(item, 'sourceDigest'), targetDigest: requireString(item, 'targetDigest'),
+  }));
   return {
     id: requireString(source, 'id'),
     kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run'] as const, 'kind'),
@@ -574,6 +591,8 @@ function normalizeRun(raw: LooseRecord): Run {
     logTail,
     resolvedParametersByNode: optionalRecord(source, 'resolvedParametersByNode') as Run['resolvedParametersByNode'],
     backups,
+    artifactTransfers,
+    imageTransfers,
     createdAt: optionalString(source, 'createdAt'),
     startedAt: optionalString(source, 'startedAt'),
     finishedAt: optionalString(source, 'finishedAt'),
@@ -703,6 +722,21 @@ export const api = {
   async updateReleaseContract(releaseId: string, input: Pick<ComponentRelease, 'parameters' | 'dependencies'>) {
     return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}/contract`, input));
   },
+  async uploadArtifact(releaseId: string, input: { environmentId: string; alias: string; sha256?: string; artifact: File; checksumFile?: File }) {
+    const form = new FormData();
+    form.set('environmentId', input.environmentId);
+    form.set('alias', input.alias);
+    if (input.sha256) form.set('sha256', input.sha256);
+    form.set('artifact', input.artifact, input.artifact.name);
+    if (input.checksumFile) form.set('checksumFile', input.checksumFile, input.checksumFile.name);
+    return normalizeArtifact(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/artifacts/upload`, form)), 'artifact'));
+  },
+  async registerArtifact(releaseId: string, input: { environmentId: string; alias: string; relativePath: string; sha256: string }) {
+    return normalizeArtifact(requireRecord(unwrap(await post<unknown>(`/component-releases/${releaseId}/artifacts/register`, input)), 'artifact'));
+  },
+  async deleteArtifact(releaseId: string, alias: string) {
+    await request<unknown>(`/component-releases/${releaseId}/artifacts/${encodeURIComponent(alias)}`, { method: 'DELETE' });
+  },
   async playbook(releaseId: string, path: string, signal?: AbortSignal) {
     return normalizePlaybook(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook?path=${encodeURIComponent(path)}`, signal)), 'Playbook'));
   },
@@ -761,6 +795,9 @@ export const api = {
   async cloneScenarioRevision(scenarioId: string) {
     return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenarios/${scenarioId}/revisions`)), 'scenario revision'));
   },
+  async abandonScenarioRevision(revisionId: string) {
+    return normalizeScenario(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/abandon`)), 'scenario'));
+  },
   async saveGraph(revisionId: string, graph: { nodes: ScenarioNode[]; edges: ScenarioEdge[]; executionPolicy?: Record<string, unknown> }) {
     const backendGraph = {
       nodes: graph.nodes.map((node) => ({
@@ -770,7 +807,6 @@ export const api = {
         action: node.data.action,
         hostGroup: node.data.hostGroup,
         values: node.data.values ?? {},
-        bindings: node.data.bindings ?? {},
         runInputs: node.data.runInputs ?? [],
         dependencySources: node.data.dependencySources ?? {},
         position: node.position,
@@ -804,9 +840,6 @@ export const api = {
   },
   async updateInventory(environmentId: string, hosts: EnvironmentHost[]) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/inventory`, { hosts })), 'environment'));
-  },
-  async updateParameters(environmentId: string, parameters: Record<string, unknown>) {
-    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/parameters`, { parameters })), 'environment'));
   },
   async updateVariables(environmentId: string, variables: Record<string, string>) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/variables`, { variables })), 'environment'));

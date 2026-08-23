@@ -137,6 +137,7 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '确认提交安装验证 / 确认提交回滚验证', purpose: '按已确认计划创建 Run。', availability: '预览成功且计划仍有效', result: '创建 Run；破坏性动作进入环境 Owner 审批。' },
       { label: '构建镜像', purpose: '为 Draft 上传 Dockerfile 并查看构建。', availability: '组件 Owner 自有 Draft', result: '打开镜像构建弹窗。' },
       { label: '上传并构建', purpose: '在所选环境的 IMAGE_REGISTRY 中创建镜像构建。', availability: 'Dockerfile、环境和 Registry 均有效', result: '创建构建记录并异步执行。' },
+      { label: '组件介质', purpose: '上传介质或登记 file-station 已有路径及 SHA-256。', availability: '组件 Owner 自有 Draft', result: '把介质元数据锁定到 Release。' },
       { label: '构建记录', purpose: '选择构建并查看状态和日志。', availability: '存在构建记录', result: '只切换详情。' },
     ],
   },
@@ -149,7 +150,8 @@ const SCENARIO_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '场景条目 / Revision 选择', purpose: '切换场景或查看某个 Revision。', availability: '所有用户', result: '只切换详情。' },
       { label: '校验', purpose: '检查 DAG、依赖、动作和参数解析。', availability: '已选择 Revision', result: '返回校验结果，不创建 Run。' },
       { label: '保存草稿', purpose: '保存节点、连线、策略和参数。', availability: '自有 Draft', result: '更新 Draft，并使旧完整测试证据失效。' },
-      { label: '新 Revision', purpose: '从 Released/Deprecated Revision 克隆新草稿。', availability: '场景 Owner 自有不可变 Revision', result: '创建新 Draft，不修改原 Revision。' },
+      { label: '新 Revision', purpose: '确认后从当前 Released/Deprecated Revision 克隆新草稿。', availability: '场景 Owner 自有不可变 Revision且没有活动 Draft', result: '创建新 Draft并设为当前，不修改原 Revision。' },
+      { label: '放弃草稿', purpose: '放弃误建或不再需要的当前 Draft。', availability: '自有当前 Draft且存在可恢复的不可变 Revision', result: '草稿保留为已放弃历史，并恢复最近的不可变 Revision。' },
       { label: '发布', purpose: '把 Test Passed Revision 发布。', availability: '自有 Test Passed Revision', result: '重新校验后进入 Released。' },
       { label: '废弃', purpose: '废弃已发布 Revision。', availability: '场景 Owner 自有 Released Revision', result: '状态变为 Deprecated；历史 Run 不变。' },
     ],
@@ -171,11 +173,11 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
     page: '环境与 Revision', path: '/environments', description: '环境保存始终创建新 Revision；其他角色只能选择环境，不能编辑。', entries: [
       { label: '新建环境 / 创建环境', purpose: '创建共享执行环境。', availability: '环境 Owner', result: '生成环境及初始 Revision。' },
       { label: '环境条目', purpose: '选择环境并读取当前 Revision。', availability: '所有用户', result: '只切换详情。' },
-      { label: 'Inventory / 环境事实 / 环境参数 / 环境变量 / 凭据引用', purpose: '切换环境配置分区。', availability: '所有用户可查看', result: '只切换分区；编辑能力由归属决定。' },
+      { label: 'Inventory / 环境事实 / 环境变量 / 凭据引用', purpose: '切换环境配置分区。', availability: '所有用户可查看', result: '只切换分区；编辑能力由归属决定。' },
       { label: '添加主机 / 删除主机', purpose: '维护 Inventory 主机和主机组。', availability: '环境 Owner 自有环境', result: '改变未保存 Inventory。' },
-      { label: '添加变量 / 删除环境变量', purpose: '维护非敏感作业环境变量和 IMAGE_REGISTRY。', availability: '环境 Owner 自有环境', result: '改变未保存变量；Secret 不得填入此处。' },
+      { label: '添加变量 / 删除环境变量', purpose: '维护非敏感作业环境变量、IMAGE_REGISTRY 和 FILE_STATION。', availability: '环境 Owner 自有环境', result: '改变未保存变量；Secret 不得填入此处。' },
       { label: '添加引用 / 删除凭据引用', purpose: '维护 CredentialRef 类型与引用位置。', availability: '环境 Owner 自有环境', result: '只保存引用，不把实际凭据返回前台。' },
-      { label: '保存新 Revision', purpose: '保存 Inventory、Facts、参数、变量与凭据引用。', availability: '环境 Owner 自有环境', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },
+      { label: '保存新 Revision', purpose: '保存 Inventory、Facts、变量与凭据引用。', availability: '环境 Owner 自有环境', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },
     ],
   },
   {
@@ -215,9 +217,10 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 ### 3. 在共享环境测试
 
-1. 选择 Draft，点击 **测试** 并选择共享环境。
-2. 补齐运行输入和依赖 Fixture，提交后到 **运行** 页面查看步骤与脱敏日志。
-3. Draft 再次保存后，旧测试证据会失效，需要重新测试。
+1. 需要镜像时先构建镜像；需要离线介质时通过 **组件介质** 上传或登记，并校验 SHA-256。
+2. 选择 Draft，点击 **测试** 并选择共享环境。
+3. 补齐运行输入和依赖 Fixture，提交后到 **运行** 页面查看步骤与脱敏日志。
+4. 来源仓库与目标环境不一致时，Run 会要求目标环境 Owner 审批平移；Draft 再次保存后旧测试证据失效。
 
 ### 4. 发布与维护
 
@@ -249,12 +252,12 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 1. 在 **场景** 页面新建场景，系统会创建初始 Draft Revision。
 2. 从组件库加入已发布 Release；每个节点锁定加入时的精确版本。
-3. 用 DAG 连线表达硬依赖和实际顺序，再配置动作、主机组、节点参数、环境绑定和运行输入。
+3. 用 DAG 连线表达硬依赖和实际顺序，再配置动作、主机组、节点参数和运行输入。
 
 ### 2. 保存并校验
 
 - 保存 Draft 后执行校验，处理空图、环、缺失依赖、顺序错误和必填参数未解析等问题。
-- 上游映射得到的参数不能再被节点值、环境绑定或运行输入覆盖。
+- 上游映射得到的参数不能再被节点值或运行输入覆盖。
 - 当前 Demo 会保存 Execution Policy，但调度仍按 DAG 串行、首个失败即停止，不要把它当成并发策略。
 
 ### 3. 完整环境测试
@@ -267,7 +270,8 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 1. 只有 Test Passed 的当前 Revision 可以发布，发布时后端会再次校验 DAG。
 2. Released Revision 不可编辑；修改时克隆一个新 Revision 并重新测试。
-3. 已发布场景可选择目标环境运行，提交后统一在 **运行** 页面跟踪。
+3. 创建新 Revision 前需要确认；同一场景只能有一个活动 Draft。不再需要时使用 **放弃草稿** 恢复最近的不可变 Revision。
+4. Revision 选择器可以查看历史版本；已发布场景可选择目标环境运行，提交后统一在 **运行** 页面跟踪。
 
 ### 5. 前台版本更新时
 
@@ -277,12 +281,12 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
   },
   environment_owner: {
     title: '环境 Owner 操作手册',
-    summary: '维护可执行的环境快照，管理 Inventory、非敏感参数、凭据引用和危险运行审批。',
+    summary: '维护可执行的环境快照，管理 Inventory、仓库变量、凭据引用和危险运行审批。',
     icon: CloudCog,
     tone: 'amber',
     primaryPath: '/environments',
     primaryLabel: '进入环境中心',
-    checkpoints: ['Inventory 主机与主机组完整', 'Secret 不进入普通参数', '危险运行审批前核对目标与动作', '版本更新后重新读取 Run 状态'],
+    checkpoints: ['Inventory 主机与主机组完整', 'IMAGE_REGISTRY 与 FILE_STATION 可达', '危险运行审批前核对平移目标与动作', '版本更新后重新读取 Run 状态'],
     buttonGroups: ENVIRONMENT_BUTTON_GROUPS,
     markdown: `## 环境 Owner 操作路径
 
@@ -292,13 +296,13 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 1. 在 **环境** 页面新建环境，填写架构、操作系统、网络栈和说明。
 2. 在 Inventory 中维护主机地址、SSH 用户、端口和主机组。
-3. 分别维护环境事实、非敏感参数与 CredentialRef；每次保存都会创建新的 Environment Revision。
+3. 分别维护环境事实、环境变量与 CredentialRef；每次保存都会创建新的 Environment Revision。
 
-### 2. 管理参数与凭据
+### 2. 管理仓库变量与凭据
 
 - 环境事实用于组件兼容性预检，键名和值应与 Release 的环境约束一致。
-- 普通环境参数可能覆盖场景节点值，变更前要检查受影响的场景。
-- 数据库只保存 CredentialRef，不保存真实密码；不要把 Secret 粘贴到 Facts、Parameters 或运行输入。
+- IMAGE_REGISTRY 和 FILE_STATION 都填写 host:port，分别作为镜像仓库和组件介质站。
+- 数据库只保存 CredentialRef，不保存真实密码；不要把 Secret 粘贴到 Facts、Variables 或运行输入。
 
 ### 3. 支持测试与正式运行
 
@@ -309,7 +313,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 ### 4. 审批危险操作
 
 1. destructive、recovery、clean、destroy、uninstall 等动作会进入等待审批。
-2. 核对目标环境、主机组、锁定版本、动作和运行参数后再批准或拒绝。
+2. 核对目标环境、主机组、锁定版本、动作、运行参数，以及镜像/介质平移的来源和目标后再批准或拒绝。
 3. 批准只表示允许平台执行，不替代真实环境变更评审；回滚也必须由组件或场景中明确声明的动作发起。
 
 ### 5. 前台版本更新时

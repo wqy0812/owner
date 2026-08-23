@@ -156,9 +156,26 @@ type ComponentRelease struct {
 	Parameters             []ParameterDefinition `json:"parameters"`
 	Dependencies           []ComponentDependency `json:"dependencies"`
 	Actions                []ActionDefinition    `json:"actions"`
+	Artifacts              []ComponentArtifact   `json:"artifacts"`
 	CreatedAt              time.Time             `json:"createdAt"`
 	ReleasedAt             *time.Time            `json:"releasedAt,omitempty"`
 	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
+}
+
+type ComponentArtifact struct {
+	ID                    string    `json:"id"`
+	ReleaseID             string    `json:"releaseId"`
+	Alias                 string    `json:"alias"`
+	FileStation           string    `json:"fileStation"`
+	RelativePath          string    `json:"relativePath"`
+	Filename              string    `json:"filename"`
+	SHA256                string    `json:"sha256"`
+	SizeBytes             int64     `json:"sizeBytes"`
+	SourceMode            string    `json:"sourceMode"`
+	EnvironmentID         string    `json:"environmentId"`
+	EnvironmentRevisionID string    `json:"environmentRevisionId"`
+	CreatedBy             string    `json:"createdBy"`
+	CreatedAt             time.Time `json:"createdAt"`
 }
 
 type ImageBuildStatus string
@@ -217,15 +234,14 @@ const (
 )
 
 type ParameterDefinition struct {
-	Name            string              `json:"name"`
-	Description     string              `json:"description"`
-	Type            ParameterType       `json:"type"`
-	Required        bool                `json:"required"`
-	DefaultValue    any                 `json:"defaultValue,omitempty"`
-	Visibility      ParameterVisibility `json:"visibility"`
-	EnvironmentPath string              `json:"environmentPath,omitempty"`
-	Enum            []any               `json:"enum,omitempty"`
-	MinLength       int                 `json:"minLength,omitempty"`
+	Name         string              `json:"name"`
+	Description  string              `json:"description"`
+	Type         ParameterType       `json:"type"`
+	Required     bool                `json:"required"`
+	DefaultValue any                 `json:"defaultValue,omitempty"`
+	Visibility   ParameterVisibility `json:"visibility"`
+	Enum         []any               `json:"enum,omitempty"`
+	MinLength    int                 `json:"minLength,omitempty"`
 }
 
 func (p ParameterDefinition) HasDefault() bool { return p.DefaultValue != nil }
@@ -366,6 +382,7 @@ type ScenarioRevision struct {
 	TestPassedAt    *time.Time     `json:"testPassedAt,omitempty"`
 	ReleasedAt      *time.Time     `json:"releasedAt,omitempty"`
 	DeprecatedAt    *time.Time     `json:"deprecatedAt,omitempty"`
+	AbandonedAt     *time.Time     `json:"abandonedAt,omitempty"`
 }
 
 type ScenarioGraph struct {
@@ -380,7 +397,6 @@ type ScenarioNode struct {
 	Action            ActionKind        `json:"action"`
 	HostGroup         string            `json:"hostGroup"`
 	Values            map[string]any    `json:"values"`
-	Bindings          map[string]string `json:"bindings"`
 	RunInputs         []string          `json:"runInputs"`
 	DependencySources map[string]string `json:"dependencySources,omitempty"`
 	Position          GraphPosition     `json:"position"`
@@ -493,7 +509,6 @@ type EnvironmentRevision struct {
 	Revision       int               `json:"revision"`
 	Facts          map[string]any    `json:"facts"`
 	Inventory      json.RawMessage   `json:"inventory"`
-	Parameters     map[string]any    `json:"parameters"`
 	Variables      map[string]string `json:"variables"`
 	CredentialRefs []CredentialRef   `json:"credentialRefs"`
 	MaxConcurrent  int               `json:"maxConcurrent"`

@@ -59,6 +59,37 @@ func (s *Store) ListComponentImageBuilds(ctx context.Context, releaseID string, 
 	return builds, rows.Err()
 }
 
+func (s *Store) LatestSucceededComponentImageBuild(ctx context.Context, releaseID string) (domain.ComponentImageBuild, error) {
+	var build domain.ComponentImageBuild
+	var created string
+	var environmentID, environmentRevisionID, started, finished sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,release_id,environment_id,environment_revision_id,requested_by,status,dockerfile_sha256,image_tag,image_ref,image_digest,error_text,created_at,started_at,finished_at FROM component_image_builds WHERE release_id=? AND status='succeeded' ORDER BY finished_at DESC,created_at DESC LIMIT 1`, releaseID).Scan(
+		&build.ID, &build.ReleaseID, &environmentID, &environmentRevisionID, &build.RequestedBy, &build.Status, &build.DockerfileSHA256, &build.ImageTag, &build.ImageRef, &build.ImageDigest, &build.Error, &created, &started, &finished)
+	if err != nil {
+		return build, mapSQLError(err)
+	}
+	build.CreatedAt = parseTime(created)
+	build.EnvironmentID = environmentID.String
+	build.EnvironmentRevisionID = environmentRevisionID.String
+	build.StartedAt = parseNullTime(started)
+	build.FinishedAt = parseNullTime(finished)
+	return build, nil
+}
+
+func (s *Store) GetComponentImageMirror(ctx context.Context, targetRegistry, sourceDigest string) (string, bool, error) {
+	var targetDigest string
+	err := s.db.QueryRowContext(ctx, `SELECT target_digest FROM component_image_mirrors WHERE target_registry=? AND source_digest=?`, targetRegistry, sourceDigest).Scan(&targetDigest)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return targetDigest, err == nil, err
+}
+
+func (s *Store) RecordComponentImageMirror(ctx context.Context, targetRegistry, sourceDigest, targetRef, targetDigest string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO component_image_mirrors(target_registry,source_digest,target_ref,target_digest,mirrored_at) VALUES(?,?,?,?,?) ON CONFLICT(target_registry,source_digest) DO UPDATE SET target_ref=excluded.target_ref,target_digest=excluded.target_digest,mirrored_at=excluded.mirrored_at`, targetRegistry, sourceDigest, targetRef, targetDigest, timeText(at))
+	return err
+}
+
 func (s *Store) UpdateComponentImageBuildStatus(ctx context.Context, id string, from []domain.ImageBuildStatus, to domain.ImageBuildStatus, digest, errorText string, at time.Time) error {
 	query := `UPDATE component_image_builds SET status=?,image_digest=?,error_text=?,started_at=CASE WHEN ?='running' THEN ? ELSE started_at END,finished_at=CASE WHEN ? IN ('succeeded','failed','cancelled','interrupted') THEN ? ELSE finished_at END WHERE id=?`
 	args := []any{to, digest, errorText, to, timeText(at), to, timeText(at), id}
