@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type Platform struct {
 	playbookRoot   string
 	imageBuildRoot string
 	dockerBinary   string
+	dialContext    func(context.Context, string, string) (net.Conn, error)
 
 	rootCtx         context.Context
 	cancel          context.CancelFunc
@@ -48,8 +50,15 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Platform{
 		store: database, runner: runner, hub: hub,
-		rootCtx: ctx, cancel: cancel,
+		dialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
+		rootCtx:     ctx, cancel: cancel,
 		workers: make(map[string]environmentWorkerState), active: make(map[string]context.CancelFunc),
+	}
+}
+
+func (p *Platform) ConfigureEnvironmentHealthDialer(dial func(context.Context, string, string) (net.Conn, error)) {
+	if dial != nil {
+		p.dialContext = dial
 	}
 }
 

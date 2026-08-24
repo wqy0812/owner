@@ -46,12 +46,9 @@ func (h *Handler) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 func notificationDTO(notification domain.Notification) map[string]any {
 	output := map[string]any{
 		"id": notification.ID, "userId": notification.UserID, "type": notification.Type,
-		"title": notification.Title, "body": notification.Body, "message": notification.Body,
+		"title": notification.Title, "body": notification.Body,
 		"resourceUrl": notification.ResourceURL, "read": notification.ReadAt != nil,
 		"readAt": notification.ReadAt, "createdAt": notification.CreatedAt,
-	}
-	for key, value := range notification.Payload {
-		output[key] = value
 	}
 	output["payload"] = notification.Payload
 	return output

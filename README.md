@@ -1,5 +1,7 @@
 # NewPlatform Demo
 
+> 当前是项目首个版本（V1），当前环境仅为测试环境，不是生产环境。除非出现明确的 V2 文档，所有代码和文档均按首版解释；不兼容历史数据库、历史数据或旧 API 字段，数据库合同变化后直接重建测试数据库。详见 [首版与环境策略](docs/version-policy.md)。
+
 一个用于管理 Ansible 组件、场景和测试环境的本地演示平台。后端使用 Go + SQLite，前端使用 React + TypeScript，内置四个可切换的 Demo 身份，并支持受控的真实 `ansible-playbook` 执行。
 
 ## 能力
@@ -8,14 +10,16 @@
 - 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
 - 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，审批高风险作业和跨仓平移。
 - 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
-- 示例：OpenFuyao 管理集群和 Kubernetes 1.17.5 集群搭建作业快照。
+- 示例：3 个 OpenFuyao 场景、2 个 Kubernetes 1.17.5 场景及对应测试环境模板。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
 
 ## 文档
 
+- [文档中心与维护索引](docs/README.md)
+- [项目结构说明](docs/project-structure.md)
 - [平台设计文档（后端为主）](docs/backend-design.md)
 - [平台操作手册（分角色）](docs/operation-manual.md)
-- [当前部署环境节点清单](docs/deployment-snapshot-2026-08-20.md)
+- [Demo 资产目录](docs/demo-catalog.md)
 
 > 这是本地 Demo，不是生产控制面。身份切换不包含密码认证；凭据仅允许保存文件路径或环境变量引用。
 
@@ -84,7 +88,7 @@ make build
 
 ## Kubernetes 1.17.5 集群搭建作业
 
-Demo 会幂等写入核心 `scenario-k8s-1.17.5`、扩展 `scenario-k8s-1.17.5-extended` 及 `environment-k8s-1.17.5-template`。旧的 Certificates、Etcd、Control Plane、Worker 四个版本化交付阶段已删除，改为最小逻辑组件和不可变 Release；同一 Release 可在控制节点和工作节点各有一个场景节点，由节点 `hostGroup` 区分。
+Demo 会幂等写入核心 `scenario-k8s-1.17.5`、扩展 `scenario-k8s-1.17.5-extended` 及 `environment-k8s-1.17.5-template`。首版模型使用最小逻辑组件和不可变 Release；同一 Release 可在控制节点和工作节点各有一个场景节点，由节点 `hostGroup` 区分。
 
 场景保持 Draft，以免把尚未在真实目标环境验收的快照误标为已发布；在页面切换到“陈晨 · 集群交付”身份即可查看和发起环境测试。
 
@@ -97,7 +101,7 @@ Demo 会幂等写入核心 `scenario-k8s-1.17.5`、扩展 `scenario-k8s-1.17.5-e
 
 Host Preflight 是只读动作；其余写主机或集群状态的动作均为 destructive，发起后必须由对应环境 Owner 审批。每个组件在 `k8s-1.17.5-cluster/components/` 下都有独立主入口和验证入口，组件测试会自动追加 Verify。恢复、卸载、Housekeeping 以及只有模板没有任务入口的 process-exporter、Event Monitor、CSI 不进入安装场景。
 
-加密密钥值不进入 seed、数据库或作业快照；数据库仅保存非敏感的引用元数据。环境模板通过动态 CredentialRef 将 Ansible 变量 `K8S_ENCRYPTION_KEY` 指向后端进程环境变量 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY`；部署方必须提供一个经审核的 32 字节密钥的 base64 值。Runner 只在批准后的执行阶段解析并注入该值。
+加密密钥值不进入 Seed、数据库或作业快照；环境模板通过 CredentialRef 将 Ansible 变量 `K8S_ENCRYPTION_KEY` 指向后端进程环境变量 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY`。部署方必须提供一个经审核的 32 字节密钥的 base64 值。当前 Kubernetes 1.17.5 Action 尚未把该引用声明为 `requiredCredentials`，因此环境 Owner 在审批前必须人工确认引用和后端变量均已配置，并依赖 Playbook 预检失败关闭。
 
 所有外部压缩包/二进制都要求 64 位十六进制 SHA256，容器镜像要求 `sha256:` digest；模板中的未知值保持为空，组件预检会在任何远端写操作前失败。无法从源快照确认软件版本的附加 Release 使用 `source-6909da3` 且 `verified=false`，不推测上游版本。
 

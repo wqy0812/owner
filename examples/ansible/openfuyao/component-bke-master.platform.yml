@@ -72,11 +72,6 @@
             - work_cluster_k8smaster
       tags: always
 
-    - name: Bridge platform inventory user to the legacy template variable
-      set_fact:
-        ansible_ssh_user: "{{ ansible_user }}"
-      tags: always
-
     - name: Build Docker registry credential document for BKE templates
       set_fact:
         docker_config_json: "{{ {'auths': {ENV_DOCKER_HARBOR_DOMAIN: {'username': ENV_DOCKER_SECRET_USERNAME, 'password': ENV_DOCKER_SECRET_PASSWORD, 'auth': ('%s:%s' | format(ENV_DOCKER_SECRET_USERNAME, ENV_DOCKER_SECRET_PASSWORD) | b64encode)}}} | to_json }}"

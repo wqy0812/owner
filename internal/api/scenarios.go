@@ -1,8 +1,6 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 
@@ -11,7 +9,7 @@ import (
 )
 
 type graphInput struct {
-	Nodes           []json.RawMessage     `json:"nodes"`
+	Nodes           []flowNodeInput       `json:"nodes"`
 	Edges           []domain.ScenarioEdge `json:"edges"`
 	ExecutionPolicy map[string]any        `json:"executionPolicy"`
 }
@@ -31,29 +29,17 @@ type flowNodeInput struct {
 	} `json:"data"`
 }
 
-func (input graphInput) domain() (domain.ScenarioGraph, error) {
+func (input graphInput) domain() domain.ScenarioGraph {
 	graph := domain.ScenarioGraph{Edges: input.Edges}
-	for _, raw := range input.Nodes {
-		var flow flowNodeInput
-		if err := json.Unmarshal(raw, &flow); err != nil {
-			return graph, fmt.Errorf("%w: invalid graph node: %v", domain.ErrInvalid, err)
-		}
-		if flow.Data.ReleaseID != "" {
-			graph.Nodes = append(graph.Nodes, domain.ScenarioNode{
-				ID: flow.ID, Name: flow.Data.Label, ReleaseID: flow.Data.ReleaseID,
-				Action: flow.Data.Action, HostGroup: flow.Data.HostGroup,
-				Values: flow.Data.Values, RunInputs: flow.Data.RunInputs,
-				DependencySources: flow.Data.DependencySources, Position: flow.Position,
-			})
-			continue
-		}
-		var node domain.ScenarioNode
-		if err := json.Unmarshal(raw, &node); err != nil {
-			return graph, fmt.Errorf("%w: invalid domain graph node: %v", domain.ErrInvalid, err)
-		}
-		graph.Nodes = append(graph.Nodes, node)
+	for _, flow := range input.Nodes {
+		graph.Nodes = append(graph.Nodes, domain.ScenarioNode{
+			ID: flow.ID, Name: flow.Data.Label, ReleaseID: flow.Data.ReleaseID,
+			Action: flow.Data.Action, HostGroup: flow.Data.HostGroup,
+			Values: flow.Data.Values, RunInputs: flow.Data.RunInputs,
+			DependencySources: flow.Data.DependencySources, Position: flow.Position,
+		})
 	}
-	return graph, nil
+	return graph
 }
 
 func (h *Handler) listScenarios(w http.ResponseWriter, r *http.Request) {
@@ -121,11 +107,7 @@ func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	graph, err := input.domain()
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	graph := input.domain()
 	if input.ExecutionPolicy == nil {
 		if existing, getErr := h.platform.Store().GetScenarioRevision(r.Context(), r.PathValue("id")); getErr == nil {
 			input.ExecutionPolicy = existing.ExecutionPolicy
@@ -153,7 +135,7 @@ func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
 		}
 		messages = append(messages, message)
 	}
-	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages, "issues": issues})
+	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages})
 }
 
 func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
@@ -264,9 +246,9 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	}
 	return map[string]any{
 		"id": revision.ID, "scenarioId": revision.ScenarioID, "revision": revision.Revision,
-		"state": state, "status": state, "nodes": nodes, "edges": revision.Graph.Edges,
-		"graph": map[string]any{"nodes": nodes, "edges": revision.Graph.Edges}, "executionPolicy": revision.ExecutionPolicy,
-		"testedAt": revision.TestPassedAt, "testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
+		"state": state, "nodes": nodes, "edges": revision.Graph.Edges,
+		"executionPolicy": revision.ExecutionPolicy,
+		"testPassedAt":    revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}
 }
 

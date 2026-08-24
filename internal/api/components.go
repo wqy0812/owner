@@ -19,7 +19,6 @@ type releaseInput struct {
 	Version                string                       `json:"version"`
 	Type                   domain.ReleaseType           `json:"type"`
 	Status                 domain.ReleaseStatus         `json:"status"`
-	State                  domain.ReleaseStatus         `json:"state"`
 	ReleaseNotes           string                       `json:"releaseNotes"`
 	Breaking               bool                         `json:"breaking"`
 	RiskLevel              domain.RiskLevel             `json:"riskLevel"`
@@ -30,32 +29,27 @@ type releaseInput struct {
 }
 
 type componentDependencyInput struct {
-	ComponentID       string                    `json:"componentId"`
-	ReleaseID         string                    `json:"releaseId"`
-	UpstreamComponent string                    `json:"upstreamComponentId"`
-	UpstreamRelease   string                    `json:"upstreamReleaseId"`
-	Purpose           string                    `json:"purpose"`
-	ParameterMappings []domain.ParameterMapping `json:"parameterMappings"`
+	UpstreamComponentID string                    `json:"upstreamComponentId"`
+	UpstreamReleaseID   string                    `json:"upstreamReleaseId"`
+	Purpose             string                    `json:"purpose"`
+	ParameterMappings   []domain.ParameterMapping `json:"parameterMappings"`
 }
 
 type componentActionInput struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	Kind                    domain.ActionKind `json:"kind"`
-	Type                    domain.ActionKind `json:"type"`
-	Playbook                string            `json:"playbook"`
-	Tags                    []string          `json:"tags"`
-	Limit                   string            `json:"limit"`
-	HostGroup               string            `json:"hostGroup"`
-	AllowedParameters       []string          `json:"allowedParameters"`
-	RequiredCredentials     *[]string         `json:"requiredCredentials"`
-	RequiredCredentialNames *[]string         `json:"required_credential_names"`
-	TimeoutSeconds          int               `json:"timeoutSeconds"`
-	RiskLevel               domain.RiskLevel  `json:"riskLevel"`
-	Risk                    string            `json:"risk"`
-	Destructive             bool              `json:"destructive"`
-	FromReleaseID           string            `json:"fromReleaseId"`
-	ToReleaseID             string            `json:"toReleaseId"`
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	Kind                domain.ActionKind `json:"kind"`
+	Playbook            string            `json:"playbook"`
+	Tags                []string          `json:"tags"`
+	Limit               string            `json:"limit"`
+	HostGroup           string            `json:"hostGroup"`
+	AllowedParameters   []string          `json:"allowedParameters"`
+	RequiredCredentials *[]string         `json:"requiredCredentials"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
+	Destructive         bool              `json:"destructive"`
+	FromReleaseID       string            `json:"fromReleaseId"`
+	ToReleaseID         string            `json:"toReleaseId"`
 }
 
 type releaseContractInput struct {
@@ -66,16 +60,9 @@ type releaseContractInput struct {
 func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDependency {
 	dependencies := make([]domain.ComponentDependency, 0, len(inputs))
 	for _, dependency := range inputs {
-		componentID, releaseID := dependency.UpstreamComponent, dependency.UpstreamRelease
-		if componentID == "" {
-			componentID = dependency.ComponentID
-		}
-		if releaseID == "" {
-			releaseID = dependency.ReleaseID
-		}
 		dependencies = append(dependencies, domain.ComponentDependency{
-			UpstreamComponentID: componentID,
-			UpstreamReleaseID:   releaseID,
+			UpstreamComponentID: dependency.UpstreamComponentID,
+			UpstreamReleaseID:   dependency.UpstreamReleaseID,
 			Purpose:             dependency.Purpose,
 			ParameterMappings:   dependency.ParameterMappings,
 		})
@@ -84,33 +71,18 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 }
 
 func (input releaseInput) domain(existing *domain.ComponentRelease) domain.ComponentRelease {
-	status := input.Status
-	if status == "" {
-		status = input.State
-	}
 	release := domain.ComponentRelease{
-		Version: input.Version, Type: input.Type, Status: status, ReleaseNotes: input.ReleaseNotes,
+		Version: input.Version, Type: input.Type, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
 		Breaking: input.Breaking, RiskLevel: input.RiskLevel,
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
 	release.Dependencies = dependencyInputs(input.Dependencies)
 	for index, inputAction := range input.Actions {
-		kind := inputAction.Kind
-		if kind == "" {
-			kind = inputAction.Type
-		}
 		risk := inputAction.RiskLevel
 		if risk == "" {
-			if inputAction.Risk == "destructive" {
-				risk = domain.RiskDestructive
-			} else {
-				risk = domain.RiskLow
-			}
+			risk = domain.RiskLow
 		}
 		requiredCredentials := inputAction.RequiredCredentials
-		if requiredCredentials == nil {
-			requiredCredentials = inputAction.RequiredCredentialNames
-		}
 		if requiredCredentials == nil && existing != nil {
 			for existingIndex := range existing.Actions {
 				candidate := &existing.Actions[existingIndex]
@@ -126,11 +98,11 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 			requiredCredentials = &empty
 		}
 		release.Actions = append(release.Actions, domain.ActionDefinition{
-			Name: inputAction.Name, Kind: kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
+			Name: inputAction.Name, Kind: inputAction.Kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
 			Limit: inputAction.Limit, HostGroup: inputAction.HostGroup, AllowedParameters: inputAction.AllowedParameters,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
-			Destructive:   inputAction.Destructive || inputAction.Risk == "destructive",
+			Destructive:   inputAction.Destructive,
 			FromReleaseID: inputAction.FromReleaseID, ToReleaseID: inputAction.ToReleaseID,
 		})
 	}

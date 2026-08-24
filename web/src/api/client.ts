@@ -1,6 +1,7 @@
 import type {
   ActionDefinition,
   Approval,
+  AuditEvent,
   Component,
   ComponentDependency,
   ComponentArtifact,
@@ -10,6 +11,7 @@ import type {
   ComponentTestRequest,
   CredentialRef,
   Environment,
+  EnvironmentHealthCheck,
   EnvironmentHost,
   EnvironmentRevision,
   ImpactPreview,
@@ -100,16 +102,16 @@ function invalidResponse(status: number, message: string): ApiError {
 }
 
 function unwrapList(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
   const body = record(value);
-  const items = body && (body.items ?? body.data);
+  const items = body?.items;
   if (Array.isArray(items)) return items;
   throw invalidResponse(200, '平台 API 返回了无效的列表响应。');
 }
 
 function unwrap(value: unknown): unknown {
   const body = record(value);
-  return body && 'data' in body ? body.data : value;
+  if (!body || !('data' in body)) throw invalidResponse(200, '平台 API 缺少 data 响应信封。');
+  return body.data;
 }
 
 type LooseRecord = Record<string, unknown>;
@@ -138,57 +140,54 @@ function requireRecord(value: unknown, field: string): LooseRecord {
   throw invalidResponse(200, `平台 API 缺少或错误返回了 ${field}。`);
 }
 
-function field(raw: LooseRecord, ...keys: string[]): unknown {
-  for (const key of keys) {
-    const value = raw[key];
-    if (value !== undefined && value !== null) return value;
-  }
-  return undefined;
+function field(raw: LooseRecord, key: string): unknown {
+  const value = raw[key];
+  return value === null ? undefined : value;
 }
 
-function optionalString(raw: LooseRecord, ...keys: string[]): string | undefined {
-  const value = field(raw, ...keys);
+function optionalString(raw: LooseRecord, key: string): string | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
   if (typeof value === 'string') return value;
-  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是字符串。`);
+  throw invalidResponse(200, `平台 API 的 ${key} 必须是字符串。`);
 }
 
-function requireString(raw: LooseRecord, ...keys: string[]): string {
-  const value = optionalString(raw, ...keys);
+function requireString(raw: LooseRecord, key: string): string {
+  const value = optionalString(raw, key);
   if (value !== undefined) return value;
-  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${key}。`);
 }
 
-function optionalNumber(raw: LooseRecord, ...keys: string[]): number | undefined {
-  const value = field(raw, ...keys);
+function optionalNumber(raw: LooseRecord, key: string): number | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是数字。`);
+  throw invalidResponse(200, `平台 API 的 ${key} 必须是数字。`);
 }
 
-function requireNumber(raw: LooseRecord, ...keys: string[]): number {
-  const value = optionalNumber(raw, ...keys);
+function requireNumber(raw: LooseRecord, key: string): number {
+  const value = optionalNumber(raw, key);
   if (value !== undefined) return value;
-  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${key}。`);
 }
 
-function optionalBoolean(raw: LooseRecord, ...keys: string[]): boolean | undefined {
-  const value = field(raw, ...keys);
+function optionalBoolean(raw: LooseRecord, key: string): boolean | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
-  throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是布尔值。`);
+  throw invalidResponse(200, `平台 API 的 ${key} 必须是布尔值。`);
 }
 
-function requireBoolean(raw: LooseRecord, ...keys: string[]): boolean {
-  const value = optionalBoolean(raw, ...keys);
+function requireBoolean(raw: LooseRecord, key: string): boolean {
+  const value = optionalBoolean(raw, key);
   if (value !== undefined) return value;
-  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${key}。`);
 }
 
-function optionalRecord(raw: LooseRecord, ...keys: string[]): LooseRecord | undefined {
-  const value = field(raw, ...keys);
+function optionalRecord(raw: LooseRecord, key: string): LooseRecord | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
-  return requireRecord(value, keys[0]);
+  return requireRecord(value, key);
 }
 
 function requireRecords(raw: LooseRecord, fieldName: string): LooseRecord[] {
@@ -197,65 +196,63 @@ function requireRecords(raw: LooseRecord, fieldName: string): LooseRecord[] {
   return value.map((item, index) => requireRecord(item, `${fieldName}[${index}]`));
 }
 
-function optionalRecords(raw: LooseRecord, ...keys: string[]): LooseRecord[] | undefined {
-  const value = field(raw, ...keys);
+function optionalRecords(raw: LooseRecord, key: string): LooseRecord[] | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是数组。`);
-  return value.map((item, index) => requireRecord(item, `${keys[0]}[${index}]`));
+  if (!Array.isArray(value)) throw invalidResponse(200, `平台 API 的 ${key} 必须是数组。`);
+  return value.map((item, index) => requireRecord(item, `${key}[${index}]`));
 }
 
-function optionalStringArray(raw: LooseRecord, ...keys: string[]): string[] | undefined {
-  const value = field(raw, ...keys);
+function optionalStringArray(raw: LooseRecord, key: string): string[] | undefined {
+  const value = field(raw, key);
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
-    throw invalidResponse(200, `平台 API 的 ${keys[0]} 必须是字符串数组。`);
+    throw invalidResponse(200, `平台 API 的 ${key} 必须是字符串数组。`);
   }
   return value;
 }
 
-function requireStringArray(raw: LooseRecord, ...keys: string[]): string[] {
-  const value = optionalStringArray(raw, ...keys);
+function requireStringArray(raw: LooseRecord, key: string): string[] {
+  const value = optionalStringArray(raw, key);
   if (value !== undefined) return value;
-  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${key}。`);
 }
 
-function optionalEnum<T extends string>(raw: LooseRecord, values: readonly T[], ...keys: string[]): T | undefined {
-  const value = optionalString(raw, ...keys);
+function optionalEnum<T extends string>(raw: LooseRecord, values: readonly T[], key: string): T | undefined {
+  const value = optionalString(raw, key);
   if (value === undefined) return undefined;
   if ((values as readonly string[]).includes(value)) return value as T;
-  throw invalidResponse(200, `平台 API 的 ${keys[0]} 值 ${JSON.stringify(value)} 不受支持。`);
+  throw invalidResponse(200, `平台 API 的 ${key} 值 ${JSON.stringify(value)} 不受支持。`);
 }
 
-function requireEnum<T extends string>(raw: LooseRecord, values: readonly T[], ...keys: string[]): T {
-  const value = optionalEnum(raw, values, ...keys);
+function requireEnum<T extends string>(raw: LooseRecord, values: readonly T[], key: string): T {
+  const value = optionalEnum(raw, values, key);
   if (value !== undefined) return value;
-  throw invalidResponse(200, `平台 API 缺少必填字段 ${keys[0]}。`);
+  throw invalidResponse(200, `平台 API 缺少必填字段 ${key}。`);
 }
 
-function optionalObject(raw: LooseRecord, ...keys: string[]): Record<string, unknown> | undefined {
-  return optionalRecord(raw, ...keys);
+function optionalObject(raw: LooseRecord, key: string): Record<string, unknown> | undefined {
+  return optionalRecord(raw, key);
 }
 
 function normalizeAction(raw: LooseRecord): ActionDefinition {
-  const risk = optionalEnum(raw, ['normal', 'destructive'] as const, 'risk');
-  const riskLevel = optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel', 'risk_level');
+  const riskLevel = optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel');
   const destructive = optionalBoolean(raw, 'destructive');
   return {
     id: optionalString(raw, 'id'),
     name: optionalString(raw, 'name'),
-    type: requireEnum(raw, ACTION_TYPES, 'type', 'kind'),
+    type: requireEnum(raw, ACTION_TYPES, 'kind'),
     playbook: requireString(raw, 'playbook'),
     tags: optionalStringArray(raw, 'tags'),
     limit: optionalString(raw, 'limit'),
-    hostGroup: optionalString(raw, 'hostGroup', 'host_group'),
-    timeoutSeconds: optionalNumber(raw, 'timeoutSeconds', 'timeout_seconds'),
-    allowedParameters: optionalStringArray(raw, 'allowedParameters', 'allowed_parameters'),
-    requiredCredentials: optionalStringArray(raw, 'requiredCredentials', 'required_credentials'),
-    risk: risk ?? (destructive ? 'destructive' : undefined),
+    hostGroup: optionalString(raw, 'hostGroup'),
+    timeoutSeconds: optionalNumber(raw, 'timeoutSeconds'),
+    allowedParameters: optionalStringArray(raw, 'allowedParameters'),
+    requiredCredentials: optionalStringArray(raw, 'requiredCredentials'),
     riskLevel,
     destructive,
-    fromReleaseId: optionalString(raw, 'fromReleaseId', 'from_release_id'),
-    toReleaseId: optionalString(raw, 'toReleaseId', 'to_release_id'),
+    fromReleaseId: optionalString(raw, 'fromReleaseId'),
+    toReleaseId: optionalString(raw, 'toReleaseId'),
   };
 }
 
@@ -271,99 +268,95 @@ function normalizeParameter(raw: LooseRecord): import('../types/domain').Paramet
     defaultValue: raw.defaultValue,
     visibility,
     enum: Array.isArray(enumValues) ? enumValues : undefined,
-    minLength: optionalNumber(raw, 'minLength', 'min_length'),
+    minLength: optionalNumber(raw, 'minLength'),
   };
 }
 
 function normalizeArtifact(raw: LooseRecord): ComponentArtifact {
   return {
     id: requireString(raw, 'id'),
-    releaseId: requireString(raw, 'releaseId', 'release_id'),
+    releaseId: requireString(raw, 'releaseId'),
     alias: requireString(raw, 'alias'),
-    fileStation: requireString(raw, 'fileStation', 'file_station'),
-    relativePath: requireString(raw, 'relativePath', 'relative_path'),
+    fileStation: requireString(raw, 'fileStation'),
+    relativePath: requireString(raw, 'relativePath'),
     filename: requireString(raw, 'filename'),
     sha256: requireString(raw, 'sha256'),
-    sizeBytes: requireNumber(raw, 'sizeBytes', 'size_bytes'),
-    sourceMode: requireEnum(raw, ['upload', 'register'] as const, 'sourceMode', 'source_mode'),
-    environmentId: requireString(raw, 'environmentId', 'environment_id'),
-    environmentRevisionId: requireString(raw, 'environmentRevisionId', 'environment_revision_id'),
-    createdBy: requireString(raw, 'createdBy', 'created_by'),
-    createdAt: requireString(raw, 'createdAt', 'created_at'),
+    sizeBytes: requireNumber(raw, 'sizeBytes'),
+    sourceMode: requireEnum(raw, ['upload', 'register'] as const, 'sourceMode'),
+    environmentId: requireString(raw, 'environmentId'),
+    environmentRevisionId: requireString(raw, 'environmentRevisionId'),
+    createdBy: requireString(raw, 'createdBy'),
+    createdAt: requireString(raw, 'createdAt'),
   };
 }
 
 function normalizeDependency(raw: LooseRecord): ComponentDependency {
-  const mappings = optionalRecords(raw, 'parameterMappings', 'parameter_mappings') ?? [];
+  const mappings = optionalRecords(raw, 'parameterMappings') ?? [];
   return {
     id: optionalString(raw, 'id'),
-    componentId: requireString(raw, 'componentId', 'component_id', 'upstreamComponentId'),
-    componentName: optionalString(raw, 'componentName', 'upstreamComponentName'),
-    releaseId: requireString(raw, 'upstreamReleaseId', 'upstream_release_id', 'releaseId', 'release_id'),
-    version: optionalString(raw, 'upstreamVersion', 'upstream_version', 'version'),
+    componentId: requireString(raw, 'upstreamComponentId'),
+    componentName: optionalString(raw, 'upstreamComponentName'),
+    releaseId: requireString(raw, 'upstreamReleaseId'),
+    version: optionalString(raw, 'upstreamVersion'),
     purpose: optionalString(raw, 'purpose'),
     parameterMappings: mappings.map((item) => ({
-      upstreamParameter: requireString(item, 'upstreamParameter', 'upstream_parameter'),
-      targetParameter: requireString(item, 'targetParameter', 'target_parameter'),
+      upstreamParameter: requireString(item, 'upstreamParameter'),
+      targetParameter: requireString(item, 'targetParameter'),
     })),
   };
 }
 
-function normalizeRelease(raw: LooseRecord, componentID?: string): ComponentRelease {
-  const state = requireEnum(raw, RELEASE_STATES, 'state', 'status');
-  const resolvedComponentID = optionalString(raw, 'componentId', 'component_id') ?? componentID;
-  if (!resolvedComponentID) throw invalidResponse(200, '平台 API 缺少必填字段 componentId。');
+function normalizeRelease(raw: LooseRecord): ComponentRelease {
+  const state = requireEnum(raw, RELEASE_STATES, 'status');
   const actions = optionalRecords(raw, 'actions')?.map(normalizeAction);
   const dependencies = optionalRecords(raw, 'dependencies')?.map(normalizeDependency);
   return {
     id: requireString(raw, 'id'),
-    componentId: resolvedComponentID,
+    componentId: requireString(raw, 'componentId'),
     version: requireString(raw, 'version'),
     type: optionalEnum(raw, ['atomic', 'bundle'] as const, 'type'),
     state,
-    status: state,
-    verification: optionalEnum(raw, ['unverified', 'testing', 'passed', 'failed'] as const, 'verification'),
     verified: optionalBoolean(raw, 'verified'),
     breaking: optionalBoolean(raw, 'breaking'),
-    releaseNotes: optionalString(raw, 'releaseNotes', 'release_notes'),
+    releaseNotes: optionalString(raw, 'releaseNotes'),
     dependencies,
-    environmentConstraints: optionalObject(raw, 'environmentConstraints', 'environment_constraints'),
+    environmentConstraints: optionalObject(raw, 'environmentConstraints'),
     parameters: optionalRecords(raw, 'parameters')?.map(normalizeParameter) ?? [],
     actions,
     artifacts: optionalRecords(raw, 'artifacts')?.map(normalizeArtifact) ?? [],
-    createdAt: optionalString(raw, 'createdAt', 'created_at'),
-    releasedAt: optionalString(raw, 'releasedAt', 'released_at'),
+    createdAt: optionalString(raw, 'createdAt'),
+    releasedAt: optionalString(raw, 'releasedAt'),
   };
 }
 
-function normalizeReleaseActionResponse(value: unknown, componentID?: string): ComponentRelease {
+function normalizeReleaseActionResponse(value: unknown): ComponentRelease {
   const raw = requireRecord(normalizeOptionalData(value), 'release');
-  return normalizeRelease(raw, componentID);
+  return normalizeRelease(raw);
 }
 
 function normalizeImageBuild(raw: LooseRecord): ComponentImageBuild {
   const logs = optionalRecords(raw, 'logs')?.map((log) => ({
     id: requireNumber(log, 'id'),
-    buildId: requireString(log, 'buildId', 'build_id'),
+    buildId: requireString(log, 'buildId'),
     stream: requireEnum(log, ['stdout', 'stderr', 'system'] as const, 'stream'),
     message: requireString(log, 'message'),
-    createdAt: requireString(log, 'createdAt', 'created_at'),
+    createdAt: requireString(log, 'createdAt'),
   }));
   return {
     id: requireString(raw, 'id'),
-    releaseId: requireString(raw, 'releaseId', 'release_id'),
-    environmentId: optionalString(raw, 'environmentId', 'environment_id'),
-    environmentRevisionId: optionalString(raw, 'environmentRevisionId', 'environment_revision_id'),
-    requestedBy: requireString(raw, 'requestedBy', 'requested_by'),
+    releaseId: requireString(raw, 'releaseId'),
+    environmentId: optionalString(raw, 'environmentId'),
+    environmentRevisionId: optionalString(raw, 'environmentRevisionId'),
+    requestedBy: requireString(raw, 'requestedBy'),
     status: requireEnum(raw, IMAGE_BUILD_STATUSES, 'status'),
-    dockerfileSha256: requireString(raw, 'dockerfileSha256', 'dockerfile_sha256'),
-    imageTag: requireString(raw, 'imageTag', 'image_tag'),
-    imageRef: requireString(raw, 'imageRef', 'image_ref'),
-    imageDigest: optionalString(raw, 'imageDigest', 'image_digest'),
-    error: optionalString(raw, 'error', 'errorText', 'error_text'),
-    createdAt: requireString(raw, 'createdAt', 'created_at'),
-    startedAt: optionalString(raw, 'startedAt', 'started_at'),
-    finishedAt: optionalString(raw, 'finishedAt', 'finished_at'),
+    dockerfileSha256: requireString(raw, 'dockerfileSha256'),
+    imageTag: requireString(raw, 'imageTag'),
+    imageRef: requireString(raw, 'imageRef'),
+    imageDigest: optionalString(raw, 'imageDigest'),
+    error: optionalString(raw, 'error'),
+    createdAt: requireString(raw, 'createdAt'),
+    startedAt: optionalString(raw, 'startedAt'),
+    finishedAt: optionalString(raw, 'finishedAt'),
     logs,
   };
 }
@@ -374,28 +367,28 @@ function normalizePlaybook(raw: LooseRecord): PlaybookFile {
     filename: requireString(raw, 'filename'),
     content: requireString(raw, 'content'),
     sha256: requireString(raw, 'sha256'),
-    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+    updatedAt: optionalString(raw, 'updatedAt'),
   };
 }
 
 function normalizeComponent(raw: LooseRecord): Component {
   const releases = optionalRecords(raw, 'releases')?.map((release) => normalizeRelease(release));
-  const latest = optionalRecord(raw, 'latestRelease', 'latest_release');
+  const latest = optionalRecord(raw, 'latestRelease');
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
     slug: optionalString(raw, 'slug'),
     description: optionalString(raw, 'description'),
-    ownerId: requireString(raw, 'ownerId', 'owner_id'),
-    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    ownerId: requireString(raw, 'ownerId'),
+    ownerName: optionalString(raw, 'ownerName'),
     layer: requireEnum(raw, COMPONENT_LAYERS, 'layer'),
     category: requireEnum(raw, COMPONENT_CATEGORIES, 'category'),
     kind: requireEnum(raw, COMPONENT_KINDS, 'kind'),
     requiredness: requireEnum(raw, COMPONENT_REQUIREDNESS, 'requiredness'),
     latestRelease: latest ? normalizeRelease(latest) : releases?.[0],
     releases,
-    releaseCount: optionalNumber(raw, 'releaseCount', 'release_count'),
-    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+    releaseCount: optionalNumber(raw, 'releaseCount'),
+    updatedAt: optionalString(raw, 'updatedAt'),
   };
 }
 
@@ -407,7 +400,7 @@ function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
   const data = requireRecord(raw.data, 'node.data');
   return {
     id: requireString(raw, 'id'),
-    type: optionalString(raw, 'type') ?? 'component',
+    type: requireEnum(raw, ['component'] as const, 'type'),
     position: normalizePosition(requireRecord(raw.position, 'node.position')),
     data: {
       label: requireString(data, 'label'),
@@ -436,34 +429,32 @@ function normalizeScenarioEdge(raw: LooseRecord): ScenarioEdge {
 function normalizeRevision(raw: LooseRecord): ScenarioRevision {
   return {
     id: requireString(raw, 'id'),
-    scenarioId: requireString(raw, 'scenarioId', 'scenario_id'),
+    scenarioId: requireString(raw, 'scenarioId'),
     revision: requireNumber(raw, 'revision'),
-    state: requireEnum(raw, ['draft', 'testing', 'test_passed', 'released', 'deprecated', 'abandoned'] as const, 'state', 'status'),
+    state: requireEnum(raw, ['draft', 'testing', 'test_passed', 'released', 'deprecated', 'abandoned'] as const, 'state'),
     nodes: requireRecords(raw, 'nodes').map(normalizeScenarioNode),
     edges: requireRecords(raw, 'edges').map(normalizeScenarioEdge),
-    runInputs: optionalStringArray(raw, 'runInputs', 'run_inputs'),
-    executionPolicy: optionalObject(raw, 'executionPolicy', 'execution_policy'),
-    validationErrors: optionalStringArray(raw, 'validationErrors'),
-    testedAt: optionalString(raw, 'testedAt', 'testPassedAt'),
+    executionPolicy: optionalObject(raw, 'executionPolicy'),
+    testedAt: optionalString(raw, 'testPassedAt'),
     createdAt: optionalString(raw, 'createdAt'),
   };
 }
 
 function normalizeScenario(raw: LooseRecord): Scenario {
   const revisions = optionalRecords(raw, 'revisions')?.map(normalizeRevision);
-  const current = optionalRecord(raw, 'currentRevision', 'current_revision', 'revision');
-  const currentID = optionalString(raw, 'currentRevisionId', 'current_revision_id');
+  const current = optionalRecord(raw, 'currentRevision');
+  const currentID = optionalString(raw, 'currentRevisionId');
   return {
     id: requireString(raw, 'id'),
     slug: requireString(raw, 'slug'),
     name: requireString(raw, 'name'),
     description: optionalString(raw, 'description'),
-    ownerId: requireString(raw, 'ownerId', 'owner_id'),
-    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    ownerId: requireString(raw, 'ownerId'),
+    ownerName: optionalString(raw, 'ownerName'),
     currentRevisionId: currentID,
-    currentRevision: current ? normalizeRevision(current) : revisions?.find((revision) => revision.id === currentID) ?? revisions?.[0],
+    currentRevision: current ? normalizeRevision(current) : undefined,
     revisions,
-    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+    updatedAt: optionalString(raw, 'updatedAt'),
   };
 }
 
@@ -480,7 +471,7 @@ function normalizeHost(raw: LooseRecord): EnvironmentHost {
 function normalizeCredential(raw: LooseRecord): CredentialRef {
   return {
     name: requireString(raw, 'name'),
-    type: requireEnum(raw, CREDENTIAL_TYPES, 'type', 'kind'),
+    type: requireEnum(raw, CREDENTIAL_TYPES, 'kind'),
     reference: optionalString(raw, 'reference'),
     maskedReference: optionalString(raw, 'maskedReference'),
   };
@@ -494,29 +485,66 @@ function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
   }));
   return {
     id: requireString(raw, 'id'),
-    environmentId: requireString(raw, 'environmentId', 'environment_id'),
+    environmentId: requireString(raw, 'environmentId'),
     revision: requireNumber(raw, 'revision'),
     facts: requireRecord(raw.facts, 'facts'),
     hosts: requireRecords(raw, 'hosts').map(normalizeHost),
     variables,
     credentialRefs: requireRecords(raw, 'credentialRefs').map(normalizeCredential),
-    maxConcurrentRuns: optionalNumber(raw, 'maxConcurrentRuns', 'max_concurrent_runs', 'maxConcurrent'),
+    maxConcurrentRuns: optionalNumber(raw, 'maxConcurrent'),
+    createdBy: optionalString(raw, 'createdBy'),
+    changeReason: optionalString(raw, 'changeReason'),
     createdAt: optionalString(raw, 'createdAt'),
   };
 }
 
+function normalizeEnvironmentHealthCheck(raw: LooseRecord): EnvironmentHealthCheck {
+  return {
+    id: requireString(raw, 'id'),
+    environmentId: requireString(raw, 'environmentId'),
+    environmentRevisionId: requireString(raw, 'environmentRevisionId'),
+    status: requireEnum(raw, ['healthy', 'degraded'] as const, 'status'),
+    results: requireRecords(raw, 'results').map((item) => ({
+      kind: requireEnum(item, ['host', 'dependency', 'configuration'] as const, 'kind'),
+      name: requireString(item, 'name'),
+      address: requireString(item, 'address'),
+      reachable: requireBoolean(item, 'reachable'),
+      latencyMs: requireNumber(item, 'latencyMs'),
+      error: optionalString(item, 'error'),
+    })),
+    checkedAt: requireString(raw, 'checkedAt'),
+  };
+}
+
 function normalizeEnvironment(raw: LooseRecord): Environment {
-  const revision = optionalRecord(raw, 'currentRevision', 'current_revision', 'revision');
+  const revision = optionalRecord(raw, 'currentRevision');
+  const revisions = optionalRecords(raw, 'revisions')?.map(normalizeEnvironmentRevision);
+  const healthCheck = optionalRecord(raw, 'healthCheck');
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
     description: optionalString(raw, 'description'),
-    ownerId: requireString(raw, 'ownerId', 'owner_id'),
-    ownerName: optionalString(raw, 'ownerName', 'owner_name'),
+    ownerId: requireString(raw, 'ownerId'),
+    ownerName: optionalString(raw, 'ownerName'),
     status: optionalEnum(raw, ['ready', 'locked', 'offline'] as const, 'status'),
+    schedulingStatus: optionalEnum(raw, ['idle', 'queued', 'awaiting_approval', 'running'] as const, 'schedulingStatus'),
     activeRunId: optionalString(raw, 'activeRunId'),
     currentRevision: revision ? normalizeEnvironmentRevision(revision) : undefined,
-    updatedAt: optionalString(raw, 'updatedAt', 'updated_at'),
+    revisions,
+    healthCheck: healthCheck ? normalizeEnvironmentHealthCheck(healthCheck) : undefined,
+    updatedAt: optionalString(raw, 'updatedAt'),
+  };
+}
+
+function normalizeAuditEvent(raw: LooseRecord): AuditEvent {
+  return {
+    id: requireString(raw, 'id'),
+    actorId: requireString(raw, 'actorId'),
+    action: requireString(raw, 'action'),
+    resourceType: requireString(raw, 'resourceType'),
+    resourceId: requireString(raw, 'resourceId'),
+    metadata: optionalRecord(raw, 'metadata') ?? {},
+    createdAt: requireString(raw, 'createdAt'),
   };
 }
 
@@ -538,15 +566,15 @@ function normalizeApproval(raw: LooseRecord): Approval {
     id: requireString(raw, 'id'),
     runId: requireString(raw, 'runId'),
     status: requireEnum(raw, ['pending', 'approved', 'rejected'] as const, 'status'),
-    riskReason: optionalString(raw, 'riskReason', 'reason'),
+    riskReason: optionalString(raw, 'riskReason'),
     requestedAt: optionalString(raw, 'requestedAt'),
     decidedAt: optionalString(raw, 'decidedAt'),
   };
 }
 
 function normalizeRun(raw: LooseRecord): Run {
-  const source = optionalRecord(raw, 'run') ?? raw;
-  const logTail = optionalStringArray(source, 'logTail', 'log_tail');
+  const source = raw;
+  const logTail = optionalStringArray(source, 'logTail');
   const steps = optionalRecords(source, 'steps')?.map(normalizeRunStep);
   const approval = optionalRecord(source, 'approval');
   const backups = optionalRecords(source, 'backups')?.map((backup) => ({
@@ -579,9 +607,10 @@ function normalizeRun(raw: LooseRecord): Run {
     componentId: optionalString(source, 'componentId'),
     componentName: optionalString(source, 'componentName'),
     componentReleaseId: optionalString(source, 'componentReleaseId'),
-    environmentId: requireString(source, 'environmentId', 'environment_id'),
+    action: optionalString(source, 'action'),
+    environmentId: requireString(source, 'environmentId'),
     environmentName: optionalString(source, 'environmentName'),
-    createdBy: optionalString(source, 'createdBy', 'requestedBy'),
+    createdBy: optionalString(source, 'requestedBy'),
     createdByName: optionalString(source, 'createdByName'),
     destructive: optionalBoolean(source, 'destructive'),
     queuePosition: optionalNumber(source, 'queuePosition'),
@@ -600,7 +629,7 @@ function normalizeRun(raw: LooseRecord): Run {
 }
 
 function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
-  const source = optionalRecord(raw, 'data') ?? raw;
+  const source = raw;
   const steps = optionalRecords(source, 'steps')?.map((step) => ({
     order: requireNumber(step, 'order'),
     componentId: requireString(step, 'componentId'),
@@ -640,16 +669,16 @@ function normalizeNotification(raw: LooseRecord): Notification {
     userId: optionalString(raw, 'userId'),
     type: optionalString(raw, 'type'),
     title: requireString(raw, 'title'),
-    message: requireString(raw, 'message', 'body'),
+    message: requireString(raw, 'body'),
     read: requireBoolean(raw, 'read'),
     resourceUrl: optionalString(raw, 'resourceUrl'),
-    componentId: optionalString(raw, 'componentId') ?? payloadString('componentId'),
-    componentName: optionalString(raw, 'componentName') ?? payloadString('componentName'),
-    oldVersion: optionalString(raw, 'oldVersion') ?? payloadString('oldVersion'),
-    newVersion: optionalString(raw, 'newVersion') ?? payloadString('newVersion'),
-    breaking: optionalBoolean(raw, 'breaking') ?? payloadBoolean('breaking'),
-    impactPaths: narrowStringPaths(field(raw, 'impactPaths') ?? field(payload ?? {}, 'impactPaths', 'paths')),
-    scenarioIds: optionalStringArray(raw, 'scenarioIds') ?? payloadStrings('scenarioIds'),
+    componentId: payloadString('componentId'),
+    componentName: payloadString('componentName'),
+    oldVersion: payloadString('oldVersion'),
+    newVersion: payloadString('newVersion'),
+    breaking: payloadBoolean('breaking'),
+    impactPaths: narrowStringPaths(field(payload ?? {}, 'paths')),
+    scenarioIds: payloadStrings('scenarioIds'),
     createdAt: optionalString(raw, 'createdAt'),
   };
 }
@@ -680,6 +709,48 @@ function narrowPeople(value: unknown): Array<{ id: string; name: string }> {
 function narrowStringPaths(value: unknown): string[][] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((path) => Array.isArray(path) && path.every((part) => typeof part === 'string') ? [path] : []);
+}
+
+function serializeAction(action: ActionDefinition) {
+  return {
+    id: action.id,
+    name: action.name,
+    kind: action.type,
+    playbook: action.playbook,
+    tags: action.tags,
+    limit: action.limit,
+    hostGroup: action.hostGroup,
+    timeoutSeconds: action.timeoutSeconds,
+    allowedParameters: action.allowedParameters,
+    requiredCredentials: action.requiredCredentials,
+    riskLevel: action.riskLevel ?? (action.destructive ? 'destructive' : 'low'),
+    destructive: action.destructive ?? action.riskLevel === 'destructive',
+    fromReleaseId: action.fromReleaseId,
+    toReleaseId: action.toReleaseId,
+  };
+}
+
+function serializeDependency(dependency: ComponentDependency) {
+  return {
+    upstreamComponentId: dependency.componentId,
+    upstreamReleaseId: dependency.releaseId,
+    purpose: dependency.purpose,
+    parameterMappings: dependency.parameterMappings ?? [],
+  };
+}
+
+function serializeRelease(input: Partial<ComponentRelease>) {
+  return {
+    version: input.version,
+    type: input.type,
+    status: input.state,
+    releaseNotes: input.releaseNotes,
+    breaking: input.breaking,
+    environmentConstraints: input.environmentConstraints,
+    parameters: input.parameters,
+    dependencies: input.dependencies?.map(serializeDependency),
+    actions: input.actions?.map(serializeAction),
+  };
 }
 
 const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal });
@@ -714,13 +785,16 @@ export const api = {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
   },
   async createRelease(componentId: string, input: Partial<ComponentRelease>) {
-    return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/releases`, input), componentId);
+    return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/releases`, serializeRelease(input)));
   },
   async updateRelease(releaseId: string, input: Partial<ComponentRelease>) {
-    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}`, input));
+    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}`, serializeRelease(input)));
   },
   async updateReleaseContract(releaseId: string, input: Pick<ComponentRelease, 'parameters' | 'dependencies'>) {
-    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}/contract`, input));
+    return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}/contract`, {
+      parameters: input.parameters,
+      dependencies: input.dependencies?.map(serializeDependency),
+    }));
   },
   async uploadArtifact(releaseId: string, input: { environmentId: string; alias: string; sha256?: string; artifact: File; checksumFile?: File }) {
     const form = new FormData();
@@ -802,14 +876,17 @@ export const api = {
     const backendGraph = {
       nodes: graph.nodes.map((node) => ({
         id: node.id,
-        name: node.data.label,
-        releaseId: node.data.releaseId,
-        action: node.data.action,
-        hostGroup: node.data.hostGroup,
-        values: node.data.values ?? {},
-        runInputs: node.data.runInputs ?? [],
-        dependencySources: node.data.dependencySources ?? {},
+        type: 'component',
         position: node.position,
+        data: {
+          label: node.data.label,
+          releaseId: node.data.releaseId,
+          action: node.data.action,
+          hostGroup: node.data.hostGroup,
+          values: node.data.values ?? {},
+          runInputs: node.data.runInputs ?? [],
+          dependencySources: node.data.dependencySources ?? {},
+        },
       })),
       edges: graph.edges,
       executionPolicy: graph.executionPolicy ?? {},
@@ -838,27 +915,36 @@ export const api = {
   async createEnvironment(input: Partial<Environment> & { facts?: Record<string, unknown> }) {
     return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environments', input)), 'environment'));
   },
-  async updateInventory(environmentId: string, hosts: EnvironmentHost[]) {
-    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/inventory`, { hosts })), 'environment'));
+  async updateInventory(environmentId: string, hosts: EnvironmentHost[], changeReason = '') {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/inventory`, { hosts, changeReason })), 'environment'));
   },
-  async updateVariables(environmentId: string, variables: Record<string, string>) {
-    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/variables`, { variables })), 'environment'));
+  async updateVariables(environmentId: string, variables: Record<string, string>, changeReason = '') {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/variables`, { variables, changeReason })), 'environment'));
   },
-  async updateFacts(environmentId: string, facts: Record<string, unknown>) {
-    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/facts`, { facts })), 'environment'));
+  async updateFacts(environmentId: string, facts: Record<string, unknown>, changeReason = '') {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/facts`, { facts, changeReason })), 'environment'));
   },
-  async updateCredentialRefs(environmentId: string, credentialRefs: unknown[]) {
+  async updateCredentialRefs(environmentId: string, credentialRefs: unknown[], changeReason = '') {
     const refs = credentialRefs.map((credential) => {
       const item = requireRecord(credential, 'credential reference');
       return {
         name: requireString(item, 'name'),
-        kind: requireEnum(item, CREDENTIAL_TYPES, 'kind', 'type'),
+        kind: requireEnum(item, CREDENTIAL_TYPES, 'type'),
         reference: optionalString(item, 'reference'),
       };
     });
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/credential-refs`, {
-      credentialRefs: refs,
+      credentialRefs: refs, changeReason,
     })), 'environment'));
+  },
+  async checkEnvironmentHealth(environmentId: string) {
+    return normalizeEnvironmentHealthCheck(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/health-checks`)), 'environment health check'));
+  },
+  async restoreEnvironmentRevision(environmentId: string, revisionId: string, changeReason: string) {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/revisions/${revisionId}/restore`, { changeReason })), 'environment'));
+  },
+  async auditEvents(signal?: AbortSignal) {
+    return unwrapList(await get<unknown>('/audit-events', signal)).map((item) => normalizeAuditEvent(requireRecord(item, 'audit event')));
   },
   async runs(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/runs', signal)).map((item) => normalizeRun(requireRecord(item, 'run')));

@@ -562,27 +562,8 @@ func runInputForNode(node domain.ScenarioNode, runInput map[string]any) map[stri
 }
 
 func validateEnvironmentConstraints(constraints, facts map[string]any) error {
-	aliases := map[string][]string{
-		"architecture":    {"architecture", "arch"},
-		"arch":            {"architecture", "arch"},
-		"operatingSystem": {"operatingSystem", "os", "distribution"},
-		"os":              {"operatingSystem", "os", "distribution"},
-		"ipFamily":        {"ipFamily", "network"},
-		"network":         {"ipFamily", "network"},
-	}
 	for key, expected := range constraints {
-		factKeys := aliases[key]
-		if len(factKeys) == 0 {
-			factKeys = []string{key}
-		}
-		var actual any
-		found := false
-		for _, factKey := range factKeys {
-			if value, ok := facts[factKey]; ok {
-				actual, found = value, true
-				break
-			}
-		}
+		actual, found := facts[key]
 		if !found {
 			return fmt.Errorf("%w: environment fact %q is required by the component", domain.ErrInvalid, key)
 		}
@@ -594,24 +575,23 @@ func validateEnvironmentConstraints(constraints, facts map[string]any) error {
 }
 
 func constraintMatches(expected, actual any) bool {
-	normalize := func(value any) string { return strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) }
 	switch values := expected.(type) {
 	case []any:
 		for _, value := range values {
-			if normalize(value) == normalize(actual) {
+			if reflect.DeepEqual(value, actual) {
 				return true
 			}
 		}
 		return false
 	case []string:
 		for _, value := range values {
-			if normalize(value) == normalize(actual) {
+			if reflect.DeepEqual(value, actual) {
 				return true
 			}
 		}
 		return false
 	default:
-		return normalize(expected) == normalize(actual)
+		return reflect.DeepEqual(expected, actual)
 	}
 }
 

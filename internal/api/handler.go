@@ -113,6 +113,8 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/facts", h.updateFacts)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/variables", h.updateVariables)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/credential-refs", h.updateCredentialRefs)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/health-checks", h.checkEnvironmentHealth)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/revisions/{revisionId}/restore", h.restoreEnvironmentRevision)
 
 	h.router.HandleFunc("GET /api/v1/runs", h.listRuns)
 	h.router.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
@@ -187,6 +189,7 @@ func currentUser(r *http.Request) domain.User {
 
 func decodeJSON(r *http.Request, output any) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 2<<20))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
 		return fmt.Errorf("%w: malformed JSON body: %v", domain.ErrInvalid, err)
 	}

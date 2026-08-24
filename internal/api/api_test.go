@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,54 @@ import (
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
 )
+
+func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
+	f := newAPIFixture(t)
+	f.platform.ConfigureEnvironmentHealthDialer(func(_ context.Context, _, _ string) (net.Conn, error) {
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	})
+	owner := f.session(seed.EnvironmentOwnerID)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+
+	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/facts", map[string]any{
+		"facts": map[string]any{"architecture": "amd64"}, "changeReason": "校正架构事实",
+	}, owner)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), "校正架构事实") {
+		t.Fatalf("environment revision update status=%d body=%s", updated.Code, updated.Body.String())
+	}
+
+	listed := decodeEnvelope(t, f.request(http.MethodGet, "/api/v1/environments", nil, owner))["items"].([]any)
+	var environment map[string]any
+	for _, item := range listed {
+		candidate := item.(map[string]any)
+		if candidate["id"] == "environment-test" {
+			environment = candidate
+			break
+		}
+	}
+	if environment == nil {
+		t.Fatal("environment-test missing from environment list")
+	}
+	revisions := environment["revisions"].([]any)
+	if len(revisions) != 2 || revisions[0].(map[string]any)["changeReason"] != "校正架构事实" {
+		t.Fatalf("environment revisions=%#v", revisions)
+	}
+	sourceID := revisions[1].(map[string]any)["id"].(string)
+	restored := f.request(http.MethodPost, "/api/v1/environments/environment-test/revisions/"+sourceID+"/restore", map[string]any{"changeReason": "恢复初始配置"}, owner)
+	if restored.Code != http.StatusOK || !strings.Contains(restored.Body.String(), "恢复初始配置") {
+		t.Fatalf("restore revision status=%d body=%s", restored.Code, restored.Body.String())
+	}
+
+	health := f.request(http.MethodPost, "/api/v1/environments/environment-test/health-checks", nil, owner)
+	if health.Code != http.StatusOK || !strings.Contains(health.Body.String(), `"status":"healthy"`) {
+		t.Fatalf("health check status=%d body=%s", health.Code, health.Body.String())
+	}
+	if denied := f.request(http.MethodPost, "/api/v1/environments/environment-test/health-checks", nil, alice); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner health check status=%d body=%s", denied.Code, denied.Body.String())
+	}
+}
 
 func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	f := newAPIFixture(t)
@@ -512,7 +561,7 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	if rejected.Code != http.StatusNotFound || strings.Contains(rejected.Body.String(), secret) {
 		t.Fatalf("removed parameter endpoint status=%d body=%s", rejected.Code, rejected.Body.String())
 	}
-	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/credential-refs", map[string]any{"credentialRefs": []any{map[string]any{"name": "registry", "type": "envVarRef", "reference": "TEST_REGISTRY_TOKEN"}}}, dave)
+	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/credential-refs", map[string]any{"credentialRefs": []any{map[string]any{"name": "registry", "kind": "envVarRef", "reference": "TEST_REGISTRY_TOKEN"}}}, dave)
 	if updated.Code != http.StatusOK {
 		t.Fatalf("credential ref update status=%d body=%s", updated.Code, updated.Body.String())
 	}
@@ -642,6 +691,36 @@ func TestPublicListAndScenarioDTOContracts(t *testing.T) {
 	}
 }
 
+func TestFirstVersionAPIRejectsOldRequestShapes(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+
+	for name, definition := range map[string]map[string]any{
+		"release state alias": {
+			"version": "strict-state", "type": "atomic", "state": "draft", "parameters": []any{}, "actions": []any{},
+		},
+		"action type alias": {
+			"version": "strict-action", "type": "atomic", "parameters": []any{},
+			"actions": []any{map[string]any{"name": "install", "type": "install", "playbook": "tests/runtime/install.yml"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := f.request(http.MethodPost, "/api/v1/components/component-test-runtime/releases", definition, alice)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") {
+				t.Fatalf("unknown first-version field status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	flatGraph := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r1/graph", map[string]any{
+		"nodes": []any{map[string]any{"id": "flat", "releaseId": "release-test-runtime-1.0.0", "action": "install"}},
+		"edges": []any{},
+	}, alice)
+	if flatGraph.Code != http.StatusBadRequest || !strings.Contains(flatGraph.Body.String(), "unknown field") {
+		t.Fatalf("old flat graph status=%d body=%s", flatGraph.Code, flatGraph.Body.String())
+	}
+}
+
 func TestReleaseImpactNotifiesDownstreamAndScenarioOwners(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
@@ -749,7 +828,7 @@ func TestDraftRequiredCredentialsDistinguishesOmittedFromExplicitEmpty(t *testin
 	if got := omittedAction["requiredCredentials"].([]any); len(got) != 1 || got[0] != "K8S_BOOTSTRAP_TOKEN" {
 		t.Fatalf("omitted required credentials were not preserved: %#v", got)
 	}
-	action["required_credential_names"] = []any{}
+	action["requiredCredentials"] = []any{}
 	cleared := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID, definition, alice)
 	if cleared.Code != http.StatusOK {
 		t.Fatalf("clear credential update status=%d body=%s", cleared.Code, cleared.Body.String())
@@ -853,7 +932,7 @@ func TestUpdatingReleaseContractPreservesActionsAndRejectsDraftUpstream(t *testi
 			"name": "runtimeRoot", "description": "runtime install root", "type": "string", "visibility": "public",
 		}},
 		"dependencies": []any{map[string]any{
-			"componentId": "component-test-runtime", "releaseId": "release-test-runtime-1.0.0", "purpose": "runtime",
+			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.0.0", "purpose": "runtime",
 		}},
 	}, alice)
 	if updated.Code != http.StatusOK {
@@ -873,7 +952,7 @@ func TestUpdatingReleaseContractPreservesActionsAndRejectsDraftUpstream(t *testi
 	rejected := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
 		"parameters": []any{},
 		"dependencies": []any{map[string]any{
-			"componentId": "component-test-runtime", "releaseId": "release-test-runtime-1.1.0", "purpose": "draft must not be lockable",
+			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.1.0", "purpose": "draft must not be lockable",
 		}},
 	}, alice)
 	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "must lock a released version") {
@@ -987,7 +1066,7 @@ func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 		t.Fatalf("duplicate active draft clone status=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
 	oldGraphEdit := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r2/graph", map[string]any{
-		"nodes": []any{map[string]any{"id": "old", "releaseId": "release-test-runtime-1.0.0", "action": "install", "hostGroup": "test_nodes"}},
+		"nodes": []any{map[string]any{"id": "old", "type": "component", "position": map[string]any{"x": 0, "y": 0}, "data": map[string]any{"label": "old", "releaseId": "release-test-runtime-1.0.0", "action": "install", "hostGroup": "test_nodes"}}},
 		"edges": []any{},
 	}, carol)
 	if oldGraphEdit.Code != http.StatusConflict {

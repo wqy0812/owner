@@ -126,9 +126,8 @@ export function ScenariosPage() {
     return [...new Set(explicit.length ? explicit : [selectedNode?.data.action ?? 'install'])];
   }, [selectedNode?.data.action, selectedRelease?.actions]);
   const declaredRunInputs = useMemo(() => uniqueRunInputs([
-    ...(revision?.runInputs ?? []),
     ...nodes.flatMap((node) => node.data.runInputs ?? []),
-  ]), [nodes, revision?.runInputs]);
+  ]), [nodes]);
 
   function addComponent(component: Component) {
     if (!editable || !component.latestRelease) return;
@@ -159,7 +158,7 @@ export function ScenariosPage() {
     setBusy('save');
     try {
       const policy = JSON.parse(executionPolicy || '{}') as Record<string, unknown>;
-      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, type, position, data }) => ({ id, type, position, data })), edges: edges.map(({ id, source, target, label }) => ({ id, source, target, label: typeof label === 'string' ? label : undefined })) as ScenarioEdge[], executionPolicy: policy });
+      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })), edges: edges.map(({ id, source, target, label }) => ({ id, source, target, label: typeof label === 'string' ? label : undefined })) as ScenarioEdge[], executionPolicy: policy });
       notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh('scenarios');
     } catch (reason) { notify('error', '保存失败', reason instanceof SyntaxError ? '执行策略必须是有效 JSON。' : displayError(reason)); } finally { setBusy(undefined); }
   }

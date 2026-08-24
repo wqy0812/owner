@@ -105,7 +105,7 @@ func init() {
 	}
 	for name, path := range openFuyaoEnvironmentPaths {
 		if definition, ok := openFuyaoParameterDefs[name]; ok {
-			if value, found := seedParameterValue(openFuyaoLegacyParameters(), path); found {
+			if value, found := seedParameterValue(openFuyaoDefaultParameters(), path); found {
 				definition.DefaultValue = value
 				definition.Required = false
 			}
@@ -229,7 +229,7 @@ func openFuyaoNode(id, name, releaseID, group, role, clusterPath string, action 
 		values["cluster_role"] = role
 	}
 	if clusterPath != "" {
-		if value, ok := seedParameterValue(openFuyaoLegacyParameters(), clusterPath); ok {
+		if value, ok := seedParameterValue(openFuyaoDefaultParameters(), clusterPath); ok {
 			values["cluster_id"] = value
 		}
 	}
@@ -296,7 +296,7 @@ func openFuyaoExecutionPolicy() map[string]any {
 	return map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}
 }
 
-func openFuyaoLegacyParameters() map[string]any {
+func openFuyaoDefaultParameters() map[string]any {
 	return map[string]any{
 		"operation": map[string]any{"management_cluster_id": "demo-management-cluster", "work_cluster_id": "demo-work-cluster", "strategy": "StatelessFlatNetworkStrategy"},
 		"artifact_sources": map[string]any{
@@ -354,6 +354,6 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 	}
 	sort.Slice(credentialRefs, func(i, j int) bool { return credentialRefs[i].Name < credentialRefs[j].Name })
 	environment := domain.Environment{ID: "environment-openfuyao-template", Name: "OpenFuyao Preflight Template", Description: "包含管理集群、业务控制面和业务节点的 TEST-NET 脱敏模板；不会连接真实基础设施。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "Kylin V10", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, MaxConcurrent: 1, CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "Kylin", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, MaxConcurrent: 1, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
 	return s.createEnvironmentIfMissing(ctx, environment, revision)
 }

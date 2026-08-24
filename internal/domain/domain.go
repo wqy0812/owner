@@ -492,15 +492,16 @@ func ValidateGraph(g ScenarioGraph) []ValidationIssue {
 }
 
 type Environment struct {
-	ID                string                `json:"id"`
-	Name              string                `json:"name"`
-	Description       string                `json:"description"`
-	OwnerID           string                `json:"ownerId"`
-	CurrentRevisionID string                `json:"currentRevisionId,omitempty"`
-	CreatedAt         time.Time             `json:"createdAt"`
-	UpdatedAt         time.Time             `json:"updatedAt"`
-	Revision          *EnvironmentRevision  `json:"revision,omitempty"`
-	Revisions         []EnvironmentRevision `json:"revisions,omitempty"`
+	ID                string                  `json:"id"`
+	Name              string                  `json:"name"`
+	Description       string                  `json:"description"`
+	OwnerID           string                  `json:"ownerId"`
+	CurrentRevisionID string                  `json:"currentRevisionId,omitempty"`
+	CreatedAt         time.Time               `json:"createdAt"`
+	UpdatedAt         time.Time               `json:"updatedAt"`
+	Revision          *EnvironmentRevision    `json:"revision,omitempty"`
+	Revisions         []EnvironmentRevision   `json:"revisions,omitempty"`
+	HealthCheck       *EnvironmentHealthCheck `json:"healthCheck,omitempty"`
 }
 
 type EnvironmentRevision struct {
@@ -512,7 +513,27 @@ type EnvironmentRevision struct {
 	Variables      map[string]string `json:"variables"`
 	CredentialRefs []CredentialRef   `json:"credentialRefs"`
 	MaxConcurrent  int               `json:"maxConcurrent"`
+	CreatedBy      string            `json:"createdBy,omitempty"`
+	ChangeReason   string            `json:"changeReason,omitempty"`
 	CreatedAt      time.Time         `json:"createdAt"`
+}
+
+type EnvironmentEndpointCheck struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Reachable bool   `json:"reachable"`
+	LatencyMS int64  `json:"latencyMs"`
+	Error     string `json:"error,omitempty"`
+}
+
+type EnvironmentHealthCheck struct {
+	ID                    string                     `json:"id"`
+	EnvironmentID         string                     `json:"environmentId"`
+	EnvironmentRevisionID string                     `json:"environmentRevisionId"`
+	Status                string                     `json:"status"`
+	Results               []EnvironmentEndpointCheck `json:"results"`
+	CheckedAt             time.Time                  `json:"checkedAt"`
 }
 
 // BackupMetadata binds a remote backup to the exact installation that

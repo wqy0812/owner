@@ -10,7 +10,7 @@ metadata:
 spec:
   hostname: {{ host }}
   ip: {{ host }}
-  username: {{ hostvars[host]['ansible_ssh_user'] }}
+  username: {{ hostvars[host]['ansible_user'] }}
   password: "{{ hostvars[host]['ansible_ssh_pass'] }}"
   port: "22"
   role:

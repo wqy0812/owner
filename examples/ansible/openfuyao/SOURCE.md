@@ -37,7 +37,9 @@ snapshot because it belongs to a concrete deployment. Use the sibling
 runtime.
 
 The platform-owned adapters and contract-test files are not part of the
-immutable 105-file source snapshot or its digest. The install adapters invoke
+105-file source snapshot or its digest. For the first-version contract, the
+three `bn.yaml.j2` references use canonical Inventory `ansible_user` directly.
+The install adapters invoke
 only the Roles needed by a component node. `component-bke-nodes.platform.yml`
 keeps the original `bke-common` then `bke-nodes` order, while
 `component-bke-master-verify.platform.yml` only reads the target BKECluster.
@@ -45,8 +47,7 @@ keeps the original `bke-common` then `bke-nodes` order, while
 Every adapter imports `component-bke-contract.tasks.yml`. It checks required
 variable names, types, `cluster_role`, strategy, and `target_host_group` before
 any Role executes. The master adapter also recreates the registry facts that
-were previously inherited from another Playbook and bridges Inventory
-`ansible_user` to the legacy `ansible_ssh_user` variable.
+were previously inherited from another Playbook.
 
 The platform Seed exposes three independent DAGs: management-cluster build,
 work-cluster control-plane build, and work-node enrollment. The enrollment DAG

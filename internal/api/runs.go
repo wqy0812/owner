@@ -83,7 +83,7 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"id": run.ID, "kind": run.Kind, "status": run.Status, "environmentId": run.EnvironmentID,
 		"environmentRevisionId": run.EnvironmentRevisionID, "componentReleaseId": run.ComponentReleaseID,
 		"scenarioRevisionId": run.ScenarioRevisionID, "action": run.Action, "destructive": run.Destructive,
-		"createdBy": run.RequestedBy, "requestedBy": run.RequestedBy, "artifactDigest": run.ArtifactDigest,
+		"requestedBy": run.RequestedBy, "artifactDigest": run.ArtifactDigest,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
 	}
 	if environment, err := h.platform.Store().GetEnvironment(r.Context(), run.EnvironmentID, false); err == nil {

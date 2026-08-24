@@ -22,8 +22,8 @@ const components = [{
   category: 'runtime',
   kind: 'software',
   requiredness: 'profile_required',
-  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { type: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { type: 'rollback', playbook: 'rollback.yml' }] },
-  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released', verified: true, actions: [{ type: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { type: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { type: 'rollback', playbook: 'rollback.yml' }] }],
+  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] },
+  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
 }];
 
 function json(data: unknown, status = 200) {
@@ -59,7 +59,6 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         scenarioId: 'scenario-openfuyao',
         revision: 1,
         state: 'draft',
-        status: 'draft',
         nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
         executionPolicy: {},
@@ -69,13 +68,12 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         scenarioId: 'scenario-openfuyao',
         revision: 1,
         state: 'draft',
-        status: 'draft',
         nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
         executionPolicy: {},
       }],
     }] : []);
-    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: {}, credentialRefs: [] } }]);
+    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
     return json({});
@@ -139,8 +137,10 @@ describe('platform shell and RBAC UI', () => {
     for (const label of ['1. 组件 Release', '2. 场景 Revision', '3. 环境 Revision', '4. Run']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    expect(screen.getAllByText(/当前为项目首个版本（V1）/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/环境仅用于测试，不是生产环境/).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: '场景节点数不等于环境主机数' })).toBeInTheDocument();
-    expect(screen.getByText(/实际数量以当前已发布 Revision 为准/)).toBeInTheDocument();
+    expect(screen.getByText(/实际数量以当前 Revision 为准/)).toBeInTheDocument();
     const commonButtons = screen.getByRole('region', { name: '全员公共按钮操作目录' });
     expect(commonButtons).toHaveTextContent('切换演示身份');
     expect(commonButtons).toHaveTextContent('刷新使用新版本');
@@ -174,7 +174,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '保存新 Revision', '拒绝', '批准执行']) {
+    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });
@@ -196,19 +196,19 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
-        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }, {
         id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
         latestRelease: {
-          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
           parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-          dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+          dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
         },
         releases: [{
-          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+          id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
           parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-          dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+          dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
         }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -229,13 +229,13 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/components')) return json([{
         id: 'component-controller-manager', name: 'kube-controller-manager', slug: 'kube-controller-manager', ownerId: alice.id,
         layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', state: 'released', status: 'released' },
-        releases: [{ id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', state: 'released', status: 'released' }],
+        latestRelease: { id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', status: 'released' },
+        releases: [{ id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', status: 'released' }],
       }, {
         id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
         layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', state: 'released', status: 'released' },
-        releases: [{ id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', state: 'released', status: 'released' }],
+        latestRelease: { id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', status: 'released' },
+        releases: [{ id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', status: 'released' }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -254,12 +254,12 @@ describe('platform shell and RBAC UI', () => {
   it('keeps component navigation locked until a Draft save finishes and its dialog unmounts', async () => {
     const schedulerDraft = {
       id: 'release-scheduler-draft', componentId: 'component-scheduler', version: '1.17.5-r2', type: 'atomic',
-      state: 'draft', status: 'draft', releaseNotes: 'Scheduler draft', parameters: [], dependencies: [],
-      actions: [{ name: 'rollback', type: 'rollback', playbook: 'managed/scheduler/kube-scheduler-rollback.yml', fromReleaseId: '1.17.5-r2', toReleaseId: '1.17.5' }],
+      status: 'draft', releaseNotes: 'Scheduler draft', parameters: [], dependencies: [],
+      actions: [{ name: 'rollback', kind: 'rollback', playbook: 'managed/scheduler/kube-scheduler-rollback.yml', fromReleaseId: '1.17.5-r2', toReleaseId: '1.17.5' }],
     };
     const proxyDraft = {
       id: 'release-proxy-draft', componentId: 'component-proxy', version: '1.17.5-r2', type: 'atomic',
-      state: 'draft', status: 'draft', releaseNotes: 'Proxy draft', parameters: [], dependencies: [], actions: [],
+      status: 'draft', releaseNotes: 'Proxy draft', parameters: [], dependencies: [], actions: [],
     };
     let resolveSave!: (response: Response) => void;
     const saveResponse = new Promise<Response>((resolve) => { resolveSave = resolve; });
@@ -311,19 +311,19 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
-        latestRelease: { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', status: 'released', parameters: [], dependencies: [] },
+        latestRelease: { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', status: 'released', parameters: [], dependencies: [] },
         releases: [
-          { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', status: 'released', parameters: [], dependencies: [] },
+          { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', status: 'released', parameters: [], dependencies: [] },
           {
-            id: 'release-kube-proxy-old', componentId: 'component-kube-proxy', version: '1.17.5', state: 'released', status: 'released',
+            id: 'release-kube-proxy-old', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
             parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-            dependencies: [{ componentId: 'component-kubelet', componentName: 'kubelet', releaseId: 'release-kubelet', version: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+            dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
           },
         ],
       }, {
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
-        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -346,7 +346,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('lets the owner edit dependencies and parameters on the component page', async () => {
     const draft = {
-      id: 'release-kube-proxy-draft', componentId: 'component-kube-proxy', version: '1.17.6', state: 'draft', status: 'draft',
+      id: 'release-kube-proxy-draft', componentId: 'component-kube-proxy', version: '1.17.6', status: 'draft',
       parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
       dependencies: [] as Array<Record<string, unknown>>,
     };
@@ -354,12 +354,12 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PUT') {
-        return json({ ...draft, ...JSON.parse(String(init.body)), state: 'draft', status: 'draft' });
+        return json({ ...draft, ...JSON.parse(String(init.body)), status: 'draft' });
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
-        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', state: 'released', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }, {
         id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
         latestRelease: draft,
@@ -387,8 +387,8 @@ describe('platform shell and RBAC UI', () => {
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
         parameters: [{ name: 'kubeRoot', visibility: 'public' }],
         dependencies: [{
-          componentId: 'component-kubelet',
-          releaseId: 'release-kubelet',
+          upstreamComponentId: 'component-kubelet',
+          upstreamReleaseId: 'release-kubelet',
           parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
         }],
       });
@@ -400,7 +400,7 @@ describe('platform shell and RBAC UI', () => {
     { button: '创建 Draft 编辑参数合同', dialog: '创建 Draft 编辑参数合同', target: 'contract-parameters' },
   ])('creates a draft and continues to $target', async ({ button, dialog, target }) => {
     const released = components[0].releases[0];
-    const draft = { ...released, id: 'release-containerd-draft', version: 'v2.1.2', state: 'draft', status: 'draft', parameters: [], dependencies: [] };
+    const draft = { ...released, id: 'release-containerd-draft', version: 'v2.1.2', status: 'draft', parameters: [], dependencies: [] };
     let created = false;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -435,8 +435,8 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
-        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
+        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
+        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -463,8 +463,8 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
-        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
-        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', state: 'draft', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
+        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
+        releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -502,6 +502,81 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('button', { name: /containerd/ })).toBeInTheDocument();
   });
 
+  it('searches and filters the component owner catalog without changing component data', async () => {
+    renderApp('/components');
+    expect(await screen.findByRole('button', { name: /containerd/ })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: '搜索组件' }), 'missing-component');
+    expect(screen.getByText('没有匹配的组件')).toBeInTheDocument();
+    expect(screen.getByText(/当前详情不在目录筛选结果中/)).toBeInTheDocument();
+    await userEvent.clear(screen.getByRole('textbox', { name: '搜索组件' }));
+    await userEvent.click(screen.getByRole('button', { name: '有 Draft' }));
+    expect(screen.getByText('没有匹配的组件')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '全部' }));
+    expect(screen.getByRole('button', { name: /containerd/ })).toBeInTheDocument();
+  });
+
+  it('describes released environment validation as a state-changing Run instead of a Draft-only test', async () => {
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '环境验证' }));
+    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('对已发布版本执行生命周期作业');
+    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('提交后会创建 Run，并可能修改目标环境');
+    expect(screen.queryByText(/直接对当前 Draft/)).not.toBeInTheDocument();
+  });
+
+  it('shows Draft readiness and links current install and rollback evidence', async () => {
+    const draft = {
+      ...components[0].releases[0], id: 'release-containerd-draft', version: 'v2.2.0-rc1', status: 'draft',
+      verified: true, dependencies: [], parameters: [],
+      actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: draft, releases: [draft] }]);
+      if (url.endsWith('/runs')) return json([{
+        id: 'run-install', kind: 'component_test', status: 'succeeded', componentReleaseId: draft.id, action: 'install', environmentId: 'environment-test', environmentName: 'Six node lab', finishedAt: '2026-08-24T01:00:00Z',
+        steps: [{ id: 'install', name: 'install', action: 'install', status: 'succeeded' }, { id: 'verify', name: 'verify', action: 'verify', status: 'succeeded' }],
+      }, {
+        id: 'run-rollback', kind: 'component_test', status: 'succeeded', componentReleaseId: draft.id, action: 'rollback', environmentId: 'environment-test', environmentName: 'Six node lab', finishedAt: '2026-08-24T02:00:00Z',
+        steps: [{ id: 'rollback', name: 'rollback', action: 'rollback', status: 'succeeded' }, { id: 'verify-after', name: 'verify', action: 'verify', status: 'succeeded' }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    const readiness = await screen.findByLabelText('Draft v2.2.0-rc1 发布就绪度');
+    expect(readiness).toHaveTextContent('4/4');
+    expect(within(readiness).getAllByRole('link', { name: /Six node lab/ })).toHaveLength(2);
+    expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeEnabled();
+  });
+
+  it('previews downstream impact before deprecating a released component version', async () => {
+    let deprecated = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/component-releases/release-containerd-2/impact')) return json({ componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
+      if (url.endsWith('/component-releases/release-containerd-2/deprecate') && init?.method === 'POST') {
+        deprecated = true;
+        return json({ ...components[0].releases[0], status: 'deprecated' });
+      }
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '废弃' }));
+    expect(deprecated).toBe(false);
+    expect(screen.getByRole('dialog', { name: '废弃 v2.1.1' })).toHaveTextContent('这是影响下游选择的状态变更');
+    const confirm = screen.getByRole('button', { name: '确认废弃版本' });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    await userEvent.click(confirm);
+    await waitFor(() => expect(deprecated).toBe(true));
+  });
+
   it('shows each release environment constraints such as architecture', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -509,11 +584,11 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/components')) return json([{
         id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
         latestRelease: {
-          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE', 'Kylin'], ipFamily: ['IPv4'] },
         },
         releases: [{
-          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE', 'Kylin'], ipFamily: ['IPv4'] },
         }],
       }]);
@@ -542,17 +617,17 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/components')) return json([{
         id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
         latestRelease: {
-          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
         },
         releases: [{
-          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', status: 'released',
+          id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
         }],
       }]);
       if (url.includes('/component-releases/release-containerd-2/clone')) {
         return json({
-          id: 'release-containerd-3', componentId: 'component-containerd', version: 'v2.2.0', state: 'draft', status: 'draft',
+          id: 'release-containerd-3', componentId: 'component-containerd', version: 'v2.2.0', status: 'draft',
           environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], ipFamily: ['IPv4'] },
         });
       }
@@ -613,11 +688,11 @@ describe('platform shell and RBAC UI', () => {
   it('previews rollback versions, invalidates stale plans, and submits rollback-only with the digest', async () => {
     const draft = {
       id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1', type: 'atomic',
-      state: 'draft', status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
+      status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
       actions: [
-        { name: 'install', type: 'install', playbook: 'managed/runtime/install.yml' },
-        { name: 'verify', type: 'verify', playbook: 'managed/runtime/verify.yml' },
-        { name: 'rollback', type: 'rollback', playbook: 'managed/runtime/rollback.yml', fromReleaseId: 'release-runtime-draft', toReleaseId: 'release-runtime-stable' },
+        { name: 'install', kind: 'install', playbook: 'managed/runtime/install.yml' },
+        { name: 'verify', kind: 'verify', playbook: 'managed/runtime/verify.yml' },
+        { name: 'rollback', kind: 'rollback', playbook: 'managed/runtime/rollback.yml', fromReleaseId: 'release-runtime-draft', toReleaseId: 'release-runtime-stable' },
       ],
     };
     const previews: Array<Record<string, unknown>> = [];
@@ -652,8 +727,8 @@ describe('platform shell and RBAC UI', () => {
         layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
         latestRelease: draft, releases: [draft, {
           id: 'release-runtime-stable', componentId: 'component-runtime', version: '1.9.0', type: 'atomic',
-          state: 'released', status: 'released', releaseNotes: 'Stable', parameters: [], dependencies: [],
-          actions: [{ name: 'verify', type: 'verify', playbook: 'managed/runtime/verify.yml', hostGroup: 'runtime_nodes' }],
+          status: 'released', releaseNotes: 'Stable', parameters: [], dependencies: [],
+          actions: [{ name: 'verify', kind: 'verify', playbook: 'managed/runtime/verify.yml', hostGroup: 'runtime_nodes' }],
         }],
       }]);
       if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Six node test', ownerId: dave.id, status: 'ready' }]);
@@ -663,27 +738,27 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderApp('/components?selected=component-runtime');
-    await userEvent.click((await screen.findAllByRole('button', { name: '测试' }))[0]);
+    await userEvent.click((await screen.findAllByRole('button', { name: '环境验证' }))[0]);
     expect(screen.getByRole('option', { name: '安装验证（主动作 + verify）' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: '回滚验证（rollback + 可选目标版本 verify）' })).toBeEnabled();
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '测试模式' }), 'rollback');
-    expect(screen.getByText('回滚将修改环境状态')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '回退验证（rollback + 可选目标版本 verify）' })).toBeEnabled();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '验证模式' }), 'rollback');
+    expect(screen.getByText('回退验证将修改环境状态')).toBeInTheDocument();
     expect(screen.getByText('来源：2.0.0-rc1 · Draft')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '1.9.0 · released · 合同目标' })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '测试环境' }), 'environment-test');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '目标环境' }), 'environment-test');
     await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
 
     expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 2.0.0-rc1');
     expect(screen.getByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 1.9.0');
-    expect(screen.getByRole('button', { name: '确认提交回滚验证' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '确认提交回退验证' })).toBeEnabled();
 
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '回滚验证策略' }), 'rollback_only');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '回退验证策略' }), 'rollback_only');
     expect(screen.queryByRole('region', { name: '完整执行计划' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认提交回滚验证' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '确认提交回退验证' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
     expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('managed/runtime/rollback.yml');
     expect(screen.getByRole('region', { name: '完整执行计划' })).not.toHaveTextContent('managed/runtime/verify.yml');
-    await userEvent.click(screen.getByRole('button', { name: '确认提交回滚验证' }));
+    await userEvent.click(screen.getByRole('button', { name: '确认提交回退验证' }));
 
     await waitFor(() => expect(submitted).toMatchObject({
       environmentId: 'environment-test', mode: 'rollback',
@@ -698,7 +773,7 @@ describe('platform shell and RBAC UI', () => {
     let submitted: Record<string, string> | undefined;
     const environment = (variables: Record<string, string>) => ({
       id: 'environment-test', name: 'Test Environment', ownerId: dave.id,
-      currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: {}, variables, credentialRefs: [] },
+      currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables, credentialRefs: [] },
     });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -714,11 +789,13 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderApp('/environments');
-    await userEvent.click(await screen.findByRole('button', { name: '环境变量' }));
+    await userEvent.click(await screen.findByRole('tab', { name: '环境变量' }));
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
     await userEvent.type(screen.getByRole('textbox', { name: '环境变量名' }), 'image_registry');
     await userEvent.type(screen.getByRole('textbox', { name: /环境变量 IMAGE_REGISTRY 的值/ }), '192.168.88.54:5000/');
     await userEvent.click(screen.getByRole('button', { name: '保存新 Revision' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '变更原因' }), '配置测试镜像仓库');
+    await userEvent.click(screen.getByRole('button', { name: '确认创建 Revision' }));
 
     await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: '192.168.88.54:5000/' }));
     expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
@@ -727,7 +804,7 @@ describe('platform shell and RBAC UI', () => {
   it('locks the selected environment when submitting a Dockerfile image build', async () => {
     const draft = {
       id: 'release-image-draft', componentId: 'component-image', version: '1.0.0-rc1', type: 'atomic',
-      state: 'draft', status: 'draft', releaseNotes: 'Image candidate', parameters: [], dependencies: [], actions: [],
+      status: 'draft', releaseNotes: 'Image candidate', parameters: [], dependencies: [], actions: [],
     };
     let submitted: FormData | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -748,7 +825,7 @@ describe('platform shell and RBAC UI', () => {
       }]);
       if (url.endsWith('/environments')) return json([{
         id: 'environment-build', name: 'Build Environment', ownerId: dave.id,
-        currentRevision: { id: 'environment-build-r3', environmentId: 'environment-build', revision: 3, facts: {}, hosts: [], parameters: {}, variables: { IMAGE_REGISTRY: '192.168.88.54:5000' }, credentialRefs: [] },
+        currentRevision: { id: 'environment-build-r3', environmentId: 'environment-build', revision: 3, facts: {}, hosts: [], variables: { IMAGE_REGISTRY: '192.168.88.54:5000' }, credentialRefs: [] },
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -771,8 +848,8 @@ describe('platform shell and RBAC UI', () => {
   it('sends an explicit empty CredentialRef list and keeps it cleared after reopening', async () => {
     let draft = {
       id: 'release-credential-draft', componentId: 'component-credential', version: '1.0.0-rc1', type: 'atomic' as const,
-      state: 'draft' as const, status: 'draft' as const, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
-      actions: [{ id: 'action-install', name: 'install', type: 'install' as const, playbook: 'managed/credential/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
+      status: 'draft' as const, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
+      actions: [{ id: 'action-install', name: 'install', kind: 'install' as const, playbook: 'managed/credential/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
     };
     let submitted: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -780,7 +857,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/component-releases/release-credential-draft') && init?.method === 'PUT') {
         submitted = JSON.parse(String(init.body));
-        draft = { ...draft, ...submitted, state: 'draft', status: 'draft' } as typeof draft;
+        draft = { ...draft, ...submitted, status: 'draft' } as typeof draft;
         return json(draft);
       }
       if (url.endsWith('/components')) return json([{
@@ -813,12 +890,12 @@ describe('platform shell and RBAC UI', () => {
   it('persists multiple lifecycle actions with distinct managed Playbooks', async () => {
     const previousRelease = {
       id: 'release-docker-previous', componentId: 'component-docker', version: '25.0.0', type: 'atomic',
-      state: 'released', status: 'released', releaseNotes: 'Previous Docker Runtime', parameters: [], dependencies: [], actions: [],
+      status: 'released', releaseNotes: 'Previous Docker Runtime', parameters: [], dependencies: [], actions: [],
     };
     let draft = {
       id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0', type: 'atomic',
-      state: 'draft', status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
-      actions: [{ name: 'install', type: 'install', playbook: 'managed/docker/release-docker-draft/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
+      status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
+      actions: [{ name: 'install', kind: 'install', playbook: 'managed/docker/release-docker-draft/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
     };
     let submittedActions: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -844,7 +921,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/component-releases/release-docker-draft') && init?.method === 'PUT') {
         const body = JSON.parse(String(init.body));
         submittedActions = body.actions;
-        draft = { ...draft, ...body, state: 'draft', status: 'draft' };
+        draft = { ...draft, ...body, status: 'draft' };
         return json(draft);
       }
       if (url.endsWith('/components')) return json([{
@@ -900,7 +977,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
 
     await waitFor(() => expect(submittedActions).toHaveLength(3));
-    expect(submittedActions.map((action) => action.type)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions.map((action) => action.kind)).toEqual(['install', 'verify', 'rollback']);
     expect(submittedActions.map((action) => action.name)).toEqual(['install', 'verify', 'rollback']);
     expect(submittedActions.map((action) => action.playbook)).toEqual([
       'managed/docker/release-docker-draft/install.yml',
@@ -908,7 +985,7 @@ describe('platform shell and RBAC UI', () => {
       'managed/docker/release-docker-draft/rollback.yml',
     ]);
     expect(submittedActions[2]).toMatchObject({ fromReleaseId: 'release-docker-draft', toReleaseId: 'release-docker-previous' });
-    expect(await screen.findByText('动作 3/3：安装、验证、回滚')).toBeInTheDocument();
+    expect(await screen.findByText('动作 3/3：安装、验证、回退')).toBeInTheDocument();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
     expect(screen.getByRole('button', { name: '安装' })).toBeInTheDocument();
@@ -929,7 +1006,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('confirms before creating a revision and does not submit when cancelled', async () => {
     const released = {
-      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released', status: 'released',
+      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released',
       nodes: [], edges: [], executionPolicy: {},
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -937,7 +1014,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(carol);
       if (url.endsWith('/components')) return json(components);
       if (url.endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST') {
-        return json({ ...released, id: 'scenario-confirm-r2', revision: 2, state: 'draft', status: 'draft' }, 201);
+        return json({ ...released, id: 'scenario-confirm-r2', revision: 2, state: 'draft' }, 201);
       }
       if (url.endsWith('/scenarios')) return json([{
         id: 'scenario-confirm', slug: 'scenario-confirm', name: 'Confirm Scenario', ownerId: carol.id,
@@ -963,14 +1040,14 @@ describe('platform shell and RBAC UI', () => {
 
   it('shows revision history and can abandon the current draft', async () => {
     const released = {
-      id: 'scenario-history-r1', scenarioId: 'scenario-history', revision: 1, state: 'released', status: 'released',
+      id: 'scenario-history-r1', scenarioId: 'scenario-history', revision: 1, state: 'released',
       nodes: [], edges: [], executionPolicy: {},
     };
     const draft = {
-      id: 'scenario-history-r2', scenarioId: 'scenario-history', revision: 2, state: 'draft', status: 'draft',
+      id: 'scenario-history-r2', scenarioId: 'scenario-history', revision: 2, state: 'draft',
       nodes: [], edges: [], executionPolicy: {},
     };
-    const abandoned = { ...draft, state: 'abandoned', status: 'abandoned' };
+    const abandoned = { ...draft, state: 'abandoned' };
     let scenario = {
       id: 'scenario-history', slug: 'scenario-history', name: 'History Scenario', ownerId: carol.id,
       currentRevisionId: draft.id, currentRevision: draft, revisions: [draft, released],

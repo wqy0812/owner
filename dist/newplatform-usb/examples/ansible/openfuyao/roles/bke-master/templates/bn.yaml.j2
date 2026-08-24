@@ -16,7 +16,7 @@ spec:
   role:
   - master/node
   - etcd
-  username: {{ hostvars[host]['ansible_ssh_user'] }}
+  username: {{ hostvars[host]['ansible_user'] }}
 status: {}
 {% endfor %}
 {%- elif cluster_role == "work" %}
@@ -37,7 +37,7 @@ spec:
   role:
   - master/node
   - etcd
-  username: {{ hostvars[host]['ansible_ssh_user'] }}
+  username: {{ hostvars[host]['ansible_user'] }}
 status: {}
 {% endfor %}
 {% endif %}

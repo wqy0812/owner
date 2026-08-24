@@ -241,10 +241,9 @@ runs.status IN ('awaiting_approval','queued') AND (
   ))
 )`
 
-// FailInvalidActiveRuns removes corrupt historical entries from the active
-// environment queue without deleting their audit trail. Normal foreign keys
-// prevent most of these states, but older databases may have been written by
-// connections that did not enable SQLite foreign-key enforcement.
+// FailInvalidActiveRuns removes corrupt entries from the active environment
+// queue without deleting their audit trail. It protects current first-version
+// data from partial writes or operator tampering.
 func (s *Store) FailInvalidActiveRuns(ctx context.Context, at time.Time) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

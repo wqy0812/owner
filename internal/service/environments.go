@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -39,7 +41,8 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
-		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: now,
+		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1,
+		CreatedBy: user.ID, ChangeReason: "创建环境", CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
 	if err := p.store.CreateEnvironment(ctx, environment, revision); err != nil {
@@ -58,12 +61,18 @@ func (p *Platform) ListEnvironments(ctx context.Context, user domain.User) ([]do
 		if environments[i].Revision != nil {
 			privileged := user.Role == domain.RoleEnvironmentOwner && user.ID == environments[i].OwnerID
 			environments[i].Revision.CredentialRefs = domain.RedactCredentialRefs(environments[i].Revision.CredentialRefs, privileged)
+			for revisionIndex := range environments[i].Revisions {
+				environments[i].Revisions[revisionIndex].CredentialRefs = domain.RedactCredentialRefs(environments[i].Revisions[revisionIndex].CredentialRefs, privileged)
+			}
 		}
 	}
 	return environments, nil
 }
 
-func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost) (domain.Environment, error) {
+func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {
+	if len(hosts) > 256 {
+		return domain.Environment{}, fmt.Errorf("%w: inventory supports at most 256 hosts", domain.ErrInvalid)
+	}
 	for _, host := range hosts {
 		if strings.TrimSpace(host.Name) == "" || strings.TrimSpace(host.Address) == "" {
 			return domain.Environment{}, fmt.Errorf("%w: every inventory host requires a name and address", domain.ErrInvalid)
@@ -76,17 +85,17 @@ func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, enviro
 	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
 		revision.Inventory = document
 		return nil
-	}, "environment.inventory_updated")
+	}, "environment.inventory_updated", firstReason(changeReason))
 }
 
-func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User, environmentID string, facts map[string]any) (domain.Environment, error) {
+func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User, environmentID string, facts map[string]any, changeReason ...string) (domain.Environment, error) {
 	if err := rejectSensitiveMap(facts, "environment fact"); err != nil {
 		return domain.Environment{}, err
 	}
 	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
 		revision.Facts = facts
 		return nil
-	}, "environment.facts_updated")
+	}, "environment.facts_updated", firstReason(changeReason))
 }
 
 var environmentVariablePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
@@ -125,7 +134,7 @@ func normalizeEnvironmentVariables(variables map[string]string, refs []domain.Cr
 	return normalized, nil
 }
 
-func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string) (domain.Environment, error) {
+func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string, changeReason ...string) (domain.Environment, error) {
 	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
 		normalized, err := normalizeEnvironmentVariables(variables, revision.CredentialRefs)
 		if err != nil {
@@ -133,7 +142,7 @@ func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.U
 		}
 		revision.Variables = normalized
 		return nil
-	}, "environment.variables_updated")
+	}, "environment.variables_updated", firstReason(changeReason))
 }
 
 func rejectSensitiveMap(values map[string]any, label string) error {
@@ -173,7 +182,7 @@ func findSensitiveValue(value any, prefix string) (string, bool) {
 	return "", false
 }
 
-func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, environmentID string, refs []domain.CredentialRef) (domain.Environment, error) {
+func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, environmentID string, refs []domain.CredentialRef, changeReason ...string) (domain.Environment, error) {
 	if err := ValidateCredentialRefs(refs); err != nil {
 		return domain.Environment{}, err
 	}
@@ -183,10 +192,17 @@ func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, e
 		}
 		revision.CredentialRefs = refs
 		return nil
-	}, "environment.credentials_updated")
+	}, "environment.credentials_updated", firstReason(changeReason))
 }
 
-func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.User, environmentID string, mutate func(*domain.EnvironmentRevision) error, auditAction string) (domain.Environment, error) {
+func firstReason(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(reasons[0])
+}
+
+func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.User, environmentID string, mutate func(*domain.EnvironmentRevision) error, auditAction, changeReason string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return environment, err
@@ -209,12 +225,140 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 		return environment, err
 	}
 	revision.ID, revision.Revision, revision.CreatedAt = newID("environment-revision"), next, time.Now().UTC()
+	revision.CreatedBy, revision.ChangeReason = user.ID, strings.TrimSpace(changeReason)
 	if err := p.store.CreateEnvironmentRevision(ctx, revision); err != nil {
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = revision.ID, &revision, revision.CreatedAt
-	p.audit(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next})
+	p.audit(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next, "changeReason": revision.ChangeReason})
 	return environment, nil
+}
+
+func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.User, environmentID, revisionID, changeReason string) (domain.Environment, error) {
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return environment, err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return environment, err
+	}
+	target, err := p.store.GetEnvironmentRevision(ctx, revisionID)
+	if err != nil {
+		return environment, err
+	}
+	if target.EnvironmentID != environmentID {
+		return environment, fmt.Errorf("%w: revision does not belong to environment", domain.ErrInvalid)
+	}
+	reason := strings.TrimSpace(changeReason)
+	if reason == "" {
+		return environment, fmt.Errorf("%w: change reason is required", domain.ErrInvalid)
+	}
+	next, err := p.store.NextEnvironmentRevision(ctx, environmentID)
+	if err != nil {
+		return environment, err
+	}
+	restored := target
+	restored.ID, restored.Revision, restored.CreatedAt = newID("environment-revision"), next, time.Now().UTC()
+	restored.CreatedBy, restored.ChangeReason = user.ID, reason
+	restored.Inventory = append([]byte(nil), target.Inventory...)
+	restored.Facts = cloneMap(target.Facts)
+	restored.Variables = cloneStringMap(target.Variables)
+	restored.CredentialRefs = append([]domain.CredentialRef(nil), target.CredentialRefs...)
+	if err := p.store.CreateEnvironmentRevision(ctx, restored); err != nil {
+		return environment, err
+	}
+	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = restored.ID, &restored, restored.CreatedAt
+	p.audit(ctx, user, "environment.revision_restored", "environment", environmentID, map[string]any{"revisionId": restored.ID, "revision": next, "sourceRevisionId": revisionID, "sourceRevision": target.Revision, "changeReason": reason})
+	return environment, nil
+}
+
+func (p *Platform) CheckEnvironmentHealth(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentHealthCheck, error) {
+	checkContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return domain.EnvironmentHealthCheck{}, err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return domain.EnvironmentHealthCheck{}, err
+	}
+	if environment.Revision == nil {
+		return domain.EnvironmentHealthCheck{}, fmt.Errorf("%w: environment has no current revision", domain.ErrConflict)
+	}
+	var inventory InventoryDocument
+	if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil {
+		return domain.EnvironmentHealthCheck{}, fmt.Errorf("%w: invalid environment inventory", domain.ErrInvalid)
+	}
+	targets := make([]domain.EnvironmentEndpointCheck, 0, len(inventory.Hosts)+2)
+	for _, host := range inventory.Hosts {
+		port := host.Port
+		if port == 0 {
+			port = 22
+		}
+		targets = append(targets, domain.EnvironmentEndpointCheck{Kind: "host", Name: host.Name, Address: net.JoinHostPort(host.Address, fmt.Sprint(port))})
+	}
+	for _, name := range []string{"IMAGE_REGISTRY", "FILE_STATION"} {
+		if value := strings.TrimSpace(environment.Revision.Variables[name]); value != "" {
+			address := strings.SplitN(value, "/", 2)[0]
+			targets = append(targets, domain.EnvironmentEndpointCheck{Kind: "dependency", Name: name, Address: address})
+		}
+	}
+	if len(inventory.Hosts) == 0 {
+		targets = append(targets, domain.EnvironmentEndpointCheck{Kind: "configuration", Name: "Inventory", Address: "—", Error: "尚未配置主机"})
+	}
+	results := make([]domain.EnvironmentEndpointCheck, len(targets))
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 8)
+	for index, target := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if target.Kind == "configuration" {
+				results[index] = target
+				return
+			}
+			if _, _, splitErr := net.SplitHostPort(target.Address); splitErr != nil {
+				target.Error = "地址必须包含有效端口"
+				results[index] = target
+				return
+			}
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			started := time.Now()
+			conn, dialErr := p.dialContext(checkContext, "tcp", target.Address)
+			target.LatencyMS = time.Since(started).Milliseconds()
+			if dialErr != nil {
+				target.Error = "TCP 连接失败"
+			} else {
+				target.Reachable = true
+				_ = conn.Close()
+			}
+			results[index] = target
+		}()
+	}
+	wg.Wait()
+	status := "healthy"
+	for _, result := range results {
+		if !result.Reachable {
+			status = "degraded"
+			break
+		}
+	}
+	check := domain.EnvironmentHealthCheck{
+		ID: newID("environment-health"), EnvironmentID: environmentID, EnvironmentRevisionID: environment.Revision.ID,
+		Status: status, Results: results, CheckedAt: time.Now().UTC(),
+	}
+	if err := p.store.SaveEnvironmentHealthCheck(ctx, check); err != nil {
+		return domain.EnvironmentHealthCheck{}, err
+	}
+	reachable := 0
+	for _, result := range results {
+		if result.Reachable {
+			reachable++
+		}
+	}
+	p.audit(ctx, user, "environment.health_checked", "environment", environmentID, map[string]any{"revisionId": environment.Revision.ID, "status": status, "reachable": reachable, "total": len(results)})
+	return check, nil
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

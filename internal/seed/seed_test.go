@@ -381,7 +381,7 @@ func TestKubernetes1175EnvironmentIsSanitizedAndComplete(t *testing.T) {
 		t.Fatalf("environment=%+v err=%v", environment, err)
 	}
 	revision := environment.Revision
-	if revision.Facts["architecture"] != "amd64" || revision.Facts["os"] != "SUSE" || revision.Facts["network"] != "IPv4" {
+	if revision.Facts["architecture"] != "amd64" || revision.Facts["operatingSystem"] != "SUSE" || revision.Facts["ipFamily"] != "IPv4" {
 		t.Fatalf("facts=%+v", revision.Facts)
 	}
 	var inventory struct {

@@ -20,15 +20,15 @@ describe('environment constraint display', () => {
     ]);
   });
 
-  it('accepts seed aliases such as cpuArch and osDistro', () => {
+  it('does not reinterpret unknown fields or values as first-version constraints', () => {
     expect(environmentConstraintGroups({
       cpuArch: 'x86_64',
       osDistro: ['kylin'],
       hardwareProfile: ['gpu'],
     })).toEqual([
-      { key: 'cpuArch', label: '架构', values: ['x86/amd64'] },
-      { key: 'osDistro', label: '操作系统', values: ['Kylin'] },
       { key: 'hardwareProfile', label: '硬件类型', values: ['GPU'] },
+      { key: 'cpuArch', label: 'cpuArch', values: ['x86_64'] },
+      { key: 'osDistro', label: 'osDistro', values: ['kylin'] },
     ]);
   });
 
@@ -38,10 +38,12 @@ describe('environment constraint display', () => {
     expect(formatConstraintValue('amd64')).toBe('x86/amd64');
   });
 
-  it('normalizes aliases into a selectable contract and serializes canonical keys', () => {
+  it('parses and serializes only canonical first-version fields and values', () => {
     const selection = parseConstraintSelection({
-      cpuArch: ['x86_64', 'aarch64'],
-      osDistro: ['Kylin V10'],
+      architecture: ['amd64', 'arm64'],
+      operatingSystem: ['Kylin'],
+      ipFamily: 'IPv4',
+      cpuArch: ['x86_64'],
       network: 'ipv4',
     });
     expect(selection.architecture).toEqual(['amd64', 'arm64']);

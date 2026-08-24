@@ -8,7 +8,6 @@ export interface User {
 }
 
 export type ReleaseState = 'draft' | 'released' | 'deprecated';
-export type VerificationState = 'unverified' | 'testing' | 'passed' | 'failed';
 export type ComponentLayer = 'host_foundation' | 'runtime_state' | 'orchestration_core' | 'cluster_service' | 'observability_management' | 'platform_extension';
 export type ComponentCategory = 'preflight' | 'bootstrap' | 'security' | 'runtime' | 'state_store' | 'control_plane' | 'worker' | 'network' | 'dns' | 'ingress' | 'storage' | 'observability' | 'node_management' | 'platform' | 'autoscaling';
 export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage' | 'configuration' | 'artifact_set';
@@ -62,7 +61,6 @@ export interface ActionDefinition {
   timeoutSeconds?: number;
   allowedParameters?: string[];
   requiredCredentials?: string[];
-  risk?: 'normal' | 'destructive';
   riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
   destructive?: boolean;
   fromReleaseId?: string;
@@ -83,8 +81,6 @@ export interface ComponentRelease {
   version: string;
   type?: 'atomic' | 'bundle';
   state: ReleaseState;
-  status?: ReleaseState;
-  verification?: VerificationState;
   verified?: boolean;
   breaking?: boolean;
   releaseNotes?: string;
@@ -175,7 +171,7 @@ export interface ScenarioNodeData extends Record<string, unknown> {
 
 export interface ScenarioNode {
   id: string;
-  type?: string;
+  type: 'component';
   position: { x: number; y: number };
   data: ScenarioNodeData;
 }
@@ -191,13 +187,10 @@ export interface ScenarioRevision {
   id: string;
   scenarioId: string;
   revision: number;
-  version?: string;
   state: ScenarioState;
   nodes: ScenarioNode[];
   edges: ScenarioEdge[];
-  runInputs?: string[];
   executionPolicy?: Record<string, unknown>;
-  validationErrors?: string[];
   testedAt?: string;
   createdAt?: string;
 }
@@ -239,7 +232,27 @@ export interface EnvironmentRevision {
   variables: Record<string, string>;
   credentialRefs: CredentialRef[];
   maxConcurrentRuns?: number;
+  createdBy?: string;
+  changeReason?: string;
   createdAt?: string;
+}
+
+export interface EnvironmentEndpointCheck {
+  kind: 'host' | 'dependency' | 'configuration';
+  name: string;
+  address: string;
+  reachable: boolean;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface EnvironmentHealthCheck {
+  id: string;
+  environmentId: string;
+  environmentRevisionId: string;
+  status: 'healthy' | 'degraded';
+  results: EnvironmentEndpointCheck[];
+  checkedAt: string;
 }
 
 export interface Environment {
@@ -249,9 +262,22 @@ export interface Environment {
   ownerId: string;
   ownerName?: string;
   status?: 'ready' | 'locked' | 'offline';
+  schedulingStatus?: 'idle' | 'queued' | 'awaiting_approval' | 'running';
   activeRunId?: string;
   currentRevision?: EnvironmentRevision;
+  revisions?: EnvironmentRevision[];
+  healthCheck?: EnvironmentHealthCheck;
   updatedAt?: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  actorId: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
 }
 
 export type RunStatus =
@@ -307,6 +333,7 @@ export interface Run {
   componentId?: string;
   componentName?: string;
   componentReleaseId?: string;
+  action?: string;
   environmentId: string;
   environmentName?: string;
   createdBy?: string;

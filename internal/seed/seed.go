@@ -109,7 +109,7 @@ type seededComponent struct {
 }
 
 func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
-	constraints := map[string]any{"architecture": []any{"amd64"}, "ipFamily": []any{"ipv4"}, "operatingSystem": []any{"Kylin V10"}}
+	constraints := map[string]any{"architecture": []any{"amd64"}, "ipFamily": []any{"IPv4"}, "operatingSystem": []any{"Kylin"}}
 	plainRelease := func(id, componentID, version string) domain.ComponentRelease {
 		releaseType := domain.ReleaseAtomic
 		if componentID == "component-kubernetes" {
@@ -305,8 +305,8 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if maxConcurrent < 1 {
 			maxConcurrent = 1
 		}
-		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(variables), string(credentialRefs), maxConcurrent, seedTime(revision.CreatedAt))
+		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(variables), string(credentialRefs), maxConcurrent, revision.CreatedBy, revision.ChangeReason, seedTime(revision.CreatedAt))
 		return err
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err

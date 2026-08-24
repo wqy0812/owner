@@ -271,7 +271,7 @@ func (s Seeder) seedKubernetes1175Environment(ctx context.Context, now time.Time
 		map[string]any{"name": "worker-1", "address": "192.0.2.21", "groups": []any{"k8snode"}, "port": 22, "user": "sysop"},
 	}})
 	environment := domain.Environment{ID: "environment-k8s-1.17.5-template", Name: "Kubernetes 1.17.5 SUSE Template", Description: "TEST-NET 脱敏模板；未知校验和和镜像 digest 保持为空，安装入口 fail-closed。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "os": "SUSE", "network": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.80:8080"}, CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, MaxConcurrent: 1, CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "SUSE", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.80:8080"}, CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, MaxConcurrent: 1, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
 	if err := s.createEnvironmentIfMissing(ctx, environment, revision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 environment: %w", err)
 	}

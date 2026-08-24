@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -59,7 +57,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if err := s.Migrate(ctx); err != nil {
+	if err := s.InitializeSchema(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -69,47 +67,37 @@ func Open(ctx context.Context, path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) DB() *sql.DB  { return s.db }
 
-func (s *Store) Migrate(ctx context.Context) error {
-	entries, err := fs.Glob(migrationFiles, "migrations/*.sql")
+func (s *Store) InitializeSchema(ctx context.Context) error {
+	var tables int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&tables); err != nil {
+		return fmt.Errorf("inspect database schema: %w", err)
+	}
+	if tables > 0 {
+		var version string
+		if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_contract WHERE id=1`).Scan(&version); err != nil {
+			return fmt.Errorf("unsupported database schema: this project is on its first version and does not upgrade historical data; recreate the test database: %w", err)
+		}
+		if version != schemaContract {
+			return fmt.Errorf("unsupported database schema contract %q: expected %q; recreate the test database", version, schemaContract)
+		}
+	}
+	content, err := schemaFiles.ReadFile("schema.sql")
+	if err != nil {
+		return fmt.Errorf("read first-version schema: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	sort.Strings(entries)
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, string(content)); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("initialize first-version schema: %w", err)
 	}
-	for _, name := range entries {
-		var count int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=?`, name).Scan(&count); err != nil {
-			return err
-		}
-		if count > 0 {
-			continue
-		}
-		content, err := migrationFiles.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, string(content)); err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, name, nowText())
-		}
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("migration %s: %w", name, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
+	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

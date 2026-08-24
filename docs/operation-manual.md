@@ -1,7 +1,9 @@
 # ClusterForge 平台操作手册（分角色）
 
-> 文档基线：2026-08-23 当前工作区代码
-> 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员  
+> 版本与环境：本文属于项目首个版本（V1）；所有操作目标均为测试环境，不是生产环境。除非出现明确的 V2 文档，否则不处理历史数据兼容。统一规则见 [首版与环境策略](version-policy.md)。
+
+> 文档基线：2026-08-24 当前工作区代码
+> 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员
 > 重要提示：这是本地 Demo。身份可无密码切换，不应直接作为生产权限系统使用。
 
 ## 1. 平台入口与准备
@@ -21,7 +23,7 @@ make dev
 - 前端：`http://127.0.0.1:5173`
 - 后端：`http://127.0.0.1:8080`
 
-生产式本地构建：
+嵌入式本地构建：
 
 ```bash
 make build
@@ -50,7 +52,7 @@ make build
 | 概览 | 汇总可见资产、进行中的运行和未读通知 |
 | 组件 | 维护组件和 Release，发起组件测试 |
 | 场景 | 编排 DAG，校验、测试、发布和运行场景 |
-| 环境 | 管理 Inventory、Facts、Parameters 和 CredentialRefs |
+| 环境 | 管理 Inventory、Facts、Variables、CredentialRefs、历史 Revision 和连通性检查 |
 | 运行 | 查看队列、审批、步骤和实时脱敏日志 |
 | 通知 | 查看上游组件发布影响并标记已读 |
 
@@ -73,7 +75,7 @@ make build
 
 - 组件参数合同和环境约束。
 - 场景节点参数、参数绑定、运行时输入。
-- 环境 Facts 和 Parameters。
+- 环境 Facts 和 Variables。
 
 密码、token、私钥、加密密钥等必须通过环境的“凭据引用”配置。不要把实际 secret 粘贴到普通 JSON 编辑框、组件发布说明或运行参数中。
 
@@ -92,7 +94,7 @@ make build
 #### 平台部署人员
 
 1. 部署前确认目标地址、当前分支和工作区，并确认没有 `running`、`queued` 或 `awaiting_approval` 的活动 Run。
-2. 运行 Go、前端测试、生产构建和差异检查；缺少 Ansible 等依赖时必须写成“未验证”，不能写成“通过”。
+2. 运行 Go、前端测试、测试环境嵌入式构建和差异检查；缺少 Ansible 等依赖时必须写成“未验证”，不能写成“通过”。
 3. 切换服务前备份二进制、数据库和环境配置；失败时三者一起恢复。
 4. 部署后核对服务状态、HTTP、二进制 SHA-256、HTML 构建版本及 `Cache-Control: no-store` 的 `version.json`。
 5. 用已经加载版本守卫的旧页面验证升级提示：旧应用区域应为 `inert`，刷新后页面版本应与服务端一致。
@@ -122,14 +124,14 @@ make build
 
 - 记录部署前后构建版本、二进制 SHA-256、备份目录、服务状态和 HTTP 状态。
 - 对比 Run、Approval、审计事件与 Environment Revision 数量，证明只读验收没有产生业务写入。
-- 分开报告代码测试、生产构建、Ansible 门禁和真实环境验收，不能相互替代。
+- 分开报告代码测试、嵌入式构建、Ansible 门禁和测试环境验收，不能相互替代。
 
 ### 2.5 场景节点、组件和环境主机的数量关系
 
 - “六节点集群”表示目标环境 Inventory 中有六台主机，不表示场景画布必须有六个节点。
 - 场景节点是逻辑执行单元；一个 bundle 或交付阶段可以通过 Playbook 操作多个软件组件和多台主机。
-- 历史的“Kubernetes 1.17.5 六节点集群搭建”Released Revision 使用“主机预检 → 节点准备 → 集群引导 → 集群验收”四个聚合节点，其中“集群引导”是 bundle。
-- 当前代码中的细粒度核心模板有 21 个节点，分别表达控制面和工作节点上的 Docker、Flannel、kubelet、kube-proxy 等动作；部署环境使用 `NEWPLATFORM_SEED_PROFILE=identities` 时不会把该模板写入已有数据库。
+- 首版支持聚合节点和细粒度节点；当前细粒度核心模板有 21 个节点，分别表达控制面和工作节点上的 Docker、Flannel、kubelet、kube-proxy 等动作。
+- `NEWPLATFORM_SEED_PROFILE=identities` 只向空的首版数据库写入身份，不写入场景模板。
 - Released Scenario Revision 不可原地扩容或替换节点；需要克隆/新建 Revision，加入精确 Release，重新校验、真实环境测试并发布。
 - 判断真实执行内容时应查看节点的 Release、Action、Host Group 与最终 Run Steps，不能只看场景节点总数。
 
@@ -171,7 +173,7 @@ make build
 - 版本和 Release 类型。
 - 发布说明和 Breaking 标记。
 - 环境约束 JSON。
-- 结构化参数表：名称、说明、类型、必填、默认值、可见性、环境路径和约束。可见性必须显式选择 `internal` 或 `public`。
+- 结构化参数表：名称、说明、类型、必填、默认值、可见性、枚举和最小长度。可见性必须显式选择 `internal` 或 `public`。
 - 依赖下拉框：只能选择已发布上游 Release，并映射其公开参数。
 - Ansible 动作 JSON。
 
@@ -180,8 +182,8 @@ make build
 ```json
 {
   "architecture": ["amd64", "arm64"],
-  "os": "Kylin V10",
-  "network": "IPv4"
+  "operatingSystem": "Kylin",
+  "ipFamily": "IPv4"
 }
 ```
 
@@ -193,7 +195,7 @@ make build
 [
   {
     "name": "install",
-    "type": "install",
+    "kind": "install",
     "playbook": "example/install.yml",
     "tags": ["install"],
     "hostGroup": "worker_nodes",
@@ -204,7 +206,7 @@ make build
   },
   {
     "name": "verify",
-    "type": "verify",
+    "kind": "verify",
     "playbook": "example/verify.yml",
     "hostGroup": "worker_nodes",
     "allowedParameters": ["install_root"],
@@ -257,13 +259,13 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 6. 只有预览成功后才能确认提交；任何环境、策略、目标版本或输入变化都会使旧计划失效，需要重新预览。
 7. 进入“运行”查看状态、步骤、解析参数来源和日志。
 
-平台优先测试 Upgrade；没有 Upgrade 时测试 Install。如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
+安装验证的主动作按 Upgrade → Install → Configure → Preflight → Inspect 的顺序选择第一个已定义动作；如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
 
 计划预览执行与正式提交相同的权限、参数、CredentialRef、备份、Playbook 摘要和 Inventory 校验，但不会创建 Run 或 Approval。确认提交时后端重新规划并核对 `planDigest`；若 Draft、环境 Revision、输入或可执行内容已变化，会返回 Conflict，必须刷新计划。
 
 环境 Owner 也可以发起任意可见组件的测试，用于基础设施侧验证。
 
-### 3.7 发布组件版本
+### 3.8 发布组件版本
 
 1. 找到 Draft，单击“发布”。
 2. 查看影响预览：下游组件 Owner、场景 Owner、受影响场景和依赖路径。
@@ -282,7 +284,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 未验证版本也允许发布，但下游会看到风险。发布后平台只发送通知，不会自动升级场景中的锁定版本。
 
-### 3.8 废弃组件版本
+### 3.9 废弃组件版本
 
 1. 找到 Released 版本。
 2. 单击“废弃”。
@@ -290,7 +292,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 废弃不会删除 Release，历史 Run 仍可追溯。当前平台不会在废弃前强制阻止已有场景引用，因此操作前应先检查影响通知和关联场景。
 
-### 3.9 处理组件影响通知
+### 3.10 处理组件影响通知
 
 1. 进入“通知”。
 2. 查看版本变化、Breaking 标记和影响路径。
@@ -320,13 +322,13 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
    - 主机组。
    - 依赖参数来源：唯一上游自动绑定，多个可达节点时必须选择。
    - 节点参数 JSON。已被上游映射的参数不能再填。
-	- 允许的运行时输入。
+   - 允许的运行时输入。
 4. 根据需要编辑“执行策略 JSON”。
 5. 单击“保存草稿”。
 
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
 
-当前界面虽然显示并允许选择 Bootstrap / Management Cluster“阶段”，但后端不会持久化这个字段；重新读取时会根据主机组名称推导显示。阶段不决定执行顺序，请用 DAG 连线表达顺序。执行策略 JSON 当前也只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
+当前界面和后端都没有场景“阶段”字段。层级标签只用于识别组件分类；主机组决定执行目标，DAG 连线决定顺序。执行策略 JSON 当前只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
 
 参数配置示例：
 
@@ -335,7 +337,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
   "values": {
     "runtime": "containerd"
   },
-	"runInputs": ["install_root"]
+  "runInputs": ["install_root"]
 }
 ```
 
@@ -425,13 +427,17 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 系统会创建空 Inventory 的 Revision 1。没有主机的环境不能执行 Run。
 
+Inventory、环境事实、环境变量和凭据引用分区采用同一保存流程：编辑后先单击“保存新 Revision”，查看差异预览，填写非空变更原因，再单击“确认创建 Revision”。当前页存在未保存修改时不能切换环境或恢复历史版本；可以用“放弃本页更改”恢复当前分区。
+
+环境处于 Queued、Awaiting Approval 或 Running 时仍可保存新 Revision，但活动 Run 继续使用提交时锁定的旧 Revision。页面会提示这一边界；不要把新 Revision 误认为已经改变正在执行的目标。
+
 ### 5.2 配置 Inventory
 
 1. 选择自己拥有的环境。
 2. 打开“Inventory”页签。
 3. 单击“添加主机”。
 4. 填写主机名、地址、主机组、SSH 用户和端口。
-5. 单击“保存新 Revision”。
+5. 单击“保存新 Revision”，核对差异并填写变更原因后确认。
 
 要求：
 
@@ -447,25 +453,25 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 1. 打开“环境事实”。
 2. 编辑 JSON。
-3. 保存新 Revision。
+3. 保存新 Revision，核对差异并填写变更原因后确认。
 
 常用键：
 
 ```json
 {
   "architecture": "amd64",
-  "os": "Kylin V10",
-  "network": "IPv4"
+  "operatingSystem": "Kylin",
+  "ipFamily": "IPv4"
 }
 ```
 
-平台会用这些事实匹配组件环境约束。键支持部分别名，例如 architecture/arch、os/operatingSystem/distribution、network/ipFamily。
+平台会用这些事实匹配组件环境约束。首版合同只接受 `architecture`、`operatingSystem`、`ipFamily` 等页面写出的规范键；旧键或值不会被转换。
 
 ### 5.4 配置非敏感环境变量
 
 1. 打开“环境变量”。
 2. 单击“添加变量”，填写大写变量名和字符串值。
-3. 保存新 Revision。
+3. 保存新 Revision，核对差异并填写变更原因后确认。
 
 变量会直接成为每个组件作业的同名 Ansible extra-vars。例如配置：
 
@@ -485,7 +491,7 @@ credential 等敏感名称，也不能与组件参数或 CredentialRef 重名。
 1. 打开“凭据引用”。
 2. 单击“添加引用”。
 3. 填写变量名称、类型和引用。
-4. 保存新 Revision。
+4. 保存新 Revision，核对差异并填写变更原因后确认。
 
 两种类型：
 
@@ -502,9 +508,32 @@ Kubernetes 1.17.5 示例需要：
 export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 ```
 
-不要把密钥值写入 `.env.example`、seed、环境 Parameters 或 Run Input。
+不要把密钥值写入 `.env.example`、Seed、环境 Variables 或 Run Input。
 
-### 5.6 审批危险 Run
+### 5.6 检查环境连通性
+
+环境 Owner 可以单击“立即检查”，对当前 Revision 执行只读 TCP 探测：
+
+- Inventory 主机检查配置的 SSH 端口，未填写时使用 22。
+- `IMAGE_REGISTRY` 和 `FILE_STATION` 存在时检查各自 `host:port`。
+- 检查结果记录来源 Revision、端点、延迟、时间和 `healthy` / `degraded` 状态，并追加审计事件。
+
+该检查不会登录 SSH、调用 Registry API、下载介质或执行 Ansible。`healthy` 只证明 TCP 端口在本次探测时可连接，不能证明凭据有效、镜像可推送、介质校验和正确或组件能够安装。仓库和文件站若未显式包含端口，会被报告为配置异常。
+
+### 5.7 查看和恢复历史 Revision
+
+“Revision 历史”列出每次保存的编号、创建者、变更原因和时间。历史项只读，不会覆盖或删除。
+
+恢复流程：
+
+1. 找到目标历史 Revision，单击“基于此恢复”。
+2. 核对目标编号、主机数、环境变量数和 CredentialRef 数。
+3. 填写非空恢复原因并确认。
+4. 平台复制目标快照，创建一个编号递增的新 Revision，并把它设为当前版本。
+
+恢复不会修改旧 Revision，也不会改变已排队、等待审批或正在运行的 Run。恢复后应重新执行环境连通性检查；旧检查若来自其他 Revision，页面会标记为过期。
+
+### 5.8 审批危险 Run
 
 1. 进入“运行”。
 2. 选择状态为“等待审批”的 Run。
@@ -524,7 +553,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 拒绝后 Run 终止为 Rejected；场景 Draft 测试会回到 Draft。当前界面的拒绝动作没有填写理由的输入框，API 支持 reason 字段，但页面会提交空理由。
 
-### 5.7 查看环境运行和审计
+### 5.9 查看环境运行和审计
 
 环境详情显示最近四个相关 Run。完整记录请进入“运行”。
 
@@ -548,7 +577,9 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 
 ### 6.3 查看日志
 
-“实时日志”显示 stdout、stderr 和平台 system 日志。平台会按已解析的 secret 执行脱敏，并限制保留大小。
+活动 Run 显示“实时日志”，结束后的 Run 显示“历史日志”。二者都包含 stdout、stderr 和平台 system 日志；平台会按已解析的 secret 执行脱敏，并限制保留大小。
+
+Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条可识别的 Ansible 诊断。可以复制诊断或定位到失败步骤，但该摘要只是日志提取结果，最终仍应核对步骤 Summary、完整保留日志和目标主机状态。
 
 如果看不到最新日志：
 
@@ -558,7 +589,8 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 
 ### 6.4 取消 Run
 
-- Queued 或 Awaiting Approval：取消后立即进入 Cancelled。
+- Queued：前台“取消”后立即进入 Cancelled。
+- Awaiting Approval：API 支持发起人或环境 Owner 取消，但当前前台不显示取消按钮；环境 Owner 可在页面拒绝该 Run。
 - Running：平台取消上下文并终止 Ansible 进程组。
 - Terminal 状态：不能再次取消。
 
@@ -592,7 +624,7 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 
 用途：承载三个相互独立的 OpenFuyao 场景：管理集群构建、业务集群控制面
 构建、业务节点纳管。节点纳管不会重建控制面，而是先用 master verify 只读
-确认 BKECluster，再按原作业顺序执行 common 和 nodes。
+确认 BKECluster，再直接执行 nodes install，不重复执行 common 或 addon。
 
 模板包含四个 TEST-NET 主机组：`bootstrap_host`、
 `management_cluster_k8smaster`、`work_cluster_k8smaster`、
@@ -610,7 +642,7 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 该环境使用脱敏 TEST-NET 地址，Playbook 依赖内部介质、仓库和合格主机。
 包含 `rcv` 的 build 动作会被视为 destructive。不要在没有替换 Inventory、
 普通参数、CredentialRef 并完成安全评审时批准。callback URL/token、task ID 和
-旧 wrapper 的 `management_cluster_id` 不属于本平台 Release 参数合同。
+外部 wrapper 的 `management_cluster_id` 不属于本平台 Release 参数合同。
 
 ### 8.2 Kubernetes 1.17.5 SUSE Template
 
@@ -624,6 +656,8 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 - 设置并复核加密密钥环境变量。
 - 检查网络、仓库和介质服务地址。
 - 明确备份、变更窗口和回退流程。
+
+当前 Kubernetes 1.17.5 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为强制 `requiredCredentials`。因此删除环境中的同名 CredentialRef 不会被通用 Planner 在排队前阻断；在合同补齐前，环境 Owner 必须在审批时人工确认 CredentialRef 和 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` 都已配置，并依赖 Playbook 预检失败关闭。
 
 安装 Run 的运行详情会显示备份基线目录、来源 Run、捕获时间和 Playbook 哈希。
 回滚只能使用环境当前安装组件记录中的这条引用；看到“backup metadata does not
@@ -673,7 +707,7 @@ match”时应重新执行安装验证并捕获新基线，不要手工指向旧
 
 ### 9.6 Run 执行中失败
 
-查看失败 Step 的 Summary 和日志，区分 Syntax Check、List Hosts 还是 Execute 阶段。修复组件 Draft、环境 Revision 或目标主机后重新提交；当前平台不支持从失败步骤继续。
+先查看顶部失败摘要并定位失败 Step，再核对 Summary 和历史日志，区分 Syntax Check、List Hosts 还是 Execute 阶段。修复组件 Draft、环境 Revision 或目标主机后重新提交；当前平台不支持从失败步骤继续。
 
 ### 9.7 服务重启后的状态
 

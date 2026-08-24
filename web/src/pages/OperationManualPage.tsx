@@ -99,20 +99,22 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
     page: '组件目录与基础信息', path: '/components', description: '组件目录负责选择对象；写按钮只对该组件 Owner 出现。', entries: [
       { label: '新建组件 / 创建组件', purpose: '创建组件及其基础归属。', availability: '组件 Owner', result: '打开创建表单并在确认后生成组件。' },
       { label: '全部展开 / 全部折叠 / 分层标题', purpose: '展开、收起 L1-L6 分类目录。', availability: '所有用户', result: '只改变目录显示。' },
+      { label: '搜索名称或标识 / 全部 / 我负责的 / 有 Draft / 待处理', purpose: '快速定位组件或仅查看需要 Owner 处理的对象。', availability: '所有用户；Owner 筛选按当前身份生效', result: '只筛选目录，不修改组件。' },
       { label: '组件条目', purpose: '选择组件并读取 Release 列表。', availability: '所有用户', result: '切换详情；编辑 Draft 时其他条目会禁用。' },
       { label: '编辑组件 / 保存组件', purpose: '修改名称、标识、分类和说明。', availability: '组件 Owner 且拥有该组件', result: '保存组件元数据，不修改已发布 Release。' },
       { label: '创建 Draft 编辑合同 / 创建 Draft', purpose: '从现有版本克隆或创建可编辑版本。', availability: '组件 Owner 且没有可编辑 Draft 时', result: '创建新 Draft；Released Release 保持不可变。' },
     ],
   },
   {
-    page: 'Release 合同与生命周期', path: '/components', description: '先选 Release，再根据其状态进行查看、编辑、测试、发布或废弃。', entries: [
+    page: 'Release 合同与生命周期', path: '/components', description: '先选 Release，再根据其状态进行查看、编辑、环境验证、发布或废弃。', entries: [
       { label: 'Release 版本行', purpose: '选择该版本的依赖和参数合同。', availability: '所有用户', result: '只切换当前查看版本。' },
+      { label: 'Draft 发布就绪度 / 编辑合同 / 配置动作 / 构建镜像 / 管理介质', purpose: '汇总发布阻断项并进入对应处理入口。', availability: '组件 Owner 自有 Draft', result: '卡片本身只汇总状态；具体写操作仍需在后续表单确认。' },
       { label: '查看合同 / 关闭', purpose: '只读查看参数可见性、依赖和映射。', availability: '所有 Release', result: '不修改合同。' },
       { label: '配置合同 / 编辑依赖和参数 / 编辑', purpose: '编辑 Draft 的参数与精确依赖映射。', availability: '组件 Owner 自有 Draft', result: '打开合同编辑器；需“保存依赖和参数”才写入。' },
       { label: '编辑可见性与映射', purpose: '从合同查看弹窗转入 Draft 编辑。', availability: '当前 Release 可编辑时', result: '关闭只读视图并打开编辑器。' },
       { label: '保存依赖和参数', purpose: '保存 Draft 参数、依赖及公开参数映射。', availability: '合同编辑器校验通过', result: '更新 Draft，并使相关旧测试证据失效。' },
       { label: '发布 / 确认发布并通知', purpose: '预览下游影响并发布不可变 Release。', availability: '组件 Owner 自有 Draft 且满足发布校验', result: 'Release 进入 Released，并为受影响 Owner 创建通知。' },
-      { label: '废弃', purpose: '停止把旧 Released Release 作为推荐版本。', availability: '组件 Owner 自有 Released Release', result: '状态变为 Deprecated；历史引用仍保留。' },
+      { label: '废弃 / 确认废弃版本', purpose: '预览影响后停止把旧的已发布 Release 作为推荐版本。', availability: '组件 Owner 自有已发布 Release', result: '确认后状态变为已废弃；历史引用仍保留。' },
     ],
   },
   {
@@ -131,10 +133,10 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
   },
   {
     page: '组件测试与镜像构建', path: '/components', description: '预览成功前不能提交测试；回滚合同与 verify 目标相互独立。', entries: [
-      { label: '测试', purpose: '打开安装验证或回滚验证。', availability: '具备可测试动作的 Release', result: '只打开表单，不创建 Run。' },
-      { label: '测试模式 / 回滚验证策略 / verify 目标 Release / 目标环境', purpose: '明确运行类型、可选 verify 基线和环境。', availability: '组件测试弹窗', result: '任一选择变化都会使旧执行计划失效。' },
+      { label: '环境验证', purpose: '打开安装验证或回退验证，并明确提示是否会修改环境。', availability: '具备可执行动作的 Release', result: '只打开表单，不创建 Run。' },
+      { label: '验证模式 / 回退验证策略 / verify 目标 Release / 目标环境', purpose: '明确运行类型、可选 verify 基线和环境。', availability: '组件环境验证弹窗', result: '任一选择变化都会使旧执行计划失效。' },
       { label: '预览执行计划 / 刷新执行计划', purpose: '由服务端校验并返回完整步骤和 planDigest。', availability: '必填项完整', result: '不创建 Run、Approval 或审计执行记录。' },
-      { label: '确认提交安装验证 / 确认提交回滚验证', purpose: '按已确认计划创建 Run。', availability: '预览成功且计划仍有效', result: '创建 Run；破坏性动作进入环境 Owner 审批。' },
+      { label: '确认提交安装验证 / 确认提交回退验证', purpose: '按已确认计划创建 Run。', availability: '预览成功且计划仍有效', result: '创建 Run；破坏性动作进入环境 Owner 审批。' },
       { label: '构建镜像', purpose: '为 Draft 上传 Dockerfile 并查看构建。', availability: '组件 Owner 自有 Draft', result: '打开镜像构建弹窗。' },
       { label: '上传并构建', purpose: '在所选环境的 IMAGE_REGISTRY 中创建镜像构建。', availability: 'Dockerfile、环境和 Registry 均有效', result: '创建构建记录并异步执行。' },
       { label: '组件介质', purpose: '上传介质或登记 file-station 已有路径及 SHA-256。', availability: '组件 Owner 自有 Draft', result: '把介质元数据锁定到 Release。' },
@@ -177,7 +179,11 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '添加主机 / 删除主机', purpose: '维护 Inventory 主机和主机组。', availability: '环境 Owner 自有环境', result: '改变未保存 Inventory。' },
       { label: '添加变量 / 删除环境变量', purpose: '维护非敏感作业环境变量、IMAGE_REGISTRY 和 FILE_STATION。', availability: '环境 Owner 自有环境', result: '改变未保存变量；Secret 不得填入此处。' },
       { label: '添加引用 / 删除凭据引用', purpose: '维护 CredentialRef 类型与引用位置。', availability: '环境 Owner 自有环境', result: '只保存引用，不把实际凭据返回前台。' },
-      { label: '保存新 Revision', purpose: '保存 Inventory、Facts、变量与凭据引用。', availability: '环境 Owner 自有环境', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },
+      { label: '立即检查', purpose: '对当前 Revision 的主机 SSH 端口、Registry 和介质站执行只读 TCP 连通性检查。', availability: '环境 Owner 自有环境', result: '保存带 Revision 来源的健康结果和审计记录；不会创建 Run 或执行安装。' },
+      { label: '放弃本页更改', purpose: '撤销当前配置分区尚未保存的修改。', availability: '环境 Owner 自有环境且当前分区有改动', result: '恢复当前 Revision 的该分区内容，不影响其他分区。' },
+      { label: '保存新 Revision', purpose: '预览 Inventory、Facts、变量或凭据引用的差异。', availability: '环境 Owner 自有环境且当前分区有改动', result: '打开差异与变更原因确认框，尚未写入。' },
+      { label: '确认创建 Revision', purpose: '用填写的变更原因提交预览差异。', availability: '差异确认框且变更原因非空', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },
+      { label: '基于此恢复', purpose: '把历史 Revision 的配置复制为一个新 Revision。', availability: '环境 Owner 自有环境的非当前 Revision', result: '要求填写恢复原因；保留原历史，不回写或删除旧 Revision。' },
     ],
   },
   {
@@ -331,7 +337,7 @@ const DEPLOYMENT_MARKDOWN = `## 部署与版本切换交接
 ### 平台部署人员
 
 1. 部署前确认目标地址、当前分支和工作区，检查没有 Running、Queued 或 Awaiting Approval 的活动 Run。
-2. 运行 Go、前端测试、生产构建和差异检查；记录未执行的门禁，不能把“依赖缺失”写成“验证通过”。
+2. 运行 Go、前端测试、测试环境嵌入式构建和差异检查；记录未执行的门禁，不能把“依赖缺失”写成“验证通过”。
 3. 切换服务前备份二进制、数据库和环境配置；失败时恢复三者，不能只回退二进制。
 4. 部署后验证服务状态、HTTP、二进制校验和、HTML 构建版本与不缓存的 version.json 一致。
 5. 用已加载版本守卫的旧页面验证升级提示；确认旧应用区域已经 inert，刷新后页面版本与服务端一致。
@@ -370,7 +376,9 @@ const DEPLOYMENT_CHECKPOINTS = [
   '业务记录计数未被只读验收改变',
 ];
 
-const OVERVIEW_MARKDOWN = `## 从可复用能力到可追踪运行
+const OVERVIEW_MARKDOWN = `> 当前是项目首个版本（V1），当前环境仅用于测试，不是生产环境。除非出现明确的 V2 文档，所有页面合同都按首版解释。
+
+## 从可复用能力到可追踪运行
 
 ClusterForge 把交付过程拆成组件 Release、场景 Revision、环境 Revision 和 Run 四类记录。前三类负责定义“执行什么、按什么顺序、在哪里执行”，Run 负责锁定快照并留下状态、审批和日志。
 
@@ -398,20 +406,20 @@ ClusterForge 把交付过程拆成组件 Release、场景 Revision、环境 Revi
 
 - “六节点集群”描述目标环境 Inventory 中的主机规模，不要求场景画布也恰好有六个节点。
 - 场景节点是逻辑执行单元；一个 bundle 或交付阶段可以在 Playbook 内处理多个软件组件和多台主机。
-- 历史场景可能使用 **主机预检 → 节点准备 → 集群引导 → 集群验收** 等聚合节点；细粒度场景则把控制面、工作节点与附加能力拆成独立逻辑节点，实际数量以当前已发布 Revision 为准。
+- 首版同时支持聚合节点和细粒度节点；实际数量以当前 Revision 为准。
 - 判断真实执行内容要查看节点锁定的 Release、Action、Host Group 和最终 Run Steps，不能只看场景节点总数。`;
 
 const WORKFLOW_STEPS = [
   { icon: Boxes, title: '1. 组件 Release', owner: '组件 Owner', text: '定义参数、依赖、环境约束与 Ansible 动作。', tone: 'indigo' },
   { icon: Network, title: '2. 场景 Revision', owner: '场景 Owner', text: '锁定精确版本，用 DAG 编排并完成环境测试。', tone: 'cyan' },
-  { icon: CloudCog, title: '3. 环境 Revision', owner: '环境 Owner', text: '提供 Inventory、Facts、Parameters 与 CredentialRef。', tone: 'amber' },
+  { icon: CloudCog, title: '3. 环境 Revision', owner: '环境 Owner', text: '提供 Inventory、Facts、Variables 与 CredentialRef。', tone: 'amber' },
   { icon: PlayCircle, title: '4. Run', owner: '协作交付', text: '锁定快照，经过审批后串行执行并沉淀日志。', tone: 'rose' },
 ] as const;
 
 const CENTER_CARDS = [
   { to: '/components', icon: Boxes, title: '组件发布', text: '创建 Draft、配置合同、共享环境测试、影响预览与发布。', tone: 'indigo' },
   { to: '/scenarios', icon: Network, title: '场景发布', text: '选择精确 Release、编排 DAG、完整测试并发布 Revision。', tone: 'cyan' },
-  { to: '/environments', icon: CloudCog, title: '环境管理', text: '维护主机、事实、普通参数、CredentialRef 与 Revision。', tone: 'amber' },
+  { to: '/environments', icon: CloudCog, title: '环境管理', text: '维护主机、事实、环境变量、CredentialRef 与 Revision。', tone: 'amber' },
 ] as const;
 
 function InlineMarkdown({ text }: { text: string }) {
@@ -547,7 +555,7 @@ export function OperationManualPage() {
       <PageHeader
         eyebrow="Role-based playbook"
         title="操作说明书"
-        description={`当前身份：${ROLE_LABELS[user.role]}。先了解平台协作流程，再按角色完成发布、管理与审批。`}
+        description={`当前为项目首个版本（V1），环境仅用于测试，不是生产环境；除非出现明确的 V2 文档，所有操作都按首版合同执行。当前身份：${ROLE_LABELS[user.role]}。`}
         actions={<Link className="button button--primary" to={showRoleManualAction ? '/manual/role' : '/manual/deployment'}>{showRoleManualAction ? <OwnerIcon size={16} /> : <RefreshCw size={16} />}{showRoleManualAction ? '查看我的操作手册' : '查看部署交接'}</Link>}
       />
 

@@ -1,7 +1,9 @@
 # ClusterForge 平台设计文档（后端为主）
 
-> 文档基线：2026-08-13 当前工作区代码  
-> 适用项目：NewPlatform Demo / ClusterForge 交付编排中心  
+> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。除非出现明确的 V2 文档，否则不提供历史数据库、历史数据或旧 API 合同兼容。统一规则见 [首版与环境策略](version-policy.md)。
+
+> 文档基线：2026-08-24 当前工作区代码
+> 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
 > 实现状态说明：本文描述当前代码已经实现的行为；“演进建议”不属于现有能力。
 
 ## 1. 文档目的
@@ -76,7 +78,7 @@ flowchart LR
 | `cmd/server` | 配置加载、数据库初始化、seed、Runner 和 HTTP 服务生命周期 |
 | `internal/domain` | 领域对象、枚举、状态、图校验和通用错误 |
 | `internal/service` | RBAC、Owner 校验、业务状态转换、参数解析、作业规划和调度 |
-| `internal/store` | SQLite migration、查询、事务、并发状态抢占和持久化 |
+| `internal/store` | SQLite 首版结构初始化、合同校验、查询、事务、并发状态抢占和持久化 |
 | `internal/api` | Cookie 会话、REST/SSE 路由、DTO、可见性过滤和统一错误 |
 | `internal/ansible` | 路径约束、摘要、工作区快照、Ansible 子进程、取消和日志脱敏 |
 | `internal/seed` | 幂等写入演示身份、组件、场景和环境 |
@@ -135,9 +137,11 @@ erDiagram
 
 Released Release 不可修改；更新时从已有版本克隆新 Draft。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
 
+参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`defaultValue`、`enum` 与 `minLength` 必须和类型一致。不存在隐式可见性或旧 `parameterSchema` 兼容字段。
+
 场景节点锁定 Release，但 Release 在图中不要求唯一。同一 Docker、Distribution、Flannel、kubelet 或 kube-proxy Release 可以分别用于 `k8smaster` 与 `k8snode`；依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
 
-组件测试优先选择 `upgrade`，不存在时选择 `install`，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
+安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
 
 每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
 CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
@@ -182,7 +186,9 @@ Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只�
 - CredentialRefs：`envVarRef` 或 `sshKeyPath`。
 - `maxConcurrent`：当前结构保留该字段，但调度实现固定按每环境一个运行串行执行。
 
-每次保存 Inventory、Facts、Variables 或 CredentialRefs 都会创建新 Environment Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改影响。
+每次保存 Inventory、Facts、Variables 或 CredentialRefs 都会创建新 Environment Revision，并记录创建者、变更原因和时间。历史 Revision 不会原地恢复；恢复操作会复制目标快照并创建一个编号递增的新 Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改或恢复影响。
+
+环境 Owner 可以对当前 Revision 发起只读健康检查。检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION` 的 TCP 连通性，结果锁定来源 Revision 并写入审计；它不执行 SSH 登录、Registry API、文件下载或 Ansible，因此不能替代组件预检和真实环境验收。
 
 ### 4.5 Run、Step、Approval 与 Log
 
@@ -217,6 +223,7 @@ SQLite 主要表如下：
 
 | 表 | 作用 | 关键约束 |
 | --- | --- | --- |
+| `schema_contract` | 首版结构标识 | 只接受当前 `schemaContract` |
 | `users` | 演示用户 | 角色枚举约束 |
 | `sessions` | Cookie 会话摘要 | token hash 主键、过期时间 |
 | `components` | 组件元数据与分类 | slug 唯一、Owner 外键、layer/category/kind/requiredness 枚举约束 |
@@ -233,6 +240,11 @@ SQLite 主要表如下：
 | `approvals` | 危险运行审批 | 每个 Run 最多一条 |
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
 | `audit_events` | 审计记录 | 数据库触发器禁止更新和删除 |
+| `component_image_builds` / `component_image_build_logs` | Dockerfile 构建记录和日志 | 锁定环境 Revision 与目标镜像 |
+| `environment_component_installations` | 当前安装和备份来源 | 环境、组件维度唯一当前记录 |
+| `component_release_artifacts` | Release 介质 | alias 唯一并锁定文件站与 SHA-256 |
+| `component_artifact_mirrors` / `component_image_mirrors` | 跨仓平移记录 | 以目标与内容指纹复用 |
+| `environment_health_checks` | 环境 TCP 连通性检查 | 记录来源 Environment Revision |
 
 时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同；Environment Revision 不再包含普通参数。
 
@@ -248,6 +260,7 @@ SQLite 主要表如下：
 | 创建/编排/发布场景 | 否 | 仅本人场景 | 否 |
 | 发起场景测试或运行 | 否 | 仅本人场景 | 可以 |
 | 创建/修改环境 Revision | 否 | 否 | 仅本人环境 |
+| 检查环境连通性、从历史快照创建新 Revision | 否 | 否 | 仅本人环境 |
 | 审批危险 Run | 否 | 否 | 仅本人环境上的 Run |
 | 取消 Run | 本人发起 | 本人发起 | 本人环境上的 Run |
 | 查看审计 API | 否 | 否 | 可以 |
@@ -382,6 +395,14 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 
 任一阶段失败即终止当前步骤和 Run。执行成功后解析 Ansible recap，记录 ok、changed 和主机数摘要。
 
+### 7.9 环境变更、恢复与健康检查
+
+- Inventory、Facts、Variables 和 CredentialRefs 分区独立保存；每次保存都由前台要求填写变更原因并创建新 Revision。
+- 历史 Revision 只读。“基于此恢复”复制其完整快照生成新 Revision，不移动旧记录、不删除历史，也不修改已经提交的 Run。
+- 环境存在 `running`、`queued` 或 `awaiting_approval` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
+- 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
+- `healthy` 仅表示本次列出的 TCP 端点全部可达；身份认证、协议语义、介质完整性、镜像推送和 Playbook 可执行性仍需各自验证。
+
 ## 8. Ansible 与凭据安全
 
 ### 8.1 路径和制品约束
@@ -407,16 +428,15 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 - 实际 secret 不写入数据库 Run 快照；日志写入前按 secret 字面值脱敏。
 - Release 动作的 `requiredCredentials` 只是一组名称。环境中同名引用缺失时，
   组件运行和场景运行都会在创建 Run 之前 fail-closed。
-- Draft 更新中省略 `requiredCredentials` 表示保留原值，显式提交空数组（也接受
-  `required_credential_names: []`）表示清空；持久化和响应都规范化为空数组而非
+- Draft 更新中省略 `requiredCredentials` 表示保留原值，显式提交空数组表示清空；持久化和响应都规范化为空数组而非
   `null`。
 
 注意：`sshKeyPath` 的路径本身会保存到数据库，私钥内容不会保存。当前 Runner 将该路径作为同名 Ansible 变量传入，是否由 Playbook 用作连接私钥取决于作业定义。
 
 ### 8.4 OpenFuyao adapter 边界
 
-原始 105 文件作业快照保持不变。平台自有 adapter 负责合同校验、动态
-`target_host_group`、`ansible_user` 到 `ansible_ssh_user` 的兼容桥，以及在
+平台纳管 105 文件的作业快照。平台自有 adapter 负责合同校验、动态
+`target_host_group`、统一使用 `ansible_user`，以及在
 `bke-master` 前重建跨 Playbook 丢失的 registry facts。Seed 提供 cert、
 bootstrap、common、addon、master、nodes 六个组件和三个独立场景：管理集群
 构建、业务集群控制面构建、业务节点纳管。节点纳管先执行只读 master verify。
@@ -424,8 +444,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 管理与业务场景分别固定 `cluster_role=manager|work` 及目标主机组，不开放运行
 输入覆盖。环境使用 `operation`、`network`、`versions`、`artifact_sources`、
 `certificates`、`addon_params` 分组，再由点路径 Bindings 映射到 Ansible 实际
-变量名。callback URL/token、task ID 和旧 wrapper 的
-`management_cluster_id` 不属于 Release 参数合同。
+变量名。callback URL/token、task ID 和外部 wrapper 字段不属于 Release 参数合同。
 
 ### 8.5 日志
 
@@ -461,6 +480,12 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | POST | `/component-releases/{id}/deprecate` | 废弃 |
 | POST | `/component-releases/{id}/test-plan` | 只读预览组件测试执行计划 |
 | POST | `/component-releases/{id}/test-runs` | 发起组件测试 |
+| GET / PUT / POST | `/component-releases/{id}/playbook` | 读取、在线保存或上传 Draft Playbook |
+| GET / POST | `/component-releases/{id}/image-builds` | 查询或创建 Dockerfile 镜像构建 |
+| POST | `/component-releases/{id}/artifacts/upload` | 上传并登记组件介质 |
+| POST | `/component-releases/{id}/artifacts/register` | 登记文件站已有组件介质 |
+| DELETE | `/component-releases/{id}/artifacts/{alias}` | 从 Draft 移除介质引用 |
+| GET | `/image-builds/{id}` | 查询镜像构建详情与日志 |
 
 ### 9.3 场景
 
@@ -475,6 +500,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | POST | `/scenario-revisions/{id}/runs` | 运行 Released Revision |
 | POST | `/scenario-revisions/{id}/publish` | 发布测试通过的 Revision |
 | POST | `/scenario-revisions/{id}/deprecate` | 废弃 Revision |
+| POST | `/scenario-revisions/{id}/abandon` | 放弃当前 Draft 并恢复最近的不可变 Revision 指针 |
 
 ### 9.4 环境、运行和治理
 
@@ -483,8 +509,10 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | GET / POST | `/environments` | 列表 / 创建环境 |
 | PUT | `/environments/{id}/inventory` | 新建包含 Inventory 变更的 Revision |
 | PUT | `/environments/{id}/facts` | 新建包含 Facts 变更的 Revision |
-| PUT | `/environments/{id}/parameters` | 新建包含参数变更的 Revision |
+| PUT | `/environments/{id}/variables` | 新建包含非敏感环境变量变更的 Revision |
 | PUT | `/environments/{id}/credential-refs` | 新建包含凭据引用变更的 Revision |
+| POST | `/environments/{id}/health-checks` | 对当前 Revision 执行只读 TCP 连通性检查 |
+| POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
 | GET | `/runs` | 查询当前用户可见 Run |
 | GET | `/runs/{id}` | Run 步骤、审批和日志详情 |
 | POST | `/runs/{id}/cancel` | 取消等待、排队或运行中的 Run |
@@ -494,7 +522,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | PATCH | `/notifications/{id}` | 标记已读；不能恢复未读 |
 | GET | `/audit-events` | 最近 500 条审计，仅环境 Owner |
 
-成功响应使用 `{ "data": ... }` 或 `{ "items": [...] }`。错误统一为：
+请求 JSON 使用唯一 camelCase 合同，Handler 拒绝未知字段。成功响应使用 `{ "data": ... }` 或 `{ "items": [...] }`。错误统一为：
 
 ```json
 {
@@ -539,7 +567,15 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | Docker CLI 路径 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 打开并迁移数据库 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。
+OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后端进程环境变量；它们不是平台启动参数，也没有默认值：
+
+- `NEWPLATFORM_OPENFUYAO_SSH_PASSWORD`
+- `NEWPLATFORM_OPENFUYAO_REGISTRY_USERNAME`
+- `NEWPLATFORM_OPENFUYAO_REGISTRY_PASSWORD`
+- `NEWPLATFORM_OPENFUYAO_CHART_USERNAME`
+- `NEWPLATFORM_OPENFUYAO_CHART_PASSWORD`
+
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空的首版数据库或校验首版合同 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。旧数据库不会升级，必须在测试环境重建。
 
 ## 12. 故障恢复与一致性
 
@@ -550,7 +586,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 - Playbook 摘要不匹配时阻断执行，不自动接受新内容。
 - 取消 Running Run 使用 context 取消并终止 Ansible 进程组；不保证撤销已经对目标主机完成的变更。
 - SQLite 事务保护 Run 抢占、审批决策和 Revision 指针更新等关键状态修改。
-- 组件发布、影响通知和审计目前不是一个跨表强事务：Release 状态先更新，后续通知失败时接口可能返回错误但 Release 已发布；生产化前应把发布、通知 outbox 和审计纳入一致性设计。
+- 组件发布、影响通知和审计目前不是一个跨表强事务：Release 状态先更新，后续通知失败时接口可能返回错误但 Release 已发布；进入生产环境前应把发布、通知 outbox 和审计纳入一致性设计。
 
 ## 13. 测试与构建门禁
 
@@ -575,4 +611,5 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 - 增加审批理由必填、多人审批、超时和审批策略模板。
 - 增加审计强事务、导出、保留期和不可抵赖存储。
 - 增加 Run 重试、从失败节点恢复和人工确认后的显式回滚流程。
-- 增加 OpenAPI、分页、过滤、幂等键和 API 版本兼容策略。
+- Kubernetes 1.17.5 样例 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为 `requiredCredentials`；补齐前只能依赖环境 Owner 人工核对和 Playbook 自身预检，通用 Planner 不会因缺少该引用而提前拒绝。
+- 增加 OpenAPI、分页、过滤和幂等键；只有出现明确的 V2 文档后才设计跨版本兼容策略。

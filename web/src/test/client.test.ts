@@ -20,6 +20,12 @@ describe('API response contract', () => {
     await expect(api.components()).rejects.toMatchObject({ status: 200, code: 'INVALID_RESPONSE' } satisfies Partial<ApiError>);
   });
 
+  it('rejects the old raw-array list envelope', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify([]), 'application/json')));
+
+    await expect(api.components()).rejects.toMatchObject({ status: 200, code: 'INVALID_RESPONSE' } satisfies Partial<ApiError>);
+  });
+
   it('keeps only valid top-level impact paths', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({
       data: {
@@ -35,6 +41,41 @@ describe('API response contract', () => {
       scenarioOwners: [],
       scenarios: [],
       paths: [['containerd', 'kubernetes']],
+    });
+  });
+
+  it('serializes the frontend CredentialRef type as the backend kind field', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(JSON.stringify({
+      data: {
+        id: 'environment-1',
+        name: 'Test Environment',
+        ownerId: 'environment-owner',
+        currentRevision: {
+          id: 'environment-1-r2',
+          environmentId: 'environment-1',
+          revision: 2,
+          facts: {},
+          hosts: [],
+          variables: {},
+          credentialRefs: [{ name: 'ANSIBLE_PASSWORD', kind: 'envVarRef', reference: 'NEWPLATFORM_ANSIBLE_PASSWORD' }],
+        },
+      },
+    }), 'application/json'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.updateCredentialRefs('environment-1', [{
+      name: 'ANSIBLE_PASSWORD',
+      type: 'envVarRef',
+      reference: 'NEWPLATFORM_ANSIBLE_PASSWORD',
+    }], '配置 Ansible 凭据');
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      credentialRefs: [{
+        name: 'ANSIBLE_PASSWORD',
+        kind: 'envVarRef',
+        reference: 'NEWPLATFORM_ANSIBLE_PASSWORD',
+      }],
+      changeReason: '配置 Ansible 凭据',
     });
   });
 });

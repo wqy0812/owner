@@ -103,5 +103,5 @@ credential_refs:
     envVarRef: NEWPLATFORM_OPENFUYAO_CHART_PASSWORD
 
 # cluster_role and target_host_group are fixed by each scenario node. Callback
-# URL/token, task ID, and the legacy management_cluster_id wrapper variable are
-# not Release parameters because the platform does not invoke ansible_run.sh.
+# URL/token and task ID are not Release parameters because the platform does
+# not invoke ansible_run.sh.

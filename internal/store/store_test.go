@@ -47,7 +47,7 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 	r := domain.ComponentRelease{
 		ID: id, ComponentID: component, Version: version, Type: domain.ReleaseAtomic,
 		Status: status, RiskLevel: domain.RiskLow, CreatedAt: testNow,
-		EnvironmentConstraints: map[string]any{"arch": "amd64"},
+		EnvironmentConstraints: map[string]any{"architecture": "amd64"},
 		Parameters:             []domain.ParameterDefinition{},
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
@@ -241,7 +241,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 
 	inventory, _ := json.Marshal(map[string]any{"all": map[string]any{"hosts": map[string]any{"localhost": map[string]any{"ansible_connection": "local"}}}})
 	env := domain.Environment{ID: "lab", Name: "Lab", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"arch": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
+	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, MaxConcurrent: 1, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, env, envRev); err != nil {
 		t.Fatal(err)
 	}

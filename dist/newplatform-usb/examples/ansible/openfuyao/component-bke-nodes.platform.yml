@@ -24,10 +24,6 @@
             - work_cluster_k8snode
       tags: always
 
-    - name: Bridge platform inventory user to the legacy node template variable
-      set_fact:
-        ansible_ssh_user: "{{ ansible_user }}"
-      tags: always
   roles:
     - role: bke-common
     - role: bke-nodes

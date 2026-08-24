@@ -7,13 +7,11 @@ export interface EnvironmentConstraintGroup {
 export interface EnvironmentConstraintOption {
   value: string;
   label: string;
-  aliases?: string[];
 }
 
 export interface EnvironmentConstraintDimension {
   key: string;
   label: string;
-  aliases: string[];
   options: EnvironmentConstraintOption[];
 }
 
@@ -23,34 +21,30 @@ export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[]
   {
     key: 'architecture',
     label: '架构',
-    aliases: ['arch', 'cpuArch'],
     options: [
-      { value: 'amd64', label: 'x86/amd64', aliases: ['x86', 'x86_64', 'x86/amd64'] },
-      { value: 'arm64', label: 'ARM/arm64', aliases: ['arm', 'aarch64', 'arm/arm64'] },
+      { value: 'amd64', label: 'x86/amd64' },
+      { value: 'arm64', label: 'ARM/arm64' },
     ],
   },
   {
     key: 'operatingSystem',
     label: '操作系统',
-    aliases: ['os', 'osDistro', 'distribution'],
     options: [
-      { value: 'SUSE', label: 'SUSE', aliases: ['sles'] },
-      { value: 'Kylin', label: 'Kylin', aliases: ['kylin v10', 'kylin linux'] },
+      { value: 'SUSE', label: 'SUSE' },
+      { value: 'Kylin', label: 'Kylin' },
     ],
   },
   {
     key: 'ipFamily',
     label: 'IP 协议族',
-    aliases: ['network'],
     options: [
-      { value: 'IPv4', label: 'IPv4', aliases: ['ipv4'] },
-      { value: 'IPv6', label: 'IPv6', aliases: ['ipv6'] },
+      { value: 'IPv4', label: 'IPv4' },
+      { value: 'IPv6', label: 'IPv6' },
     ],
   },
   {
     key: 'hardwareProfile',
     label: '硬件类型',
-    aliases: [],
     options: [
       { value: 'general', label: '通用主机' },
       { value: 'gpu', label: 'GPU' },
@@ -61,17 +55,15 @@ export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[]
   {
     key: 'isolationRuntime',
     label: '容器隔离',
-    aliases: [],
     options: [
       { value: 'runc', label: 'runc' },
       { value: 'kata', label: 'Kata' },
-      { value: 'kata-cc', label: 'Kata CC', aliases: ['kata confidential containers'] },
+      { value: 'kata-cc', label: 'Kata CC' },
     ],
   },
   {
     key: 'deploymentMode',
     label: '部署形态',
-    aliases: [],
     options: [
       { value: 'standard', label: 'standard' },
       { value: 'serverless', label: 'serverless' },
@@ -81,19 +73,13 @@ export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[]
 ];
 
 const CONSTRAINT_LABELS: Record<string, string> = Object.fromEntries([
-  ...ENVIRONMENT_CONSTRAINT_DIMENSIONS.flatMap((dimension) => [
-    [dimension.key, dimension.label],
-    ...dimension.aliases.map((alias) => [alias, dimension.label] as const),
-  ]),
+  ...ENVIRONMENT_CONSTRAINT_DIMENSIONS.map((dimension) => [dimension.key, dimension.label]),
 ]);
 
-const CONSTRAINT_ORDER = ENVIRONMENT_CONSTRAINT_DIMENSIONS.flatMap((dimension) => [dimension.key, ...dimension.aliases]);
+const CONSTRAINT_ORDER = ENVIRONMENT_CONSTRAINT_DIMENSIONS.map((dimension) => dimension.key);
 
 const VALUE_LABELS: Record<string, string> = Object.fromEntries(
-  ENVIRONMENT_CONSTRAINT_DIMENSIONS.flatMap((dimension) => dimension.options.flatMap((option) => [
-    [option.value.toLowerCase(), option.label],
-    ...(option.aliases ?? []).map((alias) => [alias.toLowerCase(), option.label] as const),
-  ])),
+  ENVIRONMENT_CONSTRAINT_DIMENSIONS.flatMap((dimension) => dimension.options.map((option) => [option.value, option.label])),
 );
 
 function asValues(value: unknown): string[] {
@@ -104,7 +90,7 @@ function asValues(value: unknown): string[] {
 }
 
 export function formatConstraintValue(value: string) {
-  return VALUE_LABELS[value.trim().toLowerCase()] ?? value.trim();
+  return VALUE_LABELS[value.trim()] ?? value.trim();
 }
 
 export function environmentConstraintGroups(constraints?: Record<string, unknown> | null): EnvironmentConstraintGroup[] {
@@ -126,12 +112,8 @@ export function environmentConstraintGroups(constraints?: Record<string, unknown
 }
 
 function normalizeOptionValue(dimension: EnvironmentConstraintDimension, raw: string) {
-  const normalized = raw.trim().toLowerCase();
-  return dimension.options.find((option) => (
-    option.value.toLowerCase() === normalized
-    || option.label.toLowerCase() === normalized
-    || (option.aliases ?? []).some((alias) => alias.toLowerCase() === normalized)
-  ))?.value;
+  const normalized = raw.trim();
+  return dimension.options.find((option) => option.value === normalized)?.value;
 }
 
 function unique(values: string[]) {
@@ -146,7 +128,7 @@ export function parseConstraintSelection(constraints?: Record<string, unknown> |
   const selection = emptyConstraintSelection();
   if (!constraints) return selection;
   for (const dimension of ENVIRONMENT_CONSTRAINT_DIMENSIONS) {
-    const raw = constraints[dimension.key] ?? dimension.aliases.map((alias) => constraints[alias]).find((value) => value != null);
+    const raw = constraints[dimension.key];
     selection[dimension.key] = unique(asValues(raw).flatMap((value) => {
       const option = normalizeOptionValue(dimension, value);
       return option ? [option] : [];
