@@ -201,6 +201,45 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 	}
 }
 
+func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
+	ctx := context.Background()
+	newEnvironment := func(t *testing.T, s *Store, id string) domain.EnvironmentRevision {
+		t.Helper()
+		inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
+		environment := domain.Environment{ID: id, Name: id, OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+		revision := domain.EnvironmentRevision{ID: id + "-r1", EnvironmentID: id, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: testNow}
+		if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
+			t.Fatal(err)
+		}
+		return revision
+	}
+	active := func(id string, kind domain.RunKind, revision domain.EnvironmentRevision) domain.Run {
+		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-dave", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+	}
+
+	t.Run("rollback blocks another active run", func(t *testing.T) {
+		s := newTestStore(t)
+		revision := newEnvironment(t, s, "rollback-fence-first")
+		if err := s.CreateRun(ctx, active("rollback-fence", domain.RunEnvironmentRollback, revision), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateRun(ctx, active("other-run", domain.RunComponentTest, revision), nil); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("active Run entered rollback-fenced environment: %v", err)
+		}
+	})
+
+	t.Run("active run blocks rollback", func(t *testing.T) {
+		s := newTestStore(t)
+		revision := newEnvironment(t, s, "rollback-fence-second")
+		if err := s.CreateRun(ctx, active("other-first", domain.RunScenario, revision), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateRun(ctx, active("rollback-second", domain.RunEnvironmentRollback, revision), nil); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("rollback entered environment with active Run: %v", err)
+		}
+	})
+}
+
 func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

@@ -99,7 +99,7 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 }
 
 func (s *Store) migrateSchemaContract(ctx context.Context, version string) error {
-	if version != candidateSchemaContract && version != idempotentSchemaContract && version != legacySchemaContract {
+	if version != evidenceSchemaContract && version != candidateSchemaContract && version != idempotentSchemaContract && version != legacySchemaContract {
 		return fmt.Errorf("unsupported database schema contract %q: expected %q", version, schemaContract)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -124,6 +124,19 @@ func (s *Store) migrateSchemaContract(ctx context.Context, version string) error
 		if _, err := tx.ExecContext(ctx, `ALTER TABLE component_releases ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1))`); err != nil {
 			return fmt.Errorf("add candidate release capability: %w", err)
 		}
+	}
+	// Exact predecessors could contain a candidate whose evidence was revoked
+	// without clearing the sharing flag. Repair those rows before schema.sql
+	// installs the candidate invariant triggers.
+	if _, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=0 WHERE candidate=1 AND verified<>1`); err != nil {
+		return fmt.Errorf("repair invalid candidate releases: %w", err)
+	}
+	var invalidCandidates int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_releases WHERE candidate=1 AND verified<>1`).Scan(&invalidCandidates); err != nil {
+		return fmt.Errorf("verify candidate release repair: %w", err)
+	}
+	if invalidCandidates != 0 {
+		return fmt.Errorf("candidate release repair left %d invalid rows", invalidCandidates)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE schema_contract SET version=? WHERE id=1 AND version=?`, schemaContract, version)
 	if err != nil {
@@ -195,7 +208,7 @@ func mapSQLError(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ErrNotFound
 	}
-	if err != nil && (strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "constraint failed")) {
+	if err != nil && (strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "constraint failed") || strings.Contains(err.Error(), "environment rollback fence conflict")) {
 		return fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
 	return err

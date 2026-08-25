@@ -202,6 +202,12 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 	if run["kind"] != string(domain.RunEnvironmentRollback) || run["status"] != string(domain.RunAwaitingApproval) {
 		t.Fatalf("rollback run=%#v", run)
 	}
+	blocked := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "install_verify",
+	}, alice)
+	if blocked.Code != http.StatusConflict {
+		t.Fatalf("rollback fence allowed another active Run status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
 	approvalID := run["approval"].(map[string]any)["id"].(string)
 	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", map[string]any{"reason": "approved whole-cluster clean rollback"}, owner); approved.Code != http.StatusOK {
 		t.Fatalf("approve rollback status=%d body=%s", approved.Code, approved.Body.String())
@@ -217,6 +223,62 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 	last := f.runner.requests[len(f.runner.requests)-3:]
 	if last[1].Variables["clusterforge_backup_cleanup_on_success"] != false || last[2].Variables["clusterforge_backup_cleanup_on_success"] != true {
 		t.Fatalf("duplicate component cleanup flags=%#v %#v", last[1].Variables, last[2].Variables)
+	}
+}
+
+func TestEnvironmentRollbackFailsClosedWhenInstallationSetChanges(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	owner := f.session(seed.EnvironmentOwnerID)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	release, err := f.database.GetComponentRelease(ctx, "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range release.Actions {
+		if release.Actions[index].Kind == domain.ActionRollback {
+			release.Actions[index].FromReleaseID = ""
+			release.Actions[index].ToReleaseID = ""
+		}
+	}
+	if err := f.database.UpdateDraftRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	installed := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+		"environmentId": "environment-test", "mode": "install_verify",
+	}, alice)
+	if installed.Code != http.StatusAccepted {
+		t.Fatalf("install baseline status=%d body=%s", installed.Code, installed.Body.String())
+	}
+	waitForRun(t, f.database, decodeEnvelope(t, installed)["data"].(map[string]any)["id"].(string), domain.RunSucceeded)
+	preview := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-plan", nil, owner)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("rollback preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	plan := decodeEnvelope(t, preview)["data"].(map[string]any)
+	created := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-runs", map[string]any{
+		"expectedPlanDigest": plan["planDigest"], "confirmEnvironmentName": "Test Environment",
+	}, owner)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("rollback run status=%d body=%s", created.Code, created.Body.String())
+	}
+	run := decodeEnvelope(t, created)["data"].(map[string]any)
+	installation, err := f.database.GetEnvironmentComponentInstallation(ctx, "environment-test", "component-test-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation.BackupRef += "-changed-after-submit"
+	if err := f.database.UpsertEnvironmentComponentInstallation(ctx, installation); err != nil {
+		t.Fatal(err)
+	}
+	approvalID := run["approval"].(map[string]any)["id"].(string)
+	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", map[string]any{"reason": "exercise stale baseline fence"}, owner); approved.Code != http.StatusOK {
+		t.Fatalf("approve stale rollback status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	waitForRun(t, f.database, run["id"].(string), domain.RunFailed)
+	failed, err := f.database.GetRun(ctx, run["id"].(string))
+	if err != nil || !strings.Contains(failed.Error, "baseline changed") {
+		t.Fatalf("stale rollback failure=%q err=%v", failed.Error, err)
 	}
 }
 
@@ -274,6 +336,12 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	if updated.Code != http.StatusOK {
 		t.Fatalf("configure file station status=%d body=%s", updated.Code, updated.Body.String())
 	}
+	if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.SetReleaseCandidate(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+		t.Fatal(err)
+	}
 
 	contents := []byte("runtime-media")
 	digest := sha256.Sum256(contents)
@@ -297,6 +365,9 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
 	if err != nil || len(release.Artifacts) != 1 || release.Artifacts[0].RelativePath != "components/component-test-runtime/v1.1.0/runtime.tar.gz" {
 		t.Fatalf("release artifacts=%+v err=%v", release.Artifacts, err)
+	}
+	if release.Verified || release.Candidate {
+		t.Fatalf("artifact upload retained delivery state: verified=%v candidate=%v", release.Verified, release.Candidate)
 	}
 	if stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(release.Artifacts[0].RelativePath))); err != nil || !bytes.Equal(stored, contents) {
 		t.Fatalf("stored artifact=%q err=%v", stored, err)
@@ -353,6 +424,10 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(release.Artifacts[0].RelativePath))); err != nil {
 		t.Fatalf("detach deleted physical media: %v", err)
+	}
+	detachedRelease, err := f.database.GetComponentRelease(context.Background(), release.ID)
+	if err != nil || detachedRelease.Verified || detachedRelease.Candidate {
+		t.Fatalf("artifact detach retained delivery state: verified=%v candidate=%v err=%v", detachedRelease.Verified, detachedRelease.Candidate, err)
 	}
 	imageHash := strings.Repeat("a", 64)
 	imageBuild := domain.ComponentImageBuild{
@@ -704,6 +779,9 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook", map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, alice); response.Code != http.StatusConflict {
 		t.Fatalf("released Playbook edit status=%d body=%s", response.Code, response.Body.String())
 	}
+	if _, err := os.Stat(filepath.Join(root, "managed", "component-test-runtime", "release-test-runtime-1.0.0", "install.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("released Playbook edit replaced a managed file: %v", err)
+	}
 	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "notes.txt", "content": "not yaml"}, alice); response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid Playbook extension status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -938,6 +1016,12 @@ func TestFirstVersionAPIRejectsOldRequestShapes(t *testing.T) {
 	if flatGraph.Code != http.StatusBadRequest || !strings.Contains(flatGraph.Body.String(), "unknown field") {
 		t.Fatalf("old flat graph status=%d body=%s", flatGraph.Code, flatGraph.Body.String())
 	}
+	edgeLabel := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r2/graph", map[string]any{
+		"nodes": []any{}, "edges": []any{map[string]any{"id": "legacy-label", "source": "a", "target": "b", "label": "legacy"}}, "executionPolicy": map[string]any{},
+	}, alice)
+	if edgeLabel.Code != http.StatusBadRequest || !strings.Contains(edgeLabel.Body.String(), "unknown field") {
+		t.Fatalf("edge label outside V1 contract status=%d body=%s", edgeLabel.Code, edgeLabel.Body.String())
+	}
 }
 
 func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
@@ -975,6 +1059,31 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice)
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "rollback and post-rollback verification") {
 			t.Fatalf("missing rollback evidence status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("rollback only is not delivery evidence", func(t *testing.T) {
+		f := newAPIFixture(t)
+		alice := f.session(seed.ComponentOwnerRuntimeID)
+		dave := f.session(seed.EnvironmentOwnerID)
+		if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+			t.Fatal(err)
+		}
+		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
+			"environmentId": "environment-test", "mode": "rollback", "rollbackVerification": map[string]any{"kind": "rollback_only"},
+		}, alice)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("rollback-only run status=%d body=%s", response.Code, response.Body.String())
+		}
+		data := decodeEnvelope(t, response)["data"].(map[string]any)
+		approvalID := data["approval"].(map[string]any)["id"].(string)
+		if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); approved.Code != http.StatusOK {
+			t.Fatalf("approve rollback-only status=%d body=%s", approved.Code, approved.Body.String())
+		}
+		waitForRun(t, f.database, data["id"].(string), domain.RunSucceeded)
+		candidate := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/candidate", map[string]any{"candidate": true}, alice)
+		if candidate.Code != http.StatusConflict || !strings.Contains(candidate.Body.String(), "rollback and post-rollback verification") {
+			t.Fatalf("rollback-only accepted as candidate evidence status=%d body=%s", candidate.Code, candidate.Body.String())
 		}
 	})
 
@@ -1090,6 +1199,29 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	}
 }
 
+func TestDirectComponentReadMatchesCandidateVisibility(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	carol := f.session(seed.ScenarioOwnerID)
+	dave := f.session(seed.EnvironmentOwnerID)
+	f.completeReleaseDelivery("release-test-runtime-1.1.0", alice, dave, true)
+	shared := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/candidate", map[string]any{"candidate": true}, alice)
+	if shared.Code != http.StatusOK {
+		t.Fatalf("share candidate status=%d body=%s", shared.Code, shared.Body.String())
+	}
+	visible := f.request(http.MethodGet, "/api/v1/components/component-test-runtime", nil, carol)
+	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), "release-test-runtime-1.1.0") {
+		t.Fatalf("direct component read hid verified candidate status=%d body=%s", visible.Code, visible.Body.String())
+	}
+	if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", false); err != nil {
+		t.Fatal(err)
+	}
+	filtered := f.request(http.MethodGet, "/api/v1/components/component-test-runtime", nil, carol)
+	if filtered.Code != http.StatusOK || strings.Contains(filtered.Body.String(), "release-test-runtime-1.1.0") || !strings.Contains(filtered.Body.String(), "release-test-runtime-1.0.0") {
+		t.Fatalf("direct component read exposed invalid candidate status=%d body=%s", filtered.Code, filtered.Body.String())
+	}
+}
+
 func TestDraftRequiredCredentialsDistinguishesOmittedFromExplicitEmpty(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
@@ -1199,7 +1331,7 @@ func TestRollbackRefusesCapturedPlaybookHashMismatch(t *testing.T) {
 	}
 }
 
-func TestUpdatingReleaseContractPreservesActionsAndRejectsDraftUpstream(t *testing.T) {
+func TestUpdatingReleaseContractPreservesActionsAndScopesDraftUpstream(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Contract Edit", "contract-edit"), alice)
@@ -1238,14 +1370,31 @@ func TestUpdatingReleaseContractPreservesActionsAndRejectsDraftUpstream(t *testi
 		t.Fatalf("contract dependencies=%+v", release.Dependencies)
 	}
 
+	sameOwnerDraft := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
+		"parameters": []any{},
+		"dependencies": []any{map[string]any{
+			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.1.0", "purpose": "same-owner import chain",
+		}},
+	}, alice)
+	if sameOwnerDraft.Code != http.StatusOK {
+		t.Fatalf("same-owner Draft upstream status=%d body=%s", sameOwnerDraft.Code, sameOwnerDraft.Body.String())
+	}
+
+	privateUpstream := domain.ComponentRelease{
+		ID: "release-test-consumer-private", ComponentID: "component-test-consumer", Version: "private", Type: domain.ReleaseAtomic,
+		Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, Actions: []domain.ActionDefinition{}, CreatedAt: time.Now().UTC(),
+	}
+	if err := f.database.CreateComponentRelease(context.Background(), privateUpstream); err != nil {
+		t.Fatal(err)
+	}
 	rejected := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
 		"parameters": []any{},
 		"dependencies": []any{map[string]any{
-			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.1.0", "purpose": "draft must not be lockable",
+			"upstreamComponentId": "component-test-consumer", "upstreamReleaseId": privateUpstream.ID, "purpose": "cross-owner private draft",
 		}},
 	}, alice)
-	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "must lock a released version") {
-		t.Fatalf("draft upstream status=%d body=%s", rejected.Code, rejected.Body.String())
+	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "private Draft owned by the same") {
+		t.Fatalf("cross-owner private Draft status=%d body=%s", rejected.Code, rejected.Body.String())
 	}
 }
 

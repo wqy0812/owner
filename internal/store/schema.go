@@ -9,7 +9,8 @@ const (
 	legacySchemaContract     = "first-version-20260824"
 	idempotentSchemaContract = "first-version-20260824-idempotent-actions"
 	candidateSchemaContract  = "first-version-20260824-candidate-releases"
-	schemaContract           = "first-version-20260825-candidate-evidence"
+	evidenceSchemaContract   = "first-version-20260825-candidate-evidence"
+	schemaContract           = "first-version-20260825-safety-fences"
 )
 
 //go:embed schema.sql

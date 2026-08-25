@@ -44,13 +44,14 @@ function releaseIsVerified(release: ComponentRelease) {
   return release.verified === true;
 }
 
-function runHasAction(run: Run, action: ActionDefinition['type']) {
-  return run.action === action || run.steps?.some((step) => step.action === action) === true;
-}
-
-function runHasPrimaryAction(run: Run) {
-  return run.steps?.some((step) => PRIMARY_ACTIONS.has(step.action as ActionDefinition['type'])) === true
-    || PRIMARY_ACTIONS.has(run.action as ActionDefinition['type']);
+function runHasOrderedVerification(run: Run, primary: (action: ActionDefinition['type']) => boolean) {
+  let primarySeen = false;
+  for (const step of run.steps ?? []) {
+    const action = step.action as ActionDefinition['type'];
+    if (primary(action)) primarySeen = true;
+    else if (primarySeen && action === 'verify') return true;
+  }
+  return false;
 }
 
 function newestRun(runs: Run[], predicate: (run: Run) => boolean) {
@@ -68,7 +69,9 @@ function componentNeedsAttention(component: Component) {
 function releaseEvidence(release: ComponentRelease, runs: Run[], mode: 'install' | 'rollback') {
   return newestRun(runs, (run) => run.kind === 'component_test'
     && run.componentReleaseId === release.id
-    && (mode === 'rollback' ? runHasAction(run, 'rollback') : runHasPrimaryAction(run) && runHasAction(run, 'verify')));
+    && (mode === 'rollback'
+      ? runHasOrderedVerification(run, (action) => action === 'rollback')
+      : runHasOrderedVerification(run, (action) => PRIMARY_ACTIONS.has(action))));
 }
 
 function releaseReadyForPublish(release: ComponentRelease, runs: Run[]) {
@@ -1263,8 +1266,12 @@ function ComponentTemplateImportModal({ onClose, onDone }: { onClose: () => void
       onDone();
     } catch (reason) {
       if (reason instanceof ComponentImportExecutionError) {
+        const components = reason.progress.completedComponents.length ? reason.progress.completedComponents.join('、') : '无';
         const completed = reason.progress.completedReleases.length ? reason.progress.completedReleases.join('、') : '无';
-        notify('error', '组件模板导入中止', `${reason.message} 已完整创建的 Draft：${completed}；当前未完成 Draft 会保留，需从前台继续修正。`);
+        const drafts = reason.progress.createdDrafts.length ? reason.progress.createdDrafts.map((item) => `${item.componentSlug}(${item.releaseId})`).join('、') : '无';
+        const files = reason.progress.savedPlaybooks.length ? reason.progress.savedPlaybooks.join('、') : '无';
+        const remaining = reason.progress.remainingComponents.length ? reason.progress.remainingComponents.join('、') : '无';
+        notify('error', '组件模板导入中止', `${reason.message} 已创建组件：${components}；已完整绑定：${completed}；已创建 Draft：${drafts}；已保存文件：${files}；未完成：${remaining}。保留项需从前台继续修正。`);
       } else {
         notify('error', '组件模板校验失败', displayError(reason));
       }

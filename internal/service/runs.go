@@ -63,10 +63,20 @@ type lockedStep struct {
 }
 
 type lockedPlan struct {
-	Steps             []lockedStep             `json:"steps"`
-	ArtifactTransfers []lockedArtifactTransfer `json:"artifactTransfers,omitempty"`
-	ImageTransfers    []lockedImageTransfer    `json:"imageTransfers,omitempty"`
-	TreeDigest        string                   `json:"treeDigest"`
+	Steps                      []lockedStep                 `json:"steps"`
+	ArtifactTransfers          []lockedArtifactTransfer     `json:"artifactTransfers,omitempty"`
+	ImageTransfers             []lockedImageTransfer        `json:"imageTransfers,omitempty"`
+	TreeDigest                 string                       `json:"treeDigest"`
+	InstallationBaseline       []lockedInstallationBaseline `json:"installationBaseline,omitempty"`
+	InstallationBaselineDigest string                       `json:"installationBaselineDigest,omitempty"`
+}
+
+type lockedInstallationBaseline struct {
+	ComponentID    string `json:"componentId"`
+	ReleaseID      string `json:"releaseId"`
+	InstallRunID   string `json:"installRunId"`
+	BackupRef      string `json:"backupRef"`
+	PlaybookSHA256 string `json:"playbookSha256"`
 }
 
 type lockedArtifactTransfer struct {
@@ -669,6 +679,10 @@ func (p *Platform) prepareLockedPlan(ctx context.Context, environment domain.Env
 	if err := p.bindBackupPlan(ctx, environment.ID, runID, kind, capturedAt, &plan); err != nil {
 		return lockedPlan{}, "", false, err
 	}
+	if kind == domain.RunEnvironmentRollback {
+		plan.InstallationBaseline = installationBaselineFromSteps(plan.Steps)
+		plan.InstallationBaselineDigest = installationBaselineDigest(plan.InstallationBaseline)
+	}
 	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
 	destructive := len(plan.ArtifactTransfers) > 0 || len(plan.ImageTransfers) > 0
 	for _, step := range plan.Steps {
@@ -728,12 +742,13 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		})
 	}
 	encoded, _ := json.Marshal(struct {
-		EnvironmentRevisionID string
-		TreeDigest            string
-		Steps                 []digestStep
-		ArtifactTransfers     []lockedArtifactTransfer
-		ImageTransfers        []lockedImageTransfer
-	}{EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers})
+		EnvironmentRevisionID      string
+		TreeDigest                 string
+		Steps                      []digestStep
+		ArtifactTransfers          []lockedArtifactTransfer
+		ImageTransfers             []lockedImageTransfer
+		InstallationBaselineDigest string
+	}{EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, InstallationBaselineDigest: plan.InstallationBaselineDigest})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }
@@ -790,6 +805,9 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		return domain.Run{}, fmt.Errorf("%w: execution plan changed after preview; refresh the plan before submitting", domain.ErrConflict)
 	}
 	snapshot := structToMap(plan)
+	if kind == domain.RunComponentTest {
+		snapshot["componentTestEvidence"] = componentTestEvidence(action, plan.Steps)
+	}
 	if len(resolvedParametersByNode) > 0 {
 		snapshot["resolvedParametersByNode"] = provenanceSnapshot(resolvedParametersByNode)
 	}
@@ -831,6 +849,33 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		p.schedule(environment.ID)
 	}
 	return run, nil
+}
+
+func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string {
+	if action == domain.ActionRollback {
+		rollbackSeen := false
+		for _, step := range steps {
+			if step.Action == domain.ActionRollback {
+				rollbackSeen = true
+				continue
+			}
+			if rollbackSeen && step.Action == domain.ActionVerify {
+				return "rollback_verify"
+			}
+		}
+		return "rollback_only"
+	}
+	primarySeen := false
+	for _, step := range steps {
+		if step.Action == domain.ActionUpgrade || step.Action == domain.ActionInstall || step.Action == domain.ActionConfigure || step.Action == domain.ActionPreflight || step.Action == domain.ActionInspect {
+			primarySeen = true
+			continue
+		}
+		if primarySeen && step.Action == domain.ActionVerify {
+			return "install_verify"
+		}
+	}
+	return "incomplete"
 }
 
 func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []lockedStep) error {

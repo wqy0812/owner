@@ -92,6 +92,7 @@ export interface ComponentRelease {
   candidate?: boolean;
   breaking?: boolean;
   releaseNotes?: string;
+  riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
   dependencies?: ComponentDependency[];
   environmentConstraints?: Record<string, unknown>;
   parameters?: ParameterDefinition[];
@@ -188,7 +189,6 @@ export interface ScenarioEdge {
   id: string;
   source: string;
   target: string;
-  label?: string;
 }
 
 export interface ScenarioRevision {

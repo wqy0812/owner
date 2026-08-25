@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -274,6 +276,32 @@ func countStepComponents(steps []lockedStep) int {
 	return len(components)
 }
 
+func installationBaselineFromSteps(steps []lockedStep) []lockedInstallationBaseline {
+	byComponent := map[string]lockedInstallationBaseline{}
+	for _, step := range steps {
+		if step.Action != domain.ActionRollback && step.Action != domain.ActionUninstall || step.Backup == nil {
+			continue
+		}
+		byComponent[step.ComponentID] = lockedInstallationBaseline{
+			ComponentID: step.ComponentID, ReleaseID: step.Backup.ReleaseID,
+			InstallRunID: step.Backup.InstallRunID, BackupRef: step.BackupRef,
+			PlaybookSHA256: step.Backup.PlaybookSHA256,
+		}
+	}
+	baseline := make([]lockedInstallationBaseline, 0, len(byComponent))
+	for _, item := range byComponent {
+		baseline = append(baseline, item)
+	}
+	sort.Slice(baseline, func(i, j int) bool { return baseline[i].ComponentID < baseline[j].ComponentID })
+	return baseline
+}
+
+func installationBaselineDigest(baseline []lockedInstallationBaseline) string {
+	encoded, _ := json.Marshal(baseline)
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest[:])
+}
+
 func isFinalCleanupStep(steps []lockedStep, index int) bool {
 	for later := index + 1; later < len(steps); later++ {
 		if steps[later].ComponentID == steps[index].ComponentID && (steps[later].Action == domain.ActionRollback || steps[later].Action == domain.ActionUninstall) {
@@ -302,6 +330,38 @@ func hasLaterCleanupStep(snapshot map[string]any, step lockedStep) bool {
 }
 
 func (p *Platform) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error {
+	if run.Kind == domain.RunEnvironmentRollback {
+		expected := installationBaselineFromSteps(plan.Steps)
+		if plan.InstallationBaselineDigest == "" || plan.InstallationBaselineDigest != installationBaselineDigest(expected) || len(plan.InstallationBaseline) != len(expected) {
+			return fmt.Errorf("%w: locked environment rollback baseline is incomplete or inconsistent", domain.ErrConflict)
+		}
+		for index := range expected {
+			if plan.InstallationBaseline[index] != expected[index] {
+				return fmt.Errorf("%w: locked environment rollback baseline changed; preview again", domain.ErrConflict)
+			}
+		}
+		current, err := p.store.ListEnvironmentComponentInstallations(ctx, run.EnvironmentID)
+		if err != nil {
+			return err
+		}
+		if len(current) != len(expected) {
+			return fmt.Errorf("%w: installed-component set changed after approval; preview again", domain.ErrConflict)
+		}
+		actual := make([]lockedInstallationBaseline, 0, len(current))
+		for _, installation := range current {
+			actual = append(actual, lockedInstallationBaseline{
+				ComponentID: installation.ComponentID, ReleaseID: installation.ReleaseID,
+				InstallRunID: installation.InstallRunID, BackupRef: installation.BackupRef,
+				PlaybookSHA256: installation.Backup.PlaybookSHA256,
+			})
+		}
+		sort.Slice(actual, func(i, j int) bool { return actual[i].ComponentID < actual[j].ComponentID })
+		for index := range actual {
+			if actual[index] != expected[index] {
+				return fmt.Errorf("%w: installed-component baseline changed after approval; preview again", domain.ErrConflict)
+			}
+		}
+	}
 	checked := map[string]struct{}{}
 	for _, step := range plan.Steps {
 		if step.Action != domain.ActionRollback && step.Action != domain.ActionUninstall {

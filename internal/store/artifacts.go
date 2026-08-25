@@ -37,20 +37,38 @@ func (s *Store) ListComponentArtifacts(ctx context.Context, releaseID string) ([
 	return artifacts, rows.Err()
 }
 
-func (s *Store) UpsertComponentArtifact(ctx context.Context, artifact domain.ComponentArtifact) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(release_id,alias) DO UPDATE SET id=excluded.id,file_station=excluded.file_station,relative_path=excluded.relative_path,filename=excluded.filename,sha256=excluded.sha256,size_bytes=excluded.size_bytes,source_mode=excluded.source_mode,environment_id=excluded.environment_id,environment_revision_id=excluded.environment_revision_id,created_by=excluded.created_by,created_at=excluded.created_at`, artifact.ID, artifact.ReleaseID, artifact.Alias, artifact.FileStation, artifact.RelativePath, artifact.Filename, artifact.SHA256, artifact.SizeBytes, artifact.SourceMode, artifact.EnvironmentID, artifact.EnvironmentRevisionID, artifact.CreatedBy, timeText(artifact.CreatedAt))
-	return mapSQLError(err)
+func (s *Store) UpsertDraftComponentArtifactAndInvalidate(ctx context.Context, artifact domain.ComponentArtifact) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := invalidateDraftReleaseDeliveryTx(ctx, tx, artifact.ReleaseID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(release_id,alias) DO UPDATE SET id=excluded.id,file_station=excluded.file_station,relative_path=excluded.relative_path,filename=excluded.filename,sha256=excluded.sha256,size_bytes=excluded.size_bytes,source_mode=excluded.source_mode,environment_id=excluded.environment_id,environment_revision_id=excluded.environment_revision_id,created_by=excluded.created_by,created_at=excluded.created_at`, artifact.ID, artifact.ReleaseID, artifact.Alias, artifact.FileStation, artifact.RelativePath, artifact.Filename, artifact.SHA256, artifact.SizeBytes, artifact.SourceMode, artifact.EnvironmentID, artifact.EnvironmentRevisionID, artifact.CreatedBy, timeText(artifact.CreatedAt)); err != nil {
+		return mapSQLError(err)
+	}
+	return tx.Commit()
 }
 
-func (s *Store) DeleteComponentArtifact(ctx context.Context, releaseID, alias string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM component_release_artifacts WHERE release_id=? AND alias=?`, releaseID, alias)
+func (s *Store) DeleteDraftComponentArtifactAndInvalidate(ctx context.Context, releaseID, alias string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := invalidateDraftReleaseDeliveryTx(ctx, tx, releaseID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM component_release_artifacts WHERE release_id=? AND alias=?`, releaseID, alias)
 	if err != nil {
 		return err
 	}
 	if count, _ := result.RowsAffected(); count == 0 {
 		return domain.ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) CloneComponentArtifacts(ctx context.Context, sourceReleaseID, targetReleaseID string) error {

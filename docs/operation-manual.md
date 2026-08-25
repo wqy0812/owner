@@ -165,7 +165,7 @@ make build
 
 如果组件已有版本，新 Draft 会复制当前最新可见版本的类型、依赖和动作；如果是首个版本，需要选择 `atomic` 或 `bundle`，然后继续配置。
 
-需要批量录入细粒度组件时，可在组件页使用“导入细粒度模板”，粘贴 JSON 后单击“校验并导入”。平台最多处理 50 个条目，并在首次写入前校验全部组件、依赖 DAG、Action 和 Playbook。每个 `release.actions[].playbook` 必须填写 `playbooks[].filename` 中唯一存在的文件名；导入器先创建无 Action 的安全 Draft，再保存文件并把后端返回的 `managed/...` 路径绑定回 Action。所有写入都走正常 API 并保留审计，但不会自动验证、加入候选集或发布；中途失败会列出已完整创建和仍需修正的 Draft。
+需要批量录入细粒度组件时，可在组件页使用“导入细粒度模板”，粘贴 JSON 后单击“校验并导入”。平台最多处理 50 个条目，并在首次写入前校验全部组件字段、参数类型、公开参数映射、依赖 DAG、Action 和 Playbook。每个 `release.actions[].playbook` 必须填写 `playbooks[].filename` 中唯一存在的文件名；允许多个 Action 复用同一文件，但拒绝缺失、重复和未引用文件。新组件模板不接受无法预先解析 ID 的显式 Upgrade 或目标版本 Rollback；应使用幂等 Install，或创建后在前台绑定既有 Release。导入器先创建无 Action 的安全 Draft，再保存文件并把后端返回的 `managed/...` 路径绑定回 Action。所有写入都走正常 API 并保留审计，但不会自动验证、加入候选集或发布；中途失败会逐项列出已创建 Draft、已保存文件、已完整绑定和未完成组件，且不会把未绑定项报告为成功。
 
 ### 3.4 配置 Draft Release
 
@@ -175,7 +175,7 @@ make build
 - 发布说明和 Breaking 标记。
 - 结构化环境约束：架构、操作系统、操作系统版本、Docker 版本和网络栈。
 - 结构化参数表：名称、说明、类型、必填、默认值、可见性、枚举和最小长度。可见性必须显式选择 `internal` 或 `public`。
-- 依赖下拉框和参数映射：直接发布链只能选择已发布上游 Release；相互依赖的新 Draft 应走候选集与场景原子发布。
+- 依赖下拉框和参数映射：编辑期可锁定同一组件 Owner 的私有 Draft；跨 Owner 只能选择已发布或已验证且共享的候选 Release。直接发布链最终必须全部锁定已发布上游；相互依赖的新 Draft 应走候选集与场景原子发布。
 - 结构化生命周期动作及在线 Playbook 编辑器：动作类型、路径、tags、主机组、参数、凭据引用、超时、风险、幂等及版本转换端点分别填写。
 
 示例环境约束：
@@ -289,6 +289,8 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 前台和 `POST /component-releases/{id}/publish` 使用同一门禁：Release 必须定义 install、verify、rollback，具备当前规格摘要下成功的 install + verify 安装验证和 rollback + verify 回退证据；规格摘要过期等同缺少证据。直接发布还要求所有上游已经 Released。
 
+“仅执行 Draft 回退”用于验证清理动作本身，不包含回退目标的 verify，因此不会满足候选共享或发布门禁。要形成交付证据，回退测试必须选择同组件的 Released/Deprecated 目标 Release 并成功执行其 verify。
+
 需要与一组相互依赖的 Draft 一起交付时，不要逐个直接发布：每个组件 Owner 在证据完整后单击“加入候选集”。该显式交接会让场景 Owner 看见 Draft；场景经完整测试后使用“预览候选集并发布”，把 Scenario Revision 与全部候选 Release 原子发布。组件 Owner 可在交接失效前使用“撤回候选”；任何后续合同或 Playbook 修改也会自动撤回候选状态并使验证证据失效。
 
 ### 3.9 废弃组件版本
@@ -333,7 +335,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 4. 根据需要编辑“执行策略 JSON”。
 5. 单击“保存草稿”。
 
-大图可使用“导入模板”一次载入 `nodes`、`edges` 和 `executionPolicy`，或使用“复制模板”导出当前图。导入只更新浏览器中的未保存草稿，必须先用“节点表”检查版本、动作、主机组和前置/后置数量，再保存。细粒度组件也可在组件中心通过“导入细粒度模板”一次创建最多 50 个组件，系统先创建组件，再按 Release 依赖拓扑创建 Draft 和独立托管 Playbook。
+大图可使用“导入模板”一次载入 `nodes`、`edges` 和 `executionPolicy`，或使用“复制模板”导出当前图。边的 V1 合同只包含 `id/source/target`，不保存展示标签。导入会先校验唯一节点/边 ID、有限坐标、端点、无环 DAG、当前可见 Release、组件归属、可执行动作和执行策略；全部通过后才替换浏览器中的未保存草稿，失败时保留原图。复制后重新导入会保留规范化后的节点、边和执行策略。细粒度组件也可在组件中心通过“导入细粒度模板”一次创建最多 50 个组件，系统先创建组件，再按 Release 依赖拓扑创建 Draft 和独立托管 Playbook。
 
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
 
@@ -568,7 +570,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 4. 进入“运行”再次复核风险，批准后才进入环境 FIFO 队列。
 5. Run 全部成功后，当前安装清单应为空；失败时已完成组件会被清除，尚未完成组件保留原基线，可修复后重新预览剩余计划。
 
-执行开始前平台还会重新读取安装记录并比对锁定的备份引用、来源 Run 和 Playbook 指纹，防止审批等待期间基线被替换。该能力只执行 Release 已声明的 rollback Playbook，不会绕过平台直接 SSH，也不会隐式执行额外的 `kubeadm reset`。
+整环境回滚从提交成功到 Run 终态会独占该环境；期间新组件测试、场景运行或第二个整环境回滚都会被数据库拒绝。执行开始前平台还会重新读取完整安装集合，并比对锁定的 Release、备份引用、来源 Run 和 Playbook 指纹；审批等待期间新增、删除或替换任何一项都会失败关闭，必须重新预览。该能力只执行 Release 已声明的 rollback Playbook，不会绕过平台直接 SSH，也不会隐式执行额外的 `kubeadm reset`。
 
 ### 5.9 审批危险 Run
 

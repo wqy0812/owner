@@ -24,7 +24,7 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 	}
 	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
-		if release.Status == domain.ReleaseReleased {
+		if release.Status == domain.ReleaseReleased || (release.Status == domain.ReleaseDraft && release.Candidate && release.Verified) {
 			filtered = append(filtered, release)
 		}
 	}
@@ -417,13 +417,35 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 }
 
 func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
+	var downstreamOwnerID string
 	for _, dependency := range release.Dependencies {
 		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
 		if err != nil {
 			return fmt.Errorf("%w: locked upstream release %s does not exist", domain.ErrInvalid, dependency.UpstreamReleaseID)
 		}
-		if upstream.ComponentID != dependency.UpstreamComponentID || (upstream.Status != domain.ReleaseReleased && !(upstream.Status == domain.ReleaseDraft && upstream.Candidate)) {
-			return fmt.Errorf("%w: upstream dependency must lock a released version or shared candidate of component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
+		if upstream.ComponentID != dependency.UpstreamComponentID {
+			return fmt.Errorf("%w: upstream dependency release does not belong to component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
+		}
+		if upstream.Status != domain.ReleaseReleased {
+			sharedCandidate := upstream.Status == domain.ReleaseDraft && upstream.Candidate && upstream.Verified
+			sameOwnerDraft := false
+			if upstream.Status == domain.ReleaseDraft {
+				if downstreamOwnerID == "" {
+					downstreamComponent, componentErr := p.store.GetComponent(ctx, release.ComponentID, false)
+					if componentErr != nil {
+						return componentErr
+					}
+					downstreamOwnerID = downstreamComponent.OwnerID
+				}
+				upstreamComponent, componentErr := p.store.GetComponent(ctx, upstream.ComponentID, false)
+				if componentErr != nil {
+					return componentErr
+				}
+				sameOwnerDraft = upstreamComponent.OwnerID == downstreamOwnerID
+			}
+			if !sharedCandidate && !sameOwnerDraft {
+				return fmt.Errorf("%w: upstream dependency must lock a released version, a verified shared candidate, or a private Draft owned by the same component owner", domain.ErrInvalid)
+			}
 		}
 		for _, mapping := range dependency.ParameterMappings {
 			upstreamParameter, ok := domain.ParameterByName(upstream.Parameters, mapping.UpstreamParameter)
@@ -540,7 +562,7 @@ func (p *Platform) validateReleaseEvidence(ctx context.Context, release domain.C
 	if !release.Verified {
 		return fmt.Errorf("%w: release must pass install and verify before delivery", domain.ErrConflict)
 	}
-	rollback, err := p.store.HasSuccessfulComponentTestAction(ctx, release.ID, domain.ActionRollback, componentReleaseSpecDigest(release))
+	rollback, err := p.store.HasSuccessfulComponentRollbackVerification(ctx, release.ID, componentReleaseSpecDigest(release))
 	if err != nil {
 		return err
 	}

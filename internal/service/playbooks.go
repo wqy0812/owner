@@ -117,7 +117,7 @@ func (p *Platform) SaveReleasePlaybook(ctx context.Context, user domain.User, re
 	// already points at this managed path. Revoke delivery state before making
 	// the file visible so a crash cannot leave changed executable content marked
 	// as verified or shared with a scenario owner.
-	if err := p.store.MarkReleaseVerified(ctx, release.ID, false); err != nil {
+	if err := p.store.InvalidateDraftReleaseDelivery(ctx, release.ID); err != nil {
 		return PlaybookFile{}, fmt.Errorf("invalidate component verification: %w", err)
 	}
 	if err := os.Rename(temporaryPath, resolved); err != nil {

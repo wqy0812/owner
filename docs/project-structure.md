@@ -156,7 +156,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。结构变化必须更新 `schema.sql` 和合同；仅允许从代码中显式列出的精确前序合同执行经过测试的加法迁移，未知合同或破坏性历史结构仍会失败关闭。本版允许从 `first-version-20260824` 加列迁移到动作幂等能力合同，并保留现有业务数据。
+数据库以 `schemaContract` 严格识别结构。当前合同为 `first-version-20260825-safety-fences`。结构变化必须更新 `schema.sql` 和合同；仅允许从代码中显式列出的 `first-version-20260824`、动作幂等、候选 Release、候选证据四个精确前序合同执行经过测试的加法迁移，迁移会修复异常的未验证候选并安装候选证据与整环境回滚隔离触发器。未知合同或破坏性历史结构仍会失败关闭。
 
 ### 3.7 `internal/ansible`
 

@@ -323,6 +323,7 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     candidate: optionalBoolean(raw, 'candidate'),
     breaking: optionalBoolean(raw, 'breaking'),
     releaseNotes: optionalString(raw, 'releaseNotes'),
+    riskLevel: optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel'),
     dependencies,
     environmentConstraints: optionalObject(raw, 'environmentConstraints'),
     parameters: optionalRecords(raw, 'parameters')?.map(normalizeParameter) ?? [],
@@ -426,7 +427,6 @@ function normalizeScenarioEdge(raw: LooseRecord): ScenarioEdge {
     id: requireString(raw, 'id'),
     source: requireString(raw, 'source'),
     target: requireString(raw, 'target'),
-    label: optionalString(raw, 'label'),
   };
 }
 
@@ -766,6 +766,7 @@ function serializeRelease(input: Partial<ComponentRelease>) {
     status: input.state,
     releaseNotes: input.releaseNotes,
     breaking: input.breaking,
+    riskLevel: input.riskLevel,
     environmentConstraints: input.environmentConstraints,
     parameters: input.parameters,
     dependencies: input.dependencies?.map(serializeDependency),

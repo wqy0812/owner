@@ -587,6 +587,33 @@ describe('platform shell and RBAC UI', () => {
     expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeEnabled();
   });
 
+  it('does not count rollback-only runs as Draft delivery evidence', async () => {
+    const draft = {
+      ...components[0].releases[0], id: 'release-containerd-rollback-only', version: 'v2.2.0-rc2', status: 'draft',
+      verified: true, dependencies: [], parameters: [],
+      actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: draft, releases: [draft] }]);
+      if (url.endsWith('/runs')) return json([{
+        id: 'run-install', kind: 'component_test', status: 'succeeded', componentReleaseId: draft.id, action: 'install', environmentId: 'environment-test',
+        steps: [{ id: 'install', name: 'install', action: 'install', status: 'succeeded' }, { id: 'verify', name: 'verify', action: 'verify', status: 'succeeded' }],
+      }, {
+        id: 'run-rollback-only', kind: 'component_test', status: 'succeeded', componentReleaseId: draft.id, action: 'rollback', environmentId: 'environment-test',
+        steps: [{ id: 'rollback', name: 'rollback', action: 'rollback', status: 'succeeded' }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    const readiness = await screen.findByLabelText('Draft v2.2.0-rc2 发布就绪度');
+    expect(readiness).toHaveTextContent('3/4');
+    expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeDisabled();
+  });
+
   it('previews downstream impact before deprecating a released component version', async () => {
     let deprecated = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

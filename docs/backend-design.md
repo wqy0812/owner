@@ -133,7 +133,7 @@ erDiagram
 - 属性：发布说明、Breaking 标记、验证标记、风险等级、环境约束和结构化参数合同。
 - 候选交接：证据完整的 Draft 可由组件 Owner 显式设置 `candidate=true`，供场景 Owner 编排；合同、制品或 Playbook 变化导致验证失效时会同时清除候选状态。数据库触发器禁止 `candidate=true && verified=false`，非 Owner 查询也只返回仍已验证的候选 Draft。
 - 参数：每个参数必须声明 `name`、`description`、`type` 和 `visibility`（`internal` 或 `public`）。敏感值继续使用 CredentialRef，不能作为普通参数或公开参数。
-- 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。
+- 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。Draft 编辑期可锁定同一组件 Owner 的私有 Draft，便于按 DAG 导入；跨 Owner 只能锁定 Released 或已验证且共享的候选 Draft。候选交接和发布仍会重新执行更严格的状态检查。
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
 - `install` 动作可以显式声明 `idempotent=true`。此时场景节点选择 `upgrade` 会复用同一个 Playbook 和动作合同；若 Release 另有显式 `upgrade`，仍优先使用显式动作。
 
@@ -143,7 +143,7 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。修改
 
 场景节点锁定 Release，但 Release 在图中不要求唯一。同一 Docker、Distribution、Flannel、kubelet 或 kube-proxy Release 可以分别用于 `k8smaster` 与 `k8snode`；依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
 
-安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。
+安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。只有安装加 verify 成功且锁定规格摘要仍与当前 Draft 一致时才设置 `verified=true`；`rollback_only` 仅证明清理动作完成，不能作为候选共享或发布所需的回退后验证证据。
 
 直接发布和候选共享都要求 Draft 定义 install、verify、rollback，并具备当前规格摘要下成功的 install + verify 安装证据及 rollback + verify 回退证据。未验证、证据缺失或摘要过期返回 Conflict；生命周期动作缺失返回 Invalid Request。直接发布还要求上游依赖已经 Released，候选链则允许依赖其他已验证且已共享的候选 Draft。
 
@@ -416,6 +416,8 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 - 平台按安装来源 Run 的完成时间倒序分层，并在每个来源内反转原安装节点顺序，生成 `environment_rollback` 锁定步骤。
 - 每项都重新校验安装记录、`backup_ref`、来源 Run、Release rollback 动作与安装 Playbook 指纹；任一证据缺失或漂移都会阻断。
 - 预览不创建 Run。提交必须携带当前 `planDigest` 并完整输入环境名称，创建的破坏性 Run 固定进入 `awaiting_approval`。
+- `environment_rollback` 从提交到终态独占目标环境；数据库同时阻止该环境创建其他活动 Run，也阻止在已有活动 Run 时创建整环境回滚。
+- 锁定计划保存完整安装集合摘要。审批等待期间新增、删除或替换任何安装记录、备份引用、来源 Run 或 Playbook 指纹，执行都会失败关闭并要求重新预览。
 - Run 成功后消费相应安装与备份基线；部分失败时只移除已成功回滚的组件记录，剩余项可修复后重新规划。
 
 ### 7.11 批量审批

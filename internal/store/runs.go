@@ -344,6 +344,18 @@ SELECT EXISTS(
 	return found != 0, err
 }
 
+func (s *Store) HasSuccessfulComponentRollbackVerification(ctx context.Context, releaseID, releaseSpecDigest string) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM runs
+  WHERE kind='component_test' AND component_release_id=? AND action_kind='rollback' AND status='succeeded'
+    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
+    AND json_extract(input_snapshot_json, '$.componentTestEvidence')='rollback_verify'
+)`, releaseID, releaseSpecDigest).Scan(&found)
+	return found != 0, err
+}
+
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -369,19 +369,43 @@ func (s *Store) DeprecateComponentRelease(ctx context.Context, id string, at tim
 	return nil
 }
 func (s *Store) MarkReleaseVerified(ctx context.Context, id string, verified bool) error {
-	query := `UPDATE component_releases SET verified=1 WHERE id=?`
 	if !verified {
-		query = `UPDATE component_releases SET verified=0,candidate=0 WHERE id=?`
+		return s.InvalidateDraftReleaseDelivery(ctx, id)
 	}
-	res, err := s.db.ExecContext(ctx, query, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET verified=1 WHERE id=? AND status='draft'`, id)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return domain.ErrNotFound
+		return fmt.Errorf("%w: only a draft release can change verification state", domain.ErrConflict)
 	}
 	return nil
+}
+
+func invalidateDraftReleaseDeliveryTx(ctx context.Context, tx *sql.Tx, id string) error {
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET verified=0,candidate=0 WHERE id=? AND status='draft'`, id)
+	if err != nil {
+		return err
+	}
+	if changed, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if changed != 1 {
+		return fmt.Errorf("%w: release is no longer a mutable draft", domain.ErrConflict)
+	}
+	return nil
+}
+
+func (s *Store) InvalidateDraftReleaseDelivery(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := invalidateDraftReleaseDeliveryTx(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bool) error {

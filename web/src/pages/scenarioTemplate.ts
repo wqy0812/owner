@@ -1,4 +1,5 @@
-import type { ActionDefinition, ScenarioEdge, ScenarioNode } from '../types/domain';
+import { executableActionTypes, type ActionDefinition, type Component, type ScenarioEdge, type ScenarioNode } from '../types/domain';
+import { COMPONENT_LAYERS } from '../types/componentClassification';
 
 export interface ScenarioTemplate {
   nodes: ScenarioNode[];
@@ -7,6 +8,7 @@ export interface ScenarioTemplate {
 }
 
 const ACTION_TYPES = new Set<ActionDefinition['type']>(['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall']);
+const LAYERS = new Set<string>(COMPONENT_LAYERS.map((layer) => layer.value));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -17,21 +19,32 @@ function requiredString(value: unknown, label: string) {
   return value.trim();
 }
 
+function assertOnlyKeys(value: Record<string, unknown>, allowed: readonly string[], label: string) {
+  const accepted = new Set(allowed);
+  const unknown = Object.keys(value).find((key) => !accepted.has(key));
+  if (unknown) throw new Error(`${label}包含不支持字段 ${unknown}。`);
+}
+
 function optionalStringMap(value: unknown, label: string): Record<string, string> | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || Object.values(value).some((item) => typeof item !== 'string')) throw new Error(`${label}必须是字符串映射。`);
-  return value as Record<string, string>;
+  if (!isRecord(value)) throw new Error(`${label}必须是字符串映射。`);
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [requiredString(key, `${label} 的键`), requiredString(item, `${label}.${key}`)]));
 }
 
 export function parseScenarioTemplate(text: string): ScenarioTemplate {
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { throw new Error('场景模板不是有效 JSON。'); }
   if (!isRecord(raw) || !Array.isArray(raw.nodes) || !Array.isArray(raw.edges)) throw new Error('模板必须包含 nodes 和 edges 数组。');
+  assertOnlyKeys(raw, ['nodes', 'edges', 'executionPolicy'], '场景模板');
   if (!isRecord(raw.executionPolicy ?? {})) throw new Error('executionPolicy 必须是对象。');
 
   const nodeIDs = new Set<string>();
   const nodes = raw.nodes.map((value, index) => {
     if (!isRecord(value) || !isRecord(value.position) || !isRecord(value.data)) throw new Error(`第 ${index + 1} 个节点结构无效。`);
+    assertOnlyKeys(value, ['id', 'type', 'position', 'data'], `nodes[${index}]`);
+    assertOnlyKeys(value.position, ['x', 'y'], `nodes[${index}].position`);
+    assertOnlyKeys(value.data, ['label', 'componentId', 'releaseId', 'version', 'action', 'hostGroup', 'values', 'runInputs', 'dependencySources', 'layer'], `nodes[${index}].data`);
+    if (value.type !== undefined && value.type !== 'component') throw new Error(`nodes[${index}].type 必须是 component。`);
     const id = requiredString(value.id, `nodes[${index}].id`);
     if (nodeIDs.has(id)) throw new Error(`节点 ID ${id} 重复。`);
     nodeIDs.add(id);
@@ -42,20 +55,26 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     if (!ACTION_TYPES.has(action)) throw new Error(`节点 ${id} 的 action ${action} 无效。`);
     if (value.data.values !== undefined && !isRecord(value.data.values)) throw new Error(`节点 ${id} 的 values 必须是对象。`);
     if (value.data.runInputs !== undefined && (!Array.isArray(value.data.runInputs) || value.data.runInputs.some((item) => typeof item !== 'string'))) throw new Error(`节点 ${id} 的 runInputs 必须是字符串数组。`);
+    const runInputs = (value.data.runInputs ?? []).map((item, inputIndex) => requiredString(item, `节点 ${id} 的 runInputs[${inputIndex}]`));
+    if (new Set(runInputs).size !== runInputs.length) throw new Error(`节点 ${id} 的 runInputs 不能重复。`);
+    const version = value.data.version === undefined ? undefined : requiredString(value.data.version, `节点 ${id} 的 version`);
+    const layer = (value.data.layer === undefined ? undefined : requiredString(value.data.layer, `节点 ${id} 的 layer`)) as Component['layer'] | undefined;
+    if (layer !== undefined && !LAYERS.has(layer)) throw new Error(`节点 ${id} 的 layer 无效。`);
     return {
       id,
       type: 'component' as const,
       position: { x, y },
       data: {
-        ...value.data,
         label: requiredString(value.data.label, `节点 ${id} 的 label`),
         componentId: requiredString(value.data.componentId, `节点 ${id} 的 componentId`),
         releaseId: requiredString(value.data.releaseId, `节点 ${id} 的 releaseId`),
         action,
         hostGroup: requiredString(value.data.hostGroup, `节点 ${id} 的 hostGroup`),
         values: (value.data.values ?? {}) as Record<string, unknown>,
-        runInputs: (value.data.runInputs ?? []) as string[],
+        runInputs,
         dependencySources: optionalStringMap(value.data.dependencySources, `节点 ${id} 的 dependencySources`),
+        ...(version === undefined ? {} : { version }),
+        ...(layer === undefined ? {} : { layer }),
       },
     };
   });
@@ -63,6 +82,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
   const edgeIDs = new Set<string>();
   const edges = raw.edges.map((value, index) => {
     if (!isRecord(value)) throw new Error(`第 ${index + 1} 条边结构无效。`);
+    assertOnlyKeys(value, ['id', 'source', 'target'], `edges[${index}]`);
     const id = requiredString(value.id, `edges[${index}].id`);
     if (edgeIDs.has(id)) throw new Error(`边 ID ${id} 重复。`);
     edgeIDs.add(id);
@@ -72,7 +92,38 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     if (source === target) throw new Error(`边 ${id} 不能连接节点自身。`);
     return { id, source, target };
   });
+  const outgoing = new Map<string, string[]>();
+  const indegree = new Map([...nodeIDs].map((id) => [id, 0]));
+  for (const edge of edges) {
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+  }
+  const ready = [...indegree].filter(([, count]) => count === 0).map(([id]) => id);
+  let visited = 0;
+  while (ready.length) {
+    const id = ready.shift()!;
+    visited += 1;
+    for (const target of outgoing.get(id) ?? []) {
+      const next = (indegree.get(target) ?? 0) - 1;
+      indegree.set(target, next);
+      if (next === 0) ready.push(target);
+    }
+  }
+  if (visited !== nodes.length) throw new Error('场景节点和边必须组成无环 DAG。');
   return { nodes, edges, executionPolicy: raw.executionPolicy as Record<string, unknown> ?? {} };
+}
+
+export function validateScenarioTemplateReferences(template: ScenarioTemplate, components: Component[]) {
+  const releases = new Map(components.flatMap((component) => (component.releases ?? []).map((release) => [release.id, { component, release }] as const)));
+  for (const node of template.nodes) {
+    const match = releases.get(node.data.releaseId);
+    if (!match) throw new Error(`节点 ${node.id} 引用了当前不可见或不存在的 Release。`);
+    if (match.component.id !== node.data.componentId) throw new Error(`节点 ${node.id} 的 componentId 与 releaseId 不匹配。`);
+    if (node.data.version !== undefined && node.data.version !== match.release.version) throw new Error(`节点 ${node.id} 的 version 与 releaseId 不匹配。`);
+    if (node.data.layer !== undefined && node.data.layer !== match.component.layer) throw new Error(`节点 ${node.id} 的 layer 与 componentId 不匹配。`);
+    const action = node.data.action!;
+    if (!executableActionTypes(match.release.actions).includes(action)) throw new Error(`节点 ${node.id} 的 Release 不支持 ${action} 动作。`);
+  }
 }
 
 export function serializeScenarioTemplate(template: ScenarioTemplate) {

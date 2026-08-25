@@ -28,12 +28,12 @@ func TestDatabaseWithoutFirstVersionContractIsRejected(t *testing.T) {
 	}
 }
 
-func TestSupportedContractsMigrateToCandidateEvidence(t *testing.T) {
+func TestSupportedContractsMigrateToSafetyFences(t *testing.T) {
 	content, err := schemaFiles.ReadFile("schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	triggerSQL := `CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_insert
+	candidateTriggerSQL := `CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_insert
 BEFORE INSERT ON component_releases
 WHEN NEW.candidate=1 AND NEW.verified<>1
 BEGIN
@@ -48,12 +48,58 @@ BEGIN
 END;
 
 `
-	for _, version := range []string{legacySchemaContract, idempotentSchemaContract, candidateSchemaContract} {
+	rollbackTriggerSQL := `CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_insert
+BEFORE INSERT ON runs
+WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+  (NEW.kind='environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.environment_id=NEW.environment_id
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+  OR
+  (NEW.kind<>'environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.environment_id=NEW.environment_id
+      AND r.kind='environment_rollback'
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'environment rollback fence conflict');
+END;
+
+CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_update
+BEFORE UPDATE OF status,environment_id,kind ON runs
+WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+  (NEW.kind='environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.id<>NEW.id
+      AND r.environment_id=NEW.environment_id
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+  OR
+  (NEW.kind<>'environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.id<>NEW.id
+      AND r.environment_id=NEW.environment_id
+      AND r.kind='environment_rollback'
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'environment rollback fence conflict');
+END;
+
+`
+	for _, version := range []string{legacySchemaContract, idempotentSchemaContract, candidateSchemaContract, evidenceSchemaContract} {
 		t.Run(version, func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "previous.db")
 			previous := strings.ReplaceAll(string(content), schemaContract, version)
-			previous = strings.Replace(previous, triggerSQL, "", 1)
+			previous = strings.Replace(previous, rollbackTriggerSQL, "", 1)
+			if version != evidenceSchemaContract {
+				previous = strings.Replace(previous, candidateTriggerSQL, "", 1)
+			}
 			if version == legacySchemaContract || version == idempotentSchemaContract {
 				previous = strings.Replace(previous, "  candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1)),\n", "", 1)
 			}
@@ -66,6 +112,16 @@ END;
 			}
 			if _, execErr := database.ExecContext(ctx, previous); execErr != nil {
 				t.Fatal(execErr)
+			}
+			if version == candidateSchemaContract {
+				if _, execErr := database.ExecContext(ctx, `
+INSERT INTO users(id,name,role,created_at) VALUES('candidate-owner','Owner','component_owner','2026-08-25T00:00:00Z');
+INSERT INTO components(id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at)
+VALUES('dirty-component','dirty-component','Dirty','','runtime_state','runtime','software','optional','candidate-owner','2026-08-25T00:00:00Z','2026-08-25T00:00:00Z');
+INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at)
+VALUES('dirty-release','dirty-component','1.0.0','atomic','draft','',0,0,1,'low','{}','[]','2026-08-25T00:00:00Z');`); execErr != nil {
+					t.Fatal(execErr)
+				}
 			}
 			if closeErr := database.Close(); closeErr != nil {
 				t.Fatal(closeErr)
@@ -89,6 +145,15 @@ END;
 			var triggers int
 			if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'component_releases_candidate_requires_verified_%'`).Scan(&triggers); queryErr != nil || triggers != 2 {
 				t.Fatalf("candidate evidence triggers=%d err=%v", triggers, queryErr)
+			}
+			if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'runs_environment_rollback_fence_%'`).Scan(&triggers); queryErr != nil || triggers != 2 {
+				t.Fatalf("environment rollback fence triggers=%d err=%v", triggers, queryErr)
+			}
+			if version == candidateSchemaContract {
+				var candidate int
+				if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT candidate FROM component_releases WHERE id='dirty-release'`).Scan(&candidate); queryErr != nil || candidate != 0 {
+					t.Fatalf("dirty candidate repair=%d err=%v", candidate, queryErr)
+				}
 			}
 		})
 	}
@@ -123,6 +188,10 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	var candidateTriggers int
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'component_releases_candidate_requires_verified_%'`).Scan(&candidateTriggers); err != nil || candidateTriggers != 2 {
 		t.Fatalf("candidate evidence triggers=%d err=%v", candidateTriggers, err)
+	}
+	var rollbackFenceTriggers int
+	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'runs_environment_rollback_fence_%'`).Scan(&rollbackFenceTriggers); err != nil || rollbackFenceTriggers != 2 {
+		t.Fatalf("environment rollback fence triggers=%d err=%v", rollbackFenceTriggers, err)
 	}
 	for table, column := range map[string]string{
 		"environment_revisions":                  "variables_json",

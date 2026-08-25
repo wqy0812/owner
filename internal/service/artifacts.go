@@ -209,10 +209,9 @@ func (p *Platform) saveComponentArtifact(ctx context.Context, user domain.User, 
 		SizeBytes: metadata.SizeBytes, SourceMode: mode, EnvironmentID: environment.ID,
 		EnvironmentRevisionID: environment.CurrentRevisionID, CreatedBy: user.ID, CreatedAt: time.Now().UTC(),
 	}
-	if err := p.store.UpsertComponentArtifact(ctx, artifact); err != nil {
+	if err := p.store.UpsertDraftComponentArtifactAndInvalidate(ctx, artifact); err != nil {
 		return domain.ComponentArtifact{}, err
 	}
-	_ = p.store.MarkReleaseVerified(ctx, release.ID, false)
 	p.audit(ctx, user, "component.artifact_saved", "component_release", release.ID, map[string]any{"alias": alias, "fileStation": station, "path": metadata.RelativePath, "sha256": metadata.SHA256, "sourceMode": mode})
 	return artifact, nil
 }
@@ -236,10 +235,9 @@ func (p *Platform) DeleteComponentArtifact(ctx context.Context, user domain.User
 	if err != nil {
 		return err
 	}
-	if err := p.store.DeleteComponentArtifact(ctx, releaseID, alias); err != nil {
+	if err := p.store.DeleteDraftComponentArtifactAndInvalidate(ctx, releaseID, alias); err != nil {
 		return err
 	}
-	_ = p.store.MarkReleaseVerified(ctx, release.ID, false)
 	p.audit(ctx, user, "component.artifact_detached", "component_release", release.ID, map[string]any{"alias": alias})
 	return nil
 }

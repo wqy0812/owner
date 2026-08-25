@@ -24,7 +24,7 @@ import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
 import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData } from '../types/domain';
-import { parseScenarioTemplate, serializeScenarioTemplate } from './scenarioTemplate';
+import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from './scenarioTemplate';
 
 type FlowNode = Node<ScenarioNodeData>;
 
@@ -163,7 +163,7 @@ export function ScenariosPage() {
     setBusy('save');
     try {
       const policy = JSON.parse(executionPolicy || '{}') as Record<string, unknown>;
-      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })), edges: edges.map(({ id, source, target, label }) => ({ id, source, target, label: typeof label === 'string' ? label : undefined })) as ScenarioEdge[], executionPolicy: policy });
+      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })), edges: edges.map(({ id, source, target }) => ({ id, source, target })) as ScenarioEdge[], executionPolicy: policy });
       notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh('scenarios');
     } catch (reason) { notify('error', '保存失败', reason instanceof SyntaxError ? '执行策略必须是有效 JSON。' : displayError(reason)); } finally { setBusy(undefined); }
   }
@@ -201,6 +201,7 @@ export function ScenariosPage() {
   function importTemplate(text: string) {
     try {
       const parsed = parseScenarioTemplate(text);
+      validateScenarioTemplateReferences(parsed, components ?? []);
       setNodes(parsed.nodes);
       setEdges(parsed.edges);
       setExecutionPolicy(JSON.stringify(parsed.executionPolicy, null, 2));

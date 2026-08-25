@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'first-version-20260825-candidate-evidence');
+VALUES(1, 'first-version-20260825-safety-fences');
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -189,6 +189,48 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_insert
+BEFORE INSERT ON runs
+WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+  (NEW.kind='environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.environment_id=NEW.environment_id
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+  OR
+  (NEW.kind<>'environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.environment_id=NEW.environment_id
+      AND r.kind='environment_rollback'
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'environment rollback fence conflict');
+END;
+
+CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_update
+BEFORE UPDATE OF status,environment_id,kind ON runs
+WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+  (NEW.kind='environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.id<>NEW.id
+      AND r.environment_id=NEW.environment_id
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+  OR
+  (NEW.kind<>'environment_rollback' AND EXISTS (
+    SELECT 1 FROM runs r
+    WHERE r.id<>NEW.id
+      AND r.environment_id=NEW.environment_id
+      AND r.kind='environment_rollback'
+      AND r.status IN ('awaiting_approval','queued','running')
+  ))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'environment rollback fence conflict');
+END;
 
 CREATE TABLE IF NOT EXISTS run_steps (
   id TEXT PRIMARY KEY,

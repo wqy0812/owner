@@ -78,4 +78,17 @@ describe('API response contract', () => {
       changeReason: '配置 Ansible 凭据',
     });
   });
+
+  it('round-trips the release risk level through the API contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(JSON.stringify({
+      data: {
+        id: 'release-1', componentId: 'component-1', version: '1.0.0', type: 'atomic', status: 'draft',
+        riskLevel: 'high', parameters: [], dependencies: [], actions: [], artifacts: [],
+      },
+    }), 'application/json'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createRelease('component-1', { version: '1.0.0', type: 'atomic', riskLevel: 'high' })).resolves.toMatchObject({ riskLevel: 'high' });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ riskLevel: 'high' });
+  });
 });
