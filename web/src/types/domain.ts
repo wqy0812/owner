@@ -63,8 +63,15 @@ export interface ActionDefinition {
   requiredCredentials?: string[];
   riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
   destructive?: boolean;
+  idempotent?: boolean;
   fromReleaseId?: string;
   toReleaseId?: string;
+}
+
+export function executableActionTypes(actions: ActionDefinition[] = []): ActionDefinition['type'][] {
+  const types = actions.map((action) => action.type);
+  if (actions.some((action) => action.type === 'install' && action.idempotent)) types.push('upgrade');
+  return [...new Set(types)];
 }
 
 export interface PlaybookFile {
@@ -82,6 +89,7 @@ export interface ComponentRelease {
   type?: 'atomic' | 'bundle';
   state: ReleaseState;
   verified?: boolean;
+  candidate?: boolean;
   breaking?: boolean;
   releaseNotes?: string;
   dependencies?: ComponentDependency[];
@@ -208,6 +216,13 @@ export interface Scenario {
   updatedAt?: string;
 }
 
+export interface CandidateReleaseSet {
+  scenarioRevisionId: string;
+  ready: boolean;
+  releases: Array<{ releaseId: string; componentId: string; componentName: string; version: string }>;
+  issues: Array<{ code: string; message: string; nodeId?: string }>;
+}
+
 export interface EnvironmentHost {
   name: string;
   address: string;
@@ -324,7 +339,7 @@ export interface Approval {
 
 export interface Run {
   id: string;
-  kind?: 'component_test' | 'scenario_test' | 'scenario_run';
+  kind?: 'component_test' | 'scenario_test' | 'scenario_run' | 'environment_rollback';
   name?: string;
   status: RunStatus;
   scenarioId?: string;
@@ -395,6 +410,13 @@ export interface ComponentTestPlan {
   requiresApproval: boolean;
   planDigest: string;
   steps: ComponentTestPlanStep[];
+}
+
+export interface EnvironmentRollbackPlan extends ComponentTestPlan {
+  environmentName: string;
+  sources: Array<{ runId: string; kind: NonNullable<Run['kind']>; scenarioRevisionId?: string; componentCount: number }>;
+  componentCount: number;
+  nodeCount: number;
 }
 
 export interface Notification {

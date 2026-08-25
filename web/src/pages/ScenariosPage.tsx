@@ -14,7 +14,7 @@ import {
   type Node,
   type NodeProps,
 } from '@xyflow/react';
-import { Beaker, Boxes, CheckCircle2, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Trash2, Undo2 } from 'lucide-react';
+import { Beaker, Boxes, CheckCircle2, ClipboardCopy, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
 import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
@@ -22,7 +22,8 @@ import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/Ru
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
-import type { Component, Environment, Scenario, ScenarioEdge, ScenarioNodeData } from '../types/domain';
+import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData } from '../types/domain';
+import { parseScenarioTemplate, serializeScenarioTemplate } from './scenarioTemplate';
 
 type FlowNode = Node<ScenarioNodeData>;
 
@@ -69,6 +70,9 @@ export function ScenariosPage() {
   const [validation, setValidation] = useState<{ valid: boolean; errors: string[] }>();
   const [testOpen, setTestOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [candidateSet, setCandidateSet] = useState<CandidateReleaseSet>();
+  const [view, setView] = useState<'graph' | 'table'>('graph');
   const [testEnvironment, setTestEnvironment] = useState('');
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
 	const [executionPolicy, setExecutionPolicy] = useState('{}');
@@ -122,7 +126,7 @@ export function ScenariosPage() {
     return [dependency.id ?? dependency.releaseId, candidates];
   }));
   const availableNodeActions = useMemo(() => {
-    const explicit = selectedRelease?.actions?.map((action) => action.type).filter(Boolean) ?? [];
+    const explicit = executableActionTypes(selectedRelease?.actions);
     return [...new Set(explicit.length ? explicit : [selectedNode?.data.action ?? 'install'])];
   }, [selectedNode?.data.action, selectedRelease?.actions]);
   const declaredRunInputs = useMemo(() => uniqueRunInputs([
@@ -131,7 +135,7 @@ export function ScenariosPage() {
 
   function addComponent(component: Component) {
     if (!editable || !component.latestRelease) return;
-    const declaredActions = component.latestRelease.actions?.map((action) => action.type) ?? [];
+    const declaredActions = executableActionTypes(component.latestRelease.actions);
     const defaultAction = declaredActions.includes('install') ? 'install' : declaredActions.includes('upgrade') ? 'upgrade' : declaredActions.includes('configure') ? 'configure' : declaredActions.includes('preflight') ? 'preflight' : declaredActions.includes('inspect') ? 'inspect' : declaredActions.includes('verify') ? 'verify' : declaredActions[0] ?? 'install';
     setNodes((items) => {
       const count = items.length;
@@ -180,10 +184,42 @@ export function ScenariosPage() {
     catch (reason) { notify('error', '测试提交失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
+  async function previewPublish() {
+    if (!revision) return; setBusy('publish-preview');
+    try { setCandidateSet(await api.candidateReleaseSet(revision.id)); }
+    catch (reason) { notify('error', '候选发布集检查失败', displayError(reason)); }
+    finally { setBusy(undefined); }
+  }
+
   async function publish() {
     if (!revision) return; setBusy('publish');
-    try { await api.publishScenario(revision.id); notify('success', '场景已发布', 'Revision 已锁定为不可变版本。'); signalRefresh('scenarios'); }
+    try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景 Revision 与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components']); }
     catch (reason) { notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
+  }
+
+  function importTemplate(text: string) {
+    try {
+      const parsed = parseScenarioTemplate(text);
+      setNodes(parsed.nodes);
+      setEdges(parsed.edges);
+      setExecutionPolicy(JSON.stringify(parsed.executionPolicy, null, 2));
+      setImportOpen(false);
+      setValidation(undefined);
+      notify('success', '场景模板已载入', `${parsed.nodes.length} 个节点 · ${parsed.edges.length} 条边；请检查后保存草稿。`);
+    } catch (reason) { notify('error', '模板导入失败', displayError(reason)); }
+  }
+
+  async function copyTemplate() {
+    try {
+      const policy = JSON.parse(executionPolicy || '{}') as unknown;
+      if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) throw new Error('执行策略必须是 JSON 对象。');
+      await navigator.clipboard.writeText(serializeScenarioTemplate({
+        nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component', position, data })),
+        edges: edges.map(({ id, source, target }) => ({ id, source, target })),
+        executionPolicy: policy as Record<string, unknown>,
+      }));
+      notify('success', '场景模板已复制', `${nodes.length} 个节点 · ${edges.length} 条边。`);
+    } catch (reason) { notify('error', '复制模板失败', displayError(reason)); }
   }
 
   async function cloneRevision() {
@@ -218,30 +254,33 @@ export function ScenariosPage() {
         {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前 Revision' : '历史 Revision'}</span><StatusPill status={revision.state} /></div>}
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>
+          {editable && <button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入模板</button>}
+          {revision && <button className="button button--quiet" onClick={() => void copyTemplate()}><ClipboardCopy size={16} /> 复制模板</button>}
           {editable && <button className="button button--secondary" disabled={busy === 'save'} onClick={() => void save()}><Save size={16} /> 保存草稿</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && (revision?.state === 'released' || revision?.state === 'deprecated') && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 新 Revision</button>}
           {canAbandonDraft && <button className="button button--danger-soft" disabled={busy === 'abandon'} onClick={() => void abandonDraft()}><Undo2 size={16} /> 放弃草稿</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && <button className="button button--danger-soft" disabled={busy === 'deprecate'} onClick={() => void deprecateRevision()}>废弃</button>}
           {canLaunchRevision && <button className="button button--secondary" onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> 发布</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish-preview'} onClick={() => void previewPublish()}><Rocket size={16} /> 预览候选集并发布</button>}
         </div>
       </div>
       {selectedScenario ? <div className="scenario-editor">
         <aside className="scenario-palette panel">
           <header><h3>组件版本</h3><p>{editable ? '点击加入画布' : '当前为只读视图'}</p></header>
           <div className="palette-list">{COMPONENT_LAYERS.map((layer) => {
-            const available = components?.filter((component) => component.layer === layer.value && component.latestRelease?.state === 'released') ?? [];
+            const available = components?.filter((component) => component.layer === layer.value && (component.latestRelease?.state === 'released' || component.latestRelease?.candidate)) ?? [];
             return <section className="palette-layer" key={layer.value}><div className="palette-layer__header"><span>{layer.code}</span><strong>{layer.label}</strong></div>{available.length ? available.map((component) => {
               const used = nodes.filter((node) => node.data.componentId === component.id).length;
-              return <button key={component.id} disabled={!editable} onClick={() => addComponent(component)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {component.latestRelease?.version}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
-            }) : <div className="palette-layer__empty">本层暂无已发布组件</div>}</section>;
+              return <button key={component.id} disabled={!editable} onClick={() => addComponent(component)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {component.latestRelease?.version}{component.latestRelease?.candidate ? ' · 候选' : ''}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
+            }) : <div className="palette-layer__empty">本层暂无已发布或候选组件</div>}</section>;
           })}</div>
           <div className="palette-hint"><GitCommitHorizontal size={17} /><p>分层只用于分类提示；连线才表示硬依赖和实际执行顺序。</p></div>
         </aside>
         <section className="flow-canvas panel" aria-label="场景 DAG 画布">
-          {nodes.length ? <ReactFlow nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
+          <div className="scenario-view-toggle"><button className={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}><Network size={14} /> DAG</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><Table2 size={14} /> 节点表</button></div>
+          {nodes.length && view === 'graph' ? <ReactFlow nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
             <Background gap={22} size={1} color="#d8deeb" /><MiniMap pannable zoomable nodeColor="#6075e8" /><Controls showInteractive={false} />
-          </ReactFlow> : <EmptyState title="场景画布为空" description={editable ? '从左侧添加已发布的组件版本。' : '这个场景还没有组件节点。'} />}
+          </ReactFlow> : nodes.length && view === 'table' ? <div className="scenario-node-table"><div><strong>节点</strong><strong>版本</strong><strong>动作</strong><strong>主机组</strong><strong>前置/后置</strong></div>{displayNodes.map((node) => <button key={node.id} className={selectedNodeId === node.id ? 'active' : ''} onClick={() => setSelectedNodeId(node.id)}><span>{node.data.label}</span><span>{node.data.version}</span><span>{node.data.action}</span><span>{node.data.hostGroup}</span><span>{edges.filter((edge) => edge.target === node.id).length} / {edges.filter((edge) => edge.source === node.id).length}</span></button>)}</div> : <EmptyState title="场景画布为空" description={editable ? '从左侧添加已发布或候选组件版本。' : '这个场景还没有组件节点。'} />}
           {validation && <div className={`validation-result${validation.valid ? ' validation-result--ok' : ''}`}><strong>{validation.valid ? '校验通过' : `${validation.errors.length} 个问题`}</strong>{validation.errors.map((item) => <span key={item}>{item}</span>)}</div>}
         </section>
         <aside className="node-inspector panel">
@@ -262,7 +301,14 @@ export function ScenariosPage() {
     </>}
     {testOpen && <Modal title={revision?.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setTestOpen(false)}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision?.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
     {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('scenarios'); }} />}
+    {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate} />}
+    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}</div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setCandidateSet(undefined)}>取消</button><button className="button button--primary" disabled={!candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
   </div>;
+}
+
+function ScenarioTemplateModal({ onClose, onImport }: { onClose: () => void; onImport: (text: string) => void }) {
+  const [text, setText] = useState('{\n  "nodes": [],\n  "edges": [],\n  "executionPolicy": {}\n}');
+  return <Modal size="wide" title="导入场景模板" description="一次导入节点、边和执行策略；载入后仍需人工检查并保存。" onClose={onClose}><div className="modal-body"><textarea aria-label="场景模板 JSON" className="code-editor" rows={18} value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" onClick={() => onImport(text)}><Upload size={16} /> 载入草稿</button></footer></Modal>;
 }
 
 function CreateScenarioModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {

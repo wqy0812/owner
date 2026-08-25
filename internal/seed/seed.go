@@ -77,7 +77,17 @@ func (s Seeder) SeedUsers(ctx context.Context) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	return s.seedUsers(ctx, now)
+	for _, user := range identityUsers(now) {
+		if _, err := s.Store.GetUser(ctx, user.ID); err == nil {
+			continue
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("check seed user %s: %w", user.ID, err)
+		}
+		if err := s.Store.UpsertUser(ctx, user); err != nil {
+			return fmt.Errorf("seed user %s: %w", user.ID, err)
+		}
+	}
+	return nil
 }
 
 func (s Seeder) seedUsers(ctx context.Context, now time.Time) error {
@@ -98,6 +108,14 @@ func demoUsers(now time.Time) []domain.User {
 	return []domain.User{
 		{ID: ComponentOwnerRuntimeID, Name: "林晓 · Runtime", Role: domain.RoleComponentOwner, CreatedAt: now},
 		{ID: ComponentOwnerK8sID, Name: "周工 · Kubernetes", Role: domain.RoleComponentOwner, CreatedAt: now},
+		{ID: ScenarioOwnerID, Name: "陈晨 · 集群交付", Role: domain.RoleScenarioOwner, CreatedAt: now},
+		{ID: EnvironmentOwnerID, Name: "王维 · 基础设施", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
+	}
+}
+
+func identityUsers(now time.Time) []domain.User {
+	return []domain.User{
+		{ID: ComponentOwnerRuntimeID, Name: "林晓 · Runtime", Role: domain.RoleComponentOwner, CreatedAt: now},
 		{ID: ScenarioOwnerID, Name: "陈晨 · 集群交付", Role: domain.RoleScenarioOwner, CreatedAt: now},
 		{ID: EnvironmentOwnerID, Name: "王维 · 基础设施", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
 	}

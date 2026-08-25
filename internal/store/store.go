@@ -75,10 +75,12 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 	if tables > 0 {
 		var version string
 		if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_contract WHERE id=1`).Scan(&version); err != nil {
-			return fmt.Errorf("unsupported database schema: this project is on its first version and does not upgrade historical data; recreate the test database: %w", err)
+			return fmt.Errorf("unsupported database schema: missing schema contract: %w", err)
 		}
 		if version != schemaContract {
-			return fmt.Errorf("unsupported database schema contract %q: expected %q; recreate the test database", version, schemaContract)
+			if err := s.migrateSchemaContract(ctx, version); err != nil {
+				return err
+			}
 		}
 	}
 	content, err := schemaFiles.ReadFile("schema.sql")
@@ -94,6 +96,46 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 		return fmt.Errorf("initialize first-version schema: %w", err)
 	}
 	return tx.Commit()
+}
+
+func (s *Store) migrateSchemaContract(ctx context.Context, version string) error {
+	if version != candidateSchemaContract && version != idempotentSchemaContract && version != legacySchemaContract {
+		return fmt.Errorf("unsupported database schema contract %q: expected %q", version, schemaContract)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var idempotentColumn int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('action_definitions') WHERE name='idempotent'`).Scan(&idempotentColumn); err != nil {
+		return fmt.Errorf("inspect action idempotency migration: %w", err)
+	}
+	if idempotentColumn == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE action_definitions ADD COLUMN idempotent INTEGER NOT NULL DEFAULT 0 CHECK (idempotent IN (0,1))`); err != nil {
+			return fmt.Errorf("add action idempotency capability: %w", err)
+		}
+	}
+	var candidateColumn int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('component_releases') WHERE name='candidate'`).Scan(&candidateColumn); err != nil {
+		return fmt.Errorf("inspect candidate release migration: %w", err)
+	}
+	if candidateColumn == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE component_releases ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1))`); err != nil {
+			return fmt.Errorf("add candidate release capability: %w", err)
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE schema_contract SET version=? WHERE id=1 AND version=?`, schemaContract, version)
+	if err != nil {
+		return fmt.Errorf("update schema contract: %w", err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("schema contract changed while migration was running")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Reset(ctx context.Context) error {

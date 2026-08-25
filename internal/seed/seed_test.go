@@ -23,6 +23,31 @@ func (seedRunner) Run(context.Context, ansiblerunner.Request) (ansiblerunner.Res
 	return ansiblerunner.Result{}, nil
 }
 
+func TestSeedUsersKeepsOneComponentOwner(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	seeder := Seeder{Store: database, Now: func() time.Time { return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC) }}
+	if err := seeder.SeedUsers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	users, err := database.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 3 {
+		t.Fatalf("users=%d, want three operational personas", len(users))
+	}
+	for _, user := range users {
+		if user.ID == ComponentOwnerK8sID {
+			t.Fatal("secondary component owner must not be seeded in identities mode")
+		}
+	}
+}
+
 func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, ":memory:")

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, Copy, ListFilter, PlayCircle, ScrollText, ShieldAlert, Square, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, Copy, Download, ListFilter, PlayCircle, ScrollText, Search, ShieldAlert, Square, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { Run } from '../types/domain';
@@ -34,7 +34,12 @@ export function RunsPage() {
   const [detailError, setDetailError] = useState<string>();
   const [detailRetry, setDetailRetry] = useState(0);
   const [busy, setBusy] = useState<string>();
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchReason, setBatchReason] = useState('同一维护窗口批量批准，按环境 FIFO 串行执行');
+  const [logQuery, setLogQuery] = useState('');
+  const [logStream, setLogStream] = useState<'all' | 'stdout' | 'stderr' | 'system'>('all');
   const actionInFlight = useRef(false);
+  const logRef = useRef<HTMLPreElement>(null);
   const selectedId = searchParams.get('selected') ?? runs?.[0]?.id;
 
   useEffect(() => {
@@ -62,6 +67,7 @@ export function RunsPage() {
   }, [selectedSummary]);
 
   const filtered = useMemo(() => (runs ?? []).filter((run) => filter === 'all' || (filter === 'active' ? ACTIVE.has(run.status) : !ACTIVE.has(run.status))), [filter, runs]);
+  const pendingApprovals = useMemo(() => (runs ?? []).filter((run) => run.status === 'awaiting_approval' && run.approval?.id), [runs]);
 
   async function action(kind: 'cancel' | 'approve' | 'reject') {
     if (!detail || actionInFlight.current) return;
@@ -77,13 +83,42 @@ export function RunsPage() {
     } catch (reason) { notify('error', '操作失败', displayError(reason)); } finally { actionInFlight.current = false; setBusy(undefined); }
   }
 
+  async function approveBatch() {
+    if (!pendingApprovals.length || !batchReason.trim()) return;
+    setBusy('batch-approve');
+    try {
+      await api.batchDecideApprovals(pendingApprovals.map((run) => run.approval!.id), 'approved', batchReason.trim());
+      setBatchOpen(false);
+      notify('success', `已批量批准 ${pendingApprovals.length} 个运行`, '运行已按各环境 FIFO 队列排队，不会并发占用同一环境。');
+      signalRefresh(['runs', 'environments', 'scenarios']);
+    } catch (reason) { notify('error', '批量审批失败', displayError(reason)); }
+    finally { setBusy(undefined); }
+  }
+
   const progress = detail?.progress ?? (detail?.status === 'succeeded' ? 100 : detail?.steps?.length ? Math.round(detail.steps.filter((step) => step.status === 'succeeded').length / detail.steps.length * 100) : 0);
   const failure = detail ? runFailureSummary(detail) : undefined;
   const succeededSteps = detail?.steps?.filter((step) => step.status === 'succeeded').length ?? 0;
   const progressLabel = detail && !ACTIVE.has(detail.status) && detail.status !== 'succeeded' && detail.steps?.length ? `${succeededSteps}/${detail.steps.length} 步完成` : `${progress}%`;
+  const allLogLines = useMemo(() => (detail?.logTail ?? []).flatMap((entry) => entry.split('\n')), [detail?.logTail]);
+  const visibleLogLines = useMemo(() => allLogLines.filter((line) => {
+    const streamMatches = logStream === 'all' || line.toLowerCase().startsWith(`[${logStream}]`);
+    return streamMatches && (!logQuery.trim() || line.toLowerCase().includes(logQuery.trim().toLowerCase()));
+  }), [allLogLines, logQuery, logStream]);
+
+  useEffect(() => {
+    if (detail && ACTIVE.has(detail.status) && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [detail, visibleLogLines.length]);
+
+  function downloadLogs() {
+    if (!detail) return;
+    const url = URL.createObjectURL(new Blob([allLogLines.join('\n')], { type: 'text/plain;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = `${detail.id}.log`; anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   return <div className="page">
-    <PageHeader eyebrow="Ansible executions" title="运行中心" description="跟踪排队、审批、执行步骤和实时脱敏日志；每个环境按 FIFO 串行执行。" />
+    <PageHeader eyebrow="Ansible executions" title="运行中心" description="跟踪排队、审批、执行步骤和实时脱敏日志；每个环境按 FIFO 串行执行。" actions={user.role === 'environment_owner' && pendingApprovals.length ? <button className="button button--primary" onClick={() => setBatchOpen(true)}><ShieldAlert size={16} /> 批量审批 {pendingApprovals.length}</button> : undefined} />
     <RefreshNotice loading={isRefreshing} error={runs ? error : undefined} onRetry={() => void reload()} />
     {loading && !runs ? <LoadingBlock label="正在加载运行队列…" /> : error && !runs ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="runs-layout">
       <aside className="run-sidebar panel">
@@ -103,8 +138,9 @@ export function RunsPage() {
         <article className="panel"><header className="panel__header"><div><span className="panel__icon"><Clock3 size={18} /></span><div><h2>执行步骤</h2><p>Preflight → syntax-check → list-hosts → execute → verify</p></div></div></header>{detail.steps?.length ? <div className="step-timeline">{detail.steps.map((step, index) => <div id={`run-step-${step.id}`} key={step.id} className={`step step--${step.status}`}><span className="step__index">{step.status === 'succeeded' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : index + 1}</span><span className="step__line" /><div><div><strong>{step.name}</strong><StatusPill status={step.status} /></div><p>{step.componentName ? `${step.componentName} · ` : ''}{step.action ?? ''}{step.summary ? ` · ${step.summary}` : ''}</p><small>{formatTime(step.startedAt)}{step.finishedAt ? ` → ${formatTime(step.finishedAt)}` : ''}</small></div></div>)}</div> : <EmptyState title="步骤尚未生成" description={detail.status === 'awaiting_approval' ? '审批通过后进入环境队列。' : 'Planner 正在生成执行步骤。'} />}</article>
         {detail.backups?.length ? <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ShieldAlert size={18} /></span><div><h2>备份基线</h2><p>每个引用只绑定到创建它的安装 Run；回滚不会按版本猜测目录。</p></div></div></header><div className="backup-list">{detail.backups.map((backup) => <section key={`${backup.nodeId ?? backup.componentId}-${backup.backupRef}`}><div><strong>{backup.componentName ?? backup.componentId} · {backup.action}</strong><StatusPill status={backup.action === 'rollback' ? 'rollback' : 'captured'}>{backup.action === 'rollback' ? '用于回滚' : '已锁定'}</StatusPill></div><p>{backup.backupRef}</p><small>来自 Run {backup.installRunId} · 捕获于 {formatTime(backup.capturedAt)} · Playbook {backup.playbookSha256.slice(0, 16)}…</small></section>)}</div></article> : null}
         {detail.resolvedParametersByNode && Object.keys(detail.resolvedParametersByNode).length > 0 && <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ListFilter size={18} /></span><div><h2>解析参数</h2><p>下游参数值及其上游来源，不包含 CredentialRef 实际值</p></div></div></header><div className="resolved-parameters">{Object.entries(detail.resolvedParametersByNode).map(([nodeId, parameters]) => <section key={nodeId}><strong>{nodeId}</strong>{Object.entries(parameters).map(([name, item]) => <div key={name} className="parameter-preview__item"><span>{name}</span><small>{item.value === undefined ? '（空）' : String(item.value)}</small>{item.upstreamParameter ? <small className="parameter-lineage">{item.targetParameter ?? name} 来自节点 {item.sourceNodeId ?? '上游'} 的公开参数 {item.upstreamParameter}</small> : <small>{item.source ?? 'local'}{item.sourceNodeId ? ` · ${item.sourceNodeId}` : ''}</small>}</div>)}</section>)}</div></article>}
-        <article className="panel log-panel"><header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><ScrollText size={18} /></span><div><h2>{ACTIVE.has(detail.status) ? '实时日志' : '历史日志'}</h2><p>stdout / stderr · 凭据自动脱敏</p></div></div><span className={`live-badge${ACTIVE.has(detail.status) ? '' : ' live-badge--history'}`}><span /> {ACTIVE.has(detail.status) ? 'LIVE' : 'ARCHIVED'}</span></header><pre>{detail.logTail?.length ? detail.logTail.join('\n') : `[platform] Run ${detail.id}\n[platform] status=${detail.status}\n[platform] 等待 Ansible 输出…`}</pre></article>
+        <article className="panel log-panel"><header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><ScrollText size={18} /></span><div><h2>{ACTIVE.has(detail.status) ? '实时日志' : '历史日志'}</h2><p>stdout / stderr / system · 凭据自动脱敏</p></div></div><span className={`live-badge${ACTIVE.has(detail.status) ? '' : ' live-badge--history'}`}><span /> {ACTIVE.has(detail.status) ? 'LIVE' : 'ARCHIVED'}</span></header><div className="log-toolbar"><label><Search size={14} /><input aria-label="搜索运行日志" value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder="搜索主机、任务或错误" /></label><select aria-label="日志流筛选" value={logStream} onChange={(event) => setLogStream(event.target.value as typeof logStream)}><option value="all">全部流</option><option value="stdout">stdout</option><option value="stderr">stderr</option><option value="system">system</option></select><span>{visibleLogLines.length}/{allLogLines.length} 行</span><button className="icon-text" onClick={() => void navigator.clipboard?.writeText(visibleLogLines.join('\n'))}><Copy size={14} /> 复制结果</button><button className="icon-text" onClick={downloadLogs}><Download size={14} /> 下载完整日志</button></div><pre ref={logRef}>{allLogLines.length ? visibleLogLines.join('\n') || '没有匹配的日志行。' : `[platform] Run ${detail.id}\n[platform] status=${detail.status}\n[platform] 等待 Ansible 输出…`}</pre></article>
       </section> : <section className="panel"><EmptyState title="选择一个运行" description="查看步骤、审批和日志详情。" /></section>}
     </div>}
+    {batchOpen && <Modal title={`批量批准 ${pendingApprovals.length} 个危险运行`} description="平台会先原子消费整批审批，再按每个环境的 FIFO 队列串行执行；任何一项已失效都会整批拒绝。" onClose={() => setBatchOpen(false)}><div className="modal-body"><div className="batch-approval-list">{pendingApprovals.map((run) => <div key={run.id}><strong>{run.name ?? run.scenarioName ?? run.componentName}</strong><span>{run.environmentName} · {run.approval?.riskReason}</span></div>)}</div><label><span>审批理由</span><textarea rows={3} value={batchReason} onChange={(event) => setBatchReason(event.target.value)} /></label></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setBatchOpen(false)}>取消</button><button className="button button--primary" disabled={busy === 'batch-approve' || !batchReason.trim()} onClick={() => void approveBatch()}><Check size={15} /> {busy === 'batch-approve' ? '批准中…' : '确认批量批准'}</button></footer></Modal>}
   </div>;
 }

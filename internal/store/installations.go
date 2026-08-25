@@ -30,6 +30,35 @@ WHERE environment_id=? AND component_id=?`, environmentID, componentID).Scan(
 	return installation, nil
 }
 
+func (s *Store) ListEnvironmentComponentInstallations(ctx context.Context, environmentID string) ([]domain.EnvironmentComponentInstallation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT environment_id,component_id,release_id,install_run_id,backup_ref,backup_metadata_json,test_only,installed_at
+FROM environment_component_installations
+WHERE environment_id=?
+ORDER BY installed_at,component_id`, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.EnvironmentComponentInstallation, 0)
+	for rows.Next() {
+		var installation domain.EnvironmentComponentInstallation
+		var metadata, installedAt string
+		var testOnly int
+		if err := rows.Scan(
+			&installation.EnvironmentID, &installation.ComponentID, &installation.ReleaseID,
+			&installation.InstallRunID, &installation.BackupRef, &metadata, &testOnly, &installedAt,
+		); err != nil {
+			return nil, err
+		}
+		installation.Backup = decodeJSON(metadata, domain.BackupMetadata{})
+		installation.TestOnly = testOnly != 0
+		installation.InstalledAt = parseTime(installedAt)
+		out = append(out, installation)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpsertEnvironmentComponentInstallation(ctx context.Context, installation domain.EnvironmentComponentInstallation) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO environment_component_installations(

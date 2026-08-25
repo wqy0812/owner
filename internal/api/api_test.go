@@ -75,6 +75,188 @@ func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
 	}
 }
 
+func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	owner := f.session(seed.EnvironmentOwnerID)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	if err := f.database.DeleteEnvironmentComponentInstallation(ctx, "environment-test", "component-test-runtime", "run-installed-runtime-1.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	type fixtureComponent struct {
+		id, releaseID, installActionID, installPlaybook, rollbackPlaybook string
+	}
+	fixtures := []fixtureComponent{
+		{id: "component-clean-foundation", releaseID: "release-clean-foundation", installActionID: "action-clean-foundation-install", installPlaybook: "tests/clean/foundation-install.yml", rollbackPlaybook: "tests/clean/foundation-rollback.yml"},
+		{id: "component-clean-service", releaseID: "release-clean-service", installActionID: "action-clean-service-install", installPlaybook: "tests/clean/service-install.yml", rollbackPlaybook: "tests/clean/service-rollback.yml"},
+	}
+	for _, item := range fixtures {
+		component := domain.Component{ID: item.id, Slug: item.id, Name: item.id, Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredCore, OwnerID: seed.ComponentOwnerRuntimeID, CreatedAt: now, UpdatedAt: now}
+		if err := f.database.CreateComponent(ctx, component); err != nil {
+			t.Fatal(err)
+		}
+		release := domain.ComponentRelease{
+			ID: item.releaseID, ComponentID: item.id, Version: "clean-v1", Type: domain.ReleaseAtomic,
+			Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow,
+			EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, CreatedAt: now, ReleasedAt: &now,
+			Actions: []domain.ActionDefinition{
+				{ID: item.installActionID, ReleaseID: item.releaseID, Name: "install", Kind: domain.ActionInstall, Playbook: item.installPlaybook, TimeoutSeconds: 60},
+				{ID: "action-" + item.id + "-rollback", ReleaseID: item.releaseID, Name: "rollback", Kind: domain.ActionRollback, Playbook: item.rollbackPlaybook, TimeoutSeconds: 60},
+			},
+		}
+		if err := f.database.CreateComponentRelease(ctx, release); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sourceRunIDs := []string{"run-clean-foundation-install", "run-clean-service-install"}
+	lockedInstall := func(id string, item fixtureComponent, limit string) map[string]any {
+		return map[string]any{
+			"id": id, "nodeId": id, "name": item.id + " · install", "componentId": item.id, "componentName": item.id,
+			"releaseId": item.releaseID, "releaseVersion": "clean-v1", "releaseSpecDigest": "locked", "actionId": item.installActionID,
+			"action": "install", "playbook": item.installPlaybook, "playbookDigest": "playbook:" + item.installPlaybook,
+			"limit": limit, "variables": map[string]any{}, "requiredCredentials": []any{}, "timeoutSeconds": 60,
+		}
+	}
+	later := now.Add(time.Minute)
+	sourceRuns := []domain.Run{
+		{
+			ID: sourceRunIDs[0], Kind: domain.RunScenarioTest, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID,
+			EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1",
+			InputSnapshot: map[string]any{"steps": []any{
+				lockedInstall("foundation-control", fixtures[0], "test_nodes"),
+				lockedInstall("foundation-workers", fixtures[0], "test_nodes"),
+			}, "treeDigest": "fixed-tree-digest"},
+			ArtifactDigest: "fixed-tree-digest", CreatedAt: now, StartedAt: &now, FinishedAt: &now,
+		},
+		{
+			ID: sourceRunIDs[1], Kind: domain.RunScenarioTest, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID,
+			EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1",
+			InputSnapshot:  map[string]any{"steps": []any{lockedInstall("service", fixtures[1], "test_nodes")}, "treeDigest": "fixed-tree-digest"},
+			ArtifactDigest: "fixed-tree-digest", CreatedAt: later, StartedAt: &later, FinishedAt: &later,
+		},
+	}
+	for _, sourceRun := range sourceRuns {
+		if err := f.database.CreateRun(ctx, sourceRun, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, item := range fixtures {
+		sourceRunID := sourceRunIDs[index]
+		capturedAt := now
+		if index == 1 {
+			capturedAt = later
+		}
+		backup := domain.BackupMetadata{
+			EnvironmentID: "environment-test", ComponentID: item.id, ReleaseID: item.releaseID, ActionID: item.installActionID,
+			InstallRunID: sourceRunID, CapturedAt: capturedAt, PlaybookSHA256: "playbook:" + item.installPlaybook,
+			DependencySnapshot: map[string]any{"dependencies": []any{}},
+		}
+		if err := f.database.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
+			EnvironmentID: "environment-test", ComponentID: item.id, ReleaseID: item.releaseID, InstallRunID: sourceRunID,
+			BackupRef: "/var/lib/clusterforge/backups/environment-test/" + item.id + "/" + item.releaseID + "/" + sourceRunID,
+			Backup:    backup, TestOnly: true, InstalledAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if denied := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-plan", nil, alice); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner preview status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	preview := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-plan", nil, owner)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("rollback preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	plan := decodeEnvelope(t, preview)["data"].(map[string]any)
+	if plan["componentCount"] != float64(2) || plan["nodeCount"] != float64(3) || plan["requiresApproval"] != true {
+		t.Fatalf("rollback plan summary=%#v", plan)
+	}
+	sources := plan["sources"].([]any)
+	if len(sources) != 2 || sources[0].(map[string]any)["runId"] != sourceRunIDs[1] {
+		t.Fatalf("rollback sources=%#v", plan["sources"])
+	}
+	steps := plan["steps"].([]any)
+	if steps[0].(map[string]any)["componentId"] != fixtures[1].id || steps[1].(map[string]any)["componentId"] != fixtures[0].id || steps[2].(map[string]any)["componentId"] != fixtures[0].id {
+		t.Fatalf("rollback steps are not reverse ordered: %#v", steps)
+	}
+	if mismatch := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-runs", map[string]any{
+		"expectedPlanDigest": plan["planDigest"], "confirmEnvironmentName": "wrong environment",
+	}, owner); mismatch.Code != http.StatusBadRequest {
+		t.Fatalf("confirmation mismatch status=%d body=%s", mismatch.Code, mismatch.Body.String())
+	}
+	if stale := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-runs", map[string]any{
+		"expectedPlanDigest": "stale-plan", "confirmEnvironmentName": "Test Environment",
+	}, owner); stale.Code != http.StatusConflict {
+		t.Fatalf("stale rollback plan status=%d body=%s", stale.Code, stale.Body.String())
+	}
+	created := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-runs", map[string]any{
+		"expectedPlanDigest": plan["planDigest"], "confirmEnvironmentName": "Test Environment",
+	}, owner)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("rollback run status=%d body=%s", created.Code, created.Body.String())
+	}
+	run := decodeEnvelope(t, created)["data"].(map[string]any)
+	if run["kind"] != string(domain.RunEnvironmentRollback) || run["status"] != string(domain.RunAwaitingApproval) {
+		t.Fatalf("rollback run=%#v", run)
+	}
+	approvalID := run["approval"].(map[string]any)["id"].(string)
+	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", map[string]any{"reason": "approved whole-cluster clean rollback"}, owner); approved.Code != http.StatusOK {
+		t.Fatalf("approve rollback status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	waitForRun(t, f.database, run["id"].(string), domain.RunSucceeded)
+	for _, item := range fixtures {
+		if _, err := f.database.GetEnvironmentComponentInstallation(ctx, "environment-test", item.id); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("installation %s remained after rollback: %v", item.id, err)
+		}
+	}
+	f.runner.mu.Lock()
+	defer f.runner.mu.Unlock()
+	last := f.runner.requests[len(f.runner.requests)-3:]
+	if last[1].Variables["clusterforge_backup_cleanup_on_success"] != false || last[2].Variables["clusterforge_backup_cleanup_on_success"] != true {
+		t.Fatalf("duplicate component cleanup flags=%#v %#v", last[1].Variables, last[2].Variables)
+	}
+}
+
+func TestBatchApprovalRequiresAndTrimsReason(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	run := domain.Run{
+		ID: "run-batch-reason", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval,
+		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionInstall, Destructive: true,
+		InputSnapshot: map[string]any{}, CreatedAt: now,
+	}
+	approval := domain.Approval{ID: "approval-batch-reason", RunID: run.ID, Status: "pending", RequestedAt: now}
+	if err := f.database.CreateRun(ctx, run, &approval); err != nil {
+		t.Fatal(err)
+	}
+	owner := f.session(seed.EnvironmentOwnerID)
+	blank := f.request(http.MethodPost, "/api/v1/approvals/batch", map[string]any{
+		"approvalIds": []any{approval.ID}, "decision": "rejected", "reason": "   ",
+	}, owner)
+	if blank.Code != http.StatusBadRequest {
+		t.Fatalf("blank batch reason status=%d body=%s", blank.Code, blank.Body.String())
+	}
+	pending, err := f.database.GetApproval(ctx, approval.ID)
+	if err != nil || pending.Status != "pending" {
+		t.Fatalf("blank reason consumed approval=%+v err=%v", pending, err)
+	}
+	decided := f.request(http.MethodPost, "/api/v1/approvals/batch", map[string]any{
+		"approvalIds": []any{approval.ID}, "decision": "rejected", "reason": "  maintenance denied  ",
+	}, owner)
+	if decided.Code != http.StatusOK {
+		t.Fatalf("valid batch reason status=%d body=%s", decided.Code, decided.Body.String())
+	}
+	stored, err := f.database.GetApproval(ctx, approval.ID)
+	if err != nil || stored.Status != "rejected" || stored.Reason != "maintenance denied" {
+		t.Fatalf("stored batch decision=%+v err=%v", stored, err)
+	}
+}
+
 func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	f := newAPIFixture(t)
 	root := t.TempDir()
@@ -287,6 +469,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 		Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, CreatedAt: now.Add(time.Second),
 		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{{Name: "expected_version", Description: "expected runtime version", Type: domain.ParameterTypeString, Required: true, DefaultValue: "1.1.0", Visibility: domain.ParameterInternal}},
 		Actions: []domain.ActionDefinition{
+			{ID: "action-test-runtime-install-1.1", ReleaseID: "release-test-runtime-1.1.0", Name: "install", Kind: domain.ActionInstall, Playbook: "tests/runtime/install.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
 			{ID: "action-test-runtime-upgrade-1.1", ReleaseID: "release-test-runtime-1.1.0", Name: "upgrade", Kind: domain.ActionUpgrade, Playbook: "tests/runtime/upgrade.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow, FromReleaseID: oldRelease.ID, ToReleaseID: "release-test-runtime-1.1.0"},
 			{ID: "action-test-runtime-verify-1.1", ReleaseID: "release-test-runtime-1.1.0", Name: "verify", Kind: domain.ActionVerify, Playbook: "tests/runtime/verify.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
 			{ID: "action-test-runtime-rollback-1.0", ReleaseID: "release-test-runtime-1.1.0", Name: "rollback", Kind: domain.ActionRollback, Playbook: "tests/runtime/rollback.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow, FromReleaseID: "release-test-runtime-1.1.0", ToReleaseID: oldRelease.ID},
@@ -385,6 +568,39 @@ func (f *apiFixture) session(userID string) *http.Cookie {
 	return cookies[0]
 }
 
+func (f *apiFixture) completeReleaseDelivery(releaseID string, owner, environmentOwner *http.Cookie, preserveInstallation bool) {
+	f.t.Helper()
+	runTest := func(mode string) {
+		response := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/test-runs", map[string]any{
+			"environmentId": "environment-test", "mode": mode,
+		}, owner)
+		if response.Code != http.StatusAccepted {
+			f.t.Fatalf("%s evidence status=%d body=%s", mode, response.Code, response.Body.String())
+		}
+		data := decodeEnvelope(f.t, response)["data"].(map[string]any)
+		if data["status"] == string(domain.RunAwaitingApproval) {
+			approval := data["approval"].(map[string]any)
+			approved := f.request(http.MethodPost, "/api/v1/approvals/"+approval["id"].(string)+"/approve", nil, environmentOwner)
+			if approved.Code != http.StatusOK {
+				f.t.Fatalf("approve %s evidence status=%d body=%s", mode, approved.Code, approved.Body.String())
+			}
+		}
+		waitForRun(f.t, f.database, data["id"].(string), domain.RunSucceeded)
+	}
+
+	runTest("install_verify")
+	installation, err := f.database.GetEnvironmentComponentInstallation(context.Background(), "environment-test", "component-test-runtime")
+	if err != nil {
+		f.t.Fatalf("read installation after install evidence: %v", err)
+	}
+	runTest("rollback")
+	if preserveInstallation {
+		if err := f.database.UpsertEnvironmentComponentInstallation(context.Background(), installation); err != nil {
+			f.t.Fatalf("restore installation fixture after delivery evidence: %v", err)
+		}
+	}
+}
+
 func (f *apiFixture) request(method, path string, body any, cookie *http.Cookie) *httptest.ResponseRecorder {
 	f.t.Helper()
 	var input *bytes.Reader
@@ -471,13 +687,16 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
 		t.Fatal(err)
 	}
+	if err := f.database.SetReleaseCandidate(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+		t.Fatal(err)
+	}
 	edited := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n- hosts: workers\n  tasks: []\n"}, alice)
 	if edited.Code != http.StatusOK || !strings.Contains(edited.Body.String(), "hosts: workers") {
 		t.Fatalf("edit Playbook status=%d body=%s", edited.Code, edited.Body.String())
 	}
 	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
-	if err != nil || release.Verified {
-		t.Fatalf("Playbook edit did not invalidate verification: verified=%v err=%v", release.Verified, err)
+	if err != nil || release.Verified || release.Candidate {
+		t.Fatalf("Playbook edit did not invalidate delivery state: verified=%v candidate=%v err=%v", release.Verified, release.Candidate, err)
 	}
 	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, bob); response.Code != http.StatusForbidden {
 		t.Fatalf("other owner edit Playbook status=%d body=%s", response.Code, response.Body.String())
@@ -721,9 +940,75 @@ func TestFirstVersionAPIRejectsOldRequestShapes(t *testing.T) {
 	}
 }
 
+func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
+	t.Run("install verification", func(t *testing.T) {
+		f := newAPIFixture(t)
+		alice := f.session(seed.ComponentOwnerRuntimeID)
+		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "must pass install and verify") {
+			t.Fatalf("unverified publish status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("complete lifecycle", func(t *testing.T) {
+		f := newAPIFixture(t)
+		alice := f.session(seed.ComponentOwnerRuntimeID)
+		createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Incomplete", "incomplete"), alice)
+		componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
+		createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
+			"version": "1.0.0", "type": "atomic",
+			"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60}},
+		}, alice)
+		releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
+		response := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/publish", nil, alice)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "must define") {
+			t.Fatalf("incomplete lifecycle publish status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("rollback evidence", func(t *testing.T) {
+		f := newAPIFixture(t)
+		alice := f.session(seed.ComponentOwnerRuntimeID)
+		if err := f.database.MarkReleaseVerified(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
+			t.Fatal(err)
+		}
+		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "rollback and post-rollback verification") {
+			t.Fatalf("missing rollback evidence status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("stale specification", func(t *testing.T) {
+		f := newAPIFixture(t)
+		alice := f.session(seed.ComponentOwnerRuntimeID)
+		dave := f.session(seed.EnvironmentOwnerID)
+		f.completeReleaseDelivery("release-test-runtime-1.1.0", alice, dave, true)
+		release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner, err := f.database.GetUser(context.Background(), seed.ComponentOwnerRuntimeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		release.ReleaseNotes = "contract changed after delivery evidence"
+		if _, err := f.platform.UpdateRelease(context.Background(), owner, release.ID, release); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.database.MarkReleaseVerified(context.Background(), release.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		response := f.request(http.MethodPost, "/api/v1/component-releases/"+release.ID+"/publish", nil, alice)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "rollback and post-rollback verification") {
+			t.Fatalf("stale evidence publish status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+}
+
 func TestReleaseImpactNotifiesDownstreamAndScenarioOwners(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
+	dave := f.session(seed.EnvironmentOwnerID)
 	draftOnly := domain.Scenario{ID: "scenario-draft-only-impact", Slug: "draft-only-impact", Name: "Draft only impact", OwnerID: seed.ScenarioOwnerID, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	draftRevision := domain.ScenarioRevision{
 		ID: "scenario-draft-only-impact-r1", ScenarioID: draftOnly.ID, Revision: 1, Status: domain.RevisionDraft,
@@ -733,13 +1018,14 @@ func TestReleaseImpactNotifiesDownstreamAndScenarioOwners(t *testing.T) {
 	if err := f.database.CreateScenario(context.Background(), draftOnly, draftRevision); err != nil {
 		t.Fatal(err)
 	}
+	f.completeReleaseDelivery("release-test-runtime-1.1.0", alice, dave, false)
 	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice)
 	if response.Code != http.StatusOK {
 		t.Fatalf("publish status=%d body=%s", response.Code, response.Body.String())
 	}
 	published := decodeEnvelope(t, response)["data"].(map[string]any)
-	if published["status"] != string(domain.ReleaseReleased) || published["verified"] != false {
-		t.Fatalf("unexpected unverified publish: %#v", published)
+	if published["status"] != string(domain.ReleaseReleased) || published["verified"] != true {
+		t.Fatalf("unexpected verified publish: %#v", published)
 	}
 	for _, userID := range []string{seed.ComponentOwnerK8sID, seed.ScenarioOwnerID} {
 		cookie := f.session(userID)
@@ -764,7 +1050,7 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
 	definition := map[string]any{
 		"version": "1.0.0", "type": "atomic", "parameters": []any{},
-		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}}},
+		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}, "idempotent": true}},
 	}
 	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", definition, alice)
 	if createdRelease.Code != http.StatusCreated {
@@ -774,6 +1060,9 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	createdAction := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["actions"].([]any)[0].(map[string]any)
 	if got, ok := createdAction["requiredCredentials"].([]any); !ok || len(got) != 1 || got[0] != "ansible_ssh_pass" {
 		t.Fatalf("requiredCredentials API round trip=%#v", createdAction["requiredCredentials"])
+	}
+	if createdAction["idempotent"] != true {
+		t.Fatalf("idempotent API round trip=%#v", createdAction["idempotent"])
 	}
 	if err := f.database.MarkReleaseVerified(context.Background(), releaseID, true); err != nil {
 		t.Fatal(err)
@@ -965,17 +1254,17 @@ func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	createdComponent := f.request(http.MethodPost, "/api/v1/components", componentRequest("Clone Env", "clone-env"), alice)
 	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
-	createdRelease := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
-		"version": "1.0.0", "type": "atomic",
-		"environmentConstraints": map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"SUSE"}},
-		"actions":                []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "timeoutSeconds": 60}},
-	}, alice)
-	if createdRelease.Code != http.StatusCreated {
-		t.Fatalf("create release status=%d body=%s", createdRelease.Code, createdRelease.Body.String())
-	}
-	releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
-	if response := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/publish", nil, alice); response.Code != http.StatusOK {
-		t.Fatalf("publish status=%d body=%s", response.Code, response.Body.String())
+	now := time.Now().UTC()
+	releaseID := "release-clone-env-1.0.0"
+	if err := f.database.CreateComponentRelease(context.Background(), domain.ComponentRelease{
+		ID: releaseID, ComponentID: componentID, Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow,
+		EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"SUSE"}},
+		Parameters:             []domain.ParameterDefinition{},
+		Actions:                []domain.ActionDefinition{{ID: "action-clone-env-install", ReleaseID: releaseID, Name: "install", Kind: domain.ActionInstall, Playbook: "tests/runtime/install.yml", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}},
+		CreatedAt:              now, ReleasedAt: &now,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	cloned := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", map[string]any{
 		"version": "1.1.0", "releaseNotes": "add arm64",
@@ -1008,13 +1297,16 @@ func TestPublishRejectsCrossReleaseTransitionMismatch(t *testing.T) {
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	componentResponse := f.request(http.MethodPost, "/api/v1/components", componentRequest("Transitions", "transitions"), alice)
 	componentID := decodeEnvelope(t, componentResponse)["data"].(map[string]any)["id"].(string)
-	oldResponse := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
-		"version": "1.0.0", "type": "atomic",
-		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install-v1.0.yml", "timeoutSeconds": 60}},
-	}, alice)
-	oldID := decodeEnvelope(t, oldResponse)["data"].(map[string]any)["id"].(string)
-	if response := f.request(http.MethodPost, "/api/v1/component-releases/"+oldID+"/publish", nil, alice); response.Code != http.StatusOK {
-		t.Fatalf("publish old release status=%d body=%s", response.Code, response.Body.String())
+	now := time.Now().UTC()
+	oldID := "release-transitions-1.0.0"
+	if err := f.database.CreateComponentRelease(context.Background(), domain.ComponentRelease{
+		ID: oldID, ComponentID: componentID, Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Status: domain.ReleaseReleased, Verified: true, RiskLevel: domain.RiskLow,
+		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{},
+		Actions:   []domain.ActionDefinition{{ID: "action-transitions-install", ReleaseID: oldID, Name: "install", Kind: domain.ActionInstall, Playbook: "tests/runtime/install-v1.0.yml", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}},
+		CreatedAt: now, ReleasedAt: &now,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	newResponse := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/releases", map[string]any{
 		"version": "2.0.0", "type": "atomic",
@@ -1102,6 +1394,7 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	carol := f.session(seed.ScenarioOwnerID)
 	dave := f.session(seed.EnvironmentOwnerID)
+	f.completeReleaseDelivery("release-test-runtime-1.1.0", alice, dave, true)
 	if response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice); response.Code != http.StatusOK {
 		t.Fatalf("publish rollback source status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -1134,7 +1427,11 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 	f.runner.mu.Lock()
 	requests := append([]ansiblerunner.Request(nil), f.runner.requests...)
 	f.runner.mu.Unlock()
-	if len(requests) != 2 || requests[0].Playbook != "tests/runtime/rollback.yml" || requests[1].Playbook != "tests/runtime/verify.yml" || requests[1].Variables["expected_version"] != "1.0.0" {
+	if len(requests) < 2 {
+		t.Fatalf("rollback execution requests=%+v", requests)
+	}
+	requests = requests[len(requests)-2:]
+	if requests[0].Playbook != "tests/runtime/rollback.yml" || requests[1].Playbook != "tests/runtime/verify.yml" || requests[1].Variables["expected_version"] != "1.0.0" {
 		t.Fatalf("rollback execution requests=%+v", requests)
 	}
 }
@@ -1309,6 +1606,7 @@ func TestScenarioTestGateAndDestructiveApproval(t *testing.T) {
 	if response := f.request(http.MethodPost, "/api/v1/scenario-revisions/scenario-test-runtime-r2/publish", nil, carol); response.Code != http.StatusConflict {
 		t.Fatalf("untested scenario publish status=%d body=%s", response.Code, response.Body.String())
 	}
+	f.completeReleaseDelivery("release-test-runtime-1.1.0", alice, dave, true)
 	if response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice); response.Code != http.StatusOK {
 		t.Fatalf("component publish: %s", response.Body.String())
 	}

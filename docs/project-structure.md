@@ -1,8 +1,8 @@
 # ClusterForge 项目结构说明
 
-> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。除非出现明确的 V2 文档，否则数据库结构和 API 直接使用唯一首版合同，不提供历史兼容。统一规则见 [首版与环境策略](version-policy.md)。
+> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，但允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-24 当前工作区代码
+> 文档基线：2026-08-25 当前工作区代码
 >
 > 适用对象：首次接触本仓库的前端、后端、测试和运维开发人员
 >
@@ -79,7 +79,7 @@ internal/service
 主平台入口位于 `cmd/server/main.go`，负责：
 
 1. 读取 `.env` 和 `NEWPLATFORM_*` 配置。
-2. 打开 SQLite；空库初始化首版结构，非首版数据库直接拒绝启动。
+2. 打开 SQLite；空库初始化当前结构，精确命中的已声明前序 V1 合同执行经过测试的加法迁移，未知合同拒绝启动。
 3. 按 Seed Profile 初始化身份或演示数据。
 4. 创建 Ansible Runner、Platform Service 和 EventHub。
 5. 启动队列恢复、HTTP 服务和优雅退出流程。
@@ -104,10 +104,10 @@ FSS 使用独立配置前缀 `CLUSTERFORGE_FSS_*`，不直接连接平台 SQLite
 领域层集中定义：
 
 - 用户与固定角色。
-- Component、ComponentRelease、依赖、动作和组件介质。
+- Component、ComponentRelease、候选交接、依赖、幂等动作和组件介质。
 - Scenario、ScenarioRevision、DAG 节点和边。
 - Environment、EnvironmentRevision、Inventory、变量和 CredentialRef。
-- Run、RunStep、RunLog、Approval、Notification 和 AuditEvent。
+- Run（含整集群 `environment_rollback`）、RunStep、RunLog、Approval、Notification 和 AuditEvent。
 - 组件分类、生命周期状态、动作类型、风险等级与通用领域错误。
 
 新增跨层字段时，先更新这里的领域结构，再同步 Store、Service、API 和前端类型。不要仅在 API DTO 或前端中维护另一套业务状态。
@@ -156,7 +156,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-项目当前没有数据库升级路径。结构变化直接修改 `schema.sql` 并更新 `schemaContract`；测试环境删除并重建数据库。检测到没有首版合同或合同不一致的数据库时，服务失败关闭，不读取、回填或转换历史数据。
+数据库以 `schemaContract` 严格识别结构。结构变化必须更新 `schema.sql` 和合同；仅允许从代码中显式列出的精确前序合同执行经过测试的加法迁移，未知合同或破坏性历史结构仍会失败关闭。本版允许从 `first-version-20260824` 加列迁移到动作幂等能力合同，并保留现有业务数据。
 
 ### 3.7 `internal/ansible`
 
@@ -305,7 +305,7 @@ make build
 | 新增领域字段 | `internal/domain` → `internal/store`/首版结构 → `internal/service` → `internal/api` → `web/src/types` 和页面 |
 | 新增 API | `internal/api` 路由与 Handler，同时在 Service 层实现规则并补 API 测试 |
 | 修改权限或状态机 | `internal/service`，必要时同步 Domain；前端只展示结果 |
-| 修改数据库结构 | 直接更新 `internal/store/schema.sql` 与 `schemaContract`，补 schema/store 测试并重建测试数据库 |
+| 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；需要保留数据时增加精确前序合同迁移，并补 schema/store 测试 |
 | 修改 Run 规划或调度 | `internal/service/runs.go`、`logic.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
 | 新增组件示例 | `examples/ansible`、`internal/seed` 及 Seed/组件脚本测试 |

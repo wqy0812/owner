@@ -45,10 +45,10 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 	query := `SELECT id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at FROM components`
 	var args []any
 	if viewer.Role == domain.RoleComponentOwner {
-		query += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND r.status='released')`
+		query += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.verified=1)))`
 		args = append(args, viewer.ID)
 	} else {
-		query += ` WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND r.status='released')`
+		query += ` WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.verified=1)))`
 	}
 	query += ` ORDER BY CASE layer WHEN 'host_foundation' THEN 1 WHEN 'runtime_state' THEN 2 WHEN 'orchestration_core' THEN 3 WHEN 'cluster_service' THEN 4 WHEN 'observability_management' THEN 5 WHEN 'platform_extension' THEN 6 ELSE 7 END, category, name`
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -74,8 +74,8 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 		return nil, err
 	}
 	for i := range out {
-		releasedOnly := viewer.Role != domain.RoleComponentOwner || out[i].OwnerID != viewer.ID
-		out[i].Releases, err = s.ListComponentReleases(ctx, out[i].ID, releasedOnly)
+		ownerView := viewer.Role == domain.RoleComponentOwner && out[i].OwnerID == viewer.ID
+		out[i].Releases, err = s.listVisibleComponentReleases(ctx, out[i].ID, ownerView)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +89,7 @@ func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRe
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err = tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -105,7 +105,7 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_type=?,release_notes=?,breaking=?,verified=?,risk_level=?,environment_constraints_json=?,parameters_json=? WHERE id=? AND status='draft'`, r.Version, r.Type, r.ReleaseNotes, r.Breaking, r.Verified, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_type=?,release_notes=?,breaking=?,verified=?,candidate=?,risk_level=?,environment_constraints_json=?,parameters_json=? WHERE id=? AND status='draft'`, r.Version, r.Type, r.ReleaseNotes, r.Breaking, r.Verified, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -137,7 +137,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(nonNilStrings(a.Tags)), a.Limit, a.HostGroup, jsonText(nonNilStrings(a.AllowedParameters)), jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, jsonText(nonNilStrings(a.Tags)), a.Limit, a.HostGroup, jsonText(nonNilStrings(a.AllowedParameters)), jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -160,7 +160,7 @@ func nullString(v string) any {
 }
 
 func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE id=?`, id)
 	r, err := scanRelease(row)
 	if err != nil {
 		return r, mapSQLError(err)
@@ -209,12 +209,13 @@ type scanner interface{ Scan(...any) error }
 
 func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var r domain.ComponentRelease
-	var breaking, verified int
+	var breaking, verified, candidate int
 	var constraints, parameters, created string
 	var released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Type, &r.Status, &r.ReleaseNotes, &breaking, &verified, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
+	err := row.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Type, &r.Status, &r.ReleaseNotes, &breaking, &verified, &candidate, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
 	r.Breaking = breaking != 0
 	r.Verified = verified != 0
+	r.Candidate = candidate != 0
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	r.Parameters = decodeJSON(parameters, []domain.ParameterDefinition{})
 	r.CreatedAt = parseTime(created)
@@ -224,7 +225,7 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 }
 
 func (s *Store) ListComponentReleases(ctx context.Context, componentID string, releasedOnly bool) ([]domain.ComponentRelease, error) {
-	q := `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=?`
+	q := `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=?`
 	if releasedOnly {
 		q += ` AND status='released'`
 	}
@@ -265,6 +266,39 @@ func (s *Store) ListComponentReleases(ctx context.Context, componentID string, r
 	return out, nil
 }
 
+func (s *Store) listVisibleComponentReleases(ctx context.Context, componentID string, ownerView bool) ([]domain.ComponentRelease, error) {
+	if ownerView {
+		return s.ListComponentReleases(ctx, componentID, false)
+	}
+	q := `SELECT id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=? AND (status='released' OR (status='draft' AND candidate=1 AND verified=1)) ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, q, componentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ComponentRelease
+	for rows.Next() {
+		r, scanErr := scanRelease(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		r.Dependencies, err = s.listDependencies(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		r.Actions, err = s.listActions(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		r.Artifacts, err = s.ListComponentArtifacts(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domain.ComponentDependency, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id=? ORDER BY c.name`, releaseID)
 	if err != nil {
@@ -285,7 +319,7 @@ func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domai
 }
 
 func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.ActionDefinition, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -294,15 +328,16 @@ func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.Act
 	for rows.Next() {
 		var a domain.ActionDefinition
 		var tags, allowed, requiredCredentials string
-		var destructive int
+		var destructive, idempotent int
 		var from, to sql.NullString
-		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &tags, &a.Limit, &a.HostGroup, &allowed, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &from, &to); err != nil {
+		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &tags, &a.Limit, &a.HostGroup, &allowed, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to); err != nil {
 			return nil, err
 		}
 		a.Tags = nonNilStrings(decodeJSON(tags, []string{}))
 		a.AllowedParameters = nonNilStrings(decodeJSON(allowed, []string{}))
 		a.RequiredCredentials = nonNilStrings(decodeJSON(requiredCredentials, []string{}))
 		a.Destructive = destructive != 0
+		a.Idempotent = idempotent != 0
 		a.FromReleaseID = from.String
 		a.ToReleaseID = to.String
 		out = append(out, a)
@@ -311,7 +346,7 @@ func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.Act
 }
 
 func (s *Store) PublishComponentRelease(ctx context.Context, id string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET status='released',released_at=? WHERE id=? AND status='draft'`, timeText(at), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET status='released',candidate=0,released_at=? WHERE id=? AND status='draft'`, timeText(at), id)
 	if err != nil {
 		return err
 	}
@@ -334,13 +369,28 @@ func (s *Store) DeprecateComponentRelease(ctx context.Context, id string, at tim
 	return nil
 }
 func (s *Store) MarkReleaseVerified(ctx context.Context, id string, verified bool) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET verified=? WHERE id=?`, verified, id)
+	query := `UPDATE component_releases SET verified=1 WHERE id=?`
+	if !verified {
+		query = `UPDATE component_releases SET verified=0,candidate=0 WHERE id=?`
+	}
+	res, err := s.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET candidate=? WHERE id=? AND status='draft'`, candidate, id)
+	if err != nil {
+		return err
+	}
+	if changed, _ := res.RowsAffected(); changed == 0 {
+		return fmt.Errorf("%w: only a draft release can change candidate state", domain.ErrConflict)
 	}
 	return nil
 }

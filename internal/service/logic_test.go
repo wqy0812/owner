@@ -119,6 +119,11 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 		t.Fatal("release definition digest did not include required credentials")
 	}
 	before = componentReleaseSpecDigest(release)
+	release.Actions[0].Idempotent = true
+	if after := componentReleaseSpecDigest(release); before == after {
+		t.Fatal("release definition digest did not include idempotent capability")
+	}
+	before = componentReleaseSpecDigest(release)
 	release.Parameters[0].DefaultValue = "us"
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not include parameters")
@@ -130,6 +135,39 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	}}
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not include parameter mappings")
+	}
+}
+
+func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
+	install := domain.ActionDefinition{ID: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60, Idempotent: true}
+	release := domain.ComponentRelease{Version: "2.0.0", Type: domain.ReleaseAtomic, Actions: []domain.ActionDefinition{install}}
+	action, err := actionFor(release, domain.ActionUpgrade)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.ID != install.ID || action.Playbook != install.Playbook || action.Kind != domain.ActionUpgrade {
+		t.Fatalf("reused upgrade action=%+v", action)
+	}
+
+	explicit := domain.ActionDefinition{ID: "upgrade", Kind: domain.ActionUpgrade, Playbook: "upgrade.yml", TimeoutSeconds: 60}
+	release.Actions = append(release.Actions, explicit)
+	action, err = actionFor(release, domain.ActionUpgrade)
+	if err != nil || action.ID != explicit.ID {
+		t.Fatalf("explicit upgrade should take precedence: action=%+v err=%v", action, err)
+	}
+
+	install.Idempotent = false
+	if _, err := actionFor(domain.ComponentRelease{Version: "2.0.0", Actions: []domain.ActionDefinition{install}}, domain.ActionUpgrade); err == nil {
+		t.Fatal("non-idempotent install unexpectedly served upgrade")
+	}
+}
+
+func TestIdempotentUpgradeReuseIsOnlyValidForInstall(t *testing.T) {
+	release := domain.ComponentRelease{Version: "1.0.0", Type: domain.ReleaseAtomic, Actions: []domain.ActionDefinition{{
+		Kind: domain.ActionVerify, Playbook: "verify.yml", TimeoutSeconds: 60, Idempotent: true,
+	}}}
+	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), "only valid for install") {
+		t.Fatalf("invalid idempotent capability validation=%v", err)
 	}
 }
 

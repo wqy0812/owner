@@ -153,6 +153,14 @@ func actionFor(release domain.ComponentRelease, kind domain.ActionKind) (domain.
 			return action, nil
 		}
 	}
+	if kind == domain.ActionUpgrade {
+		for _, action := range release.Actions {
+			if action.Kind == domain.ActionInstall && action.Idempotent {
+				action.Kind = domain.ActionUpgrade
+				return action, nil
+			}
+		}
+	}
 	return domain.ActionDefinition{}, fmt.Errorf("%w: release %s has no %s action", domain.ErrInvalid, release.Version, kind)
 }
 
@@ -194,6 +202,9 @@ func validateRelease(release domain.ComponentRelease) error {
 		}
 		if action.Kind == domain.ActionUpgrade && (action.FromReleaseID == "" || action.ToReleaseID == "") {
 			return fmt.Errorf("%w: upgrade action must declare an explicit fromReleaseId and toReleaseId", domain.ErrInvalid)
+		}
+		if action.Idempotent && action.Kind != domain.ActionInstall {
+			return fmt.Errorf("%w: idempotent upgrade reuse is only valid for install actions", domain.ErrInvalid)
 		}
 		if action.Kind == domain.ActionRollback && (action.FromReleaseID == "") != (action.ToReleaseID == "") {
 			return fmt.Errorf("%w: rollback action must declare both fromReleaseId and toReleaseId, or leave both empty for an install rollback", domain.ErrInvalid)

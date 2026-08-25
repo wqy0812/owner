@@ -73,6 +73,28 @@ func (h *Handler) decideRun(w http.ResponseWriter, r *http.Request, decision str
 	writeData(w, http.StatusOK, h.runDTO(r, run))
 }
 
+func (h *Handler) batchDecideRuns(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ApprovalIDs []string `json:"approvalIds"`
+		Decision    string   `json:"decision"`
+		Reason      string   `json:"reason"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	runs, err := h.platform.BatchDecideApprovals(r.Context(), currentUser(r), input.ApprovalIDs, input.Decision, input.Reason)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	output := make([]map[string]any, 0, len(runs))
+	for _, run := range runs {
+		output = append(output, h.runDTO(r, run))
+	}
+	writeData(w, http.StatusOK, output)
+}
+
 func (h *Handler) canViewRun(r *http.Request, user domain.User, runID string) bool {
 	visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
 	return err == nil && visible
@@ -107,6 +129,10 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 			}
 		}
 	}
+	if run.Kind == domain.RunEnvironmentRollback {
+		name, _ := output["environmentName"].(string)
+		output["name"] = name + " · 整集群回滚至干净状态"
+	}
 	locked := lockedStepMetadata(run.InputSnapshot)
 	steps := make([]map[string]any, 0, len(run.Steps))
 	succeeded := 0
@@ -137,7 +163,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		riskReason := "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。"
 		artifactTransfers, _ := run.InputSnapshot["artifactTransfers"].([]any)
 		imageTransfers, _ := run.InputSnapshot["imageTransfers"].([]any)
-		if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
+		if run.Kind == domain.RunEnvironmentRollback {
+			riskReason = "整集群回滚会按逆序执行所有已安装组件的 rollback，并在成功后删除安装清单与备份基线。"
+		} else if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
 			riskReason = fmt.Sprintf("目标环境与版本来源不一致：需平移 %d 个镜像、%d 个介质。批准后平台先传输并校验指纹，再执行组件动作。", len(imageTransfers), len(artifactTransfers))
 		}
 		output["approval"] = map[string]any{

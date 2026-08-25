@@ -1,6 +1,6 @@
 # ClusterForge 平台操作手册（分角色）
 
-> 版本与环境：本文属于项目首个版本（V1）；所有操作目标均为测试环境，不是生产环境。除非出现明确的 V2 文档，否则不处理历史数据兼容。统一规则见 [首版与环境策略](version-policy.md)。
+> 版本与环境：本文属于项目首个版本（V1）；所有操作目标均为测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
 > 文档基线：2026-08-24 当前工作区代码
 > 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员
@@ -159,30 +159,33 @@ make build
 ### 3.3 创建组件版本
 
 1. 选择自己拥有的组件。
-2. 单击“创建新版本”。
-3. 填写版本号和发布说明。
-4. 如有不兼容变更，勾选“包含不兼容变更”。
-5. 创建 Draft。
+2. 单击“创建 Draft 编辑合同”。
+3. 填写版本号、发布说明、Release 类型和 Breaking 标记。
+4. 单击“创建 Draft”。
 
 如果组件已有版本，新 Draft 会复制当前最新可见版本的类型、依赖和动作；如果是首个版本，需要选择 `atomic` 或 `bundle`，然后继续配置。
 
+需要批量录入细粒度组件时，可在组件页使用“导入细粒度模板”，粘贴 JSON 后单击“校验并导入”。平台最多处理 50 个条目，并在首次写入前校验全部组件、依赖 DAG、Action 和 Playbook。每个 `release.actions[].playbook` 必须填写 `playbooks[].filename` 中唯一存在的文件名；导入器先创建无 Action 的安全 Draft，再保存文件并把后端返回的 `managed/...` 路径绑定回 Action。所有写入都走正常 API 并保留审计，但不会自动验证、加入候选集或发布；中途失败会列出已完整创建和仍需修正的 Draft。
+
 ### 3.4 配置 Draft Release
 
-在发布历史中找到 Draft，单击“配置”。配置项包括：
+在发布历史中找到 Draft，使用“配置合同”和“Playbook”（或顶部“编辑依赖和参数”“编辑版本与 Playbook”）维护下列内容：
 
 - 版本和 Release 类型。
 - 发布说明和 Breaking 标记。
-- 环境约束 JSON。
+- 结构化环境约束：架构、操作系统、操作系统版本、Docker 版本和网络栈。
 - 结构化参数表：名称、说明、类型、必填、默认值、可见性、枚举和最小长度。可见性必须显式选择 `internal` 或 `public`。
-- 依赖下拉框：只能选择已发布上游 Release，并映射其公开参数。
-- Ansible 动作 JSON。
+- 依赖下拉框和参数映射：直接发布链只能选择已发布上游 Release；相互依赖的新 Draft 应走候选集与场景原子发布。
+- 结构化生命周期动作及在线 Playbook 编辑器：动作类型、路径、tags、主机组、参数、凭据引用、超时、风险、幂等及版本转换端点分别填写。
 
 示例环境约束：
 
 ```json
 {
   "architecture": ["amd64", "arm64"],
-  "operatingSystem": "Kylin",
+  "operatingSystem": "Ubuntu",
+  "operatingSystemVersion": "18.04",
+  "dockerVersion": "20.10.21",
   "ipFamily": "IPv4"
 }
 ```
@@ -202,7 +205,8 @@ make build
     "allowedParameters": ["install_root", "mode"],
     "timeoutSeconds": 1800,
     "riskLevel": "medium",
-    "destructive": false
+    "destructive": false,
+    "idempotent": true
   },
   {
     "name": "verify",
@@ -220,8 +224,9 @@ make build
 注意事项：
 
 - Playbook 必须是允许 Ansible 根目录下的相对路径，不能包含 `..`。
-- 依赖必须锁定已发布的上游 Release。
+- 直接发布的依赖必须锁定已发布上游 Release；候选 Draft 依赖由同一场景候选集整体校验。
 - 参数映射只能选择上游公开参数，且类型必须一致。
+- 安装 Playbook 可安全重复执行并能收敛到目标版本时，勾选“幂等安装，同时作为升级作业”；场景即可选择 Upgrade 并复用该动作，不必重复录入。显式 Upgrade 动作仍优先。
 - Upgrade 和 Rollback 还必须配置正确的 `fromReleaseId` 和 `toReleaseId`，且映射合同必须与对端 Release 一致。
 - 保存 Draft 会使之前的组件测试证据失效，需要重新测试。
 
@@ -251,7 +256,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 ### 3.7 发起组件测试
 
-1. 在发布历史中单击目标 Release 的“测试”。
+1. 在发布历史中单击目标 Release 的“环境验证”。
 2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；可以选择一个同组件的 Released/Deprecated Release 追加其 Verify，也可以选择“仅执行 Draft rollback”。Verify 目标不会覆盖 rollback 合同。
 3. 选择共享环境并填写动作声明允许的运行参数。
 4. 如果该 Release 或所选 Verify 目标声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
@@ -269,7 +274,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 1. 找到 Draft，单击“发布”。
 2. 查看影响预览：下游组件 Owner、场景 Owner、受影响场景和依赖路径。
-3. 检查 Breaking 和验证状态。
+3. 检查 Breaking、生命周期完整性、安装验证和回退证据。
 4. 单击“确认发布并通知”。
 
 发布前检查清单：
@@ -282,7 +287,9 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 - Upgrade/Rollback 起止版本是否正确。
 - 发布说明是否足够让下游判断影响。
 
-未验证版本也允许发布，但下游会看到风险。发布后平台只发送通知，不会自动升级场景中的锁定版本。
+前台和 `POST /component-releases/{id}/publish` 使用同一门禁：Release 必须定义 install、verify、rollback，具备当前规格摘要下成功的 install + verify 安装验证和 rollback + verify 回退证据；规格摘要过期等同缺少证据。直接发布还要求所有上游已经 Released。
+
+需要与一组相互依赖的 Draft 一起交付时，不要逐个直接发布：每个组件 Owner 在证据完整后单击“加入候选集”。该显式交接会让场景 Owner 看见 Draft；场景经完整测试后使用“预览候选集并发布”，把 Scenario Revision 与全部候选 Release 原子发布。组件 Owner 可在交接失效前使用“撤回候选”；任何后续合同或 Playbook 修改也会自动撤回候选状态并使验证证据失效。
 
 ### 3.9 废弃组件版本
 
@@ -314,7 +321,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 ### 4.2 编排 DAG
 
-1. 在左侧组件库选择已发布组件，单击加入画布。
+1. 在左侧组件库选择已发布组件或组件 Owner 已共享的候选 Draft，单击加入画布。
 2. 拖动画布节点，使用连接线表达先后顺序。
 3. 选择节点，在右侧配置：
    - 显示名称。
@@ -326,9 +333,13 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 4. 根据需要编辑“执行策略 JSON”。
 5. 单击“保存草稿”。
 
+大图可使用“导入模板”一次载入 `nodes`、`edges` 和 `executionPolicy`，或使用“复制模板”导出当前图。导入只更新浏览器中的未保存草稿，必须先用“节点表”检查版本、动作、主机组和前置/后置数量，再保存。细粒度组件也可在组件中心通过“导入细粒度模板”一次创建最多 50 个组件，系统先创建组件，再按 Release 依赖拓扑创建 Draft 和独立托管 Playbook。
+
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
 
 当前界面和后端都没有场景“阶段”字段。层级标签只用于识别组件分类；主机组决定执行目标，DAG 连线决定顺序。执行策略 JSON 当前只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
+
+Kubernetes reset 与 join 的可复用 Playbook 约束见 [`docs/kubernetes-reset-bootstrap-standard.md`](kubernetes-reset-bootstrap-standard.md)：控制面 reset 使用 `serial: 1`，工作节点可并行；必须处理 kubelet 残留挂载、CNI 和端口后置条件；bootstrap join 优先复用健康的 bootstrap token Secret 和 CA hash。
 
 参数配置示例：
 
@@ -350,7 +361,8 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 | 提示类型 | 处理方式 |
 | --- | --- |
 | 图为空或存在环 | 增加节点，调整连线形成 DAG |
-| Release 未发布 | 选择 Released Release |
+| Release 未发布 | 选择 Released Release，或让组件 Owner 完成验证后加入候选集 |
+| 硬依赖边未声明合同 | 在目标 Release 的直接依赖中锁定该上游 Release；场景连线和 Release 合同必须同时成立 |
 | 动作不存在 | 选择该 Release 实际定义的动作 |
 | 缺少依赖节点 | 将锁定的上游 Release 加入画布 |
 | 依赖顺序错误 | 增加从上游到下游的可达路径 |
@@ -379,13 +391,14 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 ### 4.5 发布场景
 
-只有当前 Revision 状态为 Test Passed 时才显示“发布”：
+只有当前 Revision 状态为 Test Passed 时才显示“预览候选集并发布”：
 
 1. 确认完整测试结果。
 2. 再次检查锁定的组件版本、主机组和参数。
-3. 单击“发布”。
+3. 单击“预览候选集并发布”，核对所有候选组件版本。
+4. 确认原子发布。
 
-后端会重新校验 DAG。发布成功后 Revision 不可编辑。
+后端会重新校验 DAG、Release 合同和候选状态，并在同一 SQLite 事务中发布场景 Revision 与全部候选 Release。任一候选被撤回、修改或失去验证状态时整体失败，不会留下部分发布。发布成功后 Revision 和 Release 均不可编辑。
 
 ### 4.6 运行已发布场景
 
@@ -460,12 +473,14 @@ Inventory、环境事实、环境变量和凭据引用分区采用同一保存�
 ```json
 {
   "architecture": "amd64",
-  "operatingSystem": "Kylin",
+  "operatingSystem": "Ubuntu",
+  "operatingSystemVersion": "18.04",
+  "dockerVersion": "20.10.21",
   "ipFamily": "IPv4"
 }
 ```
 
-平台会用这些事实匹配组件环境约束。首版合同只接受 `architecture`、`operatingSystem`、`ipFamily` 等页面写出的规范键；旧键或值不会被转换。
+平台会用这些事实匹配组件环境约束。首版合同只接受 `architecture`、`operatingSystem`、`operatingSystemVersion`、`dockerVersion`、`ipFamily` 等页面写出的规范键；旧键或值不会被转换。
 
 ### 5.4 配置非敏感环境变量
 
@@ -533,13 +548,37 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 恢复不会修改旧 Revision，也不会改变已排队、等待审批或正在运行的 Run。恢复后应重新执行环境连通性检查；旧检查若来自其他 Revision，页面会标记为过期。
 
-### 5.8 审批危险 Run
+### 5.8 一键回滚整个集群至干净状态
+
+环境 Owner 可以在环境详情单击“一键回滚至干净状态”。该入口不会直接执行命令，而是先生成只读计划。计划必须同时满足：
+
+- 环境调度为空闲，并且前台没有未保存的环境配置。
+- 每个安装组件都能追溯到一个已结束且仍保留锁定计划的场景或组件 Run；允许环境存在多层来源。
+- 每个安装记录都有与环境、组件、Release、来源 Run 完全匹配的 `backup_ref` 和备份元数据。
+- 来源安装 Playbook 的当前 SHA-256 与捕获基线一致。
+- 每个 Release 都声明无 from/to 版本端点的独立 `rollback`；版本回退不能冒充“恢复干净状态”。
+
+平台先按来源 Run 的完成时间倒序排列安装层，再读取每个来源的锁定节点计划，过滤安装类步骤并反转原执行顺序。这样后安装的细粒度场景会先恢复到更早场景的状态，随后更早场景再恢复到其安装前状态。控制面和工作节点复用同一组件时仍保留各自的主机组，但只在该组件最后一个节点回滚成功后删除安装记录和远端备份。
+
+操作流程：
+
+1. 查看来源 Run、组件数、回滚节点数、Environment Revision、逆序步骤和备份引用。
+2. 完整输入目标环境名称。
+3. 单击“创建回滚 Run（待审批）”。提交时后端重新规划并校验 `planDigest`，计划漂移会拒绝创建。
+4. 进入“运行”再次复核风险，批准后才进入环境 FIFO 队列。
+5. Run 全部成功后，当前安装清单应为空；失败时已完成组件会被清除，尚未完成组件保留原基线，可修复后重新预览剩余计划。
+
+执行开始前平台还会重新读取安装记录并比对锁定的备份引用、来源 Run 和 Playbook 指纹，防止审批等待期间基线被替换。该能力只执行 Release 已声明的 rollback Playbook，不会绕过平台直接 SSH，也不会隐式执行额外的 `kubeadm reset`。
+
+### 5.9 审批危险 Run
 
 1. 进入“运行”。
 2. 选择状态为“等待审批”的 Run。
 3. 查看发起人、环境、场景/组件、危险原因和锁定信息。
 4. 完成线下检查。
 5. 单击“批准执行”或“拒绝”。
+
+同一维护窗口有多条待审批 Run 时，可在运行中心右上角使用“批量审批”。弹窗会列出每条 Run 的环境和风险，必须填写审批理由；前端与 `POST /approvals/batch` 都会拒绝空白理由，后端保存裁剪后的统一理由并原子消费整批审批。任一记录过期或不属于当前 Environment Owner 时整批失败，批准后仍按每个环境的 FIFO 队列串行执行。
 
 批准前至少确认：
 
@@ -551,9 +590,9 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 - 目标环境已有备份、变更窗口和回退方案。
 - 当前环境没有绕过平台运行的外部变更任务。
 
-拒绝后 Run 终止为 Rejected；场景 Draft 测试会回到 Draft。当前界面的拒绝动作没有填写理由的输入框，API 支持 reason 字段，但页面会提交空理由。
+拒绝后 Run 终止为 Rejected；场景 Draft 测试会回到 Draft。单条审批仍可直接操作，批量批准会记录统一理由和批次大小。
 
-### 5.9 查看环境运行和审计
+### 5.10 查看环境运行和审计
 
 环境详情显示最近四个相关 Run。完整记录请进入“运行”。
 
@@ -578,6 +617,8 @@ Run 详情展示实际生成的步骤。每个步骤内部还会依次执行：
 ### 6.3 查看日志
 
 活动 Run 显示“实时日志”，结束后的 Run 显示“历史日志”。二者都包含 stdout、stderr 和平台 system 日志；平台会按已解析的 secret 执行脱敏，并限制保留大小。
+
+工具栏可用“搜索运行日志”按主机、任务或错误关键字过滤，并用“日志流筛选”只看 stdout、stderr 或 system。“复制结果”只复制当前筛选后的可见行；“下载完整日志”始终下载该 Run 的全部脱敏日志，不受当前搜索和流筛选影响。
 
 Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条可识别的 Ansible 诊断。可以复制诊断或定位到失败步骤，但该摘要只是日志提取结果，最终仍应核对步骤 Summary、完整保留日志和目标主机状态。
 

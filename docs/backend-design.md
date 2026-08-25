@@ -1,8 +1,8 @@
 # ClusterForge 平台设计文档（后端为主）
 
-> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。除非出现明确的 V2 文档，否则不提供历史数据库、历史数据或旧 API 合同兼容。统一规则见 [首版与环境策略](version-policy.md)。
+> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭，旧 API 字段不兼容。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-24 当前工作区代码
+> 文档基线：2026-08-25 当前工作区代码
 > 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
 > 实现状态说明：本文描述当前代码已经实现的行为；“演进建议”不属于现有能力。
 
@@ -131,9 +131,11 @@ erDiagram
 - 类型：`atomic` 或 `bundle`。
 - 状态：`draft -> released -> deprecated`。
 - 属性：发布说明、Breaking 标记、验证标记、风险等级、环境约束和结构化参数合同。
+- 候选交接：证据完整的 Draft 可由组件 Owner 显式设置 `candidate=true`，供场景 Owner 编排；合同、制品或 Playbook 变化导致验证失效时会同时清除候选状态。数据库触发器禁止 `candidate=true && verified=false`，非 Owner 查询也只返回仍已验证的候选 Draft。
 - 参数：每个参数必须声明 `name`、`description`、`type` 和 `visibility`（`internal` 或 `public`）。敏感值继续使用 CredentialRef，不能作为普通参数或公开参数。
 - 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
+- `install` 动作可以显式声明 `idempotent=true`。此时场景节点选择 `upgrade` 会复用同一个 Playbook 和动作合同；若 Release 另有显式 `upgrade`，仍优先使用显式动作。
 
 Released Release 不可修改；更新时从已有版本克隆新 Draft。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
 
@@ -141,7 +143,9 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。修改
 
 场景节点锁定 Release，但 Release 在图中不要求唯一。同一 Docker、Distribution、Flannel、kubelet 或 kube-proxy Release 可以分别用于 `k8smaster` 与 `k8snode`；依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
 
-安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。平台允许发布未验证的组件版本，但会在界面上明确提示风险。
+安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同；调用方可以选择一个同组件的 Released/Deprecated Release 追加其 verify，或只执行 rollback。测试成功且测试时锁定的 Release 规格摘要仍与当前 Draft 一致，才会把该 Release 标记为已验证。
+
+直接发布和候选共享都要求 Draft 定义 install、verify、rollback，并具备当前规格摘要下成功的 install + verify 安装证据及 rollback + verify 回退证据。未验证、证据缺失或摘要过期返回 Conflict；生命周期动作缺失返回 Invalid Request。直接发布还要求上游依赖已经 Released，候选链则允许依赖其他已验证且已共享的候选 Draft。
 
 每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
 CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
@@ -164,8 +168,8 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 - 每个节点必须锁定 Release、动作和主机组。
 - 同一 Release 可以在不同主机组或生命周期动作中重复出现。
 - 边的源和目标必须存在，图中不能有环。
-- 节点只能使用已发布 Release；已发布场景可继续引用已废弃但保留的 Release。
-- 节点动作必须由对应 Release 定义。
+- 可编辑 Revision 的节点只能使用 Released Release 或组件 Owner 已共享且证据仍有效的候选 Draft；已发布场景可继续引用已废弃但保留的 Release。
+- 节点动作必须由对应 Release 定义；唯一的能力映射是 `idempotent=true` 的 `install` 可同时满足 `upgrade`。
 - Release 所需参数必须有默认值、节点值、声明的运行输入，或来自上游映射。
 - 上游依赖 Release 必须出现在图中，而且在拓扑上先于下游节点。
 - 带参数映射的依赖：只有一个可达上游节点时自动绑定；多个可达节点时必须在 `dependencySources` 中明确选择。
@@ -174,13 +178,13 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 `verify` 节点观察的是环境中已存在的 Release，不要求在同一场景中重新执行该
 Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
 
-只有当前 Revision 可以编辑和测试。完整测试成功后进入 `test_passed`，再次校验通过才能发布。Released Revision 不可修改，后续变更必须创建新 Revision。
+只有当前 Revision 可以编辑和测试。完整测试成功后进入 `test_passed`，发布前再次计算候选集并复核各 Release 合同与证据。场景 Revision 和引用的全部候选 Release 在同一事务中发布，任一候选变化都会整体失败。Released Revision 不可修改，后续变更必须创建新 Revision。
 
 ### 4.4 环境与 Revision
 
 `EnvironmentRevision` 包含：
 
-- Facts：架构、操作系统、网络等兼容性事实。
+- Facts：架构、操作系统、操作系统版本、Docker 版本、网络等兼容性事实。
 - Inventory：主机名、地址、分组、SSH 用户和端口。
 - Variables：由 Environment Owner 维护的非敏感字符串环境变量；使用大写标识符名称并直接注入 Ansible extra-vars。`IMAGE_REGISTRY` 和 `FILE_STATION` 分别指定镜像仓库和介质站。
 - CredentialRefs：`envVarRef` 或 `sshKeyPath`。
@@ -197,6 +201,7 @@ Run 类型：
 - `component_test`：组件版本环境测试。
 - `scenario_test`：场景 Draft 的完整测试。
 - `scenario_run`：已发布场景的正式运行入口。
+- `environment_rollback`：按当前安装清单生成的整集群逆序回滚。
 
 Run 状态：
 
@@ -223,13 +228,13 @@ SQLite 主要表如下：
 
 | 表 | 作用 | 关键约束 |
 | --- | --- | --- |
-| `schema_contract` | 首版结构标识 | 只接受当前 `schemaContract` |
+| `schema_contract` | 数据库结构标识 | 只接受当前合同或代码显式支持的精确前序合同 |
 | `users` | 演示用户 | 角色枚举约束 |
 | `sessions` | Cookie 会话摘要 | token hash 主键、过期时间 |
 | `components` | 组件元数据与分类 | slug 唯一、Owner 外键、layer/category/kind/requiredness 枚举约束 |
-| `component_releases` | 组件版本 | `(component_id, version)` 唯一 |
+| `component_releases` | 组件版本 | `(component_id, version)` 唯一；`candidate` 记录显式场景交接状态 |
 | `component_dependencies` | 精确上游依赖 | 每个下游 Release 对同一上游组件唯一 |
-| `action_definitions` | Ansible 生命周期动作 | Release 外键 |
+| `action_definitions` | Ansible 生命周期动作 | Release 外键；`idempotent` 只允许 install 复用于 upgrade |
 | `scenarios` | 场景元数据 | slug 唯一、current Revision 指针 |
 | `scenario_revisions` | DAG 与策略 | `(scenario_id, revision)` 唯一 |
 | `environments` | 环境元数据 | current Revision 指针 |
@@ -269,7 +274,7 @@ SQLite 主要表如下：
 
 ### 6.2 读可见性
 
-- 组件 Owner 可见自己的全部 Release；其他用户只看已发布 Release。
+- 组件 Owner 可见自己的全部 Release；场景 Owner 还可见组件 Owner 显式共享的候选 Draft，其他未共享 Draft 不外露。
 - 场景 Owner 可见自己的全部 Revision；其他用户只看已发布 Revision。
 - 所有登录角色可浏览环境；CredentialRef 只有对应环境 Owner 能看到引用字符串，其他角色只看到是否已配置。
 - Run 对发起人、环境 Owner、相关场景 Owner以及锁定步骤涉及的组件 Owner可见。
@@ -281,15 +286,17 @@ SQLite 主要表如下：
 ### 7.1 组件发布与影响通知
 
 1. 组件 Owner 配置 Draft。
-2. 后端校验版本、依赖、动作、敏感参数和 Playbook 路径。
-3. Upgrade/Rollback 必须显式锁定同组件的正确起止 Release。
-4. 上游依赖必须是已发布 Release，且不能在组件依赖图中形成环。
-5. 计算反向依赖的直接和传递影响，并查找引用受影响组件的场景。
+2. 后端先校验版本、依赖、动作、敏感参数和 Playbook 路径。
+3. Upgrade/Rollback 必须显式锁定同组件的正确起止 Release；直接发布的上游依赖必须已经 Released，且不能形成依赖环。
+4. 校验 install、verify、rollback 生命周期完整性，以及当前规格摘要下的安装验证与回退证据。
+5. 全部门禁通过后才计算反向依赖的直接和传递影响，并查找引用受影响组件的场景。
 6. Release 进入 Released。
-7. 为下游组件 Owner 和场景 Owner生成站内通知。
+7. 为下游组件 Owner 和场景 Owner 生成站内通知。
 8. 追加审计事件并发送 SSE 刷新信号。
 
 通知只提示影响，不会自动修改下游锁定版本或场景 DAG。
+
+候选发布走另一条显式流程：组件 Owner 共享证据完整的 Draft，场景 Owner 将 Released 与候选 Release 锁入 DAG 并完成整图测试。发布时服务重新生成候选集并校验全部候选，Store 在一个 SQLite 事务内把 Scenario Revision 和所有候选 Release 一起改为 Released；不存在部分发布。
 
 ### 7.2 参数解析
 
@@ -403,6 +410,18 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 - 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
 - `healthy` 仅表示本次列出的 TCP 端点全部可达；身份认证、协议语义、介质完整性、镜像推送和 Playbook 可执行性仍需各自验证。
 
+### 7.10 整集群回滚
+
+- 只允许目标 Environment Owner 在环境没有活动 Run 时预览；没有当前安装基线时失败关闭。
+- 平台按安装来源 Run 的完成时间倒序分层，并在每个来源内反转原安装节点顺序，生成 `environment_rollback` 锁定步骤。
+- 每项都重新校验安装记录、`backup_ref`、来源 Run、Release rollback 动作与安装 Playbook 指纹；任一证据缺失或漂移都会阻断。
+- 预览不创建 Run。提交必须携带当前 `planDigest` 并完整输入环境名称，创建的破坏性 Run 固定进入 `awaiting_approval`。
+- Run 成功后消费相应安装与备份基线；部分失败时只移除已成功回滚的组件记录，剩余项可修复后重新规划。
+
+### 7.11 批量审批
+
+环境 Owner 可以把当前可见的多条 Awaiting Approval 记录连同统一理由提交。Service 会裁剪理由并拒绝空白值，然后在一个事务内重新校验所有 Approval 的状态、归属和目标 Run；任一项失效则整批失败。批准成功后各 Run 进入 `queued`，仍由各环境 FIFO 调度，不因批量批准而并行占用同一环境。批量拒绝同样原子写入决定。
+
 ## 8. Ansible 与凭据安全
 
 ### 8.1 路径和制品约束
@@ -462,6 +481,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | POST | `/session/switch` | 切换演示身份并创建 24 小时 Cookie |
+| GET | `/session/users` | 列出演示身份供前台切换 |
 | GET | `/session/me` | 查询当前身份 |
 | GET | `/events` | SSE 事件流 |
 
@@ -476,7 +496,8 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | PUT | `/component-releases/{id}/contract` | 仅替换 Draft 的直接依赖与参数合同，保留动作和其他版本字段 |
 | POST | `/component-releases/{id}/clone` | 克隆为新 Draft |
 | GET | `/component-releases/{id}/impact` | 发布影响预览 |
-| POST | `/component-releases/{id}/publish` | 发布 |
+| POST | `/component-releases/{id}/candidate` | 加入或撤回场景候选集 |
+| POST | `/component-releases/{id}/publish` | 按当前交付证据门禁直接发布 |
 | POST | `/component-releases/{id}/deprecate` | 废弃 |
 | POST | `/component-releases/{id}/test-plan` | 只读预览组件测试执行计划 |
 | POST | `/component-releases/{id}/test-runs` | 发起组件测试 |
@@ -498,7 +519,8 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | POST | `/scenario-revisions/{id}/validate` | 校验 DAG |
 | POST | `/scenario-revisions/{id}/test-runs` | Draft 完整测试 |
 | POST | `/scenario-revisions/{id}/runs` | 运行 Released Revision |
-| POST | `/scenario-revisions/{id}/publish` | 发布测试通过的 Revision |
+| GET | `/scenario-revisions/{id}/candidate-release-set` | 预览并校验场景引用的候选发布集 |
+| POST | `/scenario-revisions/{id}/publish` | 原子发布测试通过的 Revision 与候选 Release |
 | POST | `/scenario-revisions/{id}/deprecate` | 废弃 Revision |
 | POST | `/scenario-revisions/{id}/abandon` | 放弃当前 Draft 并恢复最近的不可变 Revision 指针 |
 
@@ -512,12 +534,15 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | PUT | `/environments/{id}/variables` | 新建包含非敏感环境变量变更的 Revision |
 | PUT | `/environments/{id}/credential-refs` | 新建包含凭据引用变更的 Revision |
 | POST | `/environments/{id}/health-checks` | 对当前 Revision 执行只读 TCP 连通性检查 |
+| POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
+| POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
 | GET | `/runs` | 查询当前用户可见 Run |
 | GET | `/runs/{id}` | Run 步骤、审批和日志详情 |
 | POST | `/runs/{id}/cancel` | 取消等待、排队或运行中的 Run |
 | POST | `/approvals/{id}/approve` | 批准危险 Run |
 | POST | `/approvals/{id}/reject` | 拒绝危险 Run |
+| POST | `/approvals/batch` | 原子批量批准或拒绝危险 Run |
 | GET | `/notifications` | 当前用户通知 |
 | PATCH | `/notifications/{id}` | 标记已读；不能恢复未读 |
 | GET | `/audit-events` | 最近 500 条审计，仅环境 Owner |
@@ -575,7 +600,7 @@ OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后�
 - `NEWPLATFORM_OPENFUYAO_CHART_USERNAME`
 - `NEWPLATFORM_OPENFUYAO_CHART_PASSWORD`
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空的首版数据库或校验首版合同 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。旧数据库不会升级，必须在测试环境重建。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库、校验合同或执行显式支持的精确加法迁移 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。未知合同或未声明的历史结构不会自动升级。
 
 ## 12. 故障恢复与一致性
 
@@ -608,7 +633,7 @@ OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后�
 - 从 SQLite/单实例 Worker 演进为数据库锁或消息队列驱动的多实例调度。
 - 接入 Vault/KMS，避免用后端进程环境变量或本地路径承载 secret 引用。
 - 将执行策略真正接入 Planner，例如并行分支、失败策略和最大不可用节点。
-- 增加审批理由必填、多人审批、超时和审批策略模板。
+- 增加多人审批、超时和审批策略模板；当前批量审批已要求统一理由，但仍是单个 Environment Owner 决策。
 - 增加审计强事务、导出、保留期和不可抵赖存储。
 - 增加 Run 重试、从失败节点恢复和人工确认后的显式回滚流程。
 - Kubernetes 1.17.5 样例 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为 `requiredCredentials`；补齐前只能依赖环境 Owner 人工核对和 Playbook 自身预检，通用 Planner 不会因缺少该引用而提前拒绝。

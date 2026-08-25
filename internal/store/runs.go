@@ -15,6 +15,19 @@ func (s *Store) CreateRun(ctx context.Context, r domain.Run, approval *domain.Ap
 		return err
 	}
 	defer tx.Rollback()
+	if r.Kind == domain.RunEnvironmentRollback {
+		var active int
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM runs
+  WHERE environment_id=? AND status IN ('awaiting_approval','queued','running')
+)`, r.EnvironmentID).Scan(&active); err != nil {
+			return err
+		}
+		if active != 0 {
+			return fmt.Errorf("%w: environment has an active run", domain.ErrConflict)
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,error_text,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, r.Error, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
 	if err != nil {
 		return mapSQLError(err)
@@ -284,6 +297,16 @@ func (s *Store) HasRunningRun(ctx context.Context, environmentID string) (bool, 
 	return running != 0, err
 }
 
+func (s *Store) HasActiveEnvironmentRun(ctx context.Context, environmentID string) (bool, error) {
+	var active int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM runs
+  WHERE environment_id=? AND status IN ('awaiting_approval','queued','running')
+)`, environmentID).Scan(&active)
+	return active != 0, err
+}
+
 func (s *Store) ListQueuedEnvironmentIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT environment_id FROM runs WHERE status='queued' ORDER BY created_at`)
 	if err != nil {
@@ -308,6 +331,17 @@ SELECT COUNT(*) FROM runs
 WHERE kind='component_test' AND component_release_id=?
   AND status IN ('awaiting_approval','queued','running')`, releaseID).Scan(&count)
 	return count > 0, err
+}
+
+func (s *Store) HasSuccessfulComponentTestAction(ctx context.Context, releaseID string, action domain.ActionKind, releaseSpecDigest string) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM runs
+  WHERE kind='component_test' AND component_release_id=? AND action_kind=? AND status='succeeded'
+    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
+)`, releaseID, action, releaseSpecDigest).Scan(&found)
+	return found != 0, err
 }
 
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {
@@ -488,4 +522,65 @@ func (s *Store) DecideApproval(ctx context.Context, id, userID, decision, reason
 		return fmt.Errorf("%w: run is no longer awaiting approval", domain.ErrConflict)
 	}
 	return tx.Commit()
+}
+
+// BatchDecideApprovals validates and consumes the complete selection in one
+// transaction. A stale, foreign, or already-decided item aborts the batch.
+func (s *Store) BatchDecideApprovals(ctx context.Context, ids []string, ownerID, decision, reason string, at time.Time) ([]domain.Run, error) {
+	if len(ids) == 0 || len(ids) > 100 || (decision != "approved" && decision != "rejected") {
+		return nil, domain.ErrInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	runIDs := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			return nil, fmt.Errorf("%w: approval ids must be non-empty and unique", domain.ErrInvalid)
+		}
+		seen[id] = true
+		var runID string
+		if err := tx.QueryRowContext(ctx, `
+SELECT a.run_id FROM approvals a
+JOIN runs r ON r.id=a.run_id
+JOIN environments e ON e.id=r.environment_id
+WHERE a.id=? AND a.status='pending' AND r.status='awaiting_approval' AND e.owner_id=?`, id, ownerID).Scan(&runID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, fmt.Errorf("%w: approval %s is stale or belongs to another environment owner", domain.ErrConflict, id)
+			}
+			return nil, err
+		}
+		runIDs = append(runIDs, runID)
+	}
+	toStatus := domain.RunRejected
+	if decision == "approved" {
+		toStatus = domain.RunQueued
+	}
+	for index, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE approvals SET status=?,decided_by=?,decision=?,reason=?,decided_at=? WHERE id=? AND status='pending'`, decision, ownerID, decision, reason, timeText(at), id); err != nil {
+			return nil, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE NULL END WHERE id=? AND status='awaiting_approval'`, toStatus, decision, timeText(at), runIDs[index])
+		if err != nil {
+			return nil, err
+		}
+		if changed, _ := result.RowsAffected(); changed != 1 {
+			return nil, fmt.Errorf("%w: run %s changed while approving batch", domain.ErrConflict, runIDs[index])
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	runs := make([]domain.Run, 0, len(runIDs))
+	for _, runID := range runIDs {
+		run, getErr := s.GetRun(ctx, runID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
 }

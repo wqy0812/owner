@@ -10,6 +10,20 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
+type CandidateReleaseSetItem struct {
+	ReleaseID     string `json:"releaseId"`
+	ComponentID   string `json:"componentId"`
+	ComponentName string `json:"componentName"`
+	Version       string `json:"version"`
+}
+
+type CandidateReleaseSet struct {
+	ScenarioRevisionID string                    `json:"scenarioRevisionId"`
+	Ready              bool                      `json:"ready"`
+	Releases           []CandidateReleaseSetItem `json:"releases"`
+	Issues             []domain.ValidationIssue  `json:"issues"`
+}
+
 func (p *Platform) CreateScenario(ctx context.Context, user domain.User, scenario domain.Scenario) (domain.Scenario, error) {
 	if err := domain.ValidateRole(user, domain.RoleScenarioOwner); err != nil {
 		return scenario, err
@@ -172,8 +186,9 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 			issues = append(issues, domain.ValidationIssue{Code: "release_not_found", Message: "locked component release does not exist", NodeID: node.ID})
 			continue
 		}
-		if release.Status != domain.ReleaseReleased && !(revision.Status == domain.RevisionReleased && release.Status == domain.ReleaseDeprecated) {
-			issues = append(issues, domain.ValidationIssue{Code: "release_not_released", Message: "scenario nodes may only use released component versions", NodeID: node.ID})
+		candidateDraft := revision.Status != domain.RevisionReleased && release.Status == domain.ReleaseDraft && release.Candidate && release.Verified
+		if release.Status != domain.ReleaseReleased && !candidateDraft && !(revision.Status == domain.RevisionReleased && release.Status == domain.ReleaseDeprecated) {
+			issues = append(issues, domain.ValidationIssue{Code: "release_not_released", Message: "scenario nodes may only use released versions or verified shared candidates", NodeID: node.ID})
 		}
 		if _, actionErr := actionFor(release, node.Action); actionErr != nil {
 			issues = append(issues, domain.ValidationIssue{Code: "action_missing", Message: actionErr.Error(), NodeID: node.ID})
@@ -189,6 +204,29 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 	}
 
 	reachable := graphReachability(revision.Graph)
+	if revision.Status != domain.RevisionReleased {
+		for _, edge := range revision.Graph.Edges {
+			source, sourceOK := releaseByNode[edge.Source]
+			target, targetOK := releaseByNode[edge.Target]
+			if !sourceOK || !targetOK || source.ID == target.ID || !target.Candidate {
+				continue
+			}
+			targetNode := findScenarioNode(revision.Graph.Nodes, edge.Target)
+			if targetNode.Action == domain.ActionVerify {
+				continue
+			}
+			declared := false
+			for _, dependency := range target.Dependencies {
+				if dependency.UpstreamReleaseID == source.ID {
+					declared = true
+					break
+				}
+			}
+			if !declared {
+				issues = append(issues, domain.ValidationIssue{Code: "undeclared_dependency_edge", Message: fmt.Sprintf("hard edge from %s must also be declared in the target Release contract", edge.Source), NodeID: edge.Target})
+			}
+		}
+	}
 	for _, node := range revision.Graph.Nodes {
 		release, ok := releaseByNode[node.ID]
 		if !ok {
@@ -229,6 +267,15 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		return issues[i].NodeID < issues[j].NodeID
 	})
 	return issues, nil
+}
+
+func findScenarioNode(nodes []domain.ScenarioNode, id string) domain.ScenarioNode {
+	for _, node := range nodes {
+		if node.ID == id {
+			return node
+		}
+	}
+	return domain.ScenarioNode{}
 }
 
 func anyUpstreamNodeReachable(upstreamNodes []string, downstreamNode string, reachable map[string]map[string]bool) bool {
@@ -315,14 +362,68 @@ func (p *Platform) PublishScenario(ctx context.Context, user domain.User, revisi
 	if len(issues) > 0 {
 		return revision, &domain.ValidationError{Message: "scenario validation failed", Details: issues}
 	}
+	set, err := p.CandidateReleaseSet(ctx, user, revisionID)
+	if err != nil {
+		return revision, err
+	}
+	if !set.Ready {
+		return revision, &domain.ValidationError{Message: "candidate release set is not ready", Details: set.Issues}
+	}
 	now := time.Now().UTC()
-	if err := p.store.SetScenarioRevisionStatus(ctx, revisionID, []domain.RevisionStatus{domain.RevisionTestPassed}, domain.RevisionReleased, now); err != nil {
+	releaseIDs := make([]string, 0, len(set.Releases))
+	for _, item := range set.Releases {
+		releaseIDs = append(releaseIDs, item.ReleaseID)
+	}
+	if err := p.store.PublishCandidateReleaseSet(ctx, revisionID, releaseIDs, now); err != nil {
 		return revision, err
 	}
 	revision.Status, revision.ReleasedAt = domain.RevisionReleased, &now
-	p.audit(ctx, user, "scenario_revision.published", "scenario_revision", revisionID, map[string]any{"scenarioId": scenario.ID, "revision": revision.Revision})
+	for _, item := range set.Releases {
+		p.audit(ctx, user, "component_release.published_with_scenario", "component_release", item.ReleaseID, map[string]any{"scenarioRevisionId": revisionID, "componentId": item.ComponentID, "version": item.Version})
+		p.hub.Publish("release.published", map[string]any{"releaseId": item.ReleaseID, "componentId": item.ComponentID})
+	}
+	p.audit(ctx, user, "scenario_revision.published", "scenario_revision", revisionID, map[string]any{"scenarioId": scenario.ID, "revision": revision.Revision, "candidateReleaseCount": len(set.Releases)})
 	p.hub.Publish("scenario.published", map[string]any{"scenarioId": scenario.ID, "revisionId": revisionID})
 	return revision, nil
+}
+
+func (p *Platform) CandidateReleaseSet(ctx context.Context, user domain.User, revisionID string) (CandidateReleaseSet, error) {
+	revision, _, err := p.ownedScenarioRevision(ctx, user, revisionID)
+	set := CandidateReleaseSet{ScenarioRevisionID: revisionID, Releases: []CandidateReleaseSetItem{}, Issues: []domain.ValidationIssue{}}
+	if err != nil {
+		return set, err
+	}
+	seen := map[string]bool{}
+	for _, node := range revision.Graph.Nodes {
+		if seen[node.ReleaseID] {
+			continue
+		}
+		seen[node.ReleaseID] = true
+		release, getErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if getErr != nil {
+			set.Issues = append(set.Issues, domain.ValidationIssue{Code: "release_not_found", Message: "locked component release does not exist", NodeID: node.ID})
+			continue
+		}
+		if release.Status == domain.ReleaseReleased {
+			continue
+		}
+		if release.Status != domain.ReleaseDraft || !release.Candidate || !release.Verified {
+			set.Issues = append(set.Issues, domain.ValidationIssue{Code: "candidate_not_ready", Message: "draft release must be verified and shared by its component owner", NodeID: node.ID})
+			continue
+		}
+		if validateErr := p.validateReleaseForCandidate(ctx, release); validateErr != nil {
+			set.Issues = append(set.Issues, domain.ValidationIssue{Code: "candidate_invalid", Message: validateErr.Error(), NodeID: node.ID})
+			continue
+		}
+		component, componentErr := p.store.GetComponent(ctx, release.ComponentID, false)
+		if componentErr != nil {
+			return set, componentErr
+		}
+		set.Releases = append(set.Releases, CandidateReleaseSetItem{ReleaseID: release.ID, ComponentID: component.ID, ComponentName: component.Name, Version: release.Version})
+	}
+	sort.Slice(set.Releases, func(i, j int) bool { return set.Releases[i].ComponentName < set.Releases[j].ComponentName })
+	set.Ready = len(set.Issues) == 0
+	return set, nil
 }
 
 func (p *Platform) DeprecateScenario(ctx context.Context, user domain.User, revisionID string) (domain.ScenarioRevision, error) {

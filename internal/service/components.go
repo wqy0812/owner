@@ -169,6 +169,7 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	// Any change to actions, dependencies, constraints or parameters invalidates
 	// the evidence produced by an earlier component test.
 	patch.Verified = false
+	patch.Candidate = false
 	if patch.Type == "" {
 		patch.Type = release.Type
 	}
@@ -220,6 +221,7 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	}
 	source.Status = domain.ReleaseDraft
 	source.Verified = false
+	source.Candidate = false
 	source.CreatedAt = time.Now().UTC()
 	source.ReleasedAt, source.DeprecatedAt = nil, nil
 	rewriteReleaseChildren(&source)
@@ -234,6 +236,52 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	}
 	p.audit(ctx, user, "component_release.cloned", "component_release", source.ID, map[string]any{"sourceReleaseId": sourceID, "version": version})
 	return source, nil
+}
+
+func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id string, candidate bool) (domain.ComponentRelease, error) {
+	release, err := p.store.GetComponentRelease(ctx, id)
+	if err != nil {
+		return release, err
+	}
+	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
+	if err != nil {
+		return release, err
+	}
+	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+		return release, err
+	}
+	if candidate {
+		if !release.Verified {
+			return release, fmt.Errorf("%w: run a successful component test before sharing a candidate", domain.ErrConflict)
+		}
+		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
+			return release, err
+		}
+	}
+	if err := p.store.SetReleaseCandidate(ctx, id, candidate); err != nil {
+		return release, err
+	}
+	p.audit(ctx, user, "component_release.candidate_updated", "component_release", id, map[string]any{"candidate": candidate})
+	return p.store.GetComponentRelease(ctx, id)
+}
+
+func (p *Platform) validateReleaseForCandidate(ctx context.Context, release domain.ComponentRelease) error {
+	if err := p.validateReleaseEvidence(ctx, release); err != nil {
+		return err
+	}
+	if err := p.validateReleaseContract(ctx, release, true); err != nil {
+		return err
+	}
+	for _, dependency := range release.Dependencies {
+		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
+		if err != nil {
+			return err
+		}
+		if upstream.Status != domain.ReleaseReleased && !(upstream.Status == domain.ReleaseDraft && upstream.Candidate && upstream.Verified) {
+			return fmt.Errorf("%w: candidate dependencies must be released or verified candidates", domain.ErrInvalid)
+		}
+	}
+	return nil
 }
 
 func (p *Platform) Impact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
@@ -283,6 +331,9 @@ func (p *Platform) PublishRelease(ctx context.Context, user domain.User, id stri
 		return release, domain.ImpactReport{}, fmt.Errorf("%w: only a draft can be published", domain.ErrConflict)
 	}
 	if err := p.validateReleaseForPublish(ctx, release); err != nil {
+		return release, domain.ImpactReport{}, err
+	}
+	if err := p.validateReleaseEvidence(ctx, release); err != nil {
 		return release, domain.ImpactReport{}, err
 	}
 	oldVersion, oldErr := p.store.LatestReleasedVersion(ctx, release.ComponentID)
@@ -371,8 +422,8 @@ func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.C
 		if err != nil {
 			return fmt.Errorf("%w: locked upstream release %s does not exist", domain.ErrInvalid, dependency.UpstreamReleaseID)
 		}
-		if upstream.ComponentID != dependency.UpstreamComponentID || upstream.Status != domain.ReleaseReleased {
-			return fmt.Errorf("%w: upstream dependency must lock a released version of component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
+		if upstream.ComponentID != dependency.UpstreamComponentID || (upstream.Status != domain.ReleaseReleased && !(upstream.Status == domain.ReleaseDraft && upstream.Candidate)) {
+			return fmt.Errorf("%w: upstream dependency must lock a released version or shared candidate of component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
 		}
 		for _, mapping := range dependency.ParameterMappings {
 			upstreamParameter, ok := domain.ParameterByName(upstream.Parameters, mapping.UpstreamParameter)
@@ -470,6 +521,31 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 				return fmt.Errorf("%w: action %s playbook is not executable: %v", domain.ErrInvalid, action.Name, digestErr)
 			}
 		}
+	}
+	return nil
+}
+
+func (p *Platform) validateReleaseEvidence(ctx context.Context, release domain.ComponentRelease) error {
+	required := map[domain.ActionKind]bool{domain.ActionInstall: false, domain.ActionVerify: false, domain.ActionRollback: false}
+	for _, action := range release.Actions {
+		if _, ok := required[action.Kind]; ok {
+			required[action.Kind] = true
+		}
+	}
+	for kind, present := range required {
+		if !present {
+			return fmt.Errorf("%w: release must define %s lifecycle action", domain.ErrInvalid, kind)
+		}
+	}
+	if !release.Verified {
+		return fmt.Errorf("%w: release must pass install and verify before delivery", domain.ErrConflict)
+	}
+	rollback, err := p.store.HasSuccessfulComponentTestAction(ctx, release.ID, domain.ActionRollback, componentReleaseSpecDigest(release))
+	if err != nil {
+		return err
+	}
+	if !rollback {
+		return fmt.Errorf("%w: release must pass rollback and post-rollback verification for the current contract", domain.ErrConflict)
 	}
 	return nil
 }

@@ -113,13 +113,15 @@ func (p *Platform) SaveReleasePlaybook(ctx context.Context, user domain.User, re
 	if err := temporary.Close(); err != nil {
 		return PlaybookFile{}, fmt.Errorf("close playbook: %w", err)
 	}
-	if err := os.Rename(temporaryPath, resolved); err != nil {
-		return PlaybookFile{}, fmt.Errorf("publish playbook: %w", err)
-	}
 	// A Playbook write changes executable evidence even when the Draft action
-	// already points at this managed path. Require a fresh component test.
+	// already points at this managed path. Revoke delivery state before making
+	// the file visible so a crash cannot leave changed executable content marked
+	// as verified or shared with a scenario owner.
 	if err := p.store.MarkReleaseVerified(ctx, release.ID, false); err != nil {
 		return PlaybookFile{}, fmt.Errorf("invalidate component verification: %w", err)
+	}
+	if err := os.Rename(temporaryPath, resolved); err != nil {
+		return PlaybookFile{}, fmt.Errorf("publish playbook: %w", err)
 	}
 	info, _ := os.Stat(resolved)
 	result := playbookFile(clean, contents, info)

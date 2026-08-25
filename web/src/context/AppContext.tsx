@@ -45,6 +45,7 @@ function displayError(error: unknown): string {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User>(DEMO_USERS[0]);
+  const [users, setUsers] = useState<User[]>(DEMO_USERS);
   const [sessionReady, setSessionReady] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -58,7 +59,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
   const refreshTimer = useRef<number>();
-  const sessionInitialization = useRef<Promise<{ user: User; switched: boolean }>>();
+  const sessionInitialization = useRef<Promise<{ user: User; users: User[]; switched: boolean }>>();
 
   const notify = useCallback((tone: Toast['tone'], title: string, message?: string) => {
     const id = Date.now() + Math.random();
@@ -89,7 +90,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const switchUser = useCallback(
     async (id: string) => {
-      const fallback = DEMO_USERS.find((item) => item.id === id);
+      const fallback = users.find((item) => item.id === id);
       if (!fallback || fallback.id === user.id) return;
       setSwitching(true);
       try {
@@ -103,26 +104,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSwitching(false);
       }
     },
-    [notify, signalRefresh, user.id],
+    [notify, signalRefresh, user.id, users],
   );
 
   useEffect(() => {
     let active = true;
     if (!sessionInitialization.current) sessionInitialization.current = (async () => {
+      const availableUsers = await api.sessionUsers()
+        .then((items) => items.length ? items.map((item) => ({ ...DEMO_USERS.find((candidate) => candidate.id === item.id), ...item })) : DEMO_USERS)
+        .catch(() => DEMO_USERS);
       try {
-        return { user: await api.me(), switched: false };
+        return { user: await api.me(), users: availableUsers, switched: false };
       } catch (error) {
         if (error instanceof ApiError && (error.status === 401 || error.status === 404)) {
-          return { user: await api.switchUser(DEMO_USERS[0].id), switched: true };
+          return { user: await api.switchUser(availableUsers[0].id), users: availableUsers, switched: true };
         }
         throw error;
       }
     })();
     void sessionInitialization.current
-      .then(({ user: me, switched }) => {
+      .then(({ user: me, users: availableUsers, switched }) => {
         if (!active) return;
-        const demo = DEMO_USERS.find((item) => item.id === me.id);
-        setUser({ ...(demo ?? DEMO_USERS[0]), ...me });
+        const demo = availableUsers.find((item) => item.id === me.id);
+        setUsers(availableUsers);
+        setUser({ ...(demo ?? availableUsers[0]), ...me });
         if (switched) signalRefresh();
       })
       .catch(() => {
@@ -164,8 +169,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [scheduleRefresh, sessionReady, user.id]);
 
   const value = useMemo(
-    () => ({ user, users: DEMO_USERS, switching, connected, switchUser, notify, refreshTokens, signalRefresh }),
-    [connected, notify, refreshTokens, signalRefresh, switchUser, switching, user],
+    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh }),
+    [connected, notify, refreshTokens, signalRefresh, switchUser, switching, user, users],
   );
 
   return (

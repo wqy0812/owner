@@ -143,14 +143,18 @@ type Component struct {
 }
 
 type ComponentRelease struct {
-	ID                     string                `json:"id"`
-	ComponentID            string                `json:"componentId"`
-	Version                string                `json:"version"`
-	Type                   ReleaseType           `json:"type"`
-	Status                 ReleaseStatus         `json:"status"`
-	ReleaseNotes           string                `json:"releaseNotes"`
-	Breaking               bool                  `json:"breaking"`
-	Verified               bool                  `json:"verified"`
+	ID           string        `json:"id"`
+	ComponentID  string        `json:"componentId"`
+	Version      string        `json:"version"`
+	Type         ReleaseType   `json:"type"`
+	Status       ReleaseStatus `json:"status"`
+	ReleaseNotes string        `json:"releaseNotes"`
+	Breaking     bool          `json:"breaking"`
+	Verified     bool          `json:"verified"`
+	// Candidate is an explicit component-owner handoff. A verified Draft marked
+	// as a candidate may be composed and tested by a scenario owner, then
+	// released atomically with that scenario revision.
+	Candidate              bool                  `json:"candidate"`
 	RiskLevel              RiskLevel             `json:"riskLevel"`
 	EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
 	Parameters             []ParameterDefinition `json:"parameters"`
@@ -332,6 +336,7 @@ type ActionDefinition struct {
 	TimeoutSeconds      int        `json:"timeoutSeconds"`
 	RiskLevel           RiskLevel  `json:"riskLevel"`
 	Destructive         bool       `json:"destructive"`
+	Idempotent          bool       `json:"idempotent"`
 	FromReleaseID       string     `json:"fromReleaseId,omitempty"`
 	ToReleaseID         string     `json:"toReleaseId,omitempty"`
 }
@@ -597,9 +602,10 @@ const (
 type RunKind string
 
 const (
-	RunComponentTest RunKind = "component_test"
-	RunScenarioTest  RunKind = "scenario_test"
-	RunScenario      RunKind = "scenario_run"
+	RunComponentTest       RunKind = "component_test"
+	RunScenarioTest        RunKind = "scenario_test"
+	RunScenario            RunKind = "scenario_run"
+	RunEnvironmentRollback RunKind = "environment_rollback"
 )
 
 type Run struct {

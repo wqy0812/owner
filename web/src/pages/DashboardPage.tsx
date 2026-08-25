@@ -147,7 +147,7 @@ export function DashboardPage() {
           </div>
           <div className="policy-hint">
             <ShieldAlert size={18} />
-            <div><strong>发布策略</strong><p>场景必须通过当前 revision 的完整测试，组件允许以“未验证”状态发布。</p></div>
+            <div><strong>发布策略</strong><p>场景必须通过当前 Revision 的完整测试；组件必须具备当前合同的安装验证和回退证据。</p></div>
           </div>
         </article>
       </section>

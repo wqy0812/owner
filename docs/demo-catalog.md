@@ -15,7 +15,7 @@
 | Scenario | 5 | 当前全部为 Draft |
 | Environment | 2 | 均为 TEST-NET 或模板配置 |
 
-`NEWPLATFORM_SEED_PROFILE=identities` 只在空的首版数据库中创建 4 个身份，不创建组件、场景或环境。
+`NEWPLATFORM_SEED_PROFILE=demo` 创建上表中的 4 个身份；`NEWPLATFORM_SEED_PROFILE=identities` 只创建 `component-alice`、`scenario-carol`、`environment-dave` 3 个操作身份，不创建组件、场景或环境。
 
 ## 2. 演示身份
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, UserRound, Wifi } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentHealthCheck, EnvironmentHost, EnvironmentRevision } from '../types/domain';
+import type { CredentialRef, Environment, EnvironmentHealthCheck, EnvironmentHost, EnvironmentRevision, EnvironmentRollbackPlan } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -30,6 +30,7 @@ function revisionActor(revision: EnvironmentRevision, users: Array<{ id: string;
 
 export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh } = useApp();
+  const navigate = useNavigate();
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const [selectedId, setSelectedId] = useState<string>();
@@ -45,6 +46,10 @@ export function EnvironmentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [restoreRevision, setRestoreRevision] = useState<EnvironmentRevision>();
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  const [rollbackPlan, setRollbackPlan] = useState<EnvironmentRollbackPlan>();
+  const [rollbackError, setRollbackError] = useState<string>();
+  const [rollbackBusy, setRollbackBusy] = useState<'preview' | 'submit'>();
   const editable = user.role === 'environment_owner' && selected?.ownerId === user.id;
 
   useEffect(() => {
@@ -149,6 +154,36 @@ export function EnvironmentsPage() {
     } catch (errorReason) { notify('error', 'Revision 恢复失败', displayError(errorReason)); } finally { setBusy(false); }
   }
 
+  async function previewClusterRollback() {
+    if (!selected || !editable) return;
+    setRollbackOpen(true);
+    setRollbackPlan(undefined);
+    setRollbackError(undefined);
+    setRollbackBusy('preview');
+    try {
+      setRollbackPlan(await api.previewEnvironmentRollback(selected.id));
+    } catch (reason) {
+      setRollbackError(displayError(reason));
+    } finally { setRollbackBusy(undefined); }
+  }
+
+  async function submitClusterRollback(confirmEnvironmentName: string) {
+    if (!selected || !rollbackPlan) return;
+    setRollbackBusy('submit');
+    setRollbackError(undefined);
+    try {
+      const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName });
+      notify('success', '整集群回滚 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
+      setRollbackOpen(false);
+      setRollbackPlan(undefined);
+      signalRefresh(['runs', 'environments']);
+      navigate(`/runs?selected=${run.id}`);
+    } catch (reason) {
+      setRollbackError(displayError(reason));
+      setRollbackPlan(undefined);
+    } finally { setRollbackBusy(undefined); }
+  }
+
   function selectEnvironment(id: string) {
     if (anyDirty) {
       notify('info', '存在未保存更改', '请先保存或放弃当前编辑，再切换环境。');
@@ -176,11 +211,13 @@ export function EnvironmentsPage() {
       {selected ? <section className="detail-stack">
         <article className="panel environment-hero">
           <div><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
-          <div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>
+          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>{editable && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button>}</div>
         </article>
         <section className="fact-grid">
           <article><Cpu size={18} /><span>架构</span><strong>{String(facts.architecture ?? 'amd64')}</strong></article>
           <article><HardDrive size={18} /><span>操作系统</span><strong>{String(facts.operatingSystem ?? 'Kylin')}</strong></article>
+          <article><HardDrive size={18} /><span>系统版本</span><strong>{String(facts.operatingSystemVersion ?? '—')}</strong></article>
+          <article><Server size={18} /><span>Docker</span><strong>{String(facts.dockerVersion ?? '—')}</strong></article>
           <article><Network size={18} /><span>网络栈</span><strong>{String(facts.ipFamily ?? 'IPv4')}</strong></article>
           <article><Server size={18} /><span>主机</span><strong>{hosts.length}</strong></article>
         </section>
@@ -212,7 +249,25 @@ export function EnvironmentsPage() {
     {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新 Revision" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧 Revision。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前 Revision。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
+    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
   </div>;
+}
+
+function ClusterRollbackModal({ environment, plan, error, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
+  const [confirmation, setConfirmation] = useState('');
+  const confirmed = confirmation === environment.name;
+  return <Modal title="一键回滚整个集群" description={`目标环境：${environment.name}。计划只允许恢复为安装前的干净状态。`} onClose={onClose}>
+    <div className="modal-body cluster-rollback-preview">
+      <div className="warning-callout"><AlertTriangle size={19} /><div><strong>这是整集群破坏性操作</strong><p>平台将依据当前安装清单，按来源 Run 时间倒序、每个来源内部安装步骤逆序执行 rollback。任一基线不完整都会拒绝生成计划。</p></div></div>
+      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <ErrorBlock message={error} onRetry={onRetry} /> : plan ? <>
+        <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>回滚节点</span><strong>{plan.nodeCount}</strong></div><div><span>Environment Revision</span><strong>{plan.environmentRevisionId}</strong></div></section>
+        <section className="cluster-rollback-sources" aria-label="安装基线来源">{plan.sources.map((source) => <Link key={source.runId} to={`/runs?selected=${source.runId}`}><span>{source.kind}</span><strong>{source.runId}</strong><small>{source.componentCount} 个组件</small></Link>)}</section>
+        <section className="test-plan-preview" aria-label="整集群回滚计划"><header><div><strong>逆序执行计划</strong><small>摘要 {plan.planDigest.slice(0, 16)}…</small></div><StatusPill status="awaiting_approval">提交后待审批</StatusPill></header><div>{plan.steps.map((step) => <article key={`${step.order}-${step.componentId}-${step.limit}`}><span>{step.order}</span><div><strong>{step.componentName} · rollback</strong><p>{step.releaseVersion} · 目标 {step.limit || 'all'}</p><small>基线 Run {step.backupInstallRunId} · {step.backupRef}</small></div></article>)}</div></section>
+        <label><span>输入环境名称以确认</span><input aria-label="确认回滚环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>
+      </> : null}
+    </div>
+    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>取消</button><button className="button button--danger" disabled={!plan || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)}>{busy === 'submit' ? '正在锁定计划…' : '创建回滚 Run（待审批）'}</button></footer>
+  </Modal>;
 }
 
 function ChangeReasonModal({ title, description, warning, diffLines, busy, onClose, onConfirm }: { title: string; description: string; warning?: string; diffLines: string[]; busy: boolean; onClose: () => void; onConfirm: (reason: string) => void }) {
@@ -228,10 +283,10 @@ function CreateEnvironmentModal({ onClose, onDone }: { onClose: () => void; onDo
     try {
       await api.createEnvironment({
         name: String(form.get('name')), description: String(form.get('description')),
-        facts: { architecture: String(form.get('architecture')), operatingSystem: String(form.get('operatingSystem')), ipFamily: String(form.get('ipFamily')) },
+        facts: { architecture: String(form.get('architecture')), operatingSystem: String(form.get('operatingSystem')), operatingSystemVersion: String(form.get('operatingSystemVersion')), dockerVersion: String(form.get('dockerVersion')), ipFamily: String(form.get('ipFamily')) },
       });
       notify('success', '环境已创建', '请继续配置 Inventory 和 CredentialRef。'); onDone();
     } catch (reason) { notify('error', '创建环境失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title="新建共享环境" description="环境由当前 Environment Owner 管理，其他 Owner 可用它运行测试。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label><span>架构</span><input name="architecture" defaultValue="amd64" required /></label><label><span>操作系统</span><input name="operatingSystem" defaultValue="Kylin" required /></label><label><span>网络栈</span><input name="ipFamily" defaultValue="IPv4" required /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
+  return <Modal title="新建共享环境" description="环境由当前 Environment Owner 管理，其他 Owner 可用它运行测试。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label><span>架构</span><select name="architecture" defaultValue="amd64" required><option value="amd64">amd64</option><option value="arm64">arm64</option></select></label><label><span>操作系统</span><select name="operatingSystem" defaultValue="Ubuntu" required><option value="Ubuntu">Ubuntu</option><option value="Kylin">Kylin</option><option value="SUSE">SUSE</option></select></label><label><span>操作系统版本</span><input name="operatingSystemVersion" defaultValue="18.04" required /></label><label><span>Docker 版本</span><input name="dockerVersion" defaultValue="20.10.21" required /></label><label><span>网络栈</span><select name="ipFamily" defaultValue="IPv4" required><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></select></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
 }

@@ -7,6 +7,7 @@ import { App } from '../App';
 import { AppProvider } from '../context/AppContext';
 import { parseRunInput, uniqueRunInputs } from '../components/RunInputFields';
 import { EventSourceMock } from './setup';
+import { executableActionTypes } from '../types/domain';
 
 const alice = { id: 'component-alice', name: 'Alice Component', role: 'component_owner' };
 const dave = { id: 'environment-dave', name: 'Dave Environment', role: 'environment_owner' };
@@ -120,6 +121,8 @@ describe('platform shell and RBAC UI', () => {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(screen.getByText(/无密码身份模式/)).toBeInTheDocument();
+    expect(screen.getByText(/组件必须具备当前合同的安装验证和回退证据/)).toBeInTheDocument();
+    expect(screen.queryByText(/允许以“未验证”状态发布/)).not.toBeInTheDocument();
   });
 
   it('changes visible owner actions after a server-backed identity switch', async () => {
@@ -128,6 +131,35 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
     await waitFor(() => expect(screen.queryByRole('button', { name: '新建组件' })).not.toBeInTheDocument());
     expect(screen.getByText('环境 Owner')).toBeInTheDocument();
+  });
+
+  it('allows an invalidated candidate Draft to be withdrawn', async () => {
+    let candidateBody: Record<string, unknown> | undefined;
+    const release = {
+      id: 'release-stale-candidate', componentId: 'component-stale-candidate', version: '1.0.0-rc1', status: 'draft',
+      candidate: true, verified: false, parameters: [], dependencies: [],
+      actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/component-releases/release-stale-candidate/candidate')) {
+        candidateBody = JSON.parse(String(init?.body));
+        return json({ ...release, candidate: false });
+      }
+      if (url.endsWith('/components')) return json([{
+        id: 'component-stale-candidate', name: 'Stale Candidate', slug: 'stale-candidate', ownerId: alice.id,
+        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'core_required',
+        latestRelease: release, releases: [release],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    renderApp('/components?selected=component-stale-candidate');
+    const withdraw = await screen.findByRole('button', { name: '撤回候选' });
+    expect(withdraw).toBeEnabled();
+    await userEvent.click(withdraw);
+    await waitFor(() => expect(candidateBody).toEqual({ candidate: false }));
   });
 
   it('shows the platform workflow overview from the operation manual entry', async () => {
@@ -145,7 +177,10 @@ describe('platform shell and RBAC UI', () => {
     expect(commonButtons).toHaveTextContent('切换演示身份');
     expect(commonButtons).toHaveTextContent('刷新使用新版本');
     expect(commonButtons).toHaveTextContent('全部已读 / 标为已读');
+    expect(commonButtons).toHaveTextContent('搜索运行日志 / 日志流筛选');
+    expect(commonButtons).toHaveTextContent('复制结果 / 下载完整日志');
     expect(commonButtons).toHaveTextContent('重新加载');
+    expect(screen.queryByText(/允许以未验证状态发布|可以未验证发布/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /查看我的操作手册/ })).toHaveAttribute('href', '/manual/role');
   });
 
@@ -154,9 +189,10 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
     let buttonDirectory = screen.getByRole('region', { name: '组件 Owner 按钮操作目录' });
-    for (const label of ['新建组件', '保存依赖和参数', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
+    for (const label of ['新建组件', '导入细粒度模板 / 校验并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
+    expect(buttonDirectory).not.toHaveTextContent('允许以未验证状态发布');
 
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), carol.id);
 
@@ -164,7 +200,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '场景 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '组件 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '场景 Owner 按钮操作目录' });
-    for (const label of ['新建场景 / 创建场景', '保存草稿', '放大 / 缩小 / 适配视图', '环境测试 / 开始完整测试']) {
+    for (const label of ['新建场景 / 创建场景', '导入模板 / 载入草稿', '复制模板', '保存草稿', '预览候选集并发布 / 确认原子发布', 'DAG / 节点表', '放大 / 缩小 / 适配视图', '环境测试 / 开始完整测试']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
 
@@ -174,7 +210,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行']) {
+    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '一键回滚至干净状态', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });
@@ -801,6 +837,51 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
   });
 
+  it('previews and submits a whole-cluster clean rollback with exact-name confirmation', async () => {
+    let submitted: Record<string, string> | undefined;
+    const environment = {
+      id: 'environment-test', name: 'Test Environment', ownerId: dave.id, schedulingStatus: 'idle',
+      currentRevision: { id: 'environment-test-r6', environmentId: 'environment-test', revision: 6, facts: {}, hosts: [], variables: {}, credentialRefs: [] },
+    };
+    const plan = {
+      environmentId: environment.id, environmentName: environment.name, environmentRevisionId: 'environment-test-r6',
+      sources: [{ runId: 'run-source-install', kind: 'scenario_test', scenarioRevisionId: 'scenario-clean-r1', componentCount: 15 }], componentCount: 15, nodeCount: 21,
+      destructive: true, requiresApproval: true, planDigest: 'rollback-plan-digest',
+      steps: [{
+        order: 1, componentId: 'component-coredns', componentName: 'CoreDNS', releaseId: 'release-coredns', releaseVersion: '1.6.5-u1',
+        action: 'rollback', playbook: 'managed/coredns/rollback.yml', limit: 'control_plane', needsApproval: true,
+        backupRef: '/var/lib/clusterforge/backups/environment-test/component-coredns/release-coredns/run-source-install',
+        backupInstallRunId: 'run-source-install', backupCapturedAt: '2026-08-24T12:00:00Z', backupPlaybookSha256: 'a'.repeat(64),
+      }],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments/environment-test/cluster-rollback-plan') && init?.method === 'POST') return json(plan);
+      if (url.endsWith('/environments/environment-test/cluster-rollback-runs') && init?.method === 'POST') {
+        submitted = JSON.parse(String(init.body));
+        return json({ id: 'run-cluster-rollback', kind: 'environment_rollback', status: 'awaiting_approval', environmentId: environment.id, scenarioRevisionId: 'scenario-clean-r1', destructive: true });
+      }
+      if (url.endsWith('/environments')) return json([environment]);
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '一键回滚至干净状态' }));
+    expect(await screen.findByRole('region', { name: '整集群回滚计划' })).toHaveTextContent('CoreDNS · rollback');
+    const confirm = screen.getByRole('textbox', { name: '确认回滚环境名称' });
+    const submit = screen.getByRole('button', { name: '创建回滚 Run（待审批）' });
+    expect(submit).toBeDisabled();
+    await userEvent.type(confirm, environment.name);
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(submitted).toEqual({ expectedPlanDigest: plan.planDigest, confirmEnvironmentName: environment.name }));
+    expect(await screen.findByText('整集群回滚 Run 已创建')).toBeInTheDocument();
+  });
+
   it('locks the selected environment when submitting a Dockerfile image build', async () => {
     const draft = {
       id: 'release-image-draft', componentId: 'component-image', version: '1.0.0-rc1', type: 'atomic',
@@ -937,6 +1018,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components?selected=component-docker');
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
     expect(screen.getByRole('textbox', { name: 'Playbook 文件名' })).toHaveAttribute('pattern', '[A-Za-z0-9][A-Za-z0-9._\\-]*\\.(yml|yaml)');
+    await userEvent.click(screen.getByRole('checkbox', { name: /幂等安装，同时作为升级作业/ }));
 
     await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
     expect(await screen.findByDisplayValue(/Install Docker/)).toBeInTheDocument();
@@ -978,6 +1060,7 @@ describe('platform shell and RBAC UI', () => {
 
     await waitFor(() => expect(submittedActions).toHaveLength(3));
     expect(submittedActions.map((action) => action.kind)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions[0].idempotent).toBe(true);
     expect(submittedActions.map((action) => action.name)).toEqual(['install', 'verify', 'rollback']);
     expect(submittedActions.map((action) => action.playbook)).toEqual([
       'managed/docker/release-docker-draft/install.yml',
@@ -1142,5 +1225,16 @@ describe('declared run input conversion', () => {
     expect(parseRunInput(['replicas', 'enabled', 'settings', 'version', 'empty'], {
       replicas: '3', enabled: 'true', settings: '{"strategy":"safe"}', version: '1.0.0', empty: ' ', ignored: 'no',
     })).toEqual({ replicas: 3, enabled: true, settings: { strategy: 'safe' }, version: '1.0.0' });
+  });
+});
+
+describe('action capability conversion', () => {
+  it('exposes upgrade once when install is idempotent', () => {
+    expect(executableActionTypes([{ type: 'install', playbook: 'install.yml', idempotent: true }])).toEqual(['install', 'upgrade']);
+    expect(executableActionTypes([{ type: 'install', playbook: 'install.yml' }])).toEqual(['install']);
+    expect(executableActionTypes([
+      { type: 'install', playbook: 'install.yml', idempotent: true },
+      { type: 'upgrade', playbook: 'upgrade.yml' },
+    ])).toEqual(['install', 'upgrade']);
   });
 });

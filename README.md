@@ -1,15 +1,15 @@
 # NewPlatform Demo
 
-> 当前是项目首个版本（V1），当前环境仅为测试环境，不是生产环境。除非出现明确的 V2 文档，所有代码和文档均按首版解释；不兼容历史数据库、历史数据或旧 API 字段，数据库合同变化后直接重建测试数据库。详见 [首版与环境策略](docs/version-policy.md)。
+> 当前是项目首个版本（V1），当前环境仅为测试环境，不是生产环境。V1 不提供通用历史兼容；仅代码显式列出的精确前序 V1 数据库合同可执行经过测试的加法迁移，未知合同失败关闭。API 不接受旧字段或双合同。详见 [首版与环境策略](docs/version-policy.md)。
 
 一个用于管理 Ansible 组件、场景和测试环境的本地演示平台。后端使用 Go + SQLite，前端使用 React + TypeScript，内置四个可切换的 Demo 身份，并支持受控的真实 `ansible-playbook` 执行。
 
 ## 能力
 
-- 组件 Owner：按 L1-L6 维护组件分类、不可变发布版本、依赖、动作与影响通知；Draft Playbook 支持上传和在线编辑。
-- 场景 Owner：使用 DAG 组合精确组件版本，测试通过后发布场景。
-- 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，审批高风险作业和跨仓平移。
-- 共享测试环境：单环境 FIFO 执行、实时日志、取消、审计和站内通知。
+- 组件 Owner：按 L1-L6 维护组件分类、结构化合同、不可变发布版本和当前交付证据；Draft 可共享到候选集，Playbook 支持上传和在线编辑。
+- 场景 Owner：使用 DAG 组合精确 Released/候选组件版本，完整测试后原子发布场景 Revision 与全部候选 Release。
+- 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，执行整集群回滚预览并单条或批量审批高风险作业。
+- 共享测试环境：单环境 FIFO 执行、日志搜索/流筛选/复制/下载、取消、审计和站内通知。
 - 示例：3 个 OpenFuyao 场景、2 个 Kubernetes 1.17.5 场景及对应测试环境模板。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
 

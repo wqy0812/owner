@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
 			Playbook: "demo/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
-			RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"},
+			RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}, Idempotent: true,
 		}},
 	}
 	if status == domain.ReleaseReleased {
@@ -102,12 +103,140 @@ func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 	if got := draft.Actions[0].RequiredCredentials; !reflect.DeepEqual(got, []string{"ansible_ssh_pass", "registry_user"}) {
 		t.Fatalf("required credentials round trip=%v", got)
 	}
+	if !draft.Actions[0].Idempotent {
+		t.Fatal("idempotent install capability was not persisted")
+	}
 	if err := s.PublishComponentRelease(ctx, draft.ID, testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	draft.ReleaseNotes = "illegal mutation"
 	if err := s.UpdateDraftRelease(ctx, draft); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("released update = %v, want conflict", err)
+	}
+}
+
+func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	component := componentFixture("candidate-runtime", "component-alice")
+	if err := s.CreateComponent(ctx, component); err != nil {
+		t.Fatal(err)
+	}
+	release := releaseFixture("candidate-runtime-1", component.ID, "1.0.0-rc1", domain.ReleaseDraft)
+	release.Verified, release.Candidate = true, true
+	if err := s.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	viewer, _ := s.GetUser(ctx, "scenario-carol")
+	visible, err := s.ListComponents(ctx, viewer)
+	if err != nil || len(visible) != 1 || len(visible[0].Releases) != 1 || !visible[0].Releases[0].Candidate {
+		t.Fatalf("candidate visibility=%+v err=%v", visible, err)
+	}
+	if _, err := s.DB().ExecContext(ctx, `UPDATE component_releases SET verified=0 WHERE id=?`, release.ID); err == nil || !strings.Contains(err.Error(), "candidate release must be verified") {
+		t.Fatalf("database accepted an unverified candidate: %v", err)
+	}
+	if err := s.MarkReleaseVerified(ctx, release.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	invalidated, _ := s.GetComponentRelease(ctx, release.ID)
+	if invalidated.Verified || invalidated.Candidate {
+		t.Fatalf("verification invalidation left delivery state=%+v", invalidated)
+	}
+	visible, err = s.ListComponents(ctx, viewer)
+	if err != nil || len(visible) != 0 {
+		t.Fatalf("invalidated candidate remained visible=%+v err=%v", visible, err)
+	}
+	if err := s.MarkReleaseVerified(ctx, release.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetReleaseCandidate(ctx, release.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: release.ID, Action: domain.ActionInstall, HostGroup: "all"}}, Edges: []domain.ScenarioEdge{}}
+	scenario := domain.Scenario{ID: "candidate-scene", Slug: "candidate-scene", Name: "Candidate", OwnerID: viewer.ID, CreatedAt: testNow, UpdatedAt: testNow}
+	revision := domain.ScenarioRevision{ID: "candidate-scene-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTestPassed, Graph: graph, ExecutionPolicy: map[string]any{}, CreatedAt: testNow, TestPassedAt: ptr(testNow)}
+	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PublishCandidateReleaseSet(ctx, revision.ID, []string{release.ID}, testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	gotRelease, _ := s.GetComponentRelease(ctx, release.ID)
+	gotRevision, _ := s.GetScenarioRevision(ctx, revision.ID)
+	if gotRelease.Status != domain.ReleaseReleased || gotRelease.Candidate || gotRevision.Status != domain.RevisionReleased {
+		t.Fatalf("atomic publish release=%+v revision=%+v", gotRelease, gotRevision)
+	}
+}
+
+func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	for _, id := range []string{"candidate-a", "candidate-b"} {
+		if err := s.CreateComponent(ctx, componentFixture(id, "component-alice")); err != nil {
+			t.Fatal(err)
+		}
+		release := releaseFixture(id+"-r1", id, "1.0.0-rc1", domain.ReleaseDraft)
+		release.Candidate = true
+		release.Verified = true
+		if err := s.CreateComponentRelease(ctx, release); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.MarkReleaseVerified(ctx, "candidate-b-r1", false); err != nil {
+		t.Fatal(err)
+	}
+	scenario := domain.Scenario{ID: "stale-set", Slug: "stale-set", Name: "Stale", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	revision := domain.ScenarioRevision{ID: "stale-set-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTestPassed, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, ExecutionPolicy: map[string]any{}, CreatedAt: testNow, TestPassedAt: ptr(testNow)}
+	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
+		t.Fatal(err)
+	}
+	err := s.PublishCandidateReleaseSet(ctx, revision.ID, []string{"candidate-a-r1", "candidate-b-r1"}, testNow.Add(time.Minute))
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale candidate set error=%v", err)
+	}
+	first, _ := s.GetComponentRelease(ctx, "candidate-a-r1")
+	gotRevision, _ := s.GetScenarioRevision(ctx, revision.ID)
+	if first.Status != domain.ReleaseDraft || gotRevision.Status != domain.RevisionTestPassed {
+		t.Fatalf("partial publish escaped transaction release=%s revision=%s", first.Status, gotRevision.Status)
+	}
+}
+
+func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
+	environment := domain.Environment{ID: "batch-env", Name: "Batch", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	revision := domain.EnvironmentRevision{ID: "batch-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedAt: testNow}
+	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 2; index++ {
+		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
+		approval := domain.Approval{ID: fmt.Sprintf("batch-approval-%d", index), RunID: run.ID, Status: "pending", RequestedAt: run.CreatedAt}
+		if err := s.CreateRun(ctx, run, &approval); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := s.BatchDecideApprovals(ctx, []string{"batch-approval-1", "batch-approval-2"}, "environment-dave", "approved", "window", testNow.Add(time.Minute))
+	if err != nil || len(runs) != 2 || runs[0].Status != domain.RunQueued || runs[1].Status != domain.RunQueued {
+		t.Fatalf("batch approval runs=%+v err=%v", runs, err)
+	}
+	claimed, err := s.ClaimNextRun(ctx, environment.ID, testNow.Add(2*time.Minute))
+	if err != nil || claimed.ID != "batch-run-1" {
+		t.Fatalf("batch FIFO claim=%+v err=%v", claimed, err)
+	}
+
+	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(3 * time.Minute)}
+	staleApproval := domain.Approval{ID: "batch-stale-approval", RunID: stale.ID, Status: "pending", RequestedAt: stale.CreatedAt}
+	if err := s.CreateRun(ctx, stale, &staleApproval); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BatchDecideApprovals(ctx, []string{"batch-stale-approval", "missing"}, "environment-dave", "approved", "window", testNow.Add(4*time.Minute)); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale batch error=%v", err)
+	}
+	unchanged, _ := s.GetRun(ctx, stale.ID)
+	if unchanged.Status != domain.RunAwaitingApproval {
+		t.Fatalf("stale batch partially consumed run: %s", unchanged.Status)
 	}
 }
 

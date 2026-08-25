@@ -55,7 +55,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// the browser cache: a cached awaiting_approval detail can otherwise outlive
 	// an approved list response and expose an already-consumed approval action.
 	w.Header().Set("Cache-Control", "no-store")
-	if r.URL.Path == "/api/v1/session/switch" {
+	if r.URL.Path == "/api/v1/session/switch" || r.URL.Path == "/api/v1/session/users" {
 		h.router.ServeHTTP(w, r)
 		return
 	}
@@ -69,6 +69,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/session/switch", h.switchSession)
+	h.router.HandleFunc("GET /api/v1/session/users", h.listSessionUsers)
 	h.router.HandleFunc("GET /api/v1/session/me", h.me)
 	h.router.HandleFunc("GET /api/v1/events", h.events)
 
@@ -85,6 +86,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/clone", h.cloneRelease)
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/impact", h.releaseImpact)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/publish", h.publishRelease)
+	h.router.HandleFunc("POST /api/v1/component-releases/{id}/candidate", h.setReleaseCandidate)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/deprecate", h.deprecateRelease)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/test-plan", h.previewReleaseTest)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/test-runs", h.testRelease)
@@ -101,6 +103,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/scenarios/{id}/revisions", h.cloneScenarioRevision)
 	h.router.HandleFunc("PUT /api/v1/scenario-revisions/{id}/graph", h.saveScenarioGraph)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/validate", h.validateScenario)
+	h.router.HandleFunc("GET /api/v1/scenario-revisions/{id}/candidate-release-set", h.candidateReleaseSet)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/test-runs", h.testScenario)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/runs", h.runScenario)
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/publish", h.publishScenario)
@@ -114,6 +117,8 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/variables", h.updateVariables)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/credential-refs", h.updateCredentialRefs)
 	h.router.HandleFunc("POST /api/v1/environments/{id}/health-checks", h.checkEnvironmentHealth)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/cluster-rollback-plan", h.previewEnvironmentRollback)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/cluster-rollback-runs", h.startEnvironmentRollback)
 	h.router.HandleFunc("POST /api/v1/environments/{id}/revisions/{revisionId}/restore", h.restoreEnvironmentRevision)
 
 	h.router.HandleFunc("GET /api/v1/runs", h.listRuns)
@@ -121,10 +126,20 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	h.router.HandleFunc("POST /api/v1/approvals/{id}/approve", h.approveRun)
 	h.router.HandleFunc("POST /api/v1/approvals/{id}/reject", h.rejectRun)
+	h.router.HandleFunc("POST /api/v1/approvals/batch", h.batchDecideRuns)
 
 	h.router.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	h.router.HandleFunc("PATCH /api/v1/notifications/{id}", h.markNotificationRead)
 	h.router.HandleFunc("GET /api/v1/audit-events", h.listAuditEvents)
+}
+
+func (h *Handler) listSessionUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.platform.Store().ListUsers(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeItems(w, users)
 }
 
 func (h *Handler) authenticate(r *http.Request) (domain.User, error) {

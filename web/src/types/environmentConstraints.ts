@@ -30,8 +30,27 @@ export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[]
     key: 'operatingSystem',
     label: '操作系统',
     options: [
+      { value: 'Ubuntu', label: 'Ubuntu' },
       { value: 'SUSE', label: 'SUSE' },
       { value: 'Kylin', label: 'Kylin' },
+    ],
+  },
+  {
+    key: 'operatingSystemVersion',
+    label: '操作系统版本',
+    options: [
+      { value: '18.04', label: '18.04' },
+      { value: '20.04', label: '20.04' },
+      { value: '22.04', label: '22.04' },
+    ],
+  },
+  {
+    key: 'dockerVersion',
+    label: 'Docker 版本',
+    options: [
+      { value: '20.10.21', label: '20.10.21' },
+      { value: '20.10.24', label: '20.10.24' },
+      { value: '24.0.9', label: '24.0.9' },
     ],
   },
   {

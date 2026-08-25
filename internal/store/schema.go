@@ -2,10 +2,15 @@ package store
 
 import "embed"
 
-// schemaContract identifies the only database contract supported by the first
-// project version. Change it whenever the first-version schema changes; test
-// databases created with an older contract must be recreated, not upgraded.
-const schemaContract = "first-version-20260824"
+// schemaContract identifies the current database contract. Additive migrations
+// may name an exact predecessor; unknown or non-additive historical contracts
+// remain unsupported and fail closed.
+const (
+	legacySchemaContract     = "first-version-20260824"
+	idempotentSchemaContract = "first-version-20260824-idempotent-actions"
+	candidateSchemaContract  = "first-version-20260824-candidate-releases"
+	schemaContract           = "first-version-20260825-candidate-evidence"
+)
 
 //go:embed schema.sql
 var schemaFiles embed.FS

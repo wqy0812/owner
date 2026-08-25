@@ -138,6 +138,15 @@ func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages})
 }
 
+func (h *Handler) candidateReleaseSet(w http.ResponseWriter, r *http.Request) {
+	set, err := h.platform.CandidateReleaseSet(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, set)
+}
+
 func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
 	var input runInput
 	if err := decodeJSON(r, &input); err != nil {

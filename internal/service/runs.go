@@ -1039,7 +1039,7 @@ func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID stri
 			step.BackupRef = installation.BackupRef
 			metadata := installation.Backup
 			step.Backup = &metadata
-			bindBackupVariables(step, "restore", kind != domain.RunScenario)
+			bindBackupVariables(step, "restore", kind != domain.RunScenario && isFinalCleanupStep(plan.Steps, index))
 		case domain.ActionUninstall:
 			installation, err := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID)
 			if err != nil {
@@ -1054,7 +1054,7 @@ func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID stri
 			step.BackupRef = installation.BackupRef
 			metadata := installation.Backup
 			step.Backup = &metadata
-			bindBackupVariables(step, "cleanup", true)
+			bindBackupVariables(step, "cleanup", isFinalCleanupStep(plan.Steps, index))
 		}
 	}
 	return nil
@@ -1393,6 +1393,10 @@ func (p *Platform) executeRun(run domain.Run) {
 		p.finishRun(run, domain.RunFailed, err)
 		return
 	}
+	if err := p.validateLockedRollbackPlan(ctx, run, plan); err != nil {
+		p.finishRun(run, domain.RunFailed, err)
+		return
+	}
 	if err := p.mirrorRunImages(ctx, run.ID, plan.ImageTransfers); err != nil {
 		p.finishRun(run, domain.RunFailed, err)
 		return
@@ -1634,6 +1638,9 @@ func (p *Platform) recordSuccessfulLifecycleStep(ctx context.Context, run domain
 		if step.Backup == nil {
 			return fmt.Errorf("%w: successful rollback action is missing its locked backup metadata", domain.ErrConflict)
 		}
+		if hasLaterCleanupStep(run.InputSnapshot, step) {
+			return nil
+		}
 		err := p.store.DeleteEnvironmentComponentInstallation(ctx, run.EnvironmentID, step.ComponentID, step.Backup.InstallRunID)
 		if errors.Is(err, domain.ErrNotFound) {
 			return fmt.Errorf("%w: rollback backup_ref was replaced while the Run was active", domain.ErrConflict)
@@ -1696,6 +1703,7 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		TimeoutSeconds      int               `json:"timeoutSeconds"`
 		RiskLevel           domain.RiskLevel  `json:"riskLevel"`
 		Destructive         bool              `json:"destructive"`
+		Idempotent          bool              `json:"idempotent"`
 		FromReleaseID       string            `json:"fromReleaseId"`
 		ToReleaseID         string            `json:"toReleaseId"`
 	}
@@ -1727,6 +1735,7 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 			Limit: action.Limit, HostGroup: action.HostGroup, AllowedParameters: action.AllowedParameters,
 			RequiredCredentials: action.RequiredCredentials,
 			TimeoutSeconds:      action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
+			Idempotent:    action.Idempotent,
 			FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,
 		})
 	}
@@ -1817,6 +1826,35 @@ func (p *Platform) DecideApproval(ctx context.Context, user domain.User, approva
 	p.audit(ctx, user, "approval."+decision, "approval", approvalID, map[string]any{"runId": run.ID, "reason": reason})
 	p.hub.Publish("approval.updated", map[string]any{"approvalId": approvalID, "runId": run.ID, "decision": decision})
 	return p.store.GetRun(ctx, run.ID)
+}
+
+func (p *Platform) BatchDecideApprovals(ctx context.Context, user domain.User, approvalIDs []string, decision, reason string) ([]domain.Run, error) {
+	if user.Role != domain.RoleEnvironmentOwner {
+		return nil, fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, fmt.Errorf("%w: batch approval reason is required", domain.ErrInvalid)
+	}
+	runs, err := p.store.BatchDecideApprovals(ctx, approvalIDs, user.ID, decision, reason, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	environments := map[string]bool{}
+	for _, run := range runs {
+		if decision == "rejected" && run.Kind == domain.RunScenarioTest {
+			_ = p.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
+		}
+		p.audit(ctx, user, "approval.batch_"+decision, "run", run.ID, map[string]any{"reason": reason, "batchSize": len(runs)})
+		p.hub.Publish("approval.updated", map[string]any{"runId": run.ID, "decision": decision, "batch": true})
+		environments[run.EnvironmentID] = true
+	}
+	if decision == "approved" {
+		for environmentID := range environments {
+			p.schedule(environmentID)
+		}
+	}
+	return runs, nil
 }
 
 func renderInventory(raw json.RawMessage) ([]byte, error) {

@@ -84,7 +84,7 @@ export function BuildVersionGuard({
 
   return (
     <>
-      <div ref={content} className="build-version-guard__content">{children}</div>
+      <div ref={content} className="build-version-guard__content" {...(availableVersion ? { inert: '', 'aria-hidden': 'true' } : {})}>{children}</div>
       {availableVersion ? (
         <div className="build-version-backdrop">
           <section

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'first-version-20260824');
+VALUES(1, 'first-version-20260825-candidate-evidence');
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS component_releases (
   release_notes TEXT NOT NULL DEFAULT '',
   breaking INTEGER NOT NULL DEFAULT 0,
   verified INTEGER NOT NULL DEFAULT 0,
+  candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1)),
   risk_level TEXT NOT NULL DEFAULT 'low',
   environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   parameters_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parameters_json)),
@@ -75,6 +76,20 @@ CREATE TABLE IF NOT EXISTS component_dependencies (
   UNIQUE(release_id, upstream_component_id)
 );
 
+CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_insert
+BEFORE INSERT ON component_releases
+WHEN NEW.candidate=1 AND NEW.verified<>1
+BEGIN
+  SELECT RAISE(ABORT, 'candidate release must be verified');
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_update
+BEFORE UPDATE OF candidate,verified ON component_releases
+WHEN NEW.candidate=1 AND NEW.verified<>1
+BEGIN
+  SELECT RAISE(ABORT, 'candidate release must be verified');
+END;
+
 CREATE TABLE IF NOT EXISTS action_definitions (
   id TEXT PRIMARY KEY,
   release_id TEXT NOT NULL REFERENCES component_releases(id) ON DELETE CASCADE,
@@ -89,6 +104,7 @@ CREATE TABLE IF NOT EXISTS action_definitions (
   timeout_seconds INTEGER NOT NULL DEFAULT 1800,
   risk_level TEXT NOT NULL DEFAULT 'low',
   destructive INTEGER NOT NULL DEFAULT 0,
+  idempotent INTEGER NOT NULL DEFAULT 0 CHECK (idempotent IN (0,1)),
   from_release_id TEXT,
   to_release_id TEXT
 );

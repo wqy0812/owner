@@ -48,6 +48,7 @@ type componentActionInput struct {
 	TimeoutSeconds      int               `json:"timeoutSeconds"`
 	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
 	Destructive         bool              `json:"destructive"`
+	Idempotent          bool              `json:"idempotent"`
 	FromReleaseID       string            `json:"fromReleaseId"`
 	ToReleaseID         string            `json:"toReleaseId"`
 }
@@ -102,7 +103,7 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 			Limit: inputAction.Limit, HostGroup: inputAction.HostGroup, AllowedParameters: inputAction.AllowedParameters,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
-			Destructive:   inputAction.Destructive,
+			Destructive: inputAction.Destructive, Idempotent: inputAction.Idempotent,
 			FromReleaseID: inputAction.FromReleaseID, ToReleaseID: inputAction.ToReleaseID,
 		})
 	}
@@ -247,6 +248,22 @@ func (h *Handler) publishRelease(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deprecateRelease(w http.ResponseWriter, r *http.Request) {
 	release, err := h.platform.DeprecateRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
+}
+
+func (h *Handler) setReleaseCandidate(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Candidate bool `json:"candidate"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	release, err := h.platform.SetReleaseCandidate(r.Context(), currentUser(r), r.PathValue("id"), input.Candidate)
 	if err != nil {
 		writeError(w, err)
 		return

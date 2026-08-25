@@ -255,6 +255,33 @@ func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from [
 	return nil
 }
 
+// PublishCandidateReleaseSet commits a tested scenario revision and every
+// opted-in Draft it locks in one SQLite transaction.
+func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionID string, releaseIDs []string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, releaseID := range releaseIDs {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE component_releases SET status='released',candidate=0,released_at=? WHERE id=? AND status='draft' AND candidate=1 AND verified=1`, timeText(at), releaseID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if changed, _ := result.RowsAffected(); changed != 1 {
+			return fmt.Errorf("%w: candidate release %s changed before atomic publish", domain.ErrConflict, releaseID)
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='released',released_at=? WHERE id=? AND status='test_passed' AND test_passed_at IS NOT NULL`, timeText(at), revisionID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: scenario revision changed before atomic publish", domain.ErrConflict)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at time.Time) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET status='deprecated',deprecated_at=? WHERE id=? AND status='released'`, timeText(at), id)
 	if err != nil {

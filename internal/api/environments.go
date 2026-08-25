@@ -124,6 +124,29 @@ func (h *Handler) checkEnvironmentHealth(w http.ResponseWriter, r *http.Request)
 	writeData(w, http.StatusOK, check)
 }
 
+func (h *Handler) previewEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
+	plan, err := h.platform.PreviewEnvironmentRollback(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, plan)
+}
+
+func (h *Handler) startEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
+	var input service.EnvironmentRollbackRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	run, err := h.platform.StartEnvironmentRollback(r.Context(), currentUser(r), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusAccepted, h.runDTO(r, run))
+}
+
 func (h *Handler) restoreEnvironmentRevision(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		ChangeReason string `json:"changeReason"`

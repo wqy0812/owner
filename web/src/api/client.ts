@@ -2,6 +2,7 @@ import type {
   ActionDefinition,
   Approval,
   AuditEvent,
+  CandidateReleaseSet,
   Component,
   ComponentDependency,
   ComponentArtifact,
@@ -13,6 +14,7 @@ import type {
   Environment,
   EnvironmentHealthCheck,
   EnvironmentHost,
+  EnvironmentRollbackPlan,
   EnvironmentRevision,
   ImpactPreview,
   Notification,
@@ -251,6 +253,7 @@ function normalizeAction(raw: LooseRecord): ActionDefinition {
     requiredCredentials: optionalStringArray(raw, 'requiredCredentials'),
     riskLevel,
     destructive,
+    idempotent: optionalBoolean(raw, 'idempotent'),
     fromReleaseId: optionalString(raw, 'fromReleaseId'),
     toReleaseId: optionalString(raw, 'toReleaseId'),
   };
@@ -317,6 +320,7 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     type: optionalEnum(raw, ['atomic', 'bundle'] as const, 'type'),
     state,
     verified: optionalBoolean(raw, 'verified'),
+    candidate: optionalBoolean(raw, 'candidate'),
     breaking: optionalBoolean(raw, 'breaking'),
     releaseNotes: optionalString(raw, 'releaseNotes'),
     dependencies,
@@ -598,7 +602,7 @@ function normalizeRun(raw: LooseRecord): Run {
   }));
   return {
     id: requireString(source, 'id'),
-    kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run'] as const, 'kind'),
+    kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'),
     name: optionalString(source, 'name'),
     status: requireEnum(source, RUN_STATUSES, 'status'),
     scenarioId: optionalString(source, 'scenarioId'),
@@ -656,6 +660,21 @@ function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
     requiresApproval: requireBoolean(source, 'requiresApproval'),
     planDigest: requireString(source, 'planDigest'),
     steps,
+  };
+}
+
+function normalizeEnvironmentRollbackPlan(raw: LooseRecord): EnvironmentRollbackPlan {
+  return {
+    ...normalizeComponentTestPlan(raw),
+    environmentName: requireString(raw, 'environmentName'),
+    sources: requireRecords(raw, 'sources').map((source) => ({
+      runId: requireString(source, 'runId'),
+      kind: requireEnum(source, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'),
+      scenarioRevisionId: optionalString(source, 'scenarioRevisionId'),
+      componentCount: requireNumber(source, 'componentCount'),
+    })),
+    componentCount: requireNumber(raw, 'componentCount'),
+    nodeCount: requireNumber(raw, 'nodeCount'),
   };
 }
 
@@ -725,6 +744,7 @@ function serializeAction(action: ActionDefinition) {
     requiredCredentials: action.requiredCredentials,
     riskLevel: action.riskLevel ?? (action.destructive ? 'destructive' : 'low'),
     destructive: action.destructive ?? action.riskLevel === 'destructive',
+    idempotent: action.idempotent ?? false,
     fromReleaseId: action.fromReleaseId,
     toReleaseId: action.toReleaseId,
   };
@@ -763,6 +783,9 @@ const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 
 export const api = {
+  async sessionUsers() {
+    return unwrapList(await get<unknown>('/session/users')).map(normalizeUser);
+  },
   async me() {
     return normalizeUser(unwrap(await get<unknown>('/session/me')));
   },
@@ -835,6 +858,9 @@ export const api = {
   async publishRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/publish`));
   },
+  async setReleaseCandidate(releaseId: string, candidate: boolean) {
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/candidate`, { candidate }));
+  },
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
   },
@@ -897,6 +923,24 @@ export const api = {
     const result = requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/validate`)), 'scenario validation');
     return { valid: requireBoolean(result, 'valid'), errors: requireStringArray(result, 'errors') };
   },
+  async candidateReleaseSet(revisionId: string): Promise<CandidateReleaseSet> {
+    const raw = requireRecord(unwrap(await get<unknown>(`/scenario-revisions/${revisionId}/candidate-release-set`)), 'candidate release set');
+    return {
+      scenarioRevisionId: requireString(raw, 'scenarioRevisionId'),
+      ready: requireBoolean(raw, 'ready'),
+      releases: requireRecords(raw, 'releases').map((item) => ({
+        releaseId: requireString(item, 'releaseId'),
+        componentId: requireString(item, 'componentId'),
+        componentName: requireString(item, 'componentName'),
+        version: requireString(item, 'version'),
+      })),
+      issues: requireRecords(raw, 'issues').map((item) => ({
+        code: requireString(item, 'code'),
+        message: requireString(item, 'message'),
+        nodeId: optionalString(item, 'nodeId'),
+      })),
+    };
+  },
   async testScenario(revisionId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/test-runs`, { environmentId, runInput })), 'run'));
   },
@@ -940,6 +984,12 @@ export const api = {
   async checkEnvironmentHealth(environmentId: string) {
     return normalizeEnvironmentHealthCheck(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/health-checks`)), 'environment health check'));
   },
+  async previewEnvironmentRollback(environmentId: string) {
+    return normalizeEnvironmentRollbackPlan(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-plan`)), 'environment rollback plan'));
+  },
+  async startEnvironmentRollback(environmentId: string, input: { expectedPlanDigest: string; confirmEnvironmentName: string }) {
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-runs`, input)), 'run'));
+  },
   async restoreEnvironmentRevision(environmentId: string, revisionId: string, changeReason: string) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/revisions/${revisionId}/restore`, { changeReason })), 'environment'));
   },
@@ -960,6 +1010,11 @@ export const api = {
   },
   async reject(id: string) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/reject`)), 'run'));
+  },
+  async batchDecideApprovals(approvalIds: string[], decision: 'approved' | 'rejected', reason: string) {
+    const value = unwrap(await post<unknown>('/approvals/batch', { approvalIds, decision, reason }));
+    if (!Array.isArray(value)) throw invalidResponse(200, '平台 API 返回了无效的批量审批结果。');
+    return value.map((item) => normalizeRun(requireRecord(item, 'run')));
   },
   async notifications(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/notifications', signal)).map((item) => normalizeNotification(requireRecord(item, 'notification')));
