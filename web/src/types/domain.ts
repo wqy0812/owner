@@ -295,6 +295,38 @@ export interface AuditEvent {
   createdAt: string;
 }
 
+export type WorkPriority = 'critical' | 'high' | 'normal' | 'info';
+export type WorkStatus = 'blocked' | 'action_required' | 'in_progress' | 'attention';
+
+export interface WorkItem {
+  id: string;
+  kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact';
+  priority: WorkPriority;
+  status: WorkStatus;
+  title: string;
+  subject: {
+    type: string;
+    id: string;
+    parentId?: string;
+    name: string;
+    version?: string;
+    revision?: number;
+    environment?: string;
+  };
+  reasons: Array<{ code: string; message: string; evidenceRunId?: string }>;
+  primaryAction: { label: string; href: string };
+  secondaryActions: Array<{ label: string; href: string }>;
+  updatedAt: string;
+}
+
+export interface Workbench {
+  generatedAt: string;
+  role: Role;
+  summary: { critical: number; actionRequired: number; inProgress: number; informational: number };
+  assets: { components: number; scenarios: number; environments: number };
+  items: WorkItem[];
+}
+
 export type RunStatus =
   | 'queued'
   | 'awaiting_approval'

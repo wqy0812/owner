@@ -138,6 +138,23 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	}
 }
 
+func TestScenarioRevisionSpecDigestChangesWithGraphAndPolicy(t *testing.T) {
+	revision := domain.ScenarioRevision{
+		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: "release-runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{"region": "cn"}}}},
+		ExecutionPolicy: map[string]any{"maxParallel": float64(1)},
+	}
+	before := scenarioRevisionSpecDigest(revision)
+	revision.Graph.Nodes[0].HostGroup = "control_plane"
+	if after := scenarioRevisionSpecDigest(revision); before == after {
+		t.Fatal("scenario definition digest did not include graph")
+	}
+	before = scenarioRevisionSpecDigest(revision)
+	revision.ExecutionPolicy["maxParallel"] = float64(2)
+	if after := scenarioRevisionSpecDigest(revision); before == after {
+		t.Fatal("scenario definition digest did not include execution policy")
+	}
+}
+
 func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
 	install := domain.ActionDefinition{ID: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60, Idempotent: true}
 	release := domain.ComponentRelease{Version: "2.0.0", Type: domain.ReleaseAtomic, Actions: []domain.ActionDefinition{install}}

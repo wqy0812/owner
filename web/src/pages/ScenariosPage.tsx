@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Background,
   Controls,
@@ -16,6 +16,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Beaker, Boxes, CheckCircle2, ClipboardCopy, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
 import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
@@ -57,13 +58,15 @@ const nodeTypes = { component: ComponentNode };
 
 export function ScenariosPage() {
   const { user, notify, signalRefresh } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: scenarios, loading, error, isRefreshing, reload } = useApiData((signal) => api.scenarios(signal), [user.id], 'scenarios');
   const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>();
+  const selectedScenarioId = searchParams.get('selected') ?? '';
   const selectedScenario = useMemo(() => scenarios?.find((item) => item.id === selectedScenarioId) ?? scenarios?.[0], [scenarios, selectedScenarioId]);
   const currentRevision = selectedScenario?.currentRevision;
-  const [selectedRevisionId, setSelectedRevisionId] = useState<string>();
+  const selectedRevisionId = searchParams.get('revision') ?? undefined;
+  const loadedRevisionRef = useRef<{ scenarioId?: string; currentRevisionId?: string }>({});
   const revision = useMemo(() => selectedScenario?.revisions?.find((item) => item.id === selectedRevisionId) ?? currentRevision, [currentRevision, selectedRevisionId, selectedScenario?.revisions]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -87,8 +90,23 @@ export function ScenariosPage() {
   const nextRevisionNumber = Math.max(0, ...(selectedScenario?.revisions?.map((item) => item.revision) ?? [])) + 1;
 
   useEffect(() => {
-    setSelectedRevisionId(currentRevision?.id);
-  }, [currentRevision?.id, selectedScenario?.id]);
+    const previous = loadedRevisionRef.current;
+    const followedPreviousCurrent = !selectedRevisionId || selectedRevisionId === previous.currentRevisionId;
+    if (selectedScenario && previous.scenarioId === selectedScenario.id && previous.currentRevisionId && previous.currentRevisionId !== currentRevision?.id && followedPreviousCurrent) {
+      setSearchParams({ selected: selectedScenario.id, ...(currentRevision?.id ? { revision: currentRevision.id } : {}) }, { replace: true });
+    }
+    loadedRevisionRef.current = { scenarioId: selectedScenario?.id, currentRevisionId: currentRevision?.id };
+  }, [currentRevision?.id, selectedRevisionId, selectedScenario?.id, setSearchParams]);
+
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (!action || !selectedScenario || !revision) return;
+    if (action === 'test' && canLaunchRevision) setTestOpen(true);
+    if (action === 'publish' && revision.state === 'test_passed' && selectedScenario.ownerId === user.id) void previewPublish();
+    const next = new URLSearchParams(searchParams);
+    next.delete('action');
+    setSearchParams(next, { replace: true });
+  }, [canLaunchRevision, revision, searchParams, selectedScenario, setSearchParams, user.id]);
 
   useEffect(() => {
     setNodes((revision?.nodes ?? []).map((node) => ({ ...node, type: 'component' })) as FlowNode[]);
@@ -226,7 +244,12 @@ export function ScenariosPage() {
 
   async function cloneRevision() {
     if (!selectedScenario || !revision || !window.confirm(`确认从 Revision ${revision.revision} 创建 Revision ${nextRevisionNumber}？\n新 Revision 将立即成为当前草稿。`)) return; setBusy('clone');
-    try { const created = await api.cloneScenarioRevision(selectedScenario.id); setSelectedRevisionId(created.id); notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。'); signalRefresh('scenarios'); }
+    try {
+      const created = await api.cloneScenarioRevision(selectedScenario.id);
+      setSearchParams({ selected: selectedScenario.id, revision: created.id }, { replace: true });
+      notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。');
+      signalRefresh('scenarios');
+    }
     catch (reason) { notify('error', '创建 Revision 失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
@@ -234,7 +257,11 @@ export function ScenariosPage() {
     if (!revision || !window.confirm(`确认放弃 Revision ${revision.revision} 草稿？\n系统将恢复到最近的不可变 Revision，当前草稿会保留在历史记录中。`)) return; setBusy('abandon');
     try {
       const scenario = await api.abandonScenarioRevision(revision.id);
-      setSelectedRevisionId(scenario.currentRevision?.id);
+      const restoredRevisionId = scenario.currentRevision?.id;
+      setSearchParams({
+        selected: selectedScenario?.id ?? scenario.id,
+        ...(restoredRevisionId ? { revision: restoredRevisionId } : {}),
+      }, { replace: true });
       notify('success', '草稿已放弃', `已恢复到 Revision ${scenario.currentRevision?.revision ?? '—'}。`);
       signalRefresh('scenarios');
     } catch (reason) { notify('error', '放弃草稿失败', displayError(reason)); } finally { setBusy(undefined); }
@@ -251,8 +278,8 @@ export function ScenariosPage() {
     <RefreshNotice loading={isRefreshing} error={scenarios ? error : undefined} onRetry={() => void reload()} />
     {loading && !scenarios ? <LoadingBlock label="正在加载场景图…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <>
       <div className="scenario-toolbar panel">
-        <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSelectedScenarioId(event.target.value)}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
-        {revision && <label><span>Revision</span><select aria-label="Revision" value={revision.id} onChange={(event) => setSelectedRevisionId(event.target.value)}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
+        <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSearchParams({ selected: event.target.value })}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
+				{revision && <label><span>Revision</span><select aria-label="Revision" value={revision.id} onChange={(event) => { if (selectedScenario) setSearchParams({ selected: selectedScenario.id, revision: event.target.value }); }}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
         {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前 Revision' : '历史 Revision'}</span><StatusPill status={revision.state} /></div>}
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>

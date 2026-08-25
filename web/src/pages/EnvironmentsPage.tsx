@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, UserRound, Wifi } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
@@ -31,9 +31,10 @@ function revisionActor(revision: EnvironmentRevision, users: Array<{ id: string;
 export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh } = useApp();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
-  const [selectedId, setSelectedId] = useState<string>();
+  const selectedId = searchParams.get('selected') ?? '';
   const selected = useMemo(() => environments?.find((item) => item.id === selectedId) ?? environments?.[0], [environments, selectedId]);
   const [tab, setTab] = useState<Tab>('inventory');
   const [hosts, setHosts] = useState<EnvironmentHost[]>([]);
@@ -189,7 +190,7 @@ export function EnvironmentsPage() {
       notify('info', '存在未保存更改', '请先保存或放弃当前编辑，再切换环境。');
       return;
     }
-    setSelectedId(id);
+    setSearchParams({ selected: id });
   }
 
   function updateHost(index: number, patch: Partial<EnvironmentHost>) {

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { AppProvider } from '../context/AppContext';
@@ -44,6 +44,12 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
       current = id === dave.id ? dave : id === carol.id ? carol : alice;
       return json(current);
     }
+    if (url.endsWith('/workbench')) return json({
+      generatedAt: '2026-08-25T10:00:00Z', role: current.role,
+      summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+      assets: { components: current.role === 'component_owner' ? 1 : 0, scenarios: current.role === 'scenario_owner' ? 1 : 0, environments: current.role === 'environment_owner' ? 1 : 0 },
+      items: [],
+    });
     if (url.endsWith('/components') && init?.method === 'POST') {
       if (options.componentCreateForbidden) return json({ error: { code: 'FORBIDDEN', message: '只有资源 Owner 可以修改组件' } }, 403);
       return json(components[0]);
@@ -87,6 +93,11 @@ function renderApp(path = '/') {
   return render(<MemoryRouter initialEntries={[path]}><AppProvider><App /></AppProvider></MemoryRouter>);
 }
 
+function HistoryBackButton() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(-1)}>测试返回</button>;
+}
+
 describe('platform shell and RBAC UI', () => {
   beforeEach(() => installFetch());
   afterEach(() => vi.unstubAllGlobals());
@@ -117,12 +128,40 @@ describe('platform shell and RBAC UI', () => {
   it('shows the dashboard summary and all primary navigation entries', async () => {
     renderApp();
     expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
-    for (const label of ['概览', '组件', '场景', '环境', '运行', '通知', '操作说明书']) {
+    for (const label of ['我的工作', '组件', '场景', '环境', '运行', '通知', '操作说明书']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(screen.getByText(/无密码身份模式/)).toBeInTheDocument();
-    expect(screen.getByText(/组件必须具备当前合同的安装验证和回退证据/)).toBeInTheDocument();
+    expect(screen.getByText('当前没有待办')).toBeInTheDocument();
+    expect(screen.getByText(/首页主任务仍是处理交付待办/)).toBeInTheDocument();
     expect(screen.queryByText(/允许以“未验证”状态发布/)).not.toBeInTheDocument();
+  });
+
+  it('explains a blocking work item and links to its exact resource', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-25T10:00:00Z', role: 'component_owner',
+        summary: { critical: 1, actionRequired: 1, inProgress: 0, informational: 0 },
+        assets: { components: 1, scenarios: 0, environments: 0 },
+        items: [{
+          id: 'component_draft:release-runtime-v2', kind: 'component_draft', priority: 'critical', status: 'blocked',
+          title: 'Runtime v2 尚不可发布',
+          subject: { type: 'component_release', id: 'release-runtime-v2', parentId: 'component-runtime', name: 'Runtime', version: 'v2' },
+          reasons: [{ code: 'release.rollback_evidence_missing', message: '当前合同缺少回滚及回滚后验证证据', evidenceRunId: 'run-runtime-failed' }],
+          primaryAction: { label: '查看失败运行', href: '/runs?selected=run-runtime-failed' }, secondaryActions: [],
+          updatedAt: '2026-08-25T09:00:00Z',
+        }],
+      });
+      return json([]);
+    }));
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'Runtime v2 尚不可发布' })).toBeInTheDocument();
+    expect(screen.getByText('当前合同缺少回滚及回滚后验证证据')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /查看失败运行/ })).toHaveAttribute('href', '/runs?selected=run-runtime-failed');
+    expect(screen.getByRole('link', { name: '查看证据 Run' })).toHaveAttribute('href', '/runs?selected=run-runtime-failed');
   });
 
   it('changes visible owner actions after a server-backed identity switch', async () => {
@@ -131,6 +170,55 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
     await waitFor(() => expect(screen.queryByRole('button', { name: '新建组件' })).not.toBeInTheDocument());
     expect(screen.getByText('环境 Owner')).toBeInTheDocument();
+  });
+
+  it('reloads the role-scoped workbench safely after an identity switch', async () => {
+    renderApp();
+    expect(await screen.findByRole('heading', { name: /早上好，Alice Component/ })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
+    expect(await screen.findByRole('heading', { name: /早上好，Dave Environment/ })).toBeInTheDocument();
+    expect(screen.getByText('当前没有待办')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '页面暂时无法显示' })).not.toBeInTheDocument();
+  });
+
+  it('keeps environment selection synchronized with browser history', async () => {
+    const environments = ['a', 'b'].map((id) => ({
+      id: `environment-${id}`, name: `Environment ${id.toUpperCase()}`, ownerId: dave.id,
+      currentRevision: { id: `environment-${id}-r1`, environmentId: `environment-${id}`, revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] },
+    }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments')) return json(environments);
+      if (url.endsWith('/runs') || url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    render(<MemoryRouter initialEntries={['/environments?selected=environment-a', '/environments?selected=environment-b']} initialIndex={1}><HistoryBackButton /><AppProvider><App /></AppProvider></MemoryRouter>);
+
+    expect(await screen.findByRole('heading', { name: 'Environment B' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '测试返回' }));
+    expect(await screen.findByRole('heading', { name: 'Environment A' })).toBeInTheDocument();
+  });
+
+  it('keeps scenario and revision selection synchronized with browser history', async () => {
+    const scenarios = ['a', 'b'].map((id) => ({
+      id: `scenario-${id}`, name: `Scenario ${id.toUpperCase()}`, ownerId: carol.id, slug: `scenario-${id}`,
+      currentRevisionId: `scenario-${id}-r1`,
+      currentRevision: { id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [], executionPolicy: {} },
+      revisions: [{ id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [], executionPolicy: {} }],
+    }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(carol);
+      if (url.endsWith('/scenarios')) return json(scenarios);
+      if (url.endsWith('/runs') || url.endsWith('/components') || url.endsWith('/environments') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    render(<MemoryRouter initialEntries={['/scenarios?selected=scenario-a&revision=scenario-a-r1', '/scenarios?selected=scenario-b&revision=scenario-b-r1']} initialIndex={1}><HistoryBackButton /><AppProvider><App /></AppProvider></MemoryRouter>);
+
+    expect(await screen.findByDisplayValue('Scenario B')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '测试返回' }));
+    expect(await screen.findByDisplayValue('Scenario A')).toBeInTheDocument();
   });
 
   it('allows an invalidated candidate Draft to be withdrawn', async () => {

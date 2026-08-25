@@ -818,6 +818,13 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		}
 		snapshot["componentReleaseSpecDigest"] = componentReleaseSpecDigest(release)
 	}
+	if revisionID != "" {
+		revision, err := p.store.GetScenarioRevision(ctx, revisionID)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
+	}
 	redactedRefs := make([]domain.CredentialRef, 0)
 	if environment.Revision != nil {
 		redactedRefs = domain.RedactCredentialRefs(environment.Revision.CredentialRefs, false)
@@ -1785,6 +1792,15 @@ func componentReleaseSpecDigest(release domain.ComponentRelease) string {
 		})
 	}
 	encoded, _ := json.Marshal(spec)
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func scenarioRevisionSpecDigest(revision domain.ScenarioRevision) string {
+	encoded, _ := json.Marshal(struct {
+		Graph           domain.ScenarioGraph
+		ExecutionPolicy map[string]any
+	}{Graph: revision.Graph, ExecutionPolicy: revision.ExecutionPolicy})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }

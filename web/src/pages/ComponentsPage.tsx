@@ -140,6 +140,8 @@ export function ComponentsPage() {
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const selectedId = searchParams.get('selected') ?? undefined;
   const selectedReleaseId = searchParams.get('release') ?? undefined;
+  const deepLinkAction = searchParams.get('action') ?? undefined;
+  const handledDeepLink = useRef<string>();
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>('all');
   const [createOpen, setCreateOpen] = useState(false);
@@ -194,6 +196,17 @@ export function ComponentsPage() {
     setImageRelease(undefined);
     setArtifactRelease(undefined);
   }, [selected?.id]);
+  useEffect(() => {
+    if (!deepLinkAction || !selected || !contractRelease) return;
+    const key = `${selected.id}:${contractRelease.id}:${deepLinkAction}`;
+    if (handledDeepLink.current === key) return;
+    handledDeepLink.current = key;
+    if (deepLinkAction === 'validate' && canTest) setTestRelease(contractRelease);
+    if (deepLinkAction === 'publish' && mine) void previewPublish(contractRelease);
+    const next = new URLSearchParams(searchParams);
+    next.delete('action');
+    setSearchParams(next, { replace: true });
+  }, [canTest, contractRelease, deepLinkAction, mine, searchParams, selected, setSearchParams]);
   function selectContractRelease(id: string) {
     const release = releases.find((item) => item.id === id);
     setContractReleaseId(id);

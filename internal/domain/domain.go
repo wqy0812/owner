@@ -683,6 +683,79 @@ type AuditEvent struct {
 	CreatedAt    time.Time      `json:"createdAt"`
 }
 
+type WorkPriority string
+
+const (
+	WorkPriorityCritical WorkPriority = "critical"
+	WorkPriorityHigh     WorkPriority = "high"
+	WorkPriorityNormal   WorkPriority = "normal"
+	WorkPriorityInfo     WorkPriority = "info"
+)
+
+type WorkStatus string
+
+const (
+	WorkStatusBlocked        WorkStatus = "blocked"
+	WorkStatusActionRequired WorkStatus = "action_required"
+	WorkStatusInProgress     WorkStatus = "in_progress"
+	WorkStatusAttention      WorkStatus = "attention"
+)
+
+type WorkSubject struct {
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	ParentID    string `json:"parentId,omitempty"`
+	Name        string `json:"name"`
+	Version     string `json:"version,omitempty"`
+	Revision    int    `json:"revision,omitempty"`
+	Environment string `json:"environment,omitempty"`
+}
+
+type WorkReason struct {
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	EvidenceRunID string `json:"evidenceRunId,omitempty"`
+}
+
+type WorkAction struct {
+	Label string `json:"label"`
+	Href  string `json:"href"`
+}
+
+type WorkItem struct {
+	ID               string       `json:"id"`
+	Kind             string       `json:"kind"`
+	Priority         WorkPriority `json:"priority"`
+	Status           WorkStatus   `json:"status"`
+	Title            string       `json:"title"`
+	Subject          WorkSubject  `json:"subject"`
+	Reasons          []WorkReason `json:"reasons"`
+	PrimaryAction    WorkAction   `json:"primaryAction"`
+	SecondaryActions []WorkAction `json:"secondaryActions"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
+}
+
+type WorkbenchSummary struct {
+	Critical       int `json:"critical"`
+	ActionRequired int `json:"actionRequired"`
+	InProgress     int `json:"inProgress"`
+	Informational  int `json:"informational"`
+}
+
+type WorkbenchAssets struct {
+	Components   int `json:"components"`
+	Scenarios    int `json:"scenarios"`
+	Environments int `json:"environments"`
+}
+
+type Workbench struct {
+	GeneratedAt time.Time        `json:"generatedAt"`
+	Role        Role             `json:"role"`
+	Summary     WorkbenchSummary `json:"summary"`
+	Assets      WorkbenchAssets  `json:"assets"`
+	Items       []WorkItem       `json:"items"`
+}
+
 type ImpactPath struct {
 	ComponentIDs   []string `json:"componentIds"`
 	ComponentNames []string `json:"componentNames"`

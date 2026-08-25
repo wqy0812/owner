@@ -454,6 +454,161 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	}
 }
 
+func TestWorkbenchIsRoleScopedAndActionable(t *testing.T) {
+	f := newAPIFixture(t)
+	if response := f.request(http.MethodGet, "/api/v1/workbench", nil, nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous workbench status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	tests := []struct {
+		userID       string
+		role         domain.Role
+		expectedKind string
+	}{
+		{userID: seed.ComponentOwnerRuntimeID, role: domain.RoleComponentOwner, expectedKind: "component_draft"},
+		{userID: seed.ScenarioOwnerID, role: domain.RoleScenarioOwner, expectedKind: "scenario_revision"},
+		{userID: seed.EnvironmentOwnerID, role: domain.RoleEnvironmentOwner, expectedKind: "environment"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.role), func(t *testing.T) {
+			response := f.request(http.MethodGet, "/api/v1/workbench", nil, f.session(test.userID))
+			if response.Code != http.StatusOK {
+				t.Fatalf("workbench status=%d body=%s", response.Code, response.Body.String())
+			}
+			data := decodeEnvelope(t, response)["data"].(map[string]any)
+			if data["role"] != string(test.role) || data["generatedAt"] == "" {
+				t.Fatalf("workbench identity=%#v", data)
+			}
+			items, ok := data["items"].([]any)
+			if !ok || len(items) == 0 {
+				t.Fatalf("workbench items=%#v", data["items"])
+			}
+			foundExpected := false
+			for _, raw := range items {
+				item := raw.(map[string]any)
+				if item["kind"] == test.expectedKind {
+					foundExpected = true
+				}
+				reasons, reasonsOK := item["reasons"].([]any)
+				action, actionOK := item["primaryAction"].(map[string]any)
+				href, hrefOK := action["href"].(string)
+				if !reasonsOK || len(reasons) == 0 || !actionOK || action["label"] == "" || !hrefOK || !strings.HasPrefix(href, "/") {
+					t.Fatalf("work item is not actionable: %#v", item)
+				}
+			}
+			if !foundExpected {
+				t.Fatalf("role %s did not receive %s: %#v", test.role, test.expectedKind, items)
+			}
+			if strings.Contains(response.Body.String(), "credentialRefs") || strings.Contains(response.Body.String(), "reference\"") {
+				t.Fatalf("workbench leaked credential configuration: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestWorkbenchLatestSuccessClearsEarlierFailure(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	failedAt := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+	failed := domain.Run{
+		ID: "run-workbench-failed", Kind: domain.RunEnvironmentRollback, Status: domain.RunFailed,
+		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		InputSnapshot: map[string]any{}, Error: "rollback failed", CreatedAt: failedAt, StartedAt: &failedAt, FinishedAt: &failedAt,
+	}
+	if err := f.database.CreateRun(ctx, failed, nil); err != nil {
+		t.Fatal(err)
+	}
+	owner := f.session(seed.EnvironmentOwnerID)
+	response := f.request(http.MethodGet, "/api/v1/workbench", nil, owner)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "run:run-workbench-failed") {
+		t.Fatalf("current failure missing status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	succeededAt := failedAt.Add(time.Minute)
+	succeeded := domain.Run{
+		ID: "run-workbench-succeeded", Kind: domain.RunEnvironmentRollback, Status: domain.RunSucceeded,
+		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		InputSnapshot: map[string]any{}, CreatedAt: succeededAt, StartedAt: &succeededAt, FinishedAt: &succeededAt,
+	}
+	if err := f.database.CreateRun(ctx, succeeded, nil); err != nil {
+		t.Fatal(err)
+	}
+	response = f.request(http.MethodGet, "/api/v1/workbench", nil, owner)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "run:run-workbench-failed") {
+		t.Fatalf("superseded failure remained status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWorkbenchKeepsInvalidTestPassedScenarioBlocked(t *testing.T) {
+	f := newAPIFixture(t)
+	now := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	if err := f.database.SetScenarioRevisionStatus(context.Background(), "scenario-test-runtime-r2", []domain.RevisionStatus{domain.RevisionDraft}, domain.RevisionTestPassed, now); err != nil {
+		t.Fatal(err)
+	}
+
+	response := f.request(http.MethodGet, "/api/v1/workbench", nil, f.session(seed.ScenarioOwnerID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("workbench status=%d body=%s", response.Code, response.Body.String())
+	}
+	items := decodeEnvelope(t, response)["data"].(map[string]any)["items"].([]any)
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		if item["id"] != "scenario_revision:scenario-test-runtime-r2" {
+			continue
+		}
+		action := item["primaryAction"].(map[string]any)
+		if item["status"] != string(domain.WorkStatusBlocked) || action["label"] != "检查场景问题" || strings.Contains(action["href"].(string), "action=publish") {
+			t.Fatalf("invalid test-passed scenario was presented as publishable: %#v", item)
+		}
+		if strings.Contains(fmt.Sprint(item["reasons"]), "scenario.ready_to_publish") {
+			t.Fatalf("invalid scenario retained ready-to-publish reason: %#v", item)
+		}
+		return
+	}
+	t.Fatal("scenario work item missing")
+}
+
+func TestWorkbenchApprovalActionMatchesViewerPermission(t *testing.T) {
+	f := newAPIFixture(t)
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	run := domain.Run{
+		ID: "run-workbench-awaiting-approval", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval,
+		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionUpgrade, InputSnapshot: map[string]any{}, CreatedAt: now,
+	}
+	if err := f.database.CreateRun(context.Background(), run, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		userID string
+		label  string
+	}{
+		{userID: seed.ComponentOwnerRuntimeID, label: "查看审批状态"},
+		{userID: seed.EnvironmentOwnerID, label: "复核并审批"},
+	} {
+		response := f.request(http.MethodGet, "/api/v1/workbench", nil, f.session(test.userID))
+		if response.Code != http.StatusOK {
+			t.Fatalf("user %s workbench status=%d body=%s", test.userID, response.Code, response.Body.String())
+		}
+		items := decodeEnvelope(t, response)["data"].(map[string]any)["items"].([]any)
+		found := false
+		for _, raw := range items {
+			item := raw.(map[string]any)
+			if item["id"] != "run:"+run.ID {
+				continue
+			}
+			found = true
+			if label := item["primaryAction"].(map[string]any)["label"]; label != test.label {
+				t.Fatalf("user %s approval action=%v want=%s", test.userID, label, test.label)
+			}
+		}
+		if !found {
+			t.Fatalf("user %s did not receive awaiting-approval run", test.userID)
+		}
+	}
+}
+
 type fakeRunner struct {
 	mu       sync.Mutex
 	calls    []string

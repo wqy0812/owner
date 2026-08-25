@@ -26,6 +26,7 @@ import type {
   ScenarioNode,
   ScenarioRevision,
   User,
+  Workbench,
 } from '../types/domain';
 
 const API_ROOT = '/api/v1';
@@ -712,6 +713,46 @@ function normalizeUser(value: unknown): User {
   };
 }
 
+function normalizeWorkbench(value: unknown): Workbench {
+  const raw = requireRecord(value, 'workbench');
+  const summary = requireRecord(field(raw, 'summary'), 'workbench summary');
+  const assets = requireRecord(field(raw, 'assets'), 'workbench assets');
+  return {
+    generatedAt: requireString(raw, 'generatedAt'),
+    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner'] as const, 'role'),
+    summary: {
+      critical: requireNumber(summary, 'critical'),
+      actionRequired: requireNumber(summary, 'actionRequired'),
+      inProgress: requireNumber(summary, 'inProgress'),
+      informational: requireNumber(summary, 'informational'),
+    },
+    assets: {
+      components: requireNumber(assets, 'components'),
+      scenarios: requireNumber(assets, 'scenarios'),
+      environments: requireNumber(assets, 'environments'),
+    },
+    items: requireRecords(raw, 'items').map((item) => {
+      const subject = requireRecord(field(item, 'subject'), 'work item subject');
+      const primaryAction = requireRecord(field(item, 'primaryAction'), 'work item primary action');
+      return {
+        id: requireString(item, 'id'),
+        kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact'] as const, 'kind'),
+        priority: requireEnum(item, ['critical', 'high', 'normal', 'info'] as const, 'priority'),
+        status: requireEnum(item, ['blocked', 'action_required', 'in_progress', 'attention'] as const, 'status'),
+        title: requireString(item, 'title'),
+        subject: {
+          type: requireString(subject, 'type'), id: requireString(subject, 'id'), parentId: optionalString(subject, 'parentId'),
+          name: requireString(subject, 'name'), version: optionalString(subject, 'version'), revision: optionalNumber(subject, 'revision'), environment: optionalString(subject, 'environment'),
+        },
+        reasons: requireRecords(item, 'reasons').map((reason) => ({ code: requireString(reason, 'code'), message: requireString(reason, 'message'), evidenceRunId: optionalString(reason, 'evidenceRunId') })),
+        primaryAction: { label: requireString(primaryAction, 'label'), href: requireString(primaryAction, 'href') },
+        secondaryActions: requireRecords(item, 'secondaryActions').map((action) => ({ label: requireString(action, 'label'), href: requireString(action, 'href') })),
+        updatedAt: requireString(item, 'updatedAt'),
+      };
+    }),
+  };
+}
+
 function normalizeOptionalData(value: unknown): unknown {
   const data = unwrap(value);
   if (data === undefined) throw invalidResponse(200, '平台 API 缺少响应数据。');
@@ -792,6 +833,9 @@ export const api = {
   },
   async switchUser(userId: string) {
     return normalizeUser(unwrap(await post<unknown>('/session/switch', { userId })));
+  },
+  async workbench(signal?: AbortSignal) {
+    return normalizeWorkbench(unwrap(await get<unknown>('/workbench', signal)));
   },
   async components(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/components', signal)).map((item) => normalizeComponent(requireRecord(item, 'component')));

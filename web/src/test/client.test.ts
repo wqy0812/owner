@@ -91,4 +91,23 @@ describe('API response contract', () => {
     await expect(api.createRelease('component-1', { version: '1.0.0', type: 'atomic', riskLevel: 'high' })).resolves.toMatchObject({ riskLevel: 'high' });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ riskLevel: 'high' });
   });
+
+  it('validates and normalizes the workbench response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: {
+      generatedAt: '2026-08-25T10:00:00Z', role: 'component_owner',
+      summary: { critical: 1, actionRequired: 1, inProgress: 0, informational: 0 },
+      assets: { components: 1, scenarios: 0, environments: 0 },
+      items: [{
+        id: 'component_draft:release-1', kind: 'component_draft', priority: 'critical', status: 'blocked', title: 'Draft 尚不可发布',
+        subject: { type: 'component_release', id: 'release-1', parentId: 'component-1', name: 'containerd', version: '1.0.0' },
+        reasons: [{ code: 'release.validation_failed', message: '环境验证失败', evidenceRunId: 'run-1' }],
+        primaryAction: { label: '查看失败运行', href: '/runs?selected=run-1' }, secondaryActions: [], updatedAt: '2026-08-25T09:00:00Z',
+      }],
+    } }), 'application/json')));
+
+    await expect(api.workbench()).resolves.toMatchObject({
+      role: 'component_owner', summary: { critical: 1 },
+      items: [{ id: 'component_draft:release-1', reasons: [{ evidenceRunId: 'run-1' }] }],
+    });
+  });
 });

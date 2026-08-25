@@ -17,7 +17,7 @@ import { ROLE_LABELS } from '../types/domain';
 import { LoadingBlock } from './Primitives';
 
 const links = [
-  { to: '/', label: '概览', icon: CircleGauge, end: true },
+  { to: '/', label: '我的工作', icon: CircleGauge, end: true },
   { to: '/components', label: '组件', icon: Boxes },
   { to: '/scenarios', label: '场景', icon: Network },
   { to: '/environments', label: '环境', icon: CloudCog },

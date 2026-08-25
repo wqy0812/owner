@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Bell, CheckCheck, GitBranch, Network, PackageOpen } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, RefreshNotice, formatTime } from '../components/Primitives';
 import { displayError, useApp } from '../context/AppContext';
@@ -8,9 +8,14 @@ import { useApiData } from '../hooks/useApiData';
 
 export function NotificationsPage() {
   const { user, notify, signalRefresh } = useApp();
+  const [searchParams] = useSearchParams();
   const { data: notifications, loading, error, isRefreshing, reload } = useApiData((signal) => api.notifications(signal), [user.id], 'notifications');
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
-  const visible = useMemo(() => (notifications ?? []).filter((item) => filter === 'all' || !item.read), [filter, notifications]);
+  const selectedId = searchParams.get('selected');
+  const selectedScenario = searchParams.get('scenario');
+  const selectedRef = useRef<HTMLElement>(null);
+  const visible = useMemo(() => (notifications ?? []).filter((item) => (filter === 'all' || !item.read) && (!selectedScenario || item.scenarioIds?.includes(selectedScenario))), [filter, notifications, selectedScenario]);
+  useEffect(() => { selectedRef.current?.scrollIntoView({ block: 'center' }); }, [selectedId, selectedScenario, visible.length]);
 
   async function mark(id: string) {
     try { await api.markNotificationRead(id); signalRefresh('notifications'); }
@@ -27,7 +32,7 @@ export function NotificationsPage() {
     <RefreshNotice loading={isRefreshing} error={notifications ? error : undefined} onRetry={() => void reload()} />
     {loading && !notifications ? <LoadingBlock label="正在加载影响通知…" /> : error && !notifications ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <section className="notification-center panel">
       <div className="notification-filter"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部 <span>{notifications?.length ?? 0}</span></button><button className={filter === 'unread' ? 'active' : ''} onClick={() => setFilter('unread')}>未读 <span>{notifications?.filter((item) => !item.read).length ?? 0}</span></button></div>
-      {visible.length ? <div className="notification-list">{visible.map((notice) => <article key={notice.id} className={`notification-card${notice.read ? '' : ' notification-card--unread'}`}>
+      {visible.length ? <div className="notification-list">{visible.map((notice) => <article key={notice.id} ref={notice.id === selectedId || Boolean(selectedScenario && notice.scenarioIds?.includes(selectedScenario)) ? selectedRef : undefined} className={`notification-card${notice.read ? '' : ' notification-card--unread'}${notice.id === selectedId ? ' notification-card--selected' : ''}`}>
         <div className={`notification-card__icon${notice.breaking ? ' notification-card__icon--warning' : ''}`}>{notice.breaking ? <AlertTriangle size={20} /> : <Bell size={20} />}</div>
         <div className="notification-card__content"><header><div><strong>{notice.title}</strong>{notice.breaking && <span className="breaking-badge">BREAKING</span>}</div><time>{formatTime(notice.createdAt)}</time></header><p>{notice.message}</p>
           {(notice.componentName || notice.oldVersion || notice.newVersion) && <div className="version-change"><PackageOpen size={16} /><strong>{notice.componentName ?? '上游组件'}</strong><span>{notice.oldVersion ?? '—'}</span><em>→</em><span className="version-change__new">{notice.newVersion ?? '新版本'}</span></div>}

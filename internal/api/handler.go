@@ -72,6 +72,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("GET /api/v1/session/users", h.listSessionUsers)
 	h.router.HandleFunc("GET /api/v1/session/me", h.me)
 	h.router.HandleFunc("GET /api/v1/events", h.events)
+	h.router.HandleFunc("GET /api/v1/workbench", h.workbench)
 
 	h.router.HandleFunc("GET /api/v1/components", h.listComponents)
 	h.router.HandleFunc("POST /api/v1/components", h.createComponent)

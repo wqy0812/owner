@@ -16,9 +16,9 @@ interface Toast {
   message?: string;
 }
 
-export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications';
+export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench';
 
-export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications'];
+export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench'];
 
 type RefreshTokens = Record<RefreshTarget, number>;
 
@@ -56,6 +56,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     environments: 0,
     runs: 0,
     notifications: 0,
+    workbench: 0,
   });
   const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
   const refreshTimer = useRef<number>();
@@ -149,12 +150,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     stream.onerror = () => setConnected(false);
     stream.onmessage = () => scheduleRefresh(ALL_REFRESH_TARGETS);
     const listeners: Array<[string, () => void]> = [
-      ['notification', () => scheduleRefresh('notifications')],
+      ['notification', () => scheduleRefresh(['notifications', 'workbench'])],
       ['run.log', () => scheduleRefresh('runs')],
-      ['run.updated', () => scheduleRefresh(['components', 'runs', 'environments', 'scenarios'])],
-      ['approval.updated', () => scheduleRefresh('runs')],
-      ['release.published', () => scheduleRefresh(['components', 'notifications'])],
-      ['scenario.published', () => scheduleRefresh('scenarios')],
+      ['run.updated', () => scheduleRefresh(['components', 'runs', 'environments', 'scenarios', 'workbench'])],
+      ['approval.updated', () => scheduleRefresh(['runs', 'workbench'])],
+      ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
+      ['scenario.published', () => scheduleRefresh(['scenarios', 'workbench'])],
     ];
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {

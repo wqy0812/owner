@@ -1,0 +1,578 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"codex/platform-demo/internal/domain"
+)
+
+var activeWorkRunStatuses = map[domain.RunStatus]bool{
+	domain.RunAwaitingApproval: true,
+	domain.RunQueued:           true,
+	domain.RunRunning:          true,
+}
+
+func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+	components, err := p.ListComponents(ctx, user)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	scenarios, err := p.ListScenarios(ctx, user)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	environments, err := p.ListEnvironments(ctx, user)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	runs, err := p.store.ListRuns(ctx, user)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	notifications, err := p.store.ListNotifications(ctx, user.ID, true)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+
+	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
+	componentByID := map[string]domain.Component{}
+	releaseByID := map[string]domain.ComponentRelease{}
+	for _, component := range components {
+		componentByID[component.ID] = component
+		if component.OwnerID == user.ID {
+			workbench.Assets.Components++
+		}
+		for _, release := range component.Releases {
+			releaseByID[release.ID] = release
+		}
+	}
+	scenarioByID := map[string]domain.Scenario{}
+	revisionByID := map[string]domain.ScenarioRevision{}
+	for _, scenario := range scenarios {
+		scenarioByID[scenario.ID] = scenario
+		if scenario.OwnerID == user.ID {
+			workbench.Assets.Scenarios++
+		}
+		for _, revision := range scenario.Revisions {
+			revisionByID[revision.ID] = revision
+		}
+	}
+	environmentByID := map[string]domain.Environment{}
+	for _, environment := range environments {
+		environmentByID[environment.ID] = environment
+		if environment.OwnerID == user.ID {
+			workbench.Assets.Environments++
+		}
+	}
+
+	embeddedRuns := map[string]bool{}
+	switch user.Role {
+	case domain.RoleComponentOwner:
+		items, embedded, itemErr := p.componentOwnerWork(ctx, user, components, runs)
+		if itemErr != nil {
+			return domain.Workbench{}, itemErr
+		}
+		workbench.Items = append(workbench.Items, items...)
+		mergeRunSet(embeddedRuns, embedded)
+	case domain.RoleScenarioOwner:
+		items, embedded, itemErr := p.scenarioOwnerWork(ctx, user, scenarios, runs)
+		if itemErr != nil {
+			return domain.Workbench{}, itemErr
+		}
+		workbench.Items = append(workbench.Items, items...)
+		mergeRunSet(embeddedRuns, embedded)
+	case domain.RoleEnvironmentOwner:
+		workbench.Items = append(workbench.Items, environmentOwnerWork(user, environments)...)
+	}
+
+	workbench.Items = append(workbench.Items, impactWork(user, notifications, scenarioByID)...)
+	runItems, runErr := p.runWork(ctx, user, runs, embeddedRuns, componentByID, releaseByID, scenarioByID, revisionByID, environmentByID)
+	if runErr != nil {
+		return domain.Workbench{}, runErr
+	}
+	workbench.Items = append(workbench.Items, runItems...)
+	sortWorkItems(workbench.Items)
+	for _, item := range workbench.Items {
+		if item.Priority == domain.WorkPriorityCritical {
+			workbench.Summary.Critical++
+			continue
+		}
+		switch item.Status {
+		case domain.WorkStatusActionRequired, domain.WorkStatusBlocked:
+			workbench.Summary.ActionRequired++
+		case domain.WorkStatusInProgress:
+			workbench.Summary.InProgress++
+		case domain.WorkStatusAttention:
+			workbench.Summary.Informational++
+		}
+	}
+	return workbench, nil
+}
+
+func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, components []domain.Component, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+	items := []domain.WorkItem{}
+	embedded := map[string]bool{}
+	for _, component := range components {
+		if component.OwnerID != user.ID {
+			continue
+		}
+		for _, release := range component.Releases {
+			if release.Status != domain.ReleaseDraft {
+				continue
+			}
+			digest := componentReleaseSpecDigest(release)
+			latest := latestMatchingRun(runs, func(run domain.Run) bool {
+				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && snapshotString(run, "componentReleaseSpecDigest") == digest
+			})
+			reasons := []domain.WorkReason{}
+			if contractErr := p.validateReleaseForPublish(ctx, release); contractErr != nil {
+				reasons = append(reasons, domain.WorkReason{Code: "release.contract_invalid", Message: contractErr.Error()})
+			}
+			configured := map[domain.ActionKind]bool{}
+			for _, action := range release.Actions {
+				configured[action.Kind] = true
+			}
+			for _, required := range []struct {
+				kind  domain.ActionKind
+				label string
+			}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}} {
+				if !configured[required.kind] {
+					reasons = append(reasons, domain.WorkReason{Code: "release.lifecycle_missing", Message: "缺少 " + required.label + " 生命周期动作"})
+				}
+			}
+			if !release.Verified {
+				reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_missing", Message: "当前合同缺少安装及 Verify 成功证据"})
+			}
+			rollbackVerified, rollbackErr := p.store.HasSuccessfulComponentRollbackVerification(ctx, release.ID, digest)
+			if rollbackErr != nil {
+				return nil, nil, rollbackErr
+			}
+			if !rollbackVerified {
+				reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_missing", Message: "当前合同缺少回滚及回滚后验证证据"})
+			}
+
+			priority, status := domain.WorkPriorityHigh, domain.WorkStatusBlocked
+			title := fmt.Sprintf("%s %s 尚不可发布", component.Name, release.Version)
+			action := domain.WorkAction{Label: "前往环境验证", Href: fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID)}
+			if latest != nil && activeWorkRunStatuses[latest.Status] {
+				embedded[latest.ID] = true
+				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
+				reasons = append(reasons, domain.WorkReason{Code: "release.validation_in_progress", Message: runStatusMessage(latest.Status), EvidenceRunID: latest.ID})
+				title = fmt.Sprintf("%s %s 正在验证", component.Name, release.Version)
+				action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
+			} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+				embedded[latest.ID] = true
+				priority = domain.WorkPriorityCritical
+				reasons = append(reasons, domain.WorkReason{Code: "release.validation_failed", Message: "当前合同最近一次环境验证失败", EvidenceRunID: latest.ID})
+				action = domain.WorkAction{Label: "查看失败运行", Href: "/runs?selected=" + latest.ID}
+			}
+			if len(reasons) == 0 {
+				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
+				title = fmt.Sprintf("%s %s 已满足发布条件", component.Name, release.Version)
+				reasons = append(reasons, domain.WorkReason{Code: "release.ready_to_publish", Message: "合同、生命周期、安装和回滚证据均已满足"})
+				action = domain.WorkAction{Label: "预览影响并发布", Href: fmt.Sprintf("/components?selected=%s&release=%s&action=publish", component.ID, release.ID)}
+			}
+			items = append(items, domain.WorkItem{
+				ID: "component_draft:" + release.ID, Kind: "component_draft", Priority: priority, Status: status, Title: title,
+				Subject: domain.WorkSubject{Type: "component_release", ID: release.ID, ParentID: component.ID, Name: component.Name, Version: release.Version},
+				Reasons: reasons, PrimaryAction: action, SecondaryActions: []domain.WorkAction{}, UpdatedAt: component.UpdatedAt,
+			})
+		}
+	}
+	return items, embedded, nil
+}
+
+func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scenarios []domain.Scenario, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+	items := []domain.WorkItem{}
+	embedded := map[string]bool{}
+	for _, scenario := range scenarios {
+		if scenario.OwnerID != user.ID {
+			continue
+		}
+		revision, ok := currentScenarioRevision(scenario)
+		if !ok || (revision.Status != domain.RevisionDraft && revision.Status != domain.RevisionTesting && revision.Status != domain.RevisionTestPassed) {
+			continue
+		}
+		digest := scenarioRevisionSpecDigest(revision)
+		latest := latestMatchingRun(runs, func(run domain.Run) bool {
+			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && snapshotString(run, "scenarioRevisionSpecDigest") == digest
+		})
+		reasons := []domain.WorkReason{}
+		issues, validationErr := p.ValidateScenario(ctx, user, revision.ID)
+		if validationErr != nil {
+			return nil, nil, validationErr
+		}
+		if len(issues) > 0 {
+			message := issues[0].Message
+			if len(issues) > 1 {
+				message = fmt.Sprintf("%s；另有 %d 项问题", message, len(issues)-1)
+			}
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.graph_invalid", Message: message})
+		}
+		priority, status := domain.WorkPriorityHigh, domain.WorkStatusBlocked
+		title := fmt.Sprintf("%s r%d 需要完整测试", scenario.Name, revision.Revision)
+		action := domain.WorkAction{Label: "前往场景测试", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID)}
+		switch revision.Status {
+		case domain.RevisionDraft:
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前 Revision 尚未通过完整环境测试"})
+		case domain.RevisionTesting:
+			if len(issues) == 0 {
+				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
+				title = fmt.Sprintf("%s r%d 正在测试", scenario.Name, revision.Revision)
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行"})
+			} else {
+				title = fmt.Sprintf("%s r%d 存在测试阻塞", scenario.Name, revision.Revision)
+				action = domain.WorkAction{Label: "检查场景问题", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)}
+			}
+		case domain.RevisionTestPassed:
+			if len(issues) == 0 {
+				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
+				title = fmt.Sprintf("%s r%d 已测试通过", scenario.Name, revision.Revision)
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前 Revision 可以预览候选集并发布"})
+				action = domain.WorkAction{Label: "预览候选集并发布", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=publish", scenario.ID, revision.ID)}
+			} else {
+				title = fmt.Sprintf("%s r%d 存在发布阻塞", scenario.Name, revision.Revision)
+				action = domain.WorkAction{Label: "检查场景问题", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)}
+			}
+		}
+		if latest != nil && activeWorkRunStatuses[latest.Status] {
+			embedded[latest.ID] = true
+			action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
+		} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+			embedded[latest.ID] = true
+			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前 Revision 最近一次完整测试失败", EvidenceRunID: latest.ID})
+			action = domain.WorkAction{Label: "查看失败运行", Href: "/runs?selected=" + latest.ID}
+		}
+		items = append(items, domain.WorkItem{
+			ID: "scenario_revision:" + revision.ID, Kind: "scenario_revision", Priority: priority, Status: status, Title: title,
+			Subject: domain.WorkSubject{Type: "scenario_revision", ID: revision.ID, ParentID: scenario.ID, Name: scenario.Name, Revision: revision.Revision},
+			Reasons: reasons, PrimaryAction: action, SecondaryActions: []domain.WorkAction{}, UpdatedAt: scenario.UpdatedAt,
+		})
+	}
+	return items, embedded, nil
+}
+
+func environmentOwnerWork(user domain.User, environments []domain.Environment) []domain.WorkItem {
+	items := []domain.WorkItem{}
+	for _, environment := range environments {
+		if environment.OwnerID != user.ID || environment.Revision == nil {
+			continue
+		}
+		reasons := []domain.WorkReason{}
+		var inventory InventoryDocument
+		if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil || len(inventory.Hosts) == 0 {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.inventory_empty", Message: "当前 Revision 尚未配置 Inventory 主机"})
+		}
+		if strings.TrimSpace(environment.Revision.Variables["IMAGE_REGISTRY"]) == "" {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.registry_missing", Message: "缺少 IMAGE_REGISTRY"})
+		}
+		if strings.TrimSpace(environment.Revision.Variables["FILE_STATION"]) == "" {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.file_station_missing", Message: "缺少 FILE_STATION"})
+		}
+		if environment.HealthCheck == nil {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行连通性检查"})
+		} else if environment.HealthCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近检查来自旧 Environment Revision，需要重新检查"})
+		} else if environment.HealthCheck.Status == "degraded" {
+			failed := 0
+			for _, result := range environment.HealthCheck.Results {
+				if !result.Reachable {
+					failed++
+				}
+			}
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed)})
+		}
+		if len(reasons) == 0 {
+			continue
+		}
+		items = append(items, domain.WorkItem{
+			ID: "environment:" + environment.ID, Kind: "environment", Priority: domain.WorkPriorityHigh, Status: domain.WorkStatusBlocked,
+			Title: environment.Name + " 需要维护", Subject: domain.WorkSubject{Type: "environment", ID: environment.ID, Name: environment.Name, Revision: environment.Revision.Revision},
+			Reasons: reasons, PrimaryAction: domain.WorkAction{Label: "检查环境", Href: "/environments?selected=" + environment.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: environment.UpdatedAt,
+		})
+	}
+	return items
+}
+
+func impactWork(user domain.User, notifications []domain.Notification, scenarios map[string]domain.Scenario) []domain.WorkItem {
+	items := []domain.WorkItem{}
+	if user.Role == domain.RoleScenarioOwner {
+		grouped := map[string][]domain.Notification{}
+		for _, notification := range notifications {
+			for _, scenarioID := range payloadStrings(notification.Payload, "scenarioIds") {
+				if scenario, ok := scenarios[scenarioID]; ok && scenario.OwnerID == user.ID {
+					grouped[scenarioID] = append(grouped[scenarioID], notification)
+				}
+			}
+		}
+		for scenarioID, notices := range grouped {
+			scenario := scenarios[scenarioID]
+			latest := notices[0]
+			for _, notice := range notices[1:] {
+				if notice.CreatedAt.After(latest.CreatedAt) {
+					latest = notice
+				}
+			}
+			items = append(items, domain.WorkItem{
+				ID: "upstream_impact:" + scenarioID, Kind: "upstream_impact", Priority: domain.WorkPriorityInfo, Status: domain.WorkStatusAttention,
+				Title: scenario.Name + " 有上游变化待评估", Subject: domain.WorkSubject{Type: "scenario", ID: scenario.ID, Name: scenario.Name},
+				Reasons:       []domain.WorkReason{{Code: "scenario.upstream_change_review", Message: fmt.Sprintf("有 %d 条未读上游发布影响；不会自动使当前 Revision 失效", len(notices))}},
+				PrimaryAction: domain.WorkAction{Label: "评估影响", Href: "/notifications?scenario=" + scenarioID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: latest.CreatedAt,
+			})
+		}
+		return items
+	}
+	if user.Role == domain.RoleComponentOwner {
+		for _, notice := range notifications {
+			componentID, _ := notice.Payload["componentId"].(string)
+			componentName, _ := notice.Payload["componentName"].(string)
+			items = append(items, domain.WorkItem{
+				ID: "upstream_impact:" + notice.ID, Kind: "upstream_impact", Priority: domain.WorkPriorityInfo, Status: domain.WorkStatusAttention,
+				Title: notice.Title, Subject: domain.WorkSubject{Type: "component", ID: componentID, Name: valueOr(componentName, "上游组件")},
+				Reasons:       []domain.WorkReason{{Code: "component.upstream_change_review", Message: notice.Body}},
+				PrimaryAction: domain.WorkAction{Label: "评估影响", Href: "/notifications?selected=" + notice.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: notice.CreatedAt,
+			})
+		}
+	}
+	return items
+}
+
+func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.Run, embedded map[string]bool, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) ([]domain.WorkItem, error) {
+	latestByKey := map[string]domain.Run{}
+	for _, run := range runs {
+		key := runWorkloadKey(run)
+		if current, ok := latestByKey[key]; !ok || run.CreatedAt.After(current.CreatedAt) {
+			latestByKey[key] = run
+		}
+	}
+	items := []domain.WorkItem{}
+	for _, run := range runs {
+		if embedded[run.ID] {
+			continue
+		}
+		active := activeWorkRunStatuses[run.Status]
+		failed := run.Status == domain.RunFailed || run.Status == domain.RunInterrupted
+		if !active && (!failed || latestByKey[runWorkloadKey(run)].ID != run.ID) {
+			continue
+		}
+		if failed {
+			current, currentErr := p.runMatchesCurrentDefinition(ctx, run)
+			if currentErr != nil {
+				return nil, currentErr
+			}
+			if !current {
+				continue
+			}
+			if user.Role == domain.RoleComponentOwner {
+				owned, ownedErr := p.failedStepOwnedBy(ctx, run, user.ID, components)
+				if ownedErr != nil {
+					return nil, ownedErr
+				}
+				if !owned {
+					continue
+				}
+			}
+		}
+		name := runDisplayName(run, components, releases, scenarios, revisions, environments)
+		priority, status := domain.WorkPriorityNormal, domain.WorkStatusInProgress
+		title := name + " " + runStatusMessage(run.Status)
+		reason := domain.WorkReason{Code: "run.in_progress", Message: runStatusMessage(run.Status), EvidenceRunID: run.ID}
+		if run.Status == domain.RunAwaitingApproval {
+			priority, status = domain.WorkPriorityCritical, domain.WorkStatusActionRequired
+			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待 Environment Owner 审批", EvidenceRunID: run.ID}
+		} else if failed {
+			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
+			reason = domain.WorkReason{Code: "run.failed", Message: valueOr(run.Error, "最近一次有效运行失败"), EvidenceRunID: run.ID}
+		}
+		canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
+		items = append(items, domain.WorkItem{
+			ID: "run:" + run.ID, Kind: "run", Priority: priority, Status: status, Title: title,
+			Subject: domain.WorkSubject{Type: "run", ID: run.ID, Name: name, Environment: environmentName(run.EnvironmentID, environments)},
+			Reasons: []domain.WorkReason{reason}, PrimaryAction: domain.WorkAction{Label: runActionLabel(run.Status, canApprove), Href: "/runs?selected=" + run.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: run.CreatedAt,
+		})
+	}
+	return items, nil
+}
+
+func (p *Platform) runMatchesCurrentDefinition(ctx context.Context, run domain.Run) (bool, error) {
+	if run.ComponentReleaseID != "" {
+		release, err := p.store.GetComponentRelease(ctx, run.ComponentReleaseID)
+		if err != nil {
+			return false, nil
+		}
+		return snapshotString(run, "componentReleaseSpecDigest") == componentReleaseSpecDigest(release), nil
+	}
+	if run.ScenarioRevisionID != "" {
+		revision, err := p.store.GetScenarioRevision(ctx, run.ScenarioRevisionID)
+		if err != nil {
+			return false, nil
+		}
+		locked := snapshotString(run, "scenarioRevisionSpecDigest")
+		if locked == "" {
+			return revision.Status == domain.RevisionReleased || revision.Status == domain.RevisionDeprecated, nil
+		}
+		return locked == scenarioRevisionSpecDigest(revision), nil
+	}
+	return true, nil
+}
+
+func (p *Platform) failedStepOwnedBy(ctx context.Context, run domain.Run, ownerID string, components map[string]domain.Component) (bool, error) {
+	steps, err := p.store.ListRunSteps(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	failedNodeID := ""
+	for _, step := range steps {
+		if step.Status == domain.RunFailed {
+			failedNodeID = step.NodeID
+			break
+		}
+	}
+	lockedSteps, _ := run.InputSnapshot["steps"].([]any)
+	for _, raw := range lockedSteps {
+		locked, _ := raw.(map[string]any)
+		if nodeID, _ := locked["nodeId"].(string); nodeID != failedNodeID {
+			continue
+		}
+		componentID, _ := locked["componentId"].(string)
+		component, ok := components[componentID]
+		if !ok {
+			loaded, loadErr := p.store.GetComponent(ctx, componentID, false)
+			if loadErr != nil {
+				return false, nil
+			}
+			component = loaded
+		}
+		return component.OwnerID == ownerID, nil
+	}
+	return run.RequestedBy == ownerID, nil
+}
+
+func currentScenarioRevision(scenario domain.Scenario) (domain.ScenarioRevision, bool) {
+	for _, revision := range scenario.Revisions {
+		if revision.ID == scenario.CurrentRevisionID {
+			return revision, true
+		}
+	}
+	return domain.ScenarioRevision{}, false
+}
+
+func latestMatchingRun(runs []domain.Run, predicate func(domain.Run) bool) *domain.Run {
+	var latest *domain.Run
+	for i := range runs {
+		if predicate(runs[i]) && (latest == nil || runs[i].CreatedAt.After(latest.CreatedAt)) {
+			candidate := runs[i]
+			latest = &candidate
+		}
+	}
+	return latest
+}
+
+func snapshotString(run domain.Run, key string) string {
+	value, _ := run.InputSnapshot[key].(string)
+	return value
+}
+
+func payloadStrings(payload map[string]any, key string) []string {
+	raw, _ := payload[key].([]any)
+	values := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if value, ok := item.(string); ok && value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func runWorkloadKey(run domain.Run) string {
+	if run.ComponentReleaseID != "" {
+		return fmt.Sprintf("%s:%s:%s:%s", run.Kind, run.ComponentReleaseID, run.Action, run.EnvironmentID)
+	}
+	if run.ScenarioRevisionID != "" {
+		return fmt.Sprintf("%s:%s:%s", run.Kind, run.ScenarioRevisionID, run.EnvironmentID)
+	}
+	return fmt.Sprintf("%s:%s", run.Kind, run.EnvironmentID)
+}
+
+func runDisplayName(run domain.Run, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) string {
+	if release, ok := releases[run.ComponentReleaseID]; ok {
+		if component, found := components[release.ComponentID]; found {
+			return component.Name + " " + release.Version
+		}
+	}
+	if revision, ok := revisions[run.ScenarioRevisionID]; ok {
+		if scenario, found := scenarios[revision.ScenarioID]; found {
+			return scenario.Name + fmt.Sprintf(" r%d", revision.Revision)
+		}
+	}
+	if run.Kind == domain.RunEnvironmentRollback {
+		return environmentName(run.EnvironmentID, environments) + " 整集群回滚"
+	}
+	return "Run " + run.ID[:min(12, len(run.ID))]
+}
+
+func environmentName(id string, environments map[string]domain.Environment) string {
+	if environment, ok := environments[id]; ok {
+		return environment.Name
+	}
+	return id
+}
+
+func runStatusMessage(status domain.RunStatus) string {
+	switch status {
+	case domain.RunAwaitingApproval:
+		return "等待审批"
+	case domain.RunQueued:
+		return "正在排队"
+	case domain.RunRunning:
+		return "正在执行"
+	case domain.RunInterrupted:
+		return "运行被中断"
+	case domain.RunFailed:
+		return "运行失败"
+	default:
+		return string(status)
+	}
+}
+
+func runActionLabel(status domain.RunStatus, canApprove bool) string {
+	if status == domain.RunAwaitingApproval {
+		if canApprove {
+			return "复核并审批"
+		}
+		return "查看审批状态"
+	}
+	if status == domain.RunFailed || status == domain.RunInterrupted {
+		return "查看失败诊断"
+	}
+	return "查看运行"
+}
+
+func mergeRunSet(target, source map[string]bool) {
+	for id := range source {
+		target[id] = true
+	}
+}
+
+func sortWorkItems(items []domain.WorkItem) {
+	priority := map[domain.WorkPriority]int{domain.WorkPriorityCritical: 0, domain.WorkPriorityHigh: 1, domain.WorkPriorityNormal: 2, domain.WorkPriorityInfo: 3}
+	status := map[domain.WorkStatus]int{domain.WorkStatusActionRequired: 0, domain.WorkStatusBlocked: 1, domain.WorkStatusInProgress: 2, domain.WorkStatusAttention: 3}
+	sort.SliceStable(items, func(i, j int) bool {
+		if priority[items[i].Priority] != priority[items[j].Priority] {
+			return priority[items[i].Priority] < priority[items[j].Priority]
+		}
+		if status[items[i].Status] != status[items[j].Status] {
+			return status[items[i].Status] < status[items[j].Status]
+		}
+		if !items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].UpdatedAt.After(items[j].UpdatedAt)
+		}
+		return items[i].ID < items[j].ID
+	})
+}
