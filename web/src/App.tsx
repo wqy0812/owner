@@ -1,12 +1,14 @@
+import { lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
-import { ComponentsPage } from './pages/ComponentsPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { EnvironmentsPage } from './pages/EnvironmentsPage';
-import { NotificationsPage } from './pages/NotificationsPage';
-import { OperationManualPage } from './pages/OperationManualPage';
-import { RunsPage } from './pages/RunsPage';
-import { ScenariosPage } from './pages/ScenariosPage';
+
+const ComponentsPage = lazy(() => import('./pages/ComponentsPage').then((module) => ({ default: module.ComponentsPage })));
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then((module) => ({ default: module.DashboardPage })));
+const EnvironmentsPage = lazy(() => import('./pages/EnvironmentsPage').then((module) => ({ default: module.EnvironmentsPage })));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
+const OperationManualPage = lazy(() => import('./pages/OperationManualPage').then((module) => ({ default: module.OperationManualPage })));
+const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
+const ScenariosPage = lazy(() => import('./pages/ScenariosPage').then((module) => ({ default: module.ScenariosPage })));
 
 export function App() {
   return (

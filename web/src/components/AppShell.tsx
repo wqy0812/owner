@@ -10,9 +10,11 @@ import {
   Radio,
   ShieldCheck,
 } from 'lucide-react';
+import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ROLE_LABELS } from '../types/domain';
+import { LoadingBlock } from './Primitives';
 
 const links = [
   { to: '/', label: '概览', icon: CircleGauge, end: true },
@@ -88,7 +90,11 @@ export function AppShell() {
             <ChevronDown size={15} />
           </label>
         </header>
-        <main className="main-content"><Outlet /></main>
+        <main className="main-content">
+          <Suspense fallback={<LoadingBlock label="正在加载页面…" />}>
+            <Outlet />
+          </Suspense>
+        </main>
       </div>
     </div>
   );
