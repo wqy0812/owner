@@ -17,14 +17,15 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Beaker, Boxes, CheckCircle2, ClipboardCopy, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
+import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
-import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData } from '../types/domain';
+import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from './scenarioTemplate';
 
 type FlowNode = Node<ScenarioNodeData>;
@@ -62,12 +63,14 @@ export function ScenariosPage() {
   const { data: scenarios, loading, error, isRefreshing, reload } = useApiData((signal) => api.scenarios(signal), [user.id], 'scenarios');
   const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const selectedScenarioId = searchParams.get('selected') ?? '';
   const selectedScenario = useMemo(() => scenarios?.find((item) => item.id === selectedScenarioId) ?? scenarios?.[0], [scenarios, selectedScenarioId]);
   const currentRevision = selectedScenario?.currentRevision;
   const selectedRevisionId = searchParams.get('revision') ?? undefined;
   const loadedRevisionRef = useRef<{ scenarioId?: string; currentRevisionId?: string }>({});
   const revision = useMemo(() => selectedScenario?.revisions?.find((item) => item.id === selectedRevisionId) ?? currentRevision, [currentRevision, selectedRevisionId, selectedScenario?.revisions]);
+  const revisionWorkItem = workbench?.items.find((item) => item.subject.type === 'scenario_revision' && item.subject.id === revision?.id);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
@@ -76,6 +79,7 @@ export function ScenariosPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [candidateSet, setCandidateSet] = useState<CandidateReleaseSet>();
+  const [operationExplanation, setOperationExplanation] = useState<WorkExplanation>();
   const [view, setView] = useState<'graph' | 'table'>('graph');
   const [testEnvironment, setTestEnvironment] = useState('');
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
@@ -103,6 +107,7 @@ export function ScenariosPage() {
     if (!action || !selectedScenario || !revision) return;
     if (action === 'test' && canLaunchRevision) setTestOpen(true);
     if (action === 'publish' && revision.state === 'test_passed' && selectedScenario.ownerId === user.id) void previewPublish();
+    if (action === 'inspect') setView('table');
     const next = new URLSearchParams(searchParams);
     next.delete('action');
     setSearchParams(next, { replace: true });
@@ -194,26 +199,29 @@ export function ScenariosPage() {
 
   async function test() {
     if (!revision || !testEnvironment) return; setBusy('test');
+    setOperationExplanation(undefined);
     try {
       const runInput = parseRunInput(declaredRunInputs, runInputValues);
       if (revision.state === 'released') await api.runScenario(revision.id, testEnvironment, runInput);
       else await api.testScenario(revision.id, testEnvironment, runInput);
-      notify('success', revision.state === 'released' ? '场景运行已提交' : '完整场景测试已提交', revision.state === 'released' ? '可以在运行中心查看执行进度。' : '场景状态将进入 Testing。'); setTestOpen(false); signalRefresh(['scenarios', 'runs', 'environments']);
+      notify('success', revision.state === 'released' ? '场景运行已提交' : '完整场景测试已提交', revision.state === 'released' ? '可以在运行中心查看执行进度。' : '场景状态将进入 Testing。'); setTestOpen(false); signalRefresh(['scenarios', 'runs', 'environments', 'workbench']);
     }
-    catch (reason) { notify('error', '测试提交失败', displayError(reason)); } finally { setBusy(undefined); }
+    catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '测试提交失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function previewPublish() {
     if (!revision) return; setBusy('publish-preview');
+    setOperationExplanation(undefined);
     try { setCandidateSet(await api.candidateReleaseSet(revision.id)); }
-    catch (reason) { notify('error', '候选发布集检查失败', displayError(reason)); }
+    catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '候选发布集检查失败', displayError(reason)); }
     finally { setBusy(undefined); }
   }
 
   async function publish() {
     if (!revision) return; setBusy('publish');
-    try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景 Revision 与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components']); }
-    catch (reason) { notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
+    setOperationExplanation(undefined);
+    try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景 Revision 与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components', 'workbench']); }
+    catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   function importTemplate(text: string) {
@@ -293,6 +301,7 @@ export function ScenariosPage() {
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish-preview'} onClick={() => void previewPublish()}><Rocket size={16} /> 预览候选集并发布</button>}
         </div>
       </div>
+      <StatusExplanationPanel item={revisionWorkItem} />
       {selectedScenario ? <div className="scenario-editor">
         <aside className="scenario-palette panel">
           <header><h3>组件版本</h3><p>{editable ? '点击加入画布' : '当前为只读视图'}</p></header>
@@ -328,10 +337,10 @@ export function ScenariosPage() {
         </aside>
       </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由场景 Owner 创建一个场景。" /></div>}
     </>}
-    {testOpen && <Modal title={revision?.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setTestOpen(false)}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision?.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
+    {testOpen && <Modal title={revision?.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /><StatusExplanationPanel explanation={operationExplanation} title="场景运行被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setTestOpen(false); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision?.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
     {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('scenarios'); }} />}
     {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate} />}
-    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}</div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setCandidateSet(undefined)}>取消</button><button className="button button--primary" disabled={!candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
+    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
   </div>;
 }
 

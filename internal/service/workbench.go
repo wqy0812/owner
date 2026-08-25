@@ -126,12 +126,22 @@ func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, com
 				continue
 			}
 			digest := componentReleaseSpecDigest(release)
+			componentHref := fmt.Sprintf("/components?selected=%s&release=%s", component.ID, release.ID)
+			contractAction := workAction("编辑合同", componentHref+"&action=contract")
+			lifecycleAction := workAction("配置生命周期", componentHref+"&action=lifecycle")
+			validationAction := workAction("前往环境验证", componentHref+"&action=validate")
 			latest := latestMatchingRun(runs, func(run domain.Run) bool {
 				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && snapshotString(run, "componentReleaseSpecDigest") == digest
 			})
+			latestInstallEvidence := latestMatchingRun(runs, func(run domain.Run) bool {
+				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && run.Status == domain.RunSucceeded && snapshotString(run, "componentTestEvidence") == "install_verify"
+			})
+			latestRollbackEvidence := latestMatchingRun(runs, func(run domain.Run) bool {
+				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && run.Status == domain.RunSucceeded && snapshotString(run, "componentTestEvidence") == "rollback_verify"
+			})
 			reasons := []domain.WorkReason{}
 			if contractErr := p.validateReleaseForPublish(ctx, release); contractErr != nil {
-				reasons = append(reasons, domain.WorkReason{Code: "release.contract_invalid", Message: contractErr.Error()})
+				reasons = append(reasons, domain.WorkReason{Code: "release.contract_invalid", Message: contractErr.Error(), Cause: ruleCause("Release 发布合同校验未通过"), NextAction: contractAction})
 			}
 			configured := map[domain.ActionKind]bool{}
 			for _, action := range release.Actions {
@@ -142,18 +152,26 @@ func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, com
 				label string
 			}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}} {
 				if !configured[required.kind] {
-					reasons = append(reasons, domain.WorkReason{Code: "release.lifecycle_missing", Message: "缺少 " + required.label + " 生命周期动作"})
+					reasons = append(reasons, domain.WorkReason{Code: "release.lifecycle_missing", Message: "缺少 " + required.label + " 生命周期动作", Cause: ruleCause("发布规则要求 Install、Verify 和 Rollback 生命周期完整"), NextAction: lifecycleAction})
 				}
 			}
 			if !release.Verified {
-				reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_missing", Message: "当前合同缺少安装及 Verify 成功证据"})
+				if latestInstallEvidence != nil && snapshotString(*latestInstallEvidence, "componentReleaseSpecDigest") != digest {
+					reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_stale", Message: "安装及 Verify 证据来自旧合同，不能证明当前 Draft", EvidenceRunID: latestInstallEvidence.ID, Cause: p.evidenceInvalidationCause(ctx, "component_release", release.ID, latestInstallEvidence), NextAction: validationAction})
+				} else {
+					reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_missing", Message: "当前合同缺少安装及 Verify 成功证据", Cause: ruleCause("发布规则要求当前合同具备成功的安装和 Verify Run"), NextAction: validationAction})
+				}
 			}
 			rollbackVerified, rollbackErr := p.store.HasSuccessfulComponentRollbackVerification(ctx, release.ID, digest)
 			if rollbackErr != nil {
 				return nil, nil, rollbackErr
 			}
 			if !rollbackVerified {
-				reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_missing", Message: "当前合同缺少回滚及回滚后验证证据"})
+				if latestRollbackEvidence != nil && snapshotString(*latestRollbackEvidence, "componentReleaseSpecDigest") != digest {
+					reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_stale", Message: "回滚证据来自旧合同，不能证明当前 Draft", EvidenceRunID: latestRollbackEvidence.ID, Cause: p.evidenceInvalidationCause(ctx, "component_release", release.ID, latestRollbackEvidence), NextAction: validationAction})
+				} else {
+					reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_missing", Message: "当前合同缺少回滚及回滚后验证证据", Cause: ruleCause("发布规则要求当前合同具备成功的回滚及回滚后验证 Run"), NextAction: validationAction})
+				}
 			}
 
 			priority, status := domain.WorkPriorityHigh, domain.WorkStatusBlocked
@@ -162,19 +180,19 @@ func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, com
 			if latest != nil && activeWorkRunStatuses[latest.Status] {
 				embedded[latest.ID] = true
 				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
-				reasons = append(reasons, domain.WorkReason{Code: "release.validation_in_progress", Message: runStatusMessage(latest.Status), EvidenceRunID: latest.ID})
+				reasons = append(reasons, domain.WorkReason{Code: "release.validation_in_progress", Message: runStatusMessage(latest.Status), EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看运行", "/runs?selected="+latest.ID)})
 				title = fmt.Sprintf("%s %s 正在验证", component.Name, release.Version)
 				action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
 			} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 				embedded[latest.ID] = true
 				priority = domain.WorkPriorityCritical
-				reasons = append(reasons, domain.WorkReason{Code: "release.validation_failed", Message: "当前合同最近一次环境验证失败", EvidenceRunID: latest.ID})
+				reasons = append(reasons, domain.WorkReason{Code: "release.validation_failed", Message: "当前合同最近一次环境验证失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
 				action = domain.WorkAction{Label: "查看失败运行", Href: "/runs?selected=" + latest.ID}
 			}
 			if len(reasons) == 0 {
 				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s %s 已满足发布条件", component.Name, release.Version)
-				reasons = append(reasons, domain.WorkReason{Code: "release.ready_to_publish", Message: "合同、生命周期、安装和回滚证据均已满足"})
+				reasons = append(reasons, domain.WorkReason{Code: "release.ready_to_publish", Message: "合同、生命周期、安装和回滚证据均已满足", Cause: ruleCause("平台已按当前合同重新核对全部发布门禁"), NextAction: workAction("预览影响并发布", componentHref+"&action=publish")})
 				action = domain.WorkAction{Label: "预览影响并发布", Href: fmt.Sprintf("/components?selected=%s&release=%s&action=publish", component.ID, release.ID)}
 			}
 			items = append(items, domain.WorkItem{
@@ -199,8 +217,14 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 			continue
 		}
 		digest := scenarioRevisionSpecDigest(revision)
+		scenarioHref := fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)
+		graphAction := workAction("检查场景问题", scenarioHref+"&action=inspect")
+		testAction := workAction("前往场景测试", scenarioHref+"&action=test")
 		latest := latestMatchingRun(runs, func(run domain.Run) bool {
 			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && snapshotString(run, "scenarioRevisionSpecDigest") == digest
+		})
+		latestSuccessfulTest := latestMatchingRun(runs, func(run domain.Run) bool {
+			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && run.Status == domain.RunSucceeded
 		})
 		reasons := []domain.WorkReason{}
 		issues, validationErr := p.ValidateScenario(ctx, user, revision.ID)
@@ -212,19 +236,29 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 			if len(issues) > 1 {
 				message = fmt.Sprintf("%s；另有 %d 项问题", message, len(issues)-1)
 			}
-			reasons = append(reasons, domain.WorkReason{Code: "scenario.graph_invalid", Message: message})
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.graph_invalid", Message: message, Cause: ruleCause("当前场景图未通过发布前校验"), NextAction: graphAction})
 		}
 		priority, status := domain.WorkPriorityHigh, domain.WorkStatusBlocked
 		title := fmt.Sprintf("%s r%d 需要完整测试", scenario.Name, revision.Revision)
 		action := domain.WorkAction{Label: "前往场景测试", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID)}
 		switch revision.Status {
 		case domain.RevisionDraft:
-			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前 Revision 尚未通过完整环境测试"})
+			if latestSuccessfulTest != nil && snapshotString(*latestSuccessfulTest, "scenarioRevisionSpecDigest") != digest {
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据来自旧场景定义，需要重新测试当前 Revision", EvidenceRunID: latestSuccessfulTest.ID, Cause: p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest), NextAction: testAction})
+			} else {
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前 Revision 尚未通过完整环境测试", Cause: ruleCause("场景发布规则要求当前 Revision 完成一次完整环境测试"), NextAction: testAction})
+			}
 		case domain.RevisionTesting:
 			if len(issues) == 0 {
 				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 正在测试", scenario.Name, revision.Revision)
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行"})
+				reason := domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行", Cause: ruleCause("当前 Revision 已由活动测试 Run 锁定"), NextAction: testAction}
+				if latest != nil {
+					reason.EvidenceRunID = latest.ID
+					reason.Cause = runCause(*latest)
+					reason.NextAction = workAction("查看运行", "/runs?selected="+latest.ID)
+				}
+				reasons = append(reasons, reason)
 			} else {
 				title = fmt.Sprintf("%s r%d 存在测试阻塞", scenario.Name, revision.Revision)
 				action = domain.WorkAction{Label: "检查场景问题", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)}
@@ -233,7 +267,7 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 			if len(issues) == 0 {
 				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 已测试通过", scenario.Name, revision.Revision)
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前 Revision 可以预览候选集并发布"})
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前 Revision 可以预览候选集并发布", Cause: ruleCause("DAG 校验和当前定义的完整测试证据均已满足"), NextAction: workAction("预览候选集并发布", scenarioHref+"&action=publish")})
 				action = domain.WorkAction{Label: "预览候选集并发布", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=publish", scenario.ID, revision.ID)}
 			} else {
 				title = fmt.Sprintf("%s r%d 存在发布阻塞", scenario.Name, revision.Revision)
@@ -246,7 +280,7 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 		} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 			embedded[latest.ID] = true
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
-			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前 Revision 最近一次完整测试失败", EvidenceRunID: latest.ID})
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前 Revision 最近一次完整测试失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
 			action = domain.WorkAction{Label: "查看失败运行", Href: "/runs?selected=" + latest.ID}
 		}
 		items = append(items, domain.WorkItem{
@@ -265,20 +299,26 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 			continue
 		}
 		reasons := []domain.WorkReason{}
+		environmentHref := "/environments?selected=" + environment.ID
 		var inventory InventoryDocument
 		if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil || len(inventory.Hosts) == 0 {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.inventory_empty", Message: "当前 Revision 尚未配置 Inventory 主机"})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.inventory_empty", Message: "当前 Revision 尚未配置 Inventory 主机", Cause: ruleCause("交付计划必须解析到至少一台 Inventory 主机"), NextAction: workAction("配置 Inventory", environmentHref+"&tab=inventory")})
 		}
 		if strings.TrimSpace(environment.Revision.Variables["IMAGE_REGISTRY"]) == "" {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.registry_missing", Message: "缺少 IMAGE_REGISTRY"})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.registry_missing", Message: "缺少 IMAGE_REGISTRY", Cause: ruleCause("镜像交付需要环境声明 IMAGE_REGISTRY"), NextAction: workAction("配置镜像仓库", environmentHref+"&tab=variables&focus=IMAGE_REGISTRY")})
 		}
 		if strings.TrimSpace(environment.Revision.Variables["FILE_STATION"]) == "" {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.file_station_missing", Message: "缺少 FILE_STATION"})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.file_station_missing", Message: "缺少 FILE_STATION", Cause: ruleCause("组件介质交付需要环境声明 FILE_STATION"), NextAction: workAction("配置 File Station", environmentHref+"&tab=variables&focus=FILE_STATION")})
 		}
 		if environment.HealthCheck == nil {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行连通性检查"})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行连通性检查", Cause: ruleCause("连通性证据必须绑定当前 Environment Revision"), NextAction: workAction("检查连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近检查来自旧 Environment Revision，需要重新检查"})
+			at := environment.Revision.CreatedAt
+			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
+			if environment.Revision.CreatedBy == user.ID {
+				cause.ActorName = user.Name
+			}
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.Status == "degraded" {
 			failed := 0
 			for _, result := range environment.HealthCheck.Results {
@@ -286,7 +326,8 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 					failed++
 				}
 			}
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed)})
+			checkedAt := environment.HealthCheck.CheckedAt
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed), Cause: &domain.WorkCause{Kind: "health_check", Summary: "当前 Revision 的只读 TCP 检查未全部通过", At: &checkedAt}, NextAction: workAction("查看异常端点", environmentHref+"&focus=health")})
 		}
 		if len(reasons) == 0 {
 			continue
@@ -294,7 +335,7 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 		items = append(items, domain.WorkItem{
 			ID: "environment:" + environment.ID, Kind: "environment", Priority: domain.WorkPriorityHigh, Status: domain.WorkStatusBlocked,
 			Title: environment.Name + " 需要维护", Subject: domain.WorkSubject{Type: "environment", ID: environment.ID, Name: environment.Name, Revision: environment.Revision.Revision},
-			Reasons: reasons, PrimaryAction: domain.WorkAction{Label: "检查环境", Href: "/environments?selected=" + environment.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: environment.UpdatedAt,
+			Reasons: reasons, PrimaryAction: domain.WorkAction{Label: "检查环境", Href: environmentHref}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: environment.UpdatedAt,
 		})
 	}
 	return items
@@ -322,7 +363,7 @@ func impactWork(user domain.User, notifications []domain.Notification, scenarios
 			items = append(items, domain.WorkItem{
 				ID: "upstream_impact:" + scenarioID, Kind: "upstream_impact", Priority: domain.WorkPriorityInfo, Status: domain.WorkStatusAttention,
 				Title: scenario.Name + " 有上游变化待评估", Subject: domain.WorkSubject{Type: "scenario", ID: scenario.ID, Name: scenario.Name},
-				Reasons:       []domain.WorkReason{{Code: "scenario.upstream_change_review", Message: fmt.Sprintf("有 %d 条未读上游发布影响；不会自动使当前 Revision 失效", len(notices))}},
+				Reasons:       []domain.WorkReason{{Code: "scenario.upstream_change_review", Message: fmt.Sprintf("有 %d 条未读上游发布影响；不会自动使当前 Revision 失效", len(notices)), Cause: ruleCause("上游发布只产生影响评估，不自动改变锁定 Release"), NextAction: workAction("评估影响", "/notifications?scenario="+scenarioID)}},
 				PrimaryAction: domain.WorkAction{Label: "评估影响", Href: "/notifications?scenario=" + scenarioID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: latest.CreatedAt,
 			})
 		}
@@ -335,7 +376,7 @@ func impactWork(user domain.User, notifications []domain.Notification, scenarios
 			items = append(items, domain.WorkItem{
 				ID: "upstream_impact:" + notice.ID, Kind: "upstream_impact", Priority: domain.WorkPriorityInfo, Status: domain.WorkStatusAttention,
 				Title: notice.Title, Subject: domain.WorkSubject{Type: "component", ID: componentID, Name: valueOr(componentName, "上游组件")},
-				Reasons:       []domain.WorkReason{{Code: "component.upstream_change_review", Message: notice.Body}},
+				Reasons:       []domain.WorkReason{{Code: "component.upstream_change_review", Message: notice.Body, Cause: ruleCause("上游组件发布了新的不可变 Release"), NextAction: workAction("评估影响", "/notifications?selected="+notice.ID)}},
 				PrimaryAction: domain.WorkAction{Label: "评估影响", Href: "/notifications?selected=" + notice.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: notice.CreatedAt,
 			})
 		}
@@ -382,18 +423,20 @@ func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.
 		name := runDisplayName(run, components, releases, scenarios, revisions, environments)
 		priority, status := domain.WorkPriorityNormal, domain.WorkStatusInProgress
 		title := name + " " + runStatusMessage(run.Status)
-		reason := domain.WorkReason{Code: "run.in_progress", Message: runStatusMessage(run.Status), EvidenceRunID: run.ID}
+		runHref := "/runs?selected=" + run.ID
+		reason := domain.WorkReason{Code: "run.in_progress", Message: runStatusMessage(run.Status), EvidenceRunID: run.ID, Cause: runCause(run), NextAction: workAction("查看运行", runHref)}
 		if run.Status == domain.RunAwaitingApproval {
+			canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusActionRequired
-			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待 Environment Owner 审批", EvidenceRunID: run.ID}
+			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待 Environment Owner 审批", EvidenceRunID: run.ID, Cause: &domain.WorkCause{Kind: "approval_rule", Summary: "锁定计划包含 destructive 动作或跨站传输"}, NextAction: workAction(runActionLabel(run.Status, canApprove), runHref)}
 		} else if failed {
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
-			reason = domain.WorkReason{Code: "run.failed", Message: valueOr(run.Error, "最近一次有效运行失败"), EvidenceRunID: run.ID}
+			reason = domain.WorkReason{Code: "run.failed", Message: valueOr(run.Error, "最近一次有效运行失败"), EvidenceRunID: run.ID, Cause: runCause(run), NextAction: workAction("查看失败运行", runHref)}
 		}
 		canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
 		items = append(items, domain.WorkItem{
 			ID: "run:" + run.ID, Kind: "run", Priority: priority, Status: status, Title: title,
-			Subject: domain.WorkSubject{Type: "run", ID: run.ID, Name: name, Environment: environmentName(run.EnvironmentID, environments)},
+			Subject: domain.WorkSubject{Type: "run", ID: run.ID, ParentID: run.EnvironmentID, Name: name, Environment: environmentName(run.EnvironmentID, environments)},
 			Reasons: []domain.WorkReason{reason}, PrimaryAction: domain.WorkAction{Label: runActionLabel(run.Status, canApprove), Href: "/runs?selected=" + run.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: run.CreatedAt,
 		})
 	}
@@ -552,6 +595,53 @@ func runActionLabel(status domain.RunStatus, canApprove bool) string {
 		return "查看失败诊断"
 	}
 	return "查看运行"
+}
+
+func workAction(label, href string) *domain.WorkAction {
+	return &domain.WorkAction{Label: label, Href: href}
+}
+
+func ruleCause(summary string) *domain.WorkCause {
+	return &domain.WorkCause{Kind: "platform_rule", Summary: summary}
+}
+
+func runCause(run domain.Run) *domain.WorkCause {
+	at := run.CreatedAt
+	if run.FinishedAt != nil {
+		at = *run.FinishedAt
+	} else if run.StartedAt != nil {
+		at = *run.StartedAt
+	}
+	return &domain.WorkCause{Kind: "run", Summary: runStatusMessage(run.Status), At: &at}
+}
+
+func (p *Platform) evidenceInvalidationCause(ctx context.Context, resourceType, resourceID string, evidence *domain.Run) *domain.WorkCause {
+	after := evidence.CreatedAt
+	if evidence.FinishedAt != nil {
+		after = *evidence.FinishedAt
+	}
+	allowed := map[string]string{
+		"component_release.updated":       "Release 合同或动作定义在证据产生后发生修改",
+		"component_playbook.saved":        "Playbook 在证据产生后发生修改",
+		"component.artifact_saved":        "组件介质在证据产生后发生修改",
+		"component.artifact_detached":     "组件介质引用在证据产生后被移除",
+		"scenario_revision.graph_updated": "场景图或执行策略在证据产生后发生修改",
+	}
+	actions := make([]string, 0, len(allowed))
+	for action := range allowed {
+		actions = append(actions, action)
+	}
+	sort.Strings(actions)
+	event, err := p.store.FirstAuditForResourceAfter(ctx, resourceType, resourceID, after, actions)
+	if err != nil {
+		return ruleCause("当前定义与证据 Run 锁定的定义摘要不一致")
+	}
+	summary := allowed[event.Action]
+	cause := &domain.WorkCause{Kind: "audit_event", Summary: summary, ActorID: event.ActorID, Action: event.Action, At: &event.CreatedAt}
+	if actor, actorErr := p.store.GetUser(ctx, event.ActorID); actorErr == nil {
+		cause.ActorName = actor.Name
+	}
+	return cause
 }
 
 func mergeRunSet(target, source map[string]bool) {

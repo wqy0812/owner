@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -104,4 +106,31 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]domain.AuditEvent, 
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) FirstAuditForResourceAfter(ctx context.Context, resourceType, resourceID string, after time.Time, actions []string) (domain.AuditEvent, error) {
+	var event domain.AuditEvent
+	if len(actions) == 0 {
+		return event, domain.ErrNotFound
+	}
+	var metadata, created string
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(actions)), ",")
+	args := []any{resourceType, resourceID, timeText(after)}
+	for _, action := range actions {
+		args = append(args, action)
+	}
+	err := s.db.QueryRowContext(ctx, `
+SELECT id,actor_id,action,resource_type,resource_id,metadata_json,created_at
+FROM audit_events
+WHERE resource_type=? AND resource_id=? AND created_at>? AND action IN (`+placeholders+`)
+ORDER BY created_at ASC
+LIMIT 1`, args...).Scan(
+		&event.ID, &event.ActorID, &event.Action, &event.ResourceType, &event.ResourceID, &metadata, &created,
+	)
+	if err != nil {
+		return event, mapSQLError(err)
+	}
+	event.Metadata = decodeJSON(metadata, map[string]any{})
+	event.CreatedAt = parseTime(created)
+	return event, nil
 }

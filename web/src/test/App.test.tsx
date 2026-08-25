@@ -149,7 +149,11 @@ describe('platform shell and RBAC UI', () => {
           id: 'component_draft:release-runtime-v2', kind: 'component_draft', priority: 'critical', status: 'blocked',
           title: 'Runtime v2 尚不可发布',
           subject: { type: 'component_release', id: 'release-runtime-v2', parentId: 'component-runtime', name: 'Runtime', version: 'v2' },
-          reasons: [{ code: 'release.rollback_evidence_missing', message: '当前合同缺少回滚及回滚后验证证据', evidenceRunId: 'run-runtime-failed' }],
+          reasons: [{
+            code: 'release.rollback_evidence_missing', message: '当前合同缺少回滚及回滚后验证证据', evidenceRunId: 'run-runtime-failed',
+            cause: { kind: 'platform_rule', summary: '发布规则要求当前合同同时具备回滚与回滚后验证证据' },
+            nextAction: { label: '发起回滚验证', href: '/components?selected=component-runtime&release=release-runtime-v2&action=validate' },
+          }],
           primaryAction: { label: '查看失败运行', href: '/runs?selected=run-runtime-failed' }, secondaryActions: [],
           updatedAt: '2026-08-25T09:00:00Z',
         }],
@@ -160,8 +164,64 @@ describe('platform shell and RBAC UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Runtime v2 尚不可发布' })).toBeInTheDocument();
     expect(screen.getByText('当前合同缺少回滚及回滚后验证证据')).toBeInTheDocument();
+    expect(screen.getByText('发布规则要求当前合同同时具备回滚与回滚后验证证据')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /发起回滚验证/ })).toHaveAttribute('href', '/components?selected=component-runtime&release=release-runtime-v2&action=validate');
     expect(screen.getByRole('link', { name: /查看失败运行/ })).toHaveAttribute('href', '/runs?selected=run-runtime-failed');
     expect(screen.getByRole('link', { name: '查看证据 Run' })).toHaveAttribute('href', '/runs?selected=run-runtime-failed');
+  });
+
+  it('can execute the same component next-step deep link more than once', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-25T10:00:00Z', role: alice.role,
+        summary: { critical: 0, actionRequired: 1, inProgress: 0, informational: 0 },
+        assets: { components: 1, scenarios: 0, environments: 0 },
+        items: [{
+          id: 'component_draft:release-containerd-2', kind: 'component_draft', priority: 'high', status: 'blocked', title: '需要重新验证',
+          subject: { type: 'component_release', id: 'release-containerd-2', parentId: 'component-containerd', name: 'containerd', version: 'v2.1.1' },
+          reasons: [{ code: 'release.evidence_missing', message: '验证证据缺失', cause: { kind: 'platform_rule', summary: '当前合同需要验证' }, nextAction: { label: '再次环境验证', href: '/components?selected=component-containerd&release=release-containerd-2&action=validate' } }],
+          primaryAction: { label: '查看组件', href: '/components?selected=component-containerd&release=release-containerd-2' }, secondaryActions: [], updatedAt: '2026-08-25T09:00:00Z',
+        }],
+      });
+      if (url.endsWith('/runs') || url.endsWith('/scenarios') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components?selected=component-containerd&release=release-containerd-2&action=validate');
+    expect(await screen.findByRole('dialog', { name: '环境验证 v2.1.1' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '取消' }));
+    await userEvent.click(screen.getByRole('link', { name: /再次环境验证/ }));
+    expect(await screen.findByRole('dialog', { name: '环境验证 v2.1.1' })).toBeInTheDocument();
+  });
+
+  it('clears a run action explanation when another run is selected', async () => {
+    const runs = [
+      { id: 'run-a', status: 'queued', environmentId: 'environment-test', environmentName: 'Test Environment', name: 'Run A', createdAt: '2026-08-25T09:00:00Z' },
+      { id: 'run-b', status: 'queued', environmentId: 'environment-test', environmentName: 'Test Environment', name: 'Run B', createdAt: '2026-08-25T08:00:00Z' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/runs/run-a/cancel')) return json({ error: { code: 'conflict', message: 'run is already terminal', explanation: { reasons: [{ code: 'run.already_terminal', message: '该 Run 已进入终态', cause: { kind: 'platform_rule', summary: '该 Run 已结束' }, nextAction: { label: '刷新运行详情', href: '/runs?selected=run-a' } }], primaryAction: { label: '刷新运行详情', href: '/runs?selected=run-a' }, secondaryActions: [] } } }, 409);
+      if (url.endsWith('/runs/run-a')) return json(runs[0]);
+      if (url.endsWith('/runs/run-b')) return json(runs[1]);
+      if (url.endsWith('/runs')) return json(runs);
+      if (url.endsWith('/workbench')) return json({ generatedAt: '2026-08-25T10:00:00Z', role: alice.role, summary: { critical: 0, actionRequired: 0, inProgress: 2, informational: 0 }, assets: { components: 0, scenarios: 0, environments: 0 }, items: [] });
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/runs?selected=run-a');
+    expect(await screen.findByRole('heading', { name: 'Run A' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(await screen.findByRole('heading', { name: '运行操作被阻断' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Run B/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Run B' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: '运行操作被阻断' })).not.toBeInTheDocument();
   });
 
   it('changes visible owner actions after a server-backed identity switch', async () => {

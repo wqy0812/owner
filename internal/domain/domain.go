@@ -712,14 +712,52 @@ type WorkSubject struct {
 }
 
 type WorkReason struct {
-	Code          string `json:"code"`
-	Message       string `json:"message"`
-	EvidenceRunID string `json:"evidenceRunId,omitempty"`
+	Code          string      `json:"code"`
+	Message       string      `json:"message"`
+	EvidenceRunID string      `json:"evidenceRunId,omitempty"`
+	Cause         *WorkCause  `json:"cause,omitempty"`
+	NextAction    *WorkAction `json:"nextAction,omitempty"`
 }
 
 type WorkAction struct {
 	Label string `json:"label"`
 	Href  string `json:"href"`
+}
+
+type WorkCause struct {
+	Kind      string     `json:"kind"`
+	Summary   string     `json:"summary"`
+	ActorID   string     `json:"actorId,omitempty"`
+	ActorName string     `json:"actorName,omitempty"`
+	Action    string     `json:"action,omitempty"`
+	At        *time.Time `json:"at,omitempty"`
+}
+
+type WorkExplanation struct {
+	Reasons          []WorkReason `json:"reasons"`
+	PrimaryAction    *WorkAction  `json:"primaryAction,omitempty"`
+	SecondaryActions []WorkAction `json:"secondaryActions"`
+}
+
+// ActionableError preserves the existing sentinel error contract while adding
+// a structured explanation that clients can render without parsing prose.
+type ActionableError struct {
+	Base        error
+	Explanation WorkExplanation
+}
+
+func (e *ActionableError) Error() string {
+	if e == nil || e.Base == nil {
+		return "actionable error"
+	}
+	return e.Base.Error()
+}
+
+func (e *ActionableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Base
 }
 
 type WorkItem struct {

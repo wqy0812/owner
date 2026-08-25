@@ -33,7 +33,7 @@ function WorkCard({ item }: { item: WorkItem }) {
     <div className="work-card__mark">{item.priority === 'critical' ? <ShieldAlert size={19} /> : item.status === 'in_progress' ? <Clock3 size={19} /> : item.status === 'attention' ? <BellRing size={19} /> : <AlertTriangle size={19} />}</div>
     <div className="work-card__body">
       <header><div><span>{subjectLabel(item)}</span><h3>{item.title}</h3></div><time>{formatTime(item.updatedAt)}</time></header>
-      <ul>{item.reasons.map((reason) => <li key={`${reason.code}-${reason.evidenceRunId ?? reason.message}`}><span /><div>{reason.message}{reason.evidenceRunId && <Link to={`/runs?selected=${reason.evidenceRunId}`}>查看证据 Run</Link>}</div></li>)}</ul>
+      <ul>{item.reasons.map((reason) => <li key={`${reason.code}-${reason.evidenceRunId ?? reason.message}`}><span /><div><strong>{reason.message}</strong>{reason.cause && <small>{reason.cause.actorName ? `${reason.cause.actorName} · ` : ''}{reason.cause.summary}{reason.cause.at ? ` · ${formatTime(reason.cause.at)}` : ''}</small>}<div>{reason.evidenceRunId && reason.nextAction?.href !== `/runs?selected=${reason.evidenceRunId}` && <Link to={`/runs?selected=${reason.evidenceRunId}`}>查看证据 Run</Link>}{reason.nextAction && <Link to={reason.nextAction.href}>{reason.nextAction.label}</Link>}</div></div></li>)}</ul>
     </div>
     <div className="work-card__actions"><Link className="button button--primary" to={item.primaryAction.href}>{item.primaryAction.label}<ArrowRight size={14} /></Link>{item.secondaryActions.map((action) => <Link key={action.href} className="icon-text" to={action.href}>{action.label}</Link>)}</div>
   </article>;

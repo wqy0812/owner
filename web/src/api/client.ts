@@ -26,6 +26,9 @@ import type {
   ScenarioNode,
   ScenarioRevision,
   User,
+  WorkAction,
+  WorkExplanation,
+  WorkReason,
   Workbench,
 } from '../types/domain';
 
@@ -36,6 +39,7 @@ interface ApiErrorBody {
     code?: string;
     message?: string;
     details?: unknown;
+    explanation?: unknown;
   };
   message?: string;
 }
@@ -44,6 +48,7 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly details?: unknown;
+  readonly explanation?: WorkExplanation;
 
   constructor(status: number, body: ApiErrorBody) {
     super(body.error?.message ?? body.message ?? `请求失败（HTTP ${status}）`);
@@ -51,7 +56,14 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body.error?.code ?? `HTTP_${status}`;
     this.details = body.error?.details;
+    if (body.error?.explanation !== undefined && body.error.explanation !== null) {
+      try { this.explanation = normalizeWorkExplanation(body.error.explanation); } catch { /* Keep the original API error usable. */ }
+    }
   }
+}
+
+export function actionableExplanation(reason: unknown): WorkExplanation | undefined {
+  return reason instanceof ApiError ? reason.explanation : undefined;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -733,7 +745,6 @@ function normalizeWorkbench(value: unknown): Workbench {
     },
     items: requireRecords(raw, 'items').map((item) => {
       const subject = requireRecord(field(item, 'subject'), 'work item subject');
-      const primaryAction = requireRecord(field(item, 'primaryAction'), 'work item primary action');
       return {
         id: requireString(item, 'id'),
         kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact'] as const, 'kind'),
@@ -744,12 +755,43 @@ function normalizeWorkbench(value: unknown): Workbench {
           type: requireString(subject, 'type'), id: requireString(subject, 'id'), parentId: optionalString(subject, 'parentId'),
           name: requireString(subject, 'name'), version: optionalString(subject, 'version'), revision: optionalNumber(subject, 'revision'), environment: optionalString(subject, 'environment'),
         },
-        reasons: requireRecords(item, 'reasons').map((reason) => ({ code: requireString(reason, 'code'), message: requireString(reason, 'message'), evidenceRunId: optionalString(reason, 'evidenceRunId') })),
-        primaryAction: { label: requireString(primaryAction, 'label'), href: requireString(primaryAction, 'href') },
-        secondaryActions: requireRecords(item, 'secondaryActions').map((action) => ({ label: requireString(action, 'label'), href: requireString(action, 'href') })),
+        reasons: requireRecords(item, 'reasons').map(normalizeWorkReason),
+        primaryAction: normalizeWorkAction(field(item, 'primaryAction')),
+        secondaryActions: requireRecords(item, 'secondaryActions').map(normalizeWorkAction),
         updatedAt: requireString(item, 'updatedAt'),
       };
     }),
+  };
+}
+
+function normalizeWorkAction(value: unknown): WorkAction {
+  const action = requireRecord(value, 'work action');
+  return { label: requireString(action, 'label'), href: requireString(action, 'href') };
+}
+
+function normalizeWorkReason(reason: LooseRecord): WorkReason {
+  const causeValue = field(reason, 'cause');
+  const cause = causeValue === undefined || causeValue === null ? undefined : requireRecord(causeValue, 'work cause');
+  const actionValue = field(reason, 'nextAction');
+  return {
+    code: requireString(reason, 'code'),
+    message: requireString(reason, 'message'),
+    evidenceRunId: optionalString(reason, 'evidenceRunId'),
+    cause: cause ? {
+      kind: requireString(cause, 'kind'), summary: requireString(cause, 'summary'), actorId: optionalString(cause, 'actorId'),
+      actorName: optionalString(cause, 'actorName'), action: optionalString(cause, 'action'), at: optionalString(cause, 'at'),
+    } : undefined,
+    nextAction: actionValue === undefined || actionValue === null ? undefined : normalizeWorkAction(actionValue),
+  };
+}
+
+function normalizeWorkExplanation(value: unknown): WorkExplanation {
+  const explanation = requireRecord(value, 'work explanation');
+  const primary = field(explanation, 'primaryAction');
+  return {
+    reasons: requireRecords(explanation, 'reasons').map(normalizeWorkReason),
+    primaryAction: primary === undefined || primary === null ? undefined : normalizeWorkAction(primary),
+    secondaryActions: requireRecords(explanation, 'secondaryActions').map(normalizeWorkAction),
   };
 }
 

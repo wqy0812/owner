@@ -249,7 +249,12 @@ func writeError(w http.ResponseWriter, err error) {
 	if errors.As(err, &validation) {
 		details = validation.Details
 	}
+	var actionable *domain.ActionableError
+	var explanation any
+	if errors.As(err, &actionable) {
+		explanation = actionable.Explanation
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": message, "details": details}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": message, "details": details, "explanation": explanation}})
 }

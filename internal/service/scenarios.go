@@ -350,24 +350,28 @@ func (p *Platform) PublishScenario(ctx context.Context, user domain.User, revisi
 		return revision, err
 	}
 	if scenario.CurrentRevisionID != revisionID {
-		return revision, fmt.Errorf("%w: only the current scenario revision can be published", domain.ErrConflict)
+		base := fmt.Errorf("%w: only the current scenario revision can be published", domain.ErrConflict)
+		return revision, actionableExistingError(base, "scenario.not_current", "历史 Revision 保持不可变，只有当前 Revision 可以发布", "查看当前 Revision", "/scenarios?selected="+scenario.ID)
 	}
 	if revision.Status != domain.RevisionTestPassed || revision.TestPassedAt == nil {
-		return revision, fmt.Errorf("%w: the current scenario revision must pass a complete test before publishing", domain.ErrConflict)
+		base := fmt.Errorf("%w: the current scenario revision must pass a complete test before publishing", domain.ErrConflict)
+		return revision, actionableExistingError(base, "scenario.test_required", "发布规则要求当前 Revision 通过完整环境测试", "前往场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
 	}
 	issues, err := p.ValidateScenario(ctx, user, revisionID)
 	if err != nil {
 		return revision, err
 	}
 	if len(issues) > 0 {
-		return revision, &domain.ValidationError{Message: "scenario validation failed", Details: issues}
+		base := &domain.ValidationError{Message: "scenario validation failed", Details: issues}
+		return revision, actionableExistingError(base, "scenario.graph_invalid", "当前 DAG 或锁定 Release 未通过校验", "检查场景问题", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=inspect", scenario.ID, revision.ID))
 	}
 	set, err := p.CandidateReleaseSet(ctx, user, revisionID)
 	if err != nil {
 		return revision, err
 	}
 	if !set.Ready {
-		return revision, &domain.ValidationError{Message: "candidate release set is not ready", Details: set.Issues}
+		base := &domain.ValidationError{Message: "candidate release set is not ready", Details: set.Issues}
+		return revision, actionableExistingError(base, "scenario.candidate_set_blocked", "候选 Release 状态或证据在发布前复核时发生变化", "检查候选集", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=inspect", scenario.ID, revision.ID))
 	}
 	now := time.Now().UTC()
 	releaseIDs := make([]string, 0, len(set.Releases))

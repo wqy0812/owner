@@ -628,6 +628,25 @@ func TestNotificationsAuditSessionAndLogs(t *testing.T) {
 	if got, err := s.ListAudit(ctx, 10); err != nil || len(got) != 1 {
 		t.Fatalf("audit=%+v err=%v", got, err)
 	}
+	if _, err := s.FirstAuditForResourceAfter(ctx, e.ResourceType, e.ResourceID, testNow.Add(time.Second), []string{e.Action}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("future audit lookup err=%v", err)
+	}
+	if _, err := s.FirstAuditForResourceAfter(ctx, e.ResourceType, e.ResourceID, testNow.Add(-time.Second), nil); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("empty action filter err=%v", err)
+	}
+	if got, err := s.FirstAuditForResourceAfter(ctx, e.ResourceType, e.ResourceID, testNow.Add(-time.Second), []string{"unrelated", e.Action}); err != nil || got.ID != e.ID || got.Action != e.Action {
+		t.Fatalf("resource audit=%+v err=%v", got, err)
+	}
+	later := e
+	later.ID = "audit-2"
+	later.Action = "component_release.updated"
+	later.CreatedAt = testNow.Add(time.Second)
+	if err := s.AppendAudit(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.FirstAuditForResourceAfter(ctx, e.ResourceType, e.ResourceID, testNow.Add(-time.Second), []string{later.Action}); err != nil || got.ID != later.ID {
+		t.Fatalf("filtered resource audit=%+v err=%v", got, err)
+	}
 	if _, err := s.DB().ExecContext(ctx, `UPDATE audit_events SET action='tampered' WHERE id=?`, e.ID); err == nil {
 		t.Fatal("append-only audit event was updated")
 	}

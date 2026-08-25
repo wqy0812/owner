@@ -298,6 +298,34 @@ export interface AuditEvent {
 export type WorkPriority = 'critical' | 'high' | 'normal' | 'info';
 export type WorkStatus = 'blocked' | 'action_required' | 'in_progress' | 'attention';
 
+export interface WorkAction {
+  label: string;
+  href: string;
+}
+
+export interface WorkCause {
+  kind: string;
+  summary: string;
+  actorId?: string;
+  actorName?: string;
+  action?: string;
+  at?: string;
+}
+
+export interface WorkReason {
+  code: string;
+  message: string;
+  evidenceRunId?: string;
+  cause?: WorkCause;
+  nextAction?: WorkAction;
+}
+
+export interface WorkExplanation {
+  reasons: WorkReason[];
+  primaryAction?: WorkAction;
+  secondaryActions: WorkAction[];
+}
+
 export interface WorkItem {
   id: string;
   kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact';
@@ -313,9 +341,9 @@ export interface WorkItem {
     revision?: number;
     environment?: string;
   };
-  reasons: Array<{ code: string; message: string; evidenceRunId?: string }>;
-  primaryAction: { label: string; href: string };
-  secondaryActions: Array<{ label: string; href: string }>;
+  reasons: WorkReason[];
+  primaryAction: WorkAction;
+  secondaryActions: WorkAction[];
   updatedAt: string;
 }
 

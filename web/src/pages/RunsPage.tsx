@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, Copy, Download, ListFilter, PlayCircle, ScrollText, Search, ShieldAlert, Square, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
+import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { Run } from '../types/domain';
+import type { Run, WorkExplanation } from '../types/domain';
 
 const ACTIVE = new Set(['queued', 'awaiting_approval', 'running']);
 
@@ -28,12 +29,14 @@ export function RunsPage() {
   const { user, notify, refreshTokens, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: runs, loading, error, isRefreshing, reload } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const [filter, setFilter] = useState<'all' | 'active' | 'finished'>('all');
   const [detail, setDetail] = useState<Run>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string>();
   const [detailRetry, setDetailRetry] = useState(0);
   const [busy, setBusy] = useState<string>();
+  const [actionExplanation, setActionExplanation] = useState<WorkExplanation>();
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchReason, setBatchReason] = useState('同一维护窗口批量批准，按环境 FIFO 串行执行');
   const [logQuery, setLogQuery] = useState('');
@@ -41,6 +44,10 @@ export function RunsPage() {
   const actionInFlight = useRef(false);
   const logRef = useRef<HTMLPreElement>(null);
   const selectedId = searchParams.get('selected') ?? runs?.[0]?.id;
+
+  useEffect(() => {
+    setActionExplanation(undefined);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) { setDetail(undefined); setDetailError(undefined); return; }
@@ -61,6 +68,7 @@ export function RunsPage() {
   }, [detailRetry, refreshTokens.runs, selectedId]);
 
   const selectedSummary = runs?.find((run) => run.id === selectedId);
+  const runWorkItem = workbench?.items.find((item) => item.subject.type === 'run' && item.subject.id === selectedId);
   useEffect(() => {
     if (!selectedSummary) return;
     setDetail((current) => current?.id === selectedSummary.id ? { ...current, ...selectedSummary } : current);
@@ -73,14 +81,15 @@ export function RunsPage() {
     if (!detail || actionInFlight.current) return;
     actionInFlight.current = true;
     setBusy(kind);
+    setActionExplanation(undefined);
     try {
       let updated: Run | undefined;
       if (kind === 'cancel') updated = await api.cancelRun(detail.id);
       else if (detail.approval?.id) updated = await (kind === 'approve' ? api.approve(detail.approval.id) : api.reject(detail.approval.id));
       if (!updated) throw new Error('审批记录已失效，请刷新后重试。');
       setDetail(updated);
-      notify('success', kind === 'approve' ? '已批准执行' : kind === 'reject' ? '已拒绝执行' : '取消请求已发送'); signalRefresh(['runs', 'environments', 'scenarios']);
-    } catch (reason) { notify('error', '操作失败', displayError(reason)); } finally { actionInFlight.current = false; setBusy(undefined); }
+      notify('success', kind === 'approve' ? '已批准执行' : kind === 'reject' ? '已拒绝执行' : '取消请求已发送'); signalRefresh(['runs', 'environments', 'scenarios', 'workbench']);
+    } catch (reason) { setActionExplanation(actionableExplanation(reason)); notify('error', '操作失败', displayError(reason)); } finally { actionInFlight.current = false; setBusy(undefined); }
   }
 
   async function approveBatch() {
@@ -90,8 +99,8 @@ export function RunsPage() {
       await api.batchDecideApprovals(pendingApprovals.map((run) => run.approval!.id), 'approved', batchReason.trim());
       setBatchOpen(false);
       notify('success', `已批量批准 ${pendingApprovals.length} 个运行`, '运行已按各环境 FIFO 队列排队，不会并发占用同一环境。');
-      signalRefresh(['runs', 'environments', 'scenarios']);
-    } catch (reason) { notify('error', '批量审批失败', displayError(reason)); }
+      signalRefresh(['runs', 'environments', 'scenarios', 'workbench']);
+    } catch (reason) { setActionExplanation(actionableExplanation(reason)); notify('error', '批量审批失败', displayError(reason)); }
     finally { setBusy(undefined); }
   }
 
@@ -132,6 +141,8 @@ export function RunsPage() {
           <div className="run-actions"><StatusPill status={detail.status} />{ACTIVE.has(detail.status) && detail.status !== 'awaiting_approval' && <button disabled={busy === 'cancel'} className="button button--danger-soft" onClick={() => void action('cancel')}><Square size={14} /> 取消</button>}</div>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /><small>{progressLabel}</small></div>
         </article>
+        <StatusExplanationPanel item={runWorkItem} />
+        <StatusExplanationPanel explanation={actionExplanation} title="运行操作被阻断" />
         {failure && <article className="failure-summary" role="alert"><AlertTriangle size={24} /><div><strong>{failure.title}</strong><p>{failure.detail}</p><small>{failure.host ? `失败主机：${failure.host} · ` : ''}完成于 {formatTime(detail.finishedAt)}</small></div><div><button className="button button--quiet" onClick={() => void navigator.clipboard?.writeText(`${failure.title}\n${failure.detail}\nRun ${detail.id}`)}><Copy size={14} /> 复制诊断</button>{failure.stepId && <button className="button button--danger-soft" onClick={() => document.getElementById(`run-step-${failure.stepId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>定位失败步骤</button>}</div></article>}
         {detail.status === 'awaiting_approval' && <article className="approval-banner"><ShieldAlert size={24} /><div><strong>危险作业等待环境 Owner 审批</strong><p>{detail.approval?.riskReason ?? '动作包含 recovery / clean / destroy / uninstall，可能改变或删除目标环境数据。'}</p></div>{user.role === 'environment_owner' ? <div><button disabled={Boolean(busy)} className="button button--quiet" onClick={() => void action('reject')}><X size={15} /> 拒绝</button><button disabled={Boolean(busy)} className="button button--primary" onClick={() => void action('approve')}><Check size={15} /> 批准执行</button></div> : <span>仅环境 Owner 可审批</span>}</article>}
         {(detail.artifactTransfers?.length || detail.imageTransfers?.length) ? <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><ShieldAlert size={18} /></span><div><h2>跨仓库平移</h2><p>以下内容属于本次审批范围；目标已存在相同指纹时不会重复传输。</p></div></div></header><div className="backup-list">{detail.imageTransfers?.map((item) => <section key={item.targetDigest}><strong>镜像：{item.sourceRegistry} → {item.targetRegistry}</strong><p>{item.targetDigest}</p></section>)}{detail.artifactTransfers?.map((item) => <section key={`${item.targetStation}-${item.relativePath}`}><strong>介质 {item.alias}：{item.sourceStation} → {item.targetStation}</strong><p>{item.relativePath}</p><small>sha256:{item.sha256}</small></section>)}</div></article> : null}

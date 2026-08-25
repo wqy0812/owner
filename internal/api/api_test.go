@@ -495,6 +495,14 @@ func TestWorkbenchIsRoleScopedAndActionable(t *testing.T) {
 				if !reasonsOK || len(reasons) == 0 || !actionOK || action["label"] == "" || !hrefOK || !strings.HasPrefix(href, "/") {
 					t.Fatalf("work item is not actionable: %#v", item)
 				}
+				for _, rawReason := range reasons {
+					reason := rawReason.(map[string]any)
+					cause, causeOK := reason["cause"].(map[string]any)
+					nextAction, nextActionOK := reason["nextAction"].(map[string]any)
+					if !causeOK || cause["summary"] == "" || !nextActionOK || nextAction["label"] == "" || !strings.HasPrefix(fmt.Sprint(nextAction["href"]), "/") {
+						t.Fatalf("work reason does not explain cause and next step: %#v", reason)
+					}
+				}
 			}
 			if !foundExpected {
 				t.Fatalf("role %s did not receive %s: %#v", test.role, test.expectedKind, items)
@@ -1265,6 +1273,34 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		response := f.request(http.MethodPost, "/api/v1/component-releases/"+release.ID+"/publish", nil, alice)
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "rollback and post-rollback verification") {
 			t.Fatalf("stale evidence publish status=%d body=%s", response.Code, response.Body.String())
+		}
+		errorBody := decodeEnvelope(t, response)["error"].(map[string]any)
+		explanation := errorBody["explanation"].(map[string]any)
+		reasons := explanation["reasons"].([]any)
+		if reasons[0].(map[string]any)["code"] != "release.evidence_missing" || explanation["primaryAction"].(map[string]any)["href"] == "" {
+			t.Fatalf("publish conflict is not actionable: %#v", errorBody)
+		}
+
+		workbench := f.request(http.MethodGet, "/api/v1/workbench", nil, alice)
+		items := decodeEnvelope(t, workbench)["data"].(map[string]any)["items"].([]any)
+		foundStaleCause := false
+		for _, rawItem := range items {
+			item := rawItem.(map[string]any)
+			if item["id"] != "component_draft:"+release.ID {
+				continue
+			}
+			for _, rawReason := range item["reasons"].([]any) {
+				reason := rawReason.(map[string]any)
+				if reason["code"] != "release.rollback_evidence_stale" {
+					continue
+				}
+				cause := reason["cause"].(map[string]any)
+				nextAction := reason["nextAction"].(map[string]any)
+				foundStaleCause = cause["kind"] == "audit_event" && cause["actorId"] == seed.ComponentOwnerRuntimeID && strings.Contains(fmt.Sprint(nextAction["href"]), "action=validate")
+			}
+		}
+		if !foundStaleCause {
+			t.Fatalf("workbench did not attribute stale evidence to the audited change: %s", workbench.Body.String())
 		}
 	})
 }

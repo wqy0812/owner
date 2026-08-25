@@ -199,6 +199,30 @@ h1, h2, h3, p { margin-top: 0; }
 .workbench-empty { display: flex; align-items: center; justify-content: center; min-height: 190px; color: #279275; }
 .workbench-empty .empty-state { border: 0; }
 
+.status-explanation { border-color: #efc46d; background: linear-gradient(135deg, #fffdf7, #fff9eb); overflow: hidden; }
+.status-explanation--critical { border-color: #ee9b9b; background: linear-gradient(135deg, #fffafa, #fff1f1); }
+.status-explanation > header { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid rgba(139, 116, 68, .16); }
+.status-explanation > header > span { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; color: #a46b12; background: #ffefc8; flex: none; }
+.status-explanation--critical > header > span { color: #a33f46; background: #ffe1e1; }
+.status-explanation > header > div { min-width: 0; flex: 1; }
+.status-explanation > header small { display: block; color: #8d7956; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.status-explanation > header h2 { margin: 2px 0 0; font-size: 17px; }
+.status-explanation > ul { list-style: none; padding: 4px 0 0; margin: 0; }
+.status-explanation > ul > li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px 0; border-bottom: 1px solid rgba(139, 116, 68, .12); }
+.status-explanation > ul > li:last-child { border-bottom: 0; padding-bottom: 0; }
+.status-explanation__bullet { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: #d99a2b; }
+.status-explanation--critical .status-explanation__bullet { background: #d15c64; }
+.status-explanation li strong { display: block; font-size: 13px; line-height: 1.5; }
+.status-explanation li small { display: flex; align-items: center; gap: 5px; margin-top: 4px; color: #7f7565; line-height: 1.4; }
+.status-explanation__reason-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 25px; }
+.status-explanation > footer { display: flex; gap: 12px; justify-content: flex-end; padding-top: 12px; }
+@media (max-width: 760px) {
+  .status-explanation > header { align-items: flex-start; flex-wrap: wrap; }
+  .status-explanation > header .button { width: 100%; justify-content: center; }
+  .status-explanation > ul > li { grid-template-columns: 10px minmax(0, 1fr); }
+  .status-explanation__reason-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+}
+
 .manual-shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 15px; align-items: start; }
 .manual-toc { position: sticky; top: 86px; padding: 11px; }
 .manual-toc__heading { display: flex; align-items: center; gap: 9px; padding: 8px 8px 13px; color: #53617e; }

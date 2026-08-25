@@ -47,6 +47,9 @@ type preparedEnvironmentRollback struct {
 func (p *Platform) PreviewEnvironmentRollback(ctx context.Context, user domain.User, environmentID string) (EnvironmentRollbackPlan, error) {
 	prepared, err := p.prepareEnvironmentRollback(ctx, user, environmentID)
 	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			err = actionableExistingError(err, "rollback.baseline_invalid", "当前安装清单、来源 Run 或备份基线无法生成安全回滚计划", "检查环境与来源 Run", "/environments?selected="+environmentID)
+		}
 		return EnvironmentRollbackPlan{}, err
 	}
 	plan, digest, destructive, err := p.prepareLockedPlan(ctx, prepared.environment, domain.RunEnvironmentRollback, "preview", prepared.sourceRuns[0].CreatedAt, prepared.steps)
@@ -59,6 +62,9 @@ func (p *Platform) PreviewEnvironmentRollback(ctx context.Context, user domain.U
 func (p *Platform) StartEnvironmentRollback(ctx context.Context, user domain.User, environmentID string, input EnvironmentRollbackRequest) (domain.Run, error) {
 	prepared, err := p.prepareEnvironmentRollback(ctx, user, environmentID)
 	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			err = actionableExistingError(err, "rollback.baseline_invalid", "当前安装清单、来源 Run 或备份基线无法生成安全回滚计划", "检查环境与来源 Run", "/environments?selected="+environmentID)
+		}
 		return domain.Run{}, err
 	}
 	if strings.TrimSpace(input.ExpectedPlanDigest) == "" {

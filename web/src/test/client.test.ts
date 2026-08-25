@@ -110,4 +110,28 @@ describe('API response contract', () => {
       items: [{ id: 'component_draft:release-1', reasons: [{ evidenceRunId: 'run-1' }] }],
     });
   });
+
+  it('keeps structured why and next-step data on actionable API conflicts', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ error: {
+      code: 'conflict', message: '执行计划已变化',
+      explanation: {
+        reasons: [{
+          code: 'execution.plan_changed', message: '环境或版本变化后旧预览已失效',
+          cause: { kind: 'platform_rule', summary: '提交时重新规划得到不同摘要' },
+          nextAction: { label: '重新预览', href: '/components?selected=component-1&release=release-1&action=validate' },
+        }],
+        primaryAction: { label: '重新预览', href: '/components?selected=component-1&release=release-1&action=validate' },
+        secondaryActions: [],
+      },
+    } }), 'application/json', 409)));
+
+    await expect(api.publishRelease('release-1')).rejects.toMatchObject({
+      status: 409,
+      explanation: {
+        reasons: [{ code: 'execution.plan_changed', message: '环境或版本变化后旧预览已失效', cause: { kind: 'platform_rule', summary: '提交时重新规划得到不同摘要' }, nextAction: { label: '重新预览', href: '/components?selected=component-1&release=release-1&action=validate' } }],
+        primaryAction: { label: '重新预览', href: '/components?selected=component-1&release=release-1&action=validate' },
+        secondaryActions: [],
+      },
+    } satisfies Partial<ApiError>);
+  });
 });

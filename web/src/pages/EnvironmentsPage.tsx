@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, UserRound, Wifi } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
+import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentHealthCheck, EnvironmentHost, EnvironmentRevision, EnvironmentRollbackPlan } from '../types/domain';
+import type { CredentialRef, Environment, EnvironmentHealthCheck, EnvironmentHost, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -34,8 +35,10 @@ export function EnvironmentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const selectedId = searchParams.get('selected') ?? '';
   const selected = useMemo(() => environments?.find((item) => item.id === selectedId) ?? environments?.[0], [environments, selectedId]);
+  const environmentWorkItem = workbench?.items.find((item) => item.subject.type === 'environment' && item.subject.id === selected?.id);
   const [tab, setTab] = useState<Tab>('inventory');
   const [hosts, setHosts] = useState<EnvironmentHost[]>([]);
   const [factsText, setFactsText] = useState('{}');
@@ -50,7 +53,9 @@ export function EnvironmentsPage() {
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollbackPlan, setRollbackPlan] = useState<EnvironmentRollbackPlan>();
   const [rollbackError, setRollbackError] = useState<string>();
+  const [rollbackExplanation, setRollbackExplanation] = useState<WorkExplanation>();
   const [rollbackBusy, setRollbackBusy] = useState<'preview' | 'submit'>();
+  const handledDeepLink = useRef<string>();
   const editable = user.role === 'environment_owner' && selected?.ownerId === user.id;
 
   useEffect(() => {
@@ -60,6 +65,25 @@ export function EnvironmentsPage() {
     setCredentials(selected?.currentRevision?.credentialRefs ?? []);
     setHealth(selected?.healthCheck);
   }, [selected?.currentRevision?.id, selected?.healthCheck?.id, selected?.id]);
+
+  useEffect(() => {
+    const requested = searchParams.get('tab');
+    if (requested === 'inventory' || requested === 'facts' || requested === 'variables' || requested === 'credentials') setTab(requested);
+    const focus = searchParams.get('focus');
+    if (focus) requestAnimationFrame(() => document.getElementById(focus === 'health' ? 'environment-health' : `environment-variable-${focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    const action = searchParams.get('action');
+    if (action !== 'rollback') handledDeepLink.current = undefined;
+    if (action === 'rollback' && selected && editable) {
+      const key = `${selected.id}:rollback`;
+      if (handledDeepLink.current !== key) {
+        handledDeepLink.current = key;
+        void previewClusterRollback();
+        const next = new URLSearchParams(searchParams);
+        next.delete('action');
+        setSearchParams(next, { replace: true });
+      }
+    }
+  }, [editable, searchParams, selected?.id, setSearchParams]);
 
   const baseline = selected?.currentRevision;
   const variablesObject = Object.fromEntries(variables.map((item) => [item.name.trim(), item.value]));
@@ -127,7 +151,7 @@ export function EnvironmentsPage() {
       if (tab === 'credentials') await api.updateCredentialRefs(selected.id, credentials.map(({ name, type, reference }) => ({ name, type, reference })), changeReason);
       setSaveOpen(false);
       notify('success', '环境 Revision 已更新', '差异和变更原因已记录，后续运行会锁定新快照。');
-      signalRefresh('environments');
+      signalRefresh(['environments', 'workbench']);
     } catch (reason) {
       notify('error', '环境保存失败', reason instanceof SyntaxError ? '内容必须是有效 JSON。' : displayError(reason));
     } finally { setBusy(false); }
@@ -140,7 +164,7 @@ export function EnvironmentsPage() {
       const result = await api.checkEnvironmentHealth(selected.id);
       setHealth(result);
       notify(result.status === 'healthy' ? 'success' : 'error', result.status === 'healthy' ? '环境检查通过' : '环境检查发现异常', `${result.results.filter((item) => item.reachable).length}/${result.results.length} 个端点可达。`);
-      signalRefresh('environments');
+      signalRefresh(['environments', 'workbench']);
     } catch (reason) { notify('error', '环境检查失败', displayError(reason)); } finally { setHealthBusy(false); }
   }
 
@@ -151,7 +175,7 @@ export function EnvironmentsPage() {
       await api.restoreEnvironmentRevision(selected.id, restoreRevision.id, reason);
       notify('success', `已基于 r${restoreRevision.revision} 创建新 Revision`, '历史没有被覆盖，后续 Run 将锁定恢复后的新快照。');
       setRestoreRevision(undefined);
-      signalRefresh('environments');
+      signalRefresh(['environments', 'workbench']);
     } catch (errorReason) { notify('error', 'Revision 恢复失败', displayError(errorReason)); } finally { setBusy(false); }
   }
 
@@ -160,11 +184,13 @@ export function EnvironmentsPage() {
     setRollbackOpen(true);
     setRollbackPlan(undefined);
     setRollbackError(undefined);
+    setRollbackExplanation(undefined);
     setRollbackBusy('preview');
     try {
       setRollbackPlan(await api.previewEnvironmentRollback(selected.id));
     } catch (reason) {
       setRollbackError(displayError(reason));
+      setRollbackExplanation(actionableExplanation(reason));
     } finally { setRollbackBusy(undefined); }
   }
 
@@ -172,15 +198,17 @@ export function EnvironmentsPage() {
     if (!selected || !rollbackPlan) return;
     setRollbackBusy('submit');
     setRollbackError(undefined);
+    setRollbackExplanation(undefined);
     try {
       const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName });
       notify('success', '整集群回滚 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
       setRollbackOpen(false);
       setRollbackPlan(undefined);
-      signalRefresh(['runs', 'environments']);
+      signalRefresh(['runs', 'environments', 'workbench']);
       navigate(`/runs?selected=${run.id}`);
     } catch (reason) {
       setRollbackError(displayError(reason));
+      setRollbackExplanation(actionableExplanation(reason));
       setRollbackPlan(undefined);
     } finally { setRollbackBusy(undefined); }
   }
@@ -214,6 +242,7 @@ export function EnvironmentsPage() {
           <div><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
           <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>{editable && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button>}</div>
         </article>
+        <StatusExplanationPanel item={environmentWorkItem} />
         <section className="fact-grid">
           <article><Cpu size={18} /><span>架构</span><strong>{String(facts.architecture ?? 'amd64')}</strong></article>
           <article><HardDrive size={18} /><span>操作系统</span><strong>{String(facts.operatingSystem ?? 'Kylin')}</strong></article>
@@ -223,7 +252,7 @@ export function EnvironmentsPage() {
           <article><Server size={18} /><span>主机</span><strong>{hosts.length}</strong></article>
         </section>
 
-        <article className="panel health-panel">
+        <article className="panel health-panel" id="environment-health">
           <header className="panel__header"><div><span className={`panel__icon ${health?.status === 'degraded' ? 'panel__icon--rose' : 'panel__icon--cyan'}`}><Activity size={18} /></span><div><h2>环境连通性</h2><p>TCP 只读检查主机 SSH、IMAGE_REGISTRY 和 FILE_STATION，不执行安装。</p></div></div>{editable && <button className="button button--secondary" disabled={healthBusy} onClick={() => void checkHealth()}><Wifi size={15} /> {healthBusy ? '检查中…' : '立即检查'}</button>}</header>
           {!health ? <EmptyState title="尚未检查" description="“调度空闲”不代表主机或依赖端点真实可达。" /> : <div className="health-results">
             <div className={`health-summary health-summary--${health.status}`}>{health.status === 'healthy' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<div><strong>{health.status === 'healthy' ? '全部端点可达' : '存在不可达端点'}</strong><small>{formatTime(health.checkedAt)} · {health.results.filter((item) => item.reachable).length}/{health.results.length} 通过{healthStale ? ' · 检查基于旧 Revision，请重新检查' : ''}</small></div></div>
@@ -237,7 +266,7 @@ export function EnvironmentsPage() {
           ] as const).map(([value, label, icon]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{icon}{label}{dirtyByTab[value] && <span className="dirty-dot" aria-label="有未保存更改" />}</button>)}</div>
           {tab === 'inventory' && <div className="editor-section"><div className="section-title"><div><h3>主机与分组</h3><p>保存后创建新的 Environment Revision。</p></div>{editable && <button className="button button--quiet" onClick={() => setHosts((items) => [...items, { name: '', address: '', groups: ['all'], port: 22, user: 'root' }])}><Plus size={15} /> 添加主机</button>}</div><div className="host-table"><div className="host-table__head"><span>主机名</span><span>地址</span><span>主机组</span><span>SSH 用户 / 端口</span><span /></div>{hosts.map((host, index) => <div className="host-row" key={`${host.name}-${index}`}><input aria-label={`主机 ${index + 1} 名称`} value={host.name} disabled={!editable} onChange={(event) => updateHost(index, { name: event.target.value })} /><input aria-label={`主机 ${index + 1} 地址`} value={host.address} disabled={!editable} onChange={(event) => updateHost(index, { address: event.target.value })} /><input aria-label={`主机 ${index + 1} 分组`} value={host.groups.join(', ')} disabled={!editable} onChange={(event) => updateHost(index, { groups: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /><div className="split-input"><input aria-label={`主机 ${index + 1} SSH 用户`} value={host.user ?? ''} disabled={!editable} onChange={(event) => updateHost(index, { user: event.target.value })} /><input aria-label={`主机 ${index + 1} SSH 端口`} type="number" value={host.port ?? 22} disabled={!editable} onChange={(event) => updateHost(index, { port: Number(event.target.value) })} /></div>{editable && <button className="icon-button icon-button--danger" aria-label={`移除主机 ${host.name || index + 1}，保存后生效`} onClick={() => setHosts((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!hosts.length && <EmptyState title="没有主机" description={editable ? '添加一台测试主机。' : '环境 Owner 尚未配置 Inventory。'} />}</div>}
           {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>环境事实</h3><p>架构、操作系统和网络栈会参与组件兼容性预检。</p></div></div><textarea aria-label="环境事实 JSON" className="code-editor" value={factsText} disabled={!editable} onChange={(event) => setFactsText(event.target.value)} spellCheck={false} /></div>}
-          {tab === 'variables' && <div className="editor-section"><div className="section-title"><div><h3>组件作业环境变量</h3><p>IMAGE_REGISTRY 指定镜像仓库，FILE_STATION 指定组件介质站，均填写 host:port。</p></div>{editable && <button className="button button--quiet" onClick={() => setVariables((items) => [...items, { name: '', value: '' }])}><Plus size={15} /> 添加变量</button>}</div><div className="environment-variable-list">{variables.map((variable, index) => <div key={index}><span className="variable-icon"><Braces size={17} /></span><input aria-label="环境变量名" value={variable.name} disabled={!editable} placeholder="IMAGE_REGISTRY" onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value.toUpperCase() } : item))} /><input aria-label={`环境变量 ${variable.name || index} 的值`} value={variable.value} disabled={!editable} placeholder={variable.name === 'IMAGE_REGISTRY' ? '192.168.88.54:5000' : variable.name === 'FILE_STATION' ? '192.168.88.57:8080' : '非敏感字符串值'} onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除环境变量 ${variable.name || index}，保存后生效`} onClick={() => setVariables((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!variables.length && <EmptyState title="尚未配置环境变量" description={editable ? '至少添加 IMAGE_REGISTRY 和 FILE_STATION，分别用于镜像和组件介质。' : '环境 Owner 尚未配置环境变量。'} />}</div>}
+          {tab === 'variables' && <div className="editor-section"><div className="section-title"><div><h3>组件作业环境变量</h3><p>IMAGE_REGISTRY 指定镜像仓库，FILE_STATION 指定组件介质站，均填写 host:port。</p></div>{editable && <button className="button button--quiet" onClick={() => setVariables((items) => [...items, { name: '', value: '' }])}><Plus size={15} /> 添加变量</button>}</div><div className="environment-variable-list">{variables.map((variable, index) => <div key={index} id={variable.name ? `environment-variable-${variable.name}` : undefined}><span className="variable-icon"><Braces size={17} /></span><input aria-label="环境变量名" value={variable.name} disabled={!editable} placeholder="IMAGE_REGISTRY" onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value.toUpperCase() } : item))} /><input aria-label={`环境变量 ${variable.name || index} 的值`} value={variable.value} disabled={!editable} placeholder={variable.name === 'IMAGE_REGISTRY' ? '192.168.88.54:5000' : variable.name === 'FILE_STATION' ? '192.168.88.57:8080' : '非敏感字符串值'} onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除环境变量 ${variable.name || index}，保存后生效`} onClick={() => setVariables((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!variables.length && <EmptyState title="尚未配置环境变量" description={editable ? '至少添加 IMAGE_REGISTRY 和 FILE_STATION，分别用于镜像和组件介质。' : '环境 Owner 尚未配置环境变量。'} />}</div>}
           {tab === 'credentials' && <div className="editor-section"><div className="section-title"><div><h3>CredentialRef</h3><p>数据库和 API 只保存引用，其他角色只看到脱敏值。</p></div>{editable && <button className="button button--quiet" onClick={() => setCredentials((items) => [...items, { name: '', type: 'envVarRef', reference: '' }])}><Plus size={15} /> 添加引用</button>}</div><div className="credential-list">{credentials.map((credential, index) => <div key={`${credential.name}-${index}`}><span className="credential-icon"><LockKeyhole size={17} /></span><input aria-label="凭据名称" value={credential.name} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} /><select aria-label={`凭据 ${credential.name || index} 类型`} value={credential.type} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, type: event.target.value as CredentialRef['type'] } : item))}><option value="envVarRef">envVarRef</option><option value="sshKeyPath">sshKeyPath</option></select><input aria-label={`凭据 ${credential.name || index} 引用`} value={editable ? credential.reference ?? '' : credential.maskedReference ?? '••••••••'} disabled={!editable} placeholder={credential.type === 'envVarRef' ? 'ANSIBLE_SSH_KEY' : '/path/to/key'} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, reference: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除凭据 ${credential.name || index}，保存后生效`} onClick={() => setCredentials((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div></div>}
           {editable && <footer className="editor-footer"><span className={dirty ? 'editor-dirty' : ''}><LockKeyhole size={14} /> {dirty ? '当前页有未保存更改' : '当前页与已保存 Revision 一致'}</span><div>{dirty && <button className="button button--quiet" onClick={discardCurrent}>放弃本页更改</button>}<button className="button button--primary" disabled={busy || !dirty} onClick={() => setSaveOpen(true)}><Save size={16} /> 保存新 Revision</button></div></footer>}
         </article>
@@ -250,17 +279,17 @@ export function EnvironmentsPage() {
     {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新 Revision" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧 Revision。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前 Revision。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
-    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
+    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
   </div>;
 }
 
-function ClusterRollbackModal({ environment, plan, error, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
+function ClusterRollbackModal({ environment, plan, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
   return <Modal title="一键回滚整个集群" description={`目标环境：${environment.name}。计划只允许恢复为安装前的干净状态。`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
       <div className="warning-callout"><AlertTriangle size={19} /><div><strong>这是整集群破坏性操作</strong><p>平台将依据当前安装清单，按来源 Run 时间倒序、每个来源内部安装步骤逆序执行 rollback。任一基线不完整都会拒绝生成计划。</p></div></div>
-      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <ErrorBlock message={error} onRetry={onRetry} /> : plan ? <>
+      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : plan ? <>
         <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>回滚节点</span><strong>{plan.nodeCount}</strong></div><div><span>Environment Revision</span><strong>{plan.environmentRevisionId}</strong></div></section>
         <section className="cluster-rollback-sources" aria-label="安装基线来源">{plan.sources.map((source) => <Link key={source.runId} to={`/runs?selected=${source.runId}`}><span>{source.kind}</span><strong>{source.runId}</strong><small>{source.componentCount} 个组件</small></Link>)}</section>
         <section className="test-plan-preview" aria-label="整集群回滚计划"><header><div><strong>逆序执行计划</strong><small>摘要 {plan.planDigest.slice(0, 16)}…</small></div><StatusPill status="awaiting_approval">提交后待审批</StatusPill></header><div>{plan.steps.map((step) => <article key={`${step.order}-${step.componentId}-${step.limit}`}><span>{step.order}</span><div><strong>{step.componentName} · rollback</strong><p>{step.releaseVersion} · 目标 {step.limit || 'all'}</p><small>基线 Run {step.backupInstallRunId} · {step.backupRef}</small></div></article>)}</div></section>

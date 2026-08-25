@@ -158,12 +158,14 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		return release, err
 	}
 	if release.Status != domain.ReleaseDraft {
-		return release, fmt.Errorf("%w: released versions are immutable; clone a new version", domain.ErrConflict)
+		base := fmt.Errorf("%w: released versions are immutable; clone a new version", domain.ErrConflict)
+		return release, actionableExistingError(base, "resource.immutable", "Released Release 不允许原地修改", "创建新 Draft", "/components?selected="+component.ID+"&release="+release.ID+"&action=contract")
 	}
 	if active, activeErr := p.store.HasActiveComponentTest(ctx, release.ID); activeErr != nil {
 		return release, activeErr
 	} else if active {
-		return release, fmt.Errorf("%w: wait for the active component test before editing this draft", domain.ErrConflict)
+		base := fmt.Errorf("%w: wait for the active component test before editing this draft", domain.ErrConflict)
+		return release, actionableExistingError(base, "release.validation_in_progress", "活动测试 Run 已锁定当前 Draft 定义", "查看运行", "/runs")
 	}
 	patch.ID, patch.ComponentID, patch.Status, patch.CreatedAt = release.ID, release.ComponentID, release.Status, release.CreatedAt
 	// Any change to actions, dependencies, constraints or parameters invalidates
@@ -252,7 +254,8 @@ func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id
 	}
 	if candidate {
 		if !release.Verified {
-			return release, fmt.Errorf("%w: run a successful component test before sharing a candidate", domain.ErrConflict)
+			base := fmt.Errorf("%w: run a successful component test before sharing a candidate", domain.ErrConflict)
+			return release, actionableExistingError(base, "release.install_evidence_missing", "候选共享要求当前合同通过安装和 Verify", "前往环境验证", fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID))
 		}
 		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
 			return release, err
@@ -328,13 +331,14 @@ func (p *Platform) PublishRelease(ctx context.Context, user domain.User, id stri
 		return release, domain.ImpactReport{}, err
 	}
 	if release.Status != domain.ReleaseDraft {
-		return release, domain.ImpactReport{}, fmt.Errorf("%w: only a draft can be published", domain.ErrConflict)
+		base := fmt.Errorf("%w: only a draft can be published", domain.ErrConflict)
+		return release, domain.ImpactReport{}, actionableExistingError(base, "resource.immutable", "只有 Draft Release 可以发布", "查看 Release", fmt.Sprintf("/components?selected=%s&release=%s", component.ID, release.ID))
 	}
 	if err := p.validateReleaseForPublish(ctx, release); err != nil {
-		return release, domain.ImpactReport{}, err
+		return release, domain.ImpactReport{}, actionableExistingError(err, "release.contract_invalid", "Release 合同未满足发布规则", "编辑合同", fmt.Sprintf("/components?selected=%s&release=%s&action=contract", component.ID, release.ID))
 	}
 	if err := p.validateReleaseEvidence(ctx, release); err != nil {
-		return release, domain.ImpactReport{}, err
+		return release, domain.ImpactReport{}, actionableExistingError(err, "release.evidence_missing", "当前合同缺少安装或回滚成功证据", "前往环境验证", fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID))
 	}
 	oldVersion, oldErr := p.store.LatestReleasedVersion(ctx, release.ComponentID)
 	if oldErr != nil && !errors.Is(oldErr, domain.ErrNotFound) {

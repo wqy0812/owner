@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Archive, Beaker, Boxes, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Container, ExternalLink, FileCode2, Filter, GitBranch, PencilLine, Plus, Rocket, Search, Shield, Trash2, Upload, UserRound } from 'lucide-react';
-import { api } from '../api/client';
+import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
+import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
@@ -17,7 +18,7 @@ import { ComponentMappingOverview, defaultContractRelease, defaultFixtureValues,
 import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
 import { environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
 import { ComponentImportExecutionError, executeComponentImport, parseComponentImportTemplate } from './componentTemplateImport';
-import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, Run } from '../types/domain';
+import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, Run, WorkExplanation } from '../types/domain';
 
 type ContractSection = 'dependencies' | 'parameters';
 type ContractEditIntent = ContractSection | 'all';
@@ -138,6 +139,7 @@ export function ComponentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: components, loading, error, isRefreshing, reload } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const selectedId = searchParams.get('selected') ?? undefined;
   const selectedReleaseId = searchParams.get('release') ?? undefined;
   const deepLinkAction = searchParams.get('action') ?? undefined;
@@ -152,6 +154,7 @@ export function ComponentsPage() {
   const [deprecateRelease, setDeprecateRelease] = useState<ComponentRelease>();
   const [editRelease, setEditRelease] = useState<ComponentRelease>();
   const [impact, setImpact] = useState<ImpactPreview>();
+  const [operationExplanation, setOperationExplanation] = useState<WorkExplanation>();
   const [testRelease, setTestRelease] = useState<ComponentRelease>();
   const [inspectRelease, setInspectRelease] = useState<ComponentRelease>();
   const [imageRelease, setImageRelease] = useState<ComponentRelease>();
@@ -173,6 +176,7 @@ export function ComponentsPage() {
     ?? (pendingContractRelease?.id === contractReleaseId ? pendingContractRelease : undefined)
     ?? defaultContractRelease(releases, selected?.latestRelease);
   const editableDraft = releases.find((release) => release.state === 'draft');
+  const releaseWorkItem = workbench?.items.find((item) => item.subject.type === 'component_release' && item.subject.id === contractRelease?.id);
   const visibleEditRelease = editRelease?.componentId === selected?.id ? editRelease : undefined;
   const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
   const mine = selected?.ownerId === user.id && user.role === 'component_owner';
@@ -197,12 +201,18 @@ export function ComponentsPage() {
     setArtifactRelease(undefined);
   }, [selected?.id]);
   useEffect(() => {
-    if (!deepLinkAction || !selected || !contractRelease) return;
+    if (!deepLinkAction) {
+      handledDeepLink.current = undefined;
+      return;
+    }
+    if (!selected || !contractRelease) return;
     const key = `${selected.id}:${contractRelease.id}:${deepLinkAction}`;
     if (handledDeepLink.current === key) return;
     handledDeepLink.current = key;
     if (deepLinkAction === 'validate' && canTest) setTestRelease(contractRelease);
     if (deepLinkAction === 'publish' && mine) void previewPublish(contractRelease);
+    if (deepLinkAction === 'contract' && mine) startEditingContract();
+    if (deepLinkAction === 'lifecycle' && mine && contractRelease.state === 'draft') setEditRelease(contractRelease);
     const next = new URLSearchParams(searchParams);
     next.delete('action');
     setSearchParams(next, { replace: true });
@@ -278,6 +288,7 @@ export function ComponentsPage() {
     setPublishRelease(release);
     setDeprecateRelease(undefined);
     setImpact(undefined);
+    setOperationExplanation(undefined);
     try {
       setImpact(await api.releaseImpact(release.id));
     } catch (reason) {
@@ -303,12 +314,14 @@ export function ComponentsPage() {
       return;
     }
     setBusy(true);
+    setOperationExplanation(undefined);
     try {
       await api.publishRelease(publishRelease.id);
       notify('success', '组件版本已发布', '下游 Owner 的站内影响通知已生成。');
       setPublishRelease(undefined);
-      signalRefresh(['components', 'notifications']);
+      signalRefresh(['components', 'notifications', 'workbench']);
     } catch (reason) {
+      setOperationExplanation(actionableExplanation(reason));
       notify('error', '发布失败', displayError(reason));
     } finally {
       setBusy(false);
@@ -416,6 +429,8 @@ export function ComponentsPage() {
               {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => startEditingContract()}><PencilLine size={16} /> {editableDraft ? '编辑依赖和参数' : '创建 Draft 编辑合同'}</button>{editableDraft ? <button className="button button--quiet" onClick={() => setEditRelease(editableDraft)}><FileCode2 size={16} /> 编辑版本与 Playbook</button> : null}</div>}
             </article>
 
+            <StatusExplanationPanel item={releaseWorkItem} />
+
             {mine && editableDraft ? <DraftReadiness
               release={editableDraft}
               runs={runs ?? []}
@@ -517,7 +532,8 @@ export function ComponentsPage() {
           <div className="impact-grid"><div><span>下游组件 Owner</span><strong>{impact?.componentOwners?.length ?? '…'}</strong></div><div><span>相关场景 Owner</span><strong>{impact?.scenarioOwners?.length ?? '…'}</strong></div><div><span>受影响场景</span><strong>{impact?.scenarios?.length ?? '…'}</strong></div></div>
           {impact?.paths?.length ? <div className="impact-paths"><strong>影响路径</strong>{impact.paths.slice(0, 5).map((path, index) => <div key={index}>{path.join('  →  ')}</div>)}</div> : null}
         </div>
-        <footer className="modal-actions"><button className="button button--quiet" onClick={() => setPublishRelease(undefined)}>取消</button><button disabled={busy || !impact} className="button button--primary" onClick={() => void confirmPublish()}>{busy ? '发布中…' : '确认发布并通知'}</button></footer>
+        <StatusExplanationPanel explanation={operationExplanation} title="发布操作被阻断" />
+        <footer className="modal-actions"><button className="button button--quiet" onClick={() => { setPublishRelease(undefined); setOperationExplanation(undefined); }}>取消</button><button disabled={busy || !impact} className="button button--primary" onClick={() => void confirmPublish()}>{busy ? '发布中…' : '确认发布并通知'}</button></footer>
       </Modal>}
       {deprecateRelease && <Modal title={`废弃 ${deprecateRelease.version}`} description="该版本将不再作为推荐版本；历史 Run 和已锁定的 Release ID 保持不变。" onClose={() => setDeprecateRelease(undefined)}>
         <div className="modal-body">
@@ -1088,6 +1104,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
   const [busy, setBusy] = useState<'preview' | 'submit'>();
   const [plan, setPlan] = useState<ComponentTestPlan>();
   const [planError, setPlanError] = useState<string>();
+  const [planExplanation, setPlanExplanation] = useState<WorkExplanation>();
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
   const component = components?.find((item) => item.id === release.componentId);
   const retainedVerifyReleases = (component?.releases ?? []).filter((item) => item.id !== release.id && (item.state === 'released' || item.state === 'deprecated') && item.actions?.some((action) => action.type === 'verify'));
@@ -1104,6 +1121,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
   function invalidatePlan() {
     setPlan(undefined);
     setPlanError(undefined);
+    setPlanExplanation(undefined);
   }
 
   function requestInput(expectedPlanDigest?: string): ComponentTestRequest {
@@ -1130,10 +1148,12 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
     setBusy('preview');
     setPlan(undefined);
     setPlanError(undefined);
+    setPlanExplanation(undefined);
     try {
       setPlan(await api.previewReleaseTest(release.id, requestInput()));
     } catch (reason) {
       setPlanError(displayError(reason));
+      setPlanExplanation(actionableExplanation(reason));
     } finally {
       setBusy(undefined);
     }
@@ -1150,6 +1170,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
     } catch (reason) {
       setPlan(undefined);
       setPlanError(displayError(reason));
+      setPlanExplanation(actionableExplanation(reason));
     } finally {
       setBusy(undefined);
     }
@@ -1177,6 +1198,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
       {mapped.length ? <div className="fixture-fields">{mapped.map((name) => <label key={name}><span>依赖 Fixture · {name}</span><input value={fixtureValues[name] ?? ''} onChange={(event) => { setFixtureValues((current) => ({ ...current, [name]: event.target.value })); invalidatePlan(); }} /></label>)}</div> : null}
       <RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => { setRunInputValues((current) => ({ ...current, [name]: value })); invalidatePlan(); }} />
       {planError ? <div className="form-validation" role="alert">{planError}</div> : null}
+      <StatusExplanationPanel explanation={planExplanation} title="验证操作被阻断" />
       {plan ? <section className="test-plan-preview" aria-label="完整执行计划"><header><div><strong>完整执行计划</strong><small>Environment Revision {plan.environmentRevisionId}</small></div>{plan.requiresApproval ? <StatusPill status="awaiting_approval">需环境 Owner 审批</StatusPill> : <StatusPill status="ready">可直接排队</StatusPill>}</header><div>{plan.steps.map((step) => <article key={`${step.order}-${step.releaseId}-${step.action}`}><span>{step.order}</span><div><strong>{step.componentName} · {step.action}</strong><p>所属版本 {step.releaseVersion} · {step.releaseId}</p><small>Playbook {step.playbook}{step.limit ? ` · 目标 ${step.limit}` : ''}</small>{step.action === 'rollback' ? <small>不可变合同：{step.fromReleaseVersion || step.fromReleaseId || '独立'} → {step.toReleaseVersion || step.toReleaseId || '独立'}</small> : null}{step.backupRef ? <small>备份基线：Run {step.backupInstallRunId} · {step.backupRef}</small> : null}</div></article>)}</div></section> : null}
     </div>
     <footer className="modal-actions"><button type="button" className="button button--quiet" disabled={Boolean(busy)} onClick={onClose}>取消</button><button type="button" className="button button--quiet" disabled={!environmentId || !selectedAction || Boolean(busy) || (mode === 'rollback' && rollbackVerificationKind === 'target_release' && !verifyReleaseId)} onClick={() => void preview()}><Beaker size={16} /> {busy === 'preview' ? '规划中…' : plan ? '刷新执行计划' : '预览执行计划'}</button><button type="button" className={mode === 'rollback' ? 'button button--danger-soft' : 'button button--primary'} disabled={!plan || Boolean(busy)} onClick={() => void run()}>{busy === 'submit' ? '提交中…' : mode === 'rollback' ? '确认提交回退验证' : '确认提交安装验证'}</button></footer>

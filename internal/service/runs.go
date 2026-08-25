@@ -368,7 +368,8 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		return domain.Run{}, validationErr
 	}
 	if len(issues) > 0 {
-		return domain.Run{}, &domain.ValidationError{Message: "scenario validation failed", Details: issues}
+		base := &domain.ValidationError{Message: "scenario validation failed", Details: issues}
+		return domain.Run{}, actionableExistingError(base, "scenario.graph_invalid", "当前 DAG 或锁定 Release 未通过校验", "检查场景问题", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=inspect", scenario.ID, revision.ID))
 	}
 	ordered, err := topologicalNodes(revision.Graph)
 	if err != nil {
@@ -802,7 +803,8 @@ func (p *Platform) createRun(ctx context.Context, user domain.User, environment 
 		return domain.Run{}, err
 	}
 	if expectedPlanDigest != "" && expectedPlanDigest != planDigest {
-		return domain.Run{}, fmt.Errorf("%w: execution plan changed after preview; refresh the plan before submitting", domain.ErrConflict)
+		base := fmt.Errorf("%w: execution plan changed after preview; refresh the plan before submitting", domain.ErrConflict)
+		return domain.Run{}, actionableExistingError(base, "execution.plan_changed", "环境 Revision、输入、Release 定义或可执行内容在预览后发生变化", "重新预览执行计划", p.planRefreshHref(ctx, kind, releaseID, revisionID, environment.ID))
 	}
 	snapshot := structToMap(plan)
 	if kind == domain.RunComponentTest {
@@ -1837,7 +1839,8 @@ func (p *Platform) CancelRun(ctx context.Context, user domain.User, runID string
 		}
 		cancel()
 	default:
-		return run, fmt.Errorf("%w: run is already terminal", domain.ErrConflict)
+		base := fmt.Errorf("%w: run is already terminal", domain.ErrConflict)
+		return run, actionableExistingError(base, "run.already_terminal", "该 Run 已进入终态，不能再次取消", "刷新运行详情", "/runs?selected="+run.ID)
 	}
 	p.audit(ctx, user, "run.cancel_requested", "run", run.ID, nil)
 	p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
@@ -1846,7 +1849,8 @@ func (p *Platform) CancelRun(ctx context.Context, user domain.User, runID string
 
 func (p *Platform) DecideApproval(ctx context.Context, user domain.User, approvalID, decision, reason string) (domain.Run, error) {
 	if user.Role != domain.RoleEnvironmentOwner {
-		return domain.Run{}, fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
+		base := fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
+		return domain.Run{}, actionableExistingError(base, "permission.environment_owner_required", "只有目标环境的 Environment Owner 可以审批危险作业", "返回我的工作", "/")
 	}
 	approval, err := p.store.GetApproval(ctx, approvalID)
 	if err != nil {
@@ -1861,7 +1865,8 @@ func (p *Platform) DecideApproval(ctx context.Context, user domain.User, approva
 		return run, err
 	}
 	if environment.OwnerID != user.ID {
-		return run, fmt.Errorf("%w: approval belongs to another owner's environment", domain.ErrForbidden)
+		base := fmt.Errorf("%w: approval belongs to another owner's environment", domain.ErrForbidden)
+		return run, actionableExistingError(base, "permission.environment_owner_required", "该审批属于另一位 Environment Owner 管理的环境", "查看运行详情", "/runs?selected="+run.ID)
 	}
 	if approval.Status != "pending" {
 		if approval.Status == decision && run.Status != domain.RunAwaitingApproval {
@@ -1870,7 +1875,8 @@ func (p *Platform) DecideApproval(ctx context.Context, user domain.User, approva
 			// attempting to enqueue the run a second time.
 			return run, nil
 		}
-		return run, fmt.Errorf("%w: approval was already %s", domain.ErrConflict, approval.Status)
+		base := fmt.Errorf("%w: approval was already %s", domain.ErrConflict, approval.Status)
+		return run, actionableExistingError(base, "approval.already_decided", "审批状态已由另一请求消费，当前页面数据已过期", "刷新运行详情", "/runs?selected="+run.ID)
 	}
 	if err := p.store.DecideApproval(ctx, approvalID, user.ID, decision, reason, time.Now().UTC()); err != nil {
 		return run, err
