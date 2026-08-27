@@ -1490,6 +1490,42 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('button', { name: '复制为新 Revision' })).toBeInTheDocument();
   });
 
+  it('confirms and deletes a never-published scenario', async () => {
+    const draft = {
+      id: 'scenario-delete-r1', scenarioId: 'scenario-delete', revision: 1, state: 'draft',
+      nodes: [], edges: [], executionPolicy: {},
+    };
+    let scenarios = [{
+      id: 'scenario-delete', slug: 'scenario-delete', name: 'Disposable Scenario', ownerId: carol.id,
+      currentRevisionId: draft.id, currentRevision: draft, revisions: [draft],
+    }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(carol);
+      if (url.endsWith('/components') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      if (url.endsWith('/scenarios/scenario-delete') && init?.method === 'DELETE') {
+        scenarios = [];
+        return json({ deleted: true });
+      }
+      if (url.endsWith('/scenarios')) return json(scenarios);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirm);
+    renderApp('/scenarios');
+
+    await userEvent.click(await screen.findByRole('button', { name: '删除场景' }));
+    expect(confirm).toHaveBeenCalledWith('确认永久删除场景“Disposable Scenario”？\n将删除整个场景、1 个未发布 Revision 和相关个人运行参数预设。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。');
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-delete') && init?.method === 'DELETE')).toBe(false);
+
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole('button', { name: '删除场景' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-delete') && init?.method === 'DELETE')).toBe(true));
+    expect(await screen.findByText('场景已删除')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('暂无场景')).toBeInTheDocument());
+  });
+
   it('allows the same release to be added more than once with independent host groups', async () => {
     installFetch({ initialUser: carol, withScenario: true });
     renderApp('/scenarios');

@@ -104,6 +104,7 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("GET /api/v1/scenarios", h.listScenarios)
 	h.router.HandleFunc("POST /api/v1/scenarios", h.createScenario)
 	h.router.HandleFunc("GET /api/v1/scenarios/{id}", h.getScenario)
+	h.router.HandleFunc("DELETE /api/v1/scenarios/{id}", h.deleteScenario)
 	h.router.HandleFunc("POST /api/v1/scenarios/{id}/revisions", h.cloneScenarioRevision)
 	h.router.HandleFunc("POST /api/v1/scenarios/{id}/revision-clone-plan", h.previewScenarioClone)
 	h.router.HandleFunc("PUT /api/v1/scenario-revisions/{id}/graph", h.saveScenarioGraph)

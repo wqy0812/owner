@@ -81,6 +81,7 @@ export function ScenariosPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [candidateSet, setCandidateSet] = useState<CandidateReleaseSet>();
   const [operationExplanation, setOperationExplanation] = useState<WorkExplanation>();
+  const [deleteExplanation, setDeleteExplanation] = useState<WorkExplanation>();
   const [view, setView] = useState<'graph' | 'table'>('graph');
   const [testEnvironment, setTestEnvironment] = useState('');
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
@@ -92,8 +93,11 @@ export function ScenariosPage() {
   const canLaunch = Boolean((user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id) || user.role === 'environment_owner');
   const canLaunchRevision = Boolean(canLaunch && revision && (isCurrentRevision || revision.state === 'released'));
   const canAbandonDraft = Boolean(editable && selectedScenario?.revisions?.some((item) => item.id !== revision?.id && (item.state === 'released' || item.state === 'deprecated')));
-  const nextRevisionNumber = Math.max(0, ...(selectedScenario?.revisions?.map((item) => item.revision) ?? [])) + 1;
-
+  const canRequestScenarioDelete = Boolean(
+    selectedScenario?.ownerId === user.id
+    && selectedScenario.revisions?.length
+    && selectedScenario.revisions.every((item) => item.state === 'draft'),
+  );
   useEffect(() => {
     const previous = loadedRevisionRef.current;
     const followedPreviousCurrent = !selectedRevisionId || selectedRevisionId === previous.currentRevisionId;
@@ -122,6 +126,8 @@ export function ScenariosPage() {
     setRunInputValues({});
 		setExecutionPolicy(JSON.stringify(revision?.executionPolicy ?? {}, null, 2));
   }, [revision?.id, setEdges, setNodes]);
+
+  useEffect(() => setDeleteExplanation(undefined), [selectedScenario?.id]);
 
   const releaseMetadata = useMemo(() => new Map(
     components?.flatMap((component) => (component.releases ?? []).map((release) => [release.id, { component, release }] as const)) ?? [],
@@ -293,6 +299,23 @@ export function ScenariosPage() {
     catch (reason) { notify('error', '废弃失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
+  async function deleteScenario() {
+    if (!selectedScenario) return;
+    const revisionCount = selectedScenario.revisions?.length ?? 0;
+    if (!window.confirm(`确认永久删除场景“${selectedScenario.name}”？\n将删除整个场景、${revisionCount} 个未发布 Revision 和相关个人运行参数预设。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。`)) return;
+    setBusy('delete-scenario');
+    setDeleteExplanation(undefined);
+    try {
+      await api.deleteScenario(selectedScenario.id);
+      setSearchParams({}, { replace: true });
+      notify('success', '场景已删除', `“${selectedScenario.name}”及其未发布 Revision 已永久删除。`);
+      signalRefresh(['scenarios', 'workbench']);
+    } catch (reason) {
+      setDeleteExplanation(actionableExplanation(reason));
+      notify('error', '删除场景失败', displayError(reason));
+    } finally { setBusy(undefined); }
+  }
+
   return <div className="page page--scenario">
     <PageHeader eyebrow="Scenario composer" title="场景编排" description="场景 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建场景</button> : undefined} />
     <RefreshNotice loading={isRefreshing} error={scenarios ? error : undefined} onRetry={() => void reload()} />
@@ -308,12 +331,14 @@ export function ScenariosPage() {
           {editable && <button className="button button--secondary" disabled={busy === 'save'} onClick={() => void save()}><Save size={16} /> 保存草稿</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && (revision?.state === 'released' || revision?.state === 'deprecated') && !selectedScenario.revisions?.some((item) => ['draft', 'testing', 'test_passed'].includes(item.state)) && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 复制为新 Revision</button>}
           {canAbandonDraft && <button className="button button--danger-soft" disabled={busy === 'abandon'} onClick={() => void abandonDraft()}><Undo2 size={16} /> 放弃草稿</button>}
+          {canRequestScenarioDelete && <button className="button button--danger-soft" disabled={busy === 'delete-scenario'} onClick={() => void deleteScenario()}><Trash2 size={16} /> 删除场景</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && <button className="button button--danger-soft" disabled={busy === 'deprecate'} onClick={() => void deprecateRevision()}>废弃</button>}
           {canLaunchRevision && <button className="button button--secondary" onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish-preview'} onClick={() => void previewPublish()}><Rocket size={16} /> 预览候选集并发布</button>}
         </div>
       </div>
       <StatusExplanationPanel item={revisionWorkItem} />
+      <StatusExplanationPanel explanation={deleteExplanation} title="场景删除被阻断" />
       {selectedScenario ? <div className="scenario-editor">
         <aside className="scenario-palette panel">
           <header><h3>组件版本</h3><p>{editable ? '点击加入画布' : '当前为只读视图'}</p></header>

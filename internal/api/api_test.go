@@ -2227,19 +2227,111 @@ func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 	}
 }
 
-func TestReleasedScenarioRetainsDeprecatedLockedComponent(t *testing.T) {
+func TestScenarioDeletionRetainsPublishedAndRunHistory(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	carol := f.session(seed.ScenarioOwnerID)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+
+	create := func(name, slug string) (string, string) {
+		response := f.request(http.MethodPost, "/api/v1/scenarios", map[string]any{"name": name, "slug": slug}, carol)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create scenario status=%d body=%s", response.Code, response.Body.String())
+		}
+		data := decodeEnvelope(t, response)["data"].(map[string]any)
+		return data["id"].(string), data["currentRevisionId"].(string)
+	}
+
+	deletableID, deletableRevisionID := create("Disposable Scenario", "disposable-scenario")
+	if denied := f.request(http.MethodDelete, "/api/v1/scenarios/"+deletableID, nil, alice); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner delete status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	now := time.Now().UTC()
+	if err := f.database.SaveRunInputPreset(ctx, domain.RunInputPreset{
+		ID: "preset-disposable-scenario", CreatedBy: seed.ScenarioOwnerID,
+		ResourceType: "scenario_revision", ResourceID: deletableRevisionID, Context: "scenario_test",
+		Name: "temporary", Values: map[string]any{"runInput": map[string]any{}}, DefinitionDigest: "temporary",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleted := f.request(http.MethodDelete, "/api/v1/scenarios/"+deletableID, nil, carol)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete unused scenario status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := f.database.GetScenario(ctx, deletableID, true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("deleted scenario still exists: %v", err)
+	}
+	var presetCount, auditCount int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM run_input_presets WHERE resource_id=?`, deletableRevisionID).Scan(&presetCount); err != nil || presetCount != 0 {
+		t.Fatalf("scenario presets count=%d err=%v", presetCount, err)
+	}
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='scenario.deleted' AND resource_id=?`, deletableID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("scenario delete audit count=%d err=%v", auditCount, err)
+	}
+
+	if blocked := f.request(http.MethodDelete, "/api/v1/scenarios/scenario-test-runtime", nil, carol); blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "已发布") {
+		t.Fatalf("published scenario delete status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	runLockedID, runLockedRevisionID := create("Run Locked Scenario", "run-locked-scenario")
+	finished := now.Add(time.Minute)
+	if err := f.database.CreateRun(ctx, domain.Run{
+		ID: "run-locks-draft-scenario", Kind: domain.RunScenarioTest, Status: domain.RunFailed,
+		RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		ScenarioRevisionID: runLockedRevisionID, InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &finished,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	blocked := f.request(http.MethodDelete, "/api/v1/scenarios/"+runLockedID, nil, carol)
+	if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "运行记录") {
+		t.Fatalf("run-locked scenario delete status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+	if _, err := f.database.GetScenario(ctx, runLockedID, true); err != nil {
+		t.Fatalf("run-locked scenario was deleted: %v", err)
+	}
+}
+
+func TestUnrunScenarioReferenceAllowsComponentReleaseDeprecation(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	if response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.0.0/deprecate", nil, alice); response.Code != http.StatusOK {
+		t.Fatalf("deprecate unrun referenced release status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestScenarioRunHistoryBlocksComponentReleaseDeprecation(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	carol := f.session(seed.ScenarioOwnerID)
-	if response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.0.0/deprecate", nil, alice); response.Code != http.StatusOK {
-		t.Fatalf("deprecate release status=%d body=%s", response.Code, response.Body.String())
-	}
 	runResponse := f.request(http.MethodPost, "/api/v1/scenario-revisions/scenario-test-runtime-r1/runs", map[string]any{"environmentId": "environment-test"}, carol)
 	if runResponse.Code != http.StatusAccepted {
-		t.Fatalf("run released scenario with deprecated lock status=%d body=%s", runResponse.Code, runResponse.Body.String())
+		t.Fatalf("run released scenario status=%d body=%s", runResponse.Code, runResponse.Body.String())
 	}
 	runID := decodeEnvelope(t, runResponse)["data"].(map[string]any)["id"].(string)
 	waitForRun(t, f.database, runID, domain.RunSucceeded)
+	impact := f.request(http.MethodGet, "/api/v1/component-releases/release-test-runtime-1.0.0/impact", nil, alice)
+	if impact.Code != http.StatusOK {
+		t.Fatalf("release impact status=%d body=%s", impact.Code, impact.Body.String())
+	}
+	if count := decodeEnvelope(t, impact)["data"].(map[string]any)["scenarioRunCount"]; count != float64(1) {
+		t.Fatalf("scenarioRunCount=%v body=%s", count, impact.Body.String())
+	}
+	deprecate := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.0.0/deprecate", nil, alice)
+	if deprecate.Code != http.StatusConflict || !strings.Contains(deprecate.Body.String(), "已被场景引用并运行") {
+		t.Fatalf("deprecate scenario-run release status=%d body=%s", deprecate.Code, deprecate.Body.String())
+	}
+	if err := f.database.DeprecateComponentRelease(context.Background(), "release-test-runtime-1.0.0", time.Now().UTC()); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "scenario run") {
+		t.Fatalf("store allowed scenario-run release deprecation: %v", err)
+	}
+	retained, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.0.0")
+	if err != nil || retained.Status != domain.ReleaseReleased || retained.DeprecatedAt != nil {
+		t.Fatalf("retained release=%#v err=%v", retained, err)
+	}
+	var auditCount int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='component_release.deprecated' AND resource_id='release-test-runtime-1.0.0'`).Scan(&auditCount); err != nil || auditCount != 0 {
+		t.Fatalf("blocked deprecation audit count=%d err=%v", auditCount, err)
+	}
 }
 
 func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {

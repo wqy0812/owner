@@ -1004,6 +1004,9 @@ export const api = {
   async createScenario(input: Pick<Scenario, 'name'> & Partial<Scenario>) {
     return normalizeScenario(requireRecord(unwrap(await post<unknown>('/scenarios', input)), 'scenario'));
   },
+  async deleteScenario(id: string) {
+    await request<unknown>(`/scenarios/${id}`, { method: 'DELETE' });
+  },
   async scenario(id: string) {
     return normalizeScenario(requireRecord(unwrap(await get<unknown>(`/scenarios/${id}`)), 'scenario'));
   },

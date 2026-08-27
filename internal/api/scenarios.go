@@ -75,6 +75,14 @@ func (h *Handler) createScenario(w http.ResponseWriter, r *http.Request) {
 	h.writeScenarioDTO(w, r, http.StatusCreated, scenario)
 }
 
+func (h *Handler) deleteScenario(w http.ResponseWriter, r *http.Request) {
+	if err := h.platform.DeleteScenario(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
 func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) {
 	var input service.ScenarioCloneRequest
 	if err := decodeJSON(r, &input); err != nil {

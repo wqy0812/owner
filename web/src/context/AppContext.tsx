@@ -156,6 +156,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['approval.updated', () => scheduleRefresh(['runs', 'workbench'])],
       ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
       ['scenario.published', () => scheduleRefresh(['scenarios', 'workbench'])],
+      ['scenario.deleted', () => scheduleRefresh(['scenarios', 'workbench'])],
     ];
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {
