@@ -40,7 +40,7 @@
 - SSE 是进程内尽力通知，不是持久消息总线。
 - 没有密钥管理系统；只保存环境变量名或 SSH 私钥绝对路径。
 - 没有租户、项目、组织、细粒度授权策略和审批流配置。
-- 没有定时任务、自动重试、断点续跑或自动回滚。
+- 没有定时任务、自动重试或自动回滚；仅支持指纹未变且首个未完成动作明确安全时的人工续跑。
 - OpenFuyao 和 Kubernetes 1.17.5 模板仍需真实主机、介质、网络和安全验收。
 
 ## 3. 总体架构
@@ -137,7 +137,7 @@ erDiagram
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
 - `install` 动作可以显式声明 `idempotent=true`。此时场景节点选择 `upgrade` 会复用同一个 Playbook 和动作合同；若 Release 另有显式 `upgrade`，仍优先使用显式动作。
 
-Released Release 不可修改；更新时从已有版本克隆新 Draft。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
+Released Release 不可修改；更新时从已有版本克隆新 Draft。复制提交把 Release、依赖、Action、介质引用和审计放在同一 SQLite 事务；托管 Playbook 先通过 manifest 暂存并提升，事务失败时清理，进程中断后由启动恢复依据目标 Release 是否落库决定保留或删除；成功响应返回目标 Release 的新介质 ID。修改 Draft 的动作、依赖、约束或参数后，`verified` 会重置为 `false`。
 
 参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`defaultValue`、`enum` 与 `minLength` 必须和类型一致。不存在隐式可见性或旧 `parameterSchema` 兼容字段。
 
@@ -406,6 +406,7 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 
 - Inventory、Facts、Variables 和 CredentialRefs 分区独立保存；每次保存都由前台要求填写变更原因并创建新 Revision。
 - 历史 Revision 只读。“基于此恢复”复制其完整快照生成新 Revision，不移动旧记录、不删除历史，也不修改已经提交的 Run。
+- Revision 导入从实际非空 CredentialRef `reference` 推导敏感确认要求，不信任文件中的摘要布尔值；预览摘要和正式落库共用同一份规范化快照。
 - 环境存在 `running`、`queued` 或 `awaiting_approval` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
 - 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
 - `healthy` 仅表示本次列出的 TCP 端点全部可达；身份认证、协议语义、介质完整性、镜像推送和 Playbook 可执行性仍需各自验证。
@@ -423,6 +424,12 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 ### 7.11 批量审批
 
 环境 Owner 可以把当前可见的多条 Awaiting Approval 记录连同统一理由提交。Service 会裁剪理由并拒绝空白值，然后在一个事务内重新校验所有 Approval 的状态、归属和目标 Run；任一项失效则整批失败。批准成功后各 Run 进入 `queued`，仍由各环境 FIFO 调度，不因批量批准而并行占用同一环境。批量拒绝同样原子写入决定。
+
+### 7.12 安全续跑
+
+失败或中断的组件测试、场景测试和场景运行只有在环境 Revision、资源定义、Playbook、目录树和制品指纹均未漂移，且首个未完成动作明确可重试时才生成续跑计划。续跑只复制未完成步骤并重新绑定备份元数据；同一根 Run 由数据库唯一索引限制为最多一个活动续跑，`retryAttempt` 从根链历史最大值递增，另一唯一索引禁止重复编号。
+
+所有新活动 Run 在最终插入事务中重新检查锁定 Release 的生命周期。场景测试引用的 Draft 必须仍为已验证候选，正式场景运行只能引用已发布过的保留版本；候选在预检后被撤回、或从未发布的 Draft 被废弃时，旧提交会以冲突拒绝。
 
 ## 8. Ansible 与凭据安全
 
@@ -497,6 +504,9 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | PUT | `/component-releases/{id}` | 更新 Draft |
 | PUT | `/component-releases/{id}/contract` | 仅替换 Draft 的直接依赖与参数合同，保留动作和其他版本字段 |
 | POST | `/component-releases/{id}/clone` | 克隆为新 Draft |
+| POST | `/component-releases/{id}/clone-plan` | 只读预览 Release 复制并生成计划指纹 |
+| POST | `/component-imports/plan` | 完整预检批量组件导入，不写入 |
+| POST | `/component-imports` | 按预检指纹原子导入组件、Draft、Playbook 和审计记录 |
 | GET | `/component-releases/{id}/impact` | 发布影响预览 |
 | POST | `/component-releases/{id}/candidate` | 加入或撤回场景候选集 |
 | POST | `/component-releases/{id}/publish` | 按当前交付证据门禁直接发布 |
@@ -516,7 +526,9 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | --- | --- | --- |
 | GET / POST | `/scenarios` | 列表 / 创建场景 |
 | GET | `/scenarios/{id}` | 场景详情 |
+| DELETE | `/scenarios/{id}` | 仅删除从未发布且从未产生 Run 的自有场景；同步清理未发布 Revision 与个人运行参数预设 |
 | POST | `/scenarios/{id}/revisions` | 克隆新 Revision |
+| POST | `/scenarios/{id}/revision-clone-plan` | 预览指定历史 Revision 的同场景复制 |
 | PUT | `/scenario-revisions/{id}/graph` | 保存 DAG 和策略 |
 | POST | `/scenario-revisions/{id}/validate` | 校验 DAG |
 | POST | `/scenario-revisions/{id}/test-runs` | Draft 完整测试 |
@@ -531,6 +543,9 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | GET / POST | `/environments` | 列表 / 创建环境 |
+| POST | `/environments/{id}/revisions/{revisionId}/export` | 导出指定 Revision；默认不含凭据引用 |
+| POST | `/environment-imports/plan` | 预览导入新环境或既有环境的新 Revision |
+| POST | `/environment-imports` | 按预检指纹提交环境导入 |
 | PUT | `/environments/{id}/inventory` | 新建包含 Inventory 变更的 Revision |
 | PUT | `/environments/{id}/facts` | 新建包含 Facts 变更的 Revision |
 | PUT | `/environments/{id}/variables` | 新建包含非敏感环境变量变更的 Revision |
@@ -542,6 +557,10 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | GET | `/runs` | 查询当前用户可见 Run |
 | GET | `/runs/{id}` | Run 步骤、审批和日志详情 |
 | POST | `/runs/{id}/cancel` | 取消等待、排队或运行中的 Run |
+| POST | `/runs/{id}/retry-plan` | 校验环境、资源与可执行指纹并预览安全续跑 |
+| POST | `/runs/{id}/retry-runs` | 创建关联 Run，从安全的未完成步骤继续 |
+| GET / POST | `/run-input-presets` | 查询或创建个人、资源级非敏感运行参数预设 |
+| PUT / DELETE | `/run-input-presets/{id}` | 更新或删除个人运行参数预设 |
 | POST | `/approvals/{id}/approve` | 批准危险 Run |
 | POST | `/approvals/{id}/reject` | 拒绝危险 Run |
 | POST | `/approvals/batch` | 原子批量批准或拒绝危险 Run |
@@ -637,6 +656,6 @@ OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后�
 - 将执行策略真正接入 Planner，例如并行分支、失败策略和最大不可用节点。
 - 增加多人审批、超时和审批策略模板；当前批量审批已要求统一理由，但仍是单个 Environment Owner 决策。
 - 增加审计强事务、导出、保留期和不可抵赖存储。
-- 增加 Run 重试、从失败节点恢复和人工确认后的显式回滚流程。
+- 在现有安全续跑和显式回退基础上，增加更细的节点恢复策略与人工确认门禁。
 - Kubernetes 1.17.5 样例 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为 `requiredCredentials`；补齐前只能依赖环境 Owner 人工核对和 Playbook 自身预检，通用 Planner 不会因缺少该引用而提前拒绝。
 - 增加 OpenAPI、分页、过滤和幂等键；只有出现明确的 V2 文档后才设计跨版本兼容策略。
