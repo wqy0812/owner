@@ -104,6 +104,21 @@ export function RunsPage() {
     finally { setBusy(undefined); }
   }
 
+  async function retrySafeRange() {
+    if (!detail) return;
+    setBusy('retry');
+    try {
+      const plan = await api.previewRunRetry(detail.id);
+      const remaining = plan.remainingSteps.map((step) => `${step.order}. ${step.componentName} · ${step.action}`).join('\n');
+      if (!window.confirm(`安全续跑预览\n跳过 ${plan.skippedSteps} 个已成功步骤\n继续 ${plan.remainingSteps.length} 个步骤${plan.requiresApproval ? '\n提交后需要重新审批' : ''}\n\n${remaining}\n\n确认创建关联 Run？`)) return;
+      const created = await api.retryRun(detail.id, plan.planDigest);
+      notify('success', '安全续跑 Run 已创建', `原 Run 保持不变，新 Run 从第 ${plan.startStep + 1} 步继续。`);
+      signalRefresh(['runs', 'workbench', 'environments', 'scenarios']);
+      setSearchParams({ selected: created.id });
+    } catch (reason) { setActionExplanation(actionableExplanation(reason)); notify('error', '无法安全续跑', displayError(reason)); }
+    finally { setBusy(undefined); }
+  }
+
   const progress = detail?.progress ?? (detail?.status === 'succeeded' ? 100 : detail?.steps?.length ? Math.round(detail.steps.filter((step) => step.status === 'succeeded').length / detail.steps.length * 100) : 0);
   const failure = detail ? runFailureSummary(detail) : undefined;
   const succeededSteps = detail?.steps?.filter((step) => step.status === 'succeeded').length ?? 0;
@@ -143,7 +158,7 @@ export function RunsPage() {
         </article>
         <StatusExplanationPanel item={runWorkItem} />
         <StatusExplanationPanel explanation={actionExplanation} title="运行操作被阻断" />
-        {failure && <article className="failure-summary" role="alert"><AlertTriangle size={24} /><div><strong>{failure.title}</strong><p>{failure.detail}</p><small>{failure.host ? `失败主机：${failure.host} · ` : ''}完成于 {formatTime(detail.finishedAt)}</small></div><div><button className="button button--quiet" onClick={() => void navigator.clipboard?.writeText(`${failure.title}\n${failure.detail}\nRun ${detail.id}`)}><Copy size={14} /> 复制诊断</button>{failure.stepId && <button className="button button--danger-soft" onClick={() => document.getElementById(`run-step-${failure.stepId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>定位失败步骤</button>}</div></article>}
+        {failure && <article className="failure-summary" role="alert"><AlertTriangle size={24} /><div><strong>{failure.title}</strong><p>{failure.detail}</p><small>{failure.host ? `失败主机：${failure.host} · ` : ''}完成于 {formatTime(detail.finishedAt)}{detail.retryOfRunId ? ` · 续跑 #${detail.retryAttempt ?? 1}` : ''}</small></div><div><button className="button button--quiet" onClick={() => void navigator.clipboard?.writeText(`${failure.title}\n${failure.detail}\nRun ${detail.id}`)}><Copy size={14} /> 复制诊断</button>{failure.stepId && <button className="button button--danger-soft" onClick={() => document.getElementById(`run-step-${failure.stepId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>定位失败步骤</button>}{detail.createdBy === user.id && ['failed', 'interrupted'].includes(detail.status) && detail.kind !== 'environment_rollback' && <button className="button button--primary" disabled={busy === 'retry'} onClick={() => void retrySafeRange()}>{busy === 'retry' ? '正在校验…' : '预览安全续跑'}</button>}</div></article>}
         {detail.status === 'awaiting_approval' && <article className="approval-banner"><ShieldAlert size={24} /><div><strong>危险作业等待环境 Owner 审批</strong><p>{detail.approval?.riskReason ?? '动作包含 recovery / clean / destroy / uninstall，可能改变或删除目标环境数据。'}</p></div>{user.role === 'environment_owner' ? <div><button disabled={Boolean(busy)} className="button button--quiet" onClick={() => void action('reject')}><X size={15} /> 拒绝</button><button disabled={Boolean(busy)} className="button button--primary" onClick={() => void action('approve')}><Check size={15} /> 批准执行</button></div> : <span>仅环境 Owner 可审批</span>}</article>}
         {(detail.artifactTransfers?.length || detail.imageTransfers?.length) ? <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><ShieldAlert size={18} /></span><div><h2>跨仓库平移</h2><p>以下内容属于本次审批范围；目标已存在相同指纹时不会重复传输。</p></div></div></header><div className="backup-list">{detail.imageTransfers?.map((item) => <section key={item.targetDigest}><strong>镜像：{item.sourceRegistry} → {item.targetRegistry}</strong><p>{item.targetDigest}</p></section>)}{detail.artifactTransfers?.map((item) => <section key={`${item.targetStation}-${item.relativePath}`}><strong>介质 {item.alias}：{item.sourceStation} → {item.targetStation}</strong><p>{item.relativePath}</p><small>sha256:{item.sha256}</small></section>)}</div></article> : null}
         <article className="panel"><header className="panel__header"><div><span className="panel__icon"><Clock3 size={18} /></span><div><h2>执行步骤</h2><p>Preflight → syntax-check → list-hosts → execute → verify</p></div></div></header>{detail.steps?.length ? <div className="step-timeline">{detail.steps.map((step, index) => <div id={`run-step-${step.id}`} key={step.id} className={`step step--${step.status}`}><span className="step__index">{step.status === 'succeeded' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : index + 1}</span><span className="step__line" /><div><div><strong>{step.name}</strong><StatusPill status={step.status} /></div><p>{step.componentName ? `${step.componentName} · ` : ''}{step.action ?? ''}{step.summary ? ` · ${step.summary}` : ''}</p><small>{formatTime(step.startedAt)}{step.finishedAt ? ` → ${formatTime(step.finishedAt)}` : ''}</small></div></div>)}</div> : <EmptyState title="步骤尚未生成" description={detail.status === 'awaiting_approval' ? '审批通过后进入环境队列。' : 'Planner 正在生成执行步骤。'} />}</article>

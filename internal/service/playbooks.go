@@ -140,18 +140,25 @@ func (p *Platform) authorizePlaybook(ctx context.Context, user domain.User, rele
 	if err != nil {
 		return release, component, err
 	}
-	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
-		return release, component, err
-	}
-	if requireDraft && release.Status != domain.ReleaseDraft {
-		return release, component, fmt.Errorf("%w: released versions and their Playbooks are immutable", domain.ErrConflict)
-	}
 	if requireDraft {
+		if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+			return release, component, err
+		}
+		if release.Status != domain.ReleaseDraft {
+			return release, component, fmt.Errorf("%w: released versions and their Playbooks are immutable", domain.ErrConflict)
+		}
 		if active, activeErr := p.store.HasActiveComponentTest(ctx, release.ID); activeErr != nil {
 			return release, component, activeErr
 		} else if active {
 			return release, component, fmt.Errorf("%w: wait for the active component test before editing its Playbook", domain.ErrConflict)
 		}
+		return release, component, nil
+	}
+	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
+		return release, component, nil
+	}
+	if !user.Role.Valid() || (release.Status != domain.ReleaseReleased && !(release.Status == domain.ReleaseDraft && release.Candidate && release.Verified)) {
+		return release, component, domain.ErrForbidden
 	}
 	return release, component, nil
 }
@@ -200,6 +207,96 @@ func (p *Platform) resolveManagedPlaybookPath(component domain.Component, releas
 
 func managedReleasePrefix(component domain.Component, release domain.ComponentRelease) string {
 	return "managed/" + component.Slug + "/" + release.ID + "/"
+}
+
+// resolveManagedPlaybookWriteTarget validates both the logical managed path
+// and its resolved parent. The second check prevents a symlink created below
+// playbookRoot from redirecting an import write or cleanup outside the root.
+func (p *Platform) resolveManagedPlaybookWriteTarget(component domain.Component, release domain.ComponentRelease, relative string, createParent bool) (string, string, error) {
+	clean, target, err := p.resolveManagedPlaybookPath(component, release, relative, true)
+	if err != nil {
+		return "", "", err
+	}
+	rootPath, err := filepath.Abs(p.playbookRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve playbook root: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve playbook root: %w", err)
+	}
+	parentPath := filepath.Dir(target)
+	rel, err := filepath.Rel(root, parentPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("%w: managed Playbook directory escapes the allowed root", domain.ErrInvalid)
+	}
+	parent := root
+	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+		if segment == "" || segment == "." {
+			continue
+		}
+		parent = filepath.Join(parent, segment)
+		info, statErr := os.Lstat(parent)
+		if os.IsNotExist(statErr) && createParent {
+			if mkdirErr := os.Mkdir(parent, 0o750); mkdirErr != nil {
+				return "", "", fmt.Errorf("create managed Playbook directory: %w", mkdirErr)
+			}
+			continue
+		}
+		if statErr != nil {
+			return "", "", statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", "", fmt.Errorf("%w: managed Playbook directory contains a symlink or non-directory", domain.ErrInvalid)
+		}
+	}
+	return clean, filepath.Join(parent, filepath.Base(target)), nil
+}
+
+func (p *Platform) copyManagedPlaybooksForClone(component domain.Component, sourceID string, target *domain.ComponentRelease) (componentImportManifest, error) {
+	sourceRelease := *target
+	sourceRelease.ID = sourceID
+	sourcePrefix, targetPrefix := managedReleasePrefix(component, sourceRelease), managedReleasePrefix(component, *target)
+	files := make([]componentImportFile, 0)
+	createdTargets := map[string]bool{}
+	for index := range target.Actions {
+		path := filepath.ToSlash(filepath.Clean(target.Actions[index].Playbook))
+		if !strings.HasPrefix(path, sourcePrefix) {
+			continue
+		}
+		filename := strings.TrimPrefix(path, sourcePrefix)
+		if filename == "" || strings.Contains(filename, "/") || !managedPlaybookFilename.MatchString(filename) {
+			return componentImportManifest{}, fmt.Errorf("%w: managed Playbook path is invalid", domain.ErrInvalid)
+		}
+		_, sourcePath, err := p.resolveManagedPlaybookPath(component, sourceRelease, path, false)
+		if err != nil {
+			return componentImportManifest{}, err
+		}
+		contents, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return componentImportManifest{}, fmt.Errorf("read source managed Playbook: %w", err)
+		}
+		if len(contents) == 0 || len(contents) > MaxPlaybookBytes || !utf8.Valid(contents) {
+			return componentImportManifest{}, fmt.Errorf("%w: source managed Playbook is not valid", domain.ErrInvalid)
+		}
+		targetRelative := targetPrefix + filename
+		if createdTargets[targetRelative] {
+			target.Actions[index].Playbook = targetRelative
+			continue
+		}
+		files = append(files, componentImportFile{Component: component, Release: *target, RelativePath: targetRelative, Content: string(contents)})
+		createdTargets[targetRelative] = true
+		target.Actions[index].Playbook = targetRelative
+	}
+	manifest, err := p.stageComponentImportFiles(files)
+	if err != nil {
+		return componentImportManifest{}, err
+	}
+	if err := p.promoteComponentImportFiles(manifest); err != nil {
+		_ = p.cleanupComponentImportManifest(manifest, true)
+		return componentImportManifest{}, err
+	}
+	return manifest, nil
 }
 
 func releaseReferencesPlaybook(release domain.ComponentRelease, path string) bool {

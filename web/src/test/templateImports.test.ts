@@ -1,9 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import {
-  executeComponentImport,
-  parseComponentImportTemplate,
-  type ComponentImportClient,
-} from '../pages/componentTemplateImport';
+import { describe, expect, it } from 'vitest';
+import { parseComponentImportTemplate } from '../pages/componentTemplateImport';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from '../pages/scenarioTemplate';
 import type { Component } from '../types/domain';
 
@@ -28,66 +24,6 @@ function componentTemplate(overrides: Record<string, unknown> = {}) {
 }
 
 describe('component template import', () => {
-  it('creates an action-free Draft, saves files, then binds managed paths', async () => {
-    const entries = parseComponentImportTemplate(JSON.stringify(componentTemplate()));
-    const calls: string[] = [];
-    let createInput: Record<string, unknown> | undefined;
-    let updateInput: Record<string, unknown> | undefined;
-    const client: ComponentImportClient = {
-      createComponent: vi.fn(async (input) => {
-        calls.push('component');
-        return { ...input, id: 'component-runtime', ownerId: 'component-alice' } as never;
-      }),
-      createRelease: vi.fn(async (_componentId, input) => {
-        calls.push('release');
-        createInput = input;
-        return { ...input, id: 'release-runtime', componentId: 'component-runtime', state: 'draft' } as never;
-      }),
-      savePlaybook: vi.fn(async (_releaseId, filename, content) => {
-        calls.push(`playbook:${filename}`);
-        return { filename, content, path: `managed/runtime/release-runtime/${filename}`, sha256: filename };
-      }),
-      updateRelease: vi.fn(async (_releaseId, input) => {
-        calls.push('update');
-        updateInput = input;
-        return { ...input, id: 'release-runtime', componentId: 'component-runtime', state: 'draft' } as never;
-      }),
-    };
-    await executeComponentImport(entries, client);
-    expect(calls).toEqual(['component', 'release', 'playbook:install.yml', 'playbook:verify.yml', 'update']);
-    expect(createInput?.actions).toEqual([]);
-    expect((updateInput?.actions as Array<{ playbook: string }>).map((action) => action.playbook)).toEqual([
-      'managed/runtime/release-runtime/install.yml',
-      'managed/runtime/release-runtime/verify.yml',
-    ]);
-  });
-
-  it('creates same-owner Draft dependencies in topological order and binds returned IDs', async () => {
-    const upstream: any = componentTemplate()[0];
-    upstream.release.parameters = [{ name: 'port', description: 'port', type: 'integer', visibility: 'public' }];
-    const downstream: any = structuredClone(upstream);
-    downstream.component = { ...downstream.component, slug: 'worker', name: 'Worker' };
-    downstream.release.parameters = [{ name: 'port', description: 'port', type: 'integer', visibility: 'internal' }];
-    downstream.release.dependencies = [{ componentSlug: 'runtime', parameterMappings: [{ upstreamParameter: 'port', targetParameter: 'port' }] }];
-    const entries = parseComponentImportTemplate(JSON.stringify([downstream, upstream]));
-    const releaseOrder: string[] = [];
-    let downstreamCreate: Record<string, unknown> | undefined;
-    const client: ComponentImportClient = {
-      createComponent: vi.fn(async (input) => ({ ...input, id: `component-${input.slug}`, ownerId: 'component-alice' }) as never),
-      createRelease: vi.fn(async (componentId, input) => {
-        const slug = componentId.replace('component-', '');
-        releaseOrder.push(slug);
-        if (slug === 'worker') downstreamCreate = input;
-        return { ...input, id: `release-${slug}`, componentId, state: 'draft' } as never;
-      }),
-      savePlaybook: vi.fn(async (releaseId, filename, content) => ({ filename, content, path: `managed/${releaseId}/${filename}`, sha256: filename })),
-      updateRelease: vi.fn(async (releaseId, input) => ({ ...input, id: releaseId, componentId: `component-${releaseId.replace('release-', '')}`, state: 'draft' }) as never),
-    };
-    await executeComponentImport(entries, client);
-    expect(releaseOrder).toEqual(['runtime', 'worker']);
-    expect(downstreamCreate?.dependencies).toEqual([expect.objectContaining({ componentId: 'component-runtime', releaseId: 'release-runtime' })]);
-  });
-
   it('rejects missing, duplicate, and unreferenced playbooks before execution', () => {
     const base = componentTemplate()[0];
     const cases = [
@@ -114,10 +50,7 @@ describe('component template import', () => {
     expect(() => parseComponentImportTemplate(JSON.stringify([first, second]))).toThrow(/存在环/);
   });
 
-  it('rejects invalid serialized fields and dependency mappings before any API call', async () => {
-    const client: ComponentImportClient = {
-      createComponent: vi.fn(), createRelease: vi.fn(), savePlaybook: vi.fn(), updateRelease: vi.fn(),
-    };
+  it('rejects invalid serialized fields and dependency mappings during client preflight', () => {
     const base = componentTemplate()[0];
     const invalid = [
       { ...base, release: { ...base.release, breaking: 'yes' } },
@@ -129,10 +62,6 @@ describe('component template import', () => {
     for (const value of invalid) {
       expect(() => parseComponentImportTemplate(JSON.stringify([value]))).toThrow();
     }
-    expect(client.createComponent).not.toHaveBeenCalled();
-    expect(client.createRelease).not.toHaveBeenCalled();
-    expect(client.savePlaybook).not.toHaveBeenCalled();
-    expect(client.updateRelease).not.toHaveBeenCalled();
   });
 
   it('validates public mapping sources, declared targets, and matching types', () => {

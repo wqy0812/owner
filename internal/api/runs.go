@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/service"
 )
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +41,29 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 	run, err := h.platform.CancelRun(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusAccepted, h.runDTO(r, run))
+}
+
+func (h *Handler) previewRunRetry(w http.ResponseWriter, r *http.Request) {
+	plan, err := h.platform.PreviewRunRetry(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, plan)
+}
+
+func (h *Handler) retryRun(w http.ResponseWriter, r *http.Request) {
+	var input service.RunRetryRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	run, err := h.platform.RetryRun(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -106,6 +130,8 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"environmentRevisionId": run.EnvironmentRevisionID, "componentReleaseId": run.ComponentReleaseID,
 		"scenarioRevisionId": run.ScenarioRevisionID, "action": run.Action, "destructive": run.Destructive,
 		"requestedBy": run.RequestedBy, "artifactDigest": run.ArtifactDigest,
+		"retryOfRunId": run.RetryOfRunID, "retryRootRunId": run.RetryRootRunID,
+		"retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
 	}
 	if environment, err := h.platform.Store().GetEnvironment(r.Context(), run.EnvironmentID, false); err == nil {

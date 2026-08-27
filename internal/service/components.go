@@ -202,7 +202,14 @@ func (p *Platform) UpdateReleaseContract(ctx context.Context, user domain.User, 
 	return p.UpdateRelease(ctx, user, id, release)
 }
 
-func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID, version, notes string, breaking bool, constraints map[string]any) (domain.ComponentRelease, error) {
+func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID string, input ReleaseCloneRequest) (domain.ComponentRelease, error) {
+	plan, err := p.PreviewReleaseClone(ctx, user, sourceID, input)
+	if err != nil {
+		return domain.ComponentRelease{}, err
+	}
+	if input.ExpectedPlanDigest == "" || input.ExpectedPlanDigest != plan.PlanDigest {
+		return domain.ComponentRelease{}, fmt.Errorf("%w: release clone plan changed; preview again", domain.ErrConflict)
+	}
 	source, err := p.store.GetComponentRelease(ctx, sourceID)
 	if err != nil {
 		return source, err
@@ -214,29 +221,49 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID,
 	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
 		return source, err
 	}
-	source.ID = newID("release")
-	source.Version = version
-	source.ReleaseNotes = notes
-	source.Breaking = breaking
-	if constraints != nil {
-		source.EnvironmentConstraints = constraints
+	newReleaseID := newID("release")
+	source.ID = newReleaseID
+	source.Version = input.Version
+	source.ReleaseNotes = input.ReleaseNotes
+	source.Breaking = input.Breaking
+	if input.EnvironmentConstraints != nil {
+		source.EnvironmentConstraints = input.EnvironmentConstraints
 	}
 	source.Status = domain.ReleaseDraft
 	source.Verified = false
 	source.Candidate = false
 	source.CreatedAt = time.Now().UTC()
 	source.ReleasedAt, source.DeprecatedAt = nil, nil
+	for index := range source.Artifacts {
+		source.Artifacts[index].ID = newID("artifact")
+		source.Artifacts[index].ReleaseID = newReleaseID
+	}
+	for index := range source.Actions {
+		switch source.Actions[index].Kind {
+		case domain.ActionUpgrade:
+			source.Actions[index].FromReleaseID, source.Actions[index].ToReleaseID = sourceID, newReleaseID
+		case domain.ActionRollback:
+			if source.Actions[index].FromReleaseID != "" || source.Actions[index].ToReleaseID != "" {
+				source.Actions[index].FromReleaseID, source.Actions[index].ToReleaseID = newReleaseID, sourceID
+			}
+		}
+	}
+	manifest, err := p.copyManagedPlaybooksForClone(component, sourceID, &source)
+	if err != nil {
+		return source, err
+	}
+	cleanup := func(deleteFinal bool) { _ = p.cleanupComponentImportManifest(manifest, deleteFinal) }
 	rewriteReleaseChildren(&source)
 	if err := p.validateReleaseContract(ctx, source, false); err != nil {
+		cleanup(true)
 		return source, err
 	}
-	if err := p.store.CreateComponentRelease(ctx, source); err != nil {
+	audit := newAuditEvent(user, "component_release.cloned", "component_release", source.ID, map[string]any{"sourceReleaseId": sourceID, "version": input.Version, "planDigest": plan.PlanDigest})
+	if err := p.store.CreateClonedComponentRelease(ctx, source, audit); err != nil {
+		cleanup(true)
 		return source, err
 	}
-	if err := p.store.CloneComponentArtifacts(ctx, sourceID, source.ID); err != nil {
-		return source, err
-	}
-	p.audit(ctx, user, "component_release.cloned", "component_release", source.ID, map[string]any{"sourceReleaseId": sourceID, "version": version})
+	cleanup(false)
 	return source, nil
 }
 
@@ -304,18 +331,32 @@ func (p *Platform) Impact(ctx context.Context, user domain.User, releaseID strin
 		return domain.ImpactReport{}, err
 	}
 	var releases []domain.ComponentRelease
+	targetIncluded := false
 	for _, item := range components {
 		for _, candidate := range item.Releases {
 			if candidate.Status == domain.ReleaseReleased {
 				releases = append(releases, candidate)
+				targetIncluded = targetIncluded || candidate.ID == release.ID
 			}
 		}
+	}
+	// A shared Draft may already be locked by mutable scenario revisions. Keep
+	// it in the lookup used by impact analysis so deprecation previews include
+	// those exact references even though the normal dependency graph is based on
+	// immutable releases.
+	if !targetIncluded {
+		releases = append(releases, release)
 	}
 	scenarios, err := p.store.ListScenariosForImpact(ctx)
 	if err != nil {
 		return domain.ImpactReport{}, err
 	}
-	return BuildImpactReport(release.ComponentID, components, releases, scenarios), nil
+	report := BuildImpactReport(release.ComponentID, components, releases, scenarios)
+	report.ScenarioRunCount, err = p.store.CountScenarioRunsForComponentRelease(ctx, release.ID)
+	if err != nil {
+		return domain.ImpactReport{}, err
+	}
+	return report, nil
 }
 
 func (p *Platform) PublishRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, domain.ImpactReport, error) {
@@ -398,12 +439,31 @@ func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id st
 	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
 		return release, err
 	}
+	if release.Status != domain.ReleaseDraft && release.Status != domain.ReleaseReleased {
+		return release, fmt.Errorf("%w: only draft or released versions can be deprecated", domain.ErrConflict)
+	}
+	scenarioRunCount, err := p.store.CountScenarioRunsForComponentRelease(ctx, release.ID)
+	if err != nil {
+		return release, err
+	}
+	if scenarioRunCount > 0 {
+		base := fmt.Errorf("%w: component release is retained by %d scenario run(s)", domain.ErrConflict, scenarioRunCount)
+		return release, actionableExistingError(base, "release.scenario_run_history", "该组件版本已被场景引用并运行，不能废弃", "查看运行记录", "/runs")
+	}
+	if release.Status == domain.ReleaseDraft {
+		if active, activeErr := p.store.HasActiveComponentTest(ctx, release.ID); activeErr != nil {
+			return release, activeErr
+		} else if active {
+			return release, fmt.Errorf("%w: wait for the active component test before deprecating this draft", domain.ErrConflict)
+		}
+	}
+	previousStatus := release.Status
 	now := time.Now().UTC()
 	if err := p.store.DeprecateComponentRelease(ctx, id, now); err != nil {
 		return release, err
 	}
-	release.Status, release.DeprecatedAt = domain.ReleaseDeprecated, &now
-	p.audit(ctx, user, "component_release.deprecated", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version})
+	release.Status, release.Candidate, release.DeprecatedAt = domain.ReleaseDeprecated, false, &now
+	p.audit(ctx, user, "component_release.deprecated", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "previousStatus": previousStatus})
 	return release, nil
 }
 

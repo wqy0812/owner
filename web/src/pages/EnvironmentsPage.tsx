@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, UserRound, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentHealthCheck, EnvironmentHost, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
+import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -48,6 +48,7 @@ export function EnvironmentsPage() {
   const [healthBusy, setHealthBusy] = useState(false);
   const [health, setHealth] = useState<EnvironmentHealthCheck>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [restoreRevision, setRestoreRevision] = useState<EnvironmentRevision>();
   const [rollbackOpen, setRollbackOpen] = useState(false);
@@ -179,6 +180,19 @@ export function EnvironmentsPage() {
     } catch (errorReason) { notify('error', 'Revision 恢复失败', displayError(errorReason)); } finally { setBusy(false); }
   }
 
+  async function exportRevision(revision: EnvironmentRevision, includeCredentialReferences: boolean) {
+    if (!selected) return;
+    if (includeCredentialReferences && !window.confirm('敏感导出会包含 CredentialRef 的引用字符串，但不会包含真实 Secret。确认下载并自行妥善保管？')) return;
+    try {
+      const blob = await api.exportEnvironmentRevision(selected.id, revision.id, includeCredentialReferences);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = `${selected.name}-r${revision.revision}${includeCredentialReferences ? '-credential-refs' : ''}.json`; anchor.click();
+      URL.revokeObjectURL(url);
+      notify('success', includeCredentialReferences ? '已导出含凭据引用的环境文件' : '已安全导出环境文件', '导出内容不包含 Secret 实际值、运行记录或历史证据。');
+    } catch (reason) { notify('error', '环境导出失败', displayError(reason)); }
+  }
+
   async function previewClusterRollback() {
     if (!selected || !editable) return;
     setRollbackOpen(true);
@@ -230,7 +244,7 @@ export function EnvironmentsPage() {
   const healthStale = Boolean(health && health.environmentRevisionId !== selected?.currentRevision?.id);
 
   return <div className="page">
-    <PageHeader eyebrow="Execution environments" title="环境管理" description="分别查看调度占用与真实连通性；配置变更以可追溯 Revision 保存。" actions={user.role === 'environment_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button> : undefined} />
+    <PageHeader eyebrow="Execution environments" title="环境管理" description="分别查看调度占用与真实连通性；配置变更以可追溯 Revision 保存。" actions={user.role === 'environment_owner' ? <><button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入环境</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button></> : undefined} />
     <RefreshNotice loading={isRefreshing} error={environments ? error : undefined} onRetry={() => void reload()} />
     {loading && !environments ? <LoadingBlock label="正在读取共享环境…" /> : error && !environments ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="catalog-layout">
       <aside className="catalog-list panel">
@@ -240,7 +254,7 @@ export function EnvironmentsPage() {
       {selected ? <section className="detail-stack">
         <article className="panel environment-hero">
           <div><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
-          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>{editable && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button>}</div>
+          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>{editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button><button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button></>}</div>
         </article>
         <StatusExplanationPanel item={environmentWorkItem} />
         <section className="fact-grid">
@@ -271,12 +285,13 @@ export function EnvironmentsPage() {
           {editable && <footer className="editor-footer"><span className={dirty ? 'editor-dirty' : ''}><LockKeyhole size={14} /> {dirty ? '当前页有未保存更改' : '当前页与已保存 Revision 一致'}</span><div>{dirty && <button className="button button--quiet" onClick={discardCurrent}>放弃本页更改</button>}<button className="button button--primary" disabled={busy || !dirty} onClick={() => setSaveOpen(true)}><Save size={16} /> 保存新 Revision</button></div></footer>}
         </article>
 
-        <article className="panel revision-history"><header className="panel__header"><div><span className="panel__icon"><History size={18} /></span><div><h2>Revision 历史</h2><p>恢复旧配置时始终创建新 Revision，不覆盖历史。</p></div></div></header><div className="revision-list">{(selected.revisions ?? (selected.currentRevision ? [selected.currentRevision] : [])).map((revision) => <div key={revision.id}><span className="revision-number">r{revision.revision}</span><div><strong>{revision.changeReason || (revision.revision === 1 ? '创建环境' : '未填写变更原因')}</strong><small>{revisionActor(revision, users)} · {formatTime(revision.createdAt)}</small></div>{revision.id === selected.currentRevision?.id ? <StatusPill status="active">当前</StatusPill> : editable && <button className="button button--quiet" disabled={anyDirty} onClick={() => setRestoreRevision(revision)}><RotateCcw size={14} /> 基于此恢复</button>}</div>)}</div></article>
+        <article className="panel revision-history"><header className="panel__header"><div><span className="panel__icon"><History size={18} /></span><div><h2>Revision 历史</h2><p>恢复旧配置时始终创建新 Revision，不覆盖历史。</p></div></div></header><div className="revision-list">{(selected.revisions ?? (selected.currentRevision ? [selected.currentRevision] : [])).map((revision) => <div key={revision.id}><span className="revision-number">r{revision.revision}</span><div><strong>{revision.changeReason || (revision.revision === 1 ? '创建环境' : '未填写变更原因')}</strong><small>{revisionActor(revision, users)} · {formatTime(revision.createdAt)}</small></div>{editable && <button className="button button--quiet" onClick={() => void exportRevision(revision, false)}><Download size={14} /> 导出</button>}{revision.id === selected.currentRevision?.id ? <StatusPill status="active">当前</StatusPill> : editable && <button className="button button--quiet" disabled={anyDirty} onClick={() => setRestoreRevision(revision)}><RotateCcw size={14} /> 基于此恢复</button>}</div>)}</div></article>
 
         <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><LockKeyhole size={18} /></span><div><h2>最近环境运行</h2><p>同一环境一次只允许一个活动 Run</p></div></div></header>{environmentRuns.length ? <div className="simple-table">{environmentRuns.map((run) => <Link key={run.id} to={`/runs?selected=${run.id}`}><div><strong>{run.name ?? run.scenarioName ?? run.componentName}</strong><small>{formatTime(run.createdAt)}</small></div><StatusPill status={run.status} /></Link>)}</div> : <EmptyState title="暂无运行记录" />}</article>
       </section> : <section className="panel"><EmptyState title="没有可见环境" /></section>}
     </div>}
     {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
+    {importOpen && <EnvironmentImportModal environments={environments ?? []} selected={selected} onClose={() => setImportOpen(false)} onDone={(environment) => { setImportOpen(false); signalRefresh(['environments', 'workbench']); setSearchParams({ selected: environment.id }); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新 Revision" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧 Revision。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前 Revision。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
     {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
@@ -303,6 +318,73 @@ function ClusterRollbackModal({ environment, plan, error, explanation, busy, onR
 function ChangeReasonModal({ title, description, warning, diffLines, busy, onClose, onConfirm }: { title: string; description: string; warning?: string; diffLines: string[]; busy: boolean; onClose: () => void; onConfirm: (reason: string) => void }) {
   const [reason, setReason] = useState('');
   return <Modal title={title} description={description} onClose={onClose}><div className="modal-body revision-preview"><div className="revision-diff"><GitCompare size={18} /><div><strong>变更预览</strong>{diffLines.map((line) => <p key={line}>{line}</p>)}</div></div>{warning && <div className="inline-warning"><AlertTriangle size={17} /><span>{warning}</span></div>}<label><span>变更原因</span><textarea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：调整 node-6 地址并补充 FILE_STATION" autoFocus /></label></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || !reason.trim()} onClick={() => onConfirm(reason.trim())}>{busy ? '处理中…' : '确认创建 Revision'}</button></footer></Modal>;
+}
+
+export function environmentDocumentContainsCredentialReferences(document?: EnvironmentExportDocument) {
+	return document?.snapshot?.credentialRefs?.some((reference) => typeof reference.reference === 'string' && reference.reference.trim() !== '') ?? false;
+}
+
+function EnvironmentImportModal({ environments, selected, onClose, onDone }: { environments: Environment[]; selected?: Environment; onClose: () => void; onDone: (environment: Environment) => void }) {
+  const { notify } = useApp();
+  const [text, setText] = useState('');
+  const [targetKind, setTargetKind] = useState<'new' | 'existing'>(selected ? 'existing' : 'new');
+  const [targetEnvironmentId, setTargetEnvironmentId] = useState(selected?.id ?? '');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [reason, setReason] = useState('');
+  const [confirmReferences, setConfirmReferences] = useState(false);
+  const [plan, setPlan] = useState<EnvironmentImportPlan>();
+  const [document, setDocument] = useState<EnvironmentExportDocument>();
+  const [busy, setBusy] = useState<'preview' | 'submit'>();
+
+  function request(parsed: EnvironmentExportDocument) {
+    return {
+      document: parsed,
+      target: targetKind === 'new' ? { kind: 'new' as const, name: name.trim(), description: description.trim() } : { kind: 'existing' as const, environmentId: targetEnvironmentId },
+      changeReason: reason.trim(),
+      confirmCredentialReferences: confirmReferences,
+    };
+  }
+
+  async function preview() {
+    setBusy('preview'); setPlan(undefined);
+    try {
+      const parsed = JSON.parse(text) as EnvironmentExportDocument;
+      if (parsed.formatVersion !== 'clusterforge-environment/v1') throw new Error('仅支持 clusterforge-environment/v1 文件。');
+      const result = await api.previewEnvironmentImport(request(parsed));
+      setDocument(parsed); setPlan(result);
+    } catch (reasonValue) { notify('error', '环境导入预检失败', reasonValue instanceof SyntaxError ? '导入内容不是有效 JSON。' : displayError(reasonValue)); }
+    finally { setBusy(undefined); }
+  }
+
+  async function submit() {
+    if (!plan || !document) return;
+    setBusy('submit');
+    try {
+      const environment = await api.importEnvironment({ ...request(document), expectedPlanDigest: plan.planDigest });
+      notify('success', targetKind === 'new' ? '已从文件创建环境' : `已创建 Environment Revision r${plan.nextRevision}`, '运行、健康记录、安装证据和审计历史没有被导入。');
+      onDone(environment);
+    } catch (reasonValue) { setPlan(undefined); notify('error', '环境导入失败', displayError(reasonValue)); }
+    finally { setBusy(undefined); }
+  }
+
+	let containsReferences = false;
+	try {
+		const candidate = document ?? (text.trim() ? JSON.parse(text) as EnvironmentExportDocument : undefined);
+		containsReferences = environmentDocumentContainsCredentialReferences(candidate);
+	} catch { /* Preview reports malformed JSON. */ }
+
+  return <Modal size="wide" title="导入环境 Revision" description="导入只复用环境配置；不会复制 Run、健康检查、安装记录、备份或审计历史。" onClose={onClose}>
+    <div className="modal-body">
+	      <label><span>环境导出 JSON</span><input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then((value) => { setText(value); setPlan(undefined); setDocument(undefined); setConfirmReferences(false); }); }} /><textarea className="code-editor" rows={12} value={text} onChange={(event) => { setText(event.target.value); setPlan(undefined); setDocument(undefined); setConfirmReferences(false); }} placeholder="粘贴 clusterforge-environment/v1 文件；缺少的 CredentialRef reference 可直接在此映射或删除。" /></label>
+      <label><span>导入目标</span><select value={targetKind} onChange={(event) => { setTargetKind(event.target.value as 'new' | 'existing'); setPlan(undefined); }}><option value="new">创建新环境及 r1</option><option value="existing">既有环境创建新 Revision</option></select></label>
+      {targetKind === 'new' ? <div className="form-grid"><label><span>新环境名称</span><input value={name} onChange={(event) => { setName(event.target.value); setPlan(undefined); }} /></label><label><span>说明</span><input value={description} onChange={(event) => { setDescription(event.target.value); setPlan(undefined); }} /></label></div> : <label><span>目标环境</span><select value={targetEnvironmentId} onChange={(event) => { setTargetEnvironmentId(event.target.value); setPlan(undefined); }}><option value="">请选择</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · r{environment.currentRevision?.revision ?? 1}</option>)}</select></label>}
+      <label><span>变更原因</span><textarea rows={2} value={reason} onChange={(event) => { setReason(event.target.value); setPlan(undefined); }} placeholder="说明本次导入用途" /></label>
+      {containsReferences ? <label className="checkbox-field"><input type="checkbox" checked={confirmReferences} onChange={(event) => { setConfirmReferences(event.target.checked); setPlan(undefined); }} /><span>我确认复用文件中的 CredentialRef 引用；文件不包含 Secret 实际值</span></label> : null}
+      {plan && <section className="revision-preview"><div className="revision-diff"><GitCompare size={18} /><div><strong>导入预览 · 将创建 r{plan.nextRevision}</strong>{plan.changes.map((line) => <p key={line}>{line}</p>)}<p>{plan.hostCount} 台主机 · {plan.variableCount} 个变量 · {plan.credentialRefCount} 个 CredentialRef</p></div></div>{plan.warnings.map((warning) => <div className="inline-warning" key={warning}><AlertTriangle size={16} /><span>{warning}</span></div>)}</section>}
+    </div>
+    <footer className="modal-actions"><button className="button button--quiet" disabled={Boolean(busy)} onClick={onClose}>取消</button><button className="button button--quiet" disabled={Boolean(busy) || !text.trim() || !reason.trim() || (targetKind === 'new' ? !name.trim() : !targetEnvironmentId)} onClick={() => void preview()}>{busy === 'preview' ? '预检中…' : '预览差异'}</button><button className="button button--primary" disabled={Boolean(busy) || !plan} onClick={() => void submit()}>{busy === 'submit' ? '导入中…' : '确认创建 Revision'}</button></footer>
+  </Modal>;
 }
 
 function CreateEnvironmentModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {

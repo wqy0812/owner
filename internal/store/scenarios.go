@@ -25,6 +25,89 @@ func (s *Store) CreateScenario(ctx context.Context, sc domain.Scenario, rev doma
 	return tx.Commit()
 }
 
+type ScenarioDeletionImpact struct {
+	RevisionCount          int
+	PublishedRevisionCount int
+	RunCount               int
+}
+
+func (s *Store) ScenarioDeletionImpact(ctx context.Context, scenarioID string) (ScenarioDeletionImpact, error) {
+	var impact ScenarioDeletionImpact
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scenarios WHERE id=?`, scenarioID).Scan(&exists); err != nil {
+		return impact, err
+	}
+	if exists == 0 {
+		return impact, domain.ErrNotFound
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('released','deprecated') OR released_at IS NOT NULL THEN 1 ELSE 0 END),0)
+FROM scenario_revisions WHERE scenario_id=?`, scenarioID).Scan(&impact.RevisionCount, &impact.PublishedRevisionCount); err != nil {
+		return impact, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM runs r
+JOIN scenario_revisions sr ON sr.id=r.scenario_revision_id
+WHERE sr.scenario_id=?`, scenarioID).Scan(&impact.RunCount); err != nil {
+		return impact, err
+	}
+	return impact, nil
+}
+
+// DeleteScenario removes only scenarios that have never been published or run.
+// The audit event is committed in the same transaction so this destructive
+// action cannot succeed without leaving a retained record.
+func (s *Store) DeleteScenario(ctx context.Context, scenarioID string, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var exists, published, runs int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM scenarios WHERE id=?`, scenarioID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return domain.ErrNotFound
+	}
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM scenario_revisions
+WHERE scenario_id=? AND (status IN ('released','deprecated') OR released_at IS NOT NULL)`, scenarioID).Scan(&published); err != nil {
+		return err
+	}
+	if published > 0 {
+		return fmt.Errorf("%w: published scenario revisions must be retained", domain.ErrConflict)
+	}
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM runs r
+JOIN scenario_revisions sr ON sr.id=r.scenario_revision_id
+WHERE sr.scenario_id=?`, scenarioID).Scan(&runs); err != nil {
+		return err
+	}
+	if runs > 0 {
+		return fmt.Errorf("%w: scenario run history must be retained", domain.ErrConflict)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM run_input_presets
+WHERE resource_type='scenario_revision'
+AND resource_id IN (SELECT id FROM scenario_revisions WHERE scenario_id=?)`, scenarioID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM scenarios WHERE id=?`, scenarioID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, audit.ID, audit.ActorID, audit.Action, audit.ResourceType, audit.ResourceID, jsonText(audit.Metadata), timeText(audit.CreatedAt)); err != nil {
+		return mapSQLError(err)
+	}
+	return tx.Commit()
+}
+
 func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRevision) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.ExecutionPolicy), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
 	return mapSQLError(err)

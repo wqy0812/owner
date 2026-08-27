@@ -567,6 +567,16 @@ func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
+	component := domain.Component{ID: "restart-component", Slug: "restart-component", Name: "Restart Component", Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredOptional, OwnerID: "component-alice", CreatedAt: testNow, UpdatedAt: testNow}
+	if err := s.CreateComponent(ctx, component); err != nil {
+		t.Fatal(err)
+	}
+	releasedAt := testNow
+	release := releaseFixture("restart-release", component.ID, "1.0.0", domain.ReleaseReleased)
+	release.ReleasedAt = &releasedAt
+	if err := s.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
 	scenario := domain.Scenario{ID: "restart-scenario", Slug: "restart-scenario", Name: "Restart", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{ID: "restart-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTesting, Graph: domain.ScenarioGraph{}, ExecutionPolicy: map[string]any{}, CreatedAt: testNow}
 	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
@@ -577,7 +587,7 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
-	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step"}}}, CreatedAt: testNow}
+	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run, nil); err != nil {
 		t.Fatal(err)
 	}

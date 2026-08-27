@@ -285,6 +285,47 @@ export interface Environment {
   updatedAt?: string;
 }
 
+export interface EnvironmentExportDocument {
+  formatVersion: 'clusterforge-environment/v1';
+  exportedAt: string;
+  containsCredentialReferences: boolean;
+  source: { environmentId: string; environmentName: string; revisionId: string; revision: number };
+  snapshot: {
+    facts: Record<string, unknown>;
+    hosts: EnvironmentHost[];
+    variables: Record<string, string>;
+    credentialRefs: Array<{ name: string; kind: CredentialRef['type']; reference?: string; configured?: boolean }>;
+    maxConcurrent: number;
+  };
+}
+
+export interface EnvironmentImportPlan {
+  planDigest: string;
+  targetKind: 'new' | 'existing';
+  targetEnvironmentId?: string;
+  targetCurrentRevisionId?: string;
+  nextRevision: number;
+  hostCount: number;
+  variableCount: number;
+  credentialRefCount: number;
+  changes: string[];
+  warnings: string[];
+}
+
+export interface RunInputPreset {
+  id: string;
+  createdBy: string;
+  resourceType: 'component_release' | 'scenario_revision';
+  resourceId: string;
+  context: 'component_install_verify' | 'component_rollback' | 'scenario_test' | 'scenario_run';
+  name: string;
+  values: { runInput?: Record<string, unknown>; dependencyFixtures?: Record<string, unknown> };
+  definitionDigest: string;
+  stale: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AuditEvent {
   id: string;
   actorId: string;
@@ -414,6 +455,10 @@ export interface Run {
   createdBy?: string;
   createdByName?: string;
   destructive?: boolean;
+  retryOfRunId?: string;
+  retryRootRunId?: string;
+  retryAttempt?: number;
+  retryStartStep?: number;
   queuePosition?: number;
   progress?: number;
   steps?: RunStep[];
@@ -426,6 +471,17 @@ export interface Run {
   createdAt?: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface RunRetryPlan {
+  sourceRunId: string;
+  retryRootRunId: string;
+  environmentRevisionId: string;
+  startStep: number;
+  skippedSteps: number;
+  remainingSteps: ComponentTestPlanStep[];
+  requiresApproval: boolean;
+  planDigest: string;
 }
 
 export type ComponentTestMode = 'install_verify' | 'rollback';
@@ -502,6 +558,7 @@ export interface ImpactPreview {
   scenarioOwners: Array<{ id: string; name: string }>;
   scenarios: Array<{ id: string; name: string }>;
   paths: string[][];
+  scenarioRunCount: number;
 }
 
 export const ROLE_LABELS: Record<Role, string> = {

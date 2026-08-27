@@ -78,6 +78,9 @@ func (p *Platform) ConfigureImageBuilder(buildRoot, dockerBinary string) {
 }
 
 func (p *Platform) Start(ctx context.Context) error {
+	if err := p.RecoverComponentImportFiles(ctx); err != nil {
+		return fmt.Errorf("recover component import files: %w", err)
+	}
 	if err := p.store.MarkComponentImageBuildsInterrupted(ctx, time.Now().UTC()); err != nil {
 		return fmt.Errorf("recover interrupted image builds: %w", err)
 	}
@@ -135,16 +138,20 @@ func requireOwner(user domain.User, role domain.Role, ownerID string) error {
 }
 
 func (p *Platform) audit(ctx context.Context, actor domain.User, action, resourceType, resourceID string, metadata map[string]any) {
+	event := newAuditEvent(actor, action, resourceType, resourceID, metadata)
+	_ = p.store.AppendAudit(ctx, event)
+}
+
+func newAuditEvent(actor domain.User, action, resourceType, resourceID string, metadata map[string]any) domain.AuditEvent {
 	safeMetadata := map[string]any{}
 	if metadata != nil {
 		safeMetadata = Redact(metadata).(map[string]any)
 	}
-	event := domain.AuditEvent{
+	return domain.AuditEvent{
 		ID: newID("audit"), ActorID: actor.ID, Action: action,
 		ResourceType: resourceType, ResourceID: resourceID,
 		Metadata: safeMetadata, CreatedAt: time.Now().UTC(),
 	}
-	_ = p.store.AppendAudit(ctx, event)
 }
 
 func actionFor(release domain.ComponentRelease, kind domain.ActionKind) (domain.ActionDefinition, error) {
@@ -171,6 +178,9 @@ func validateRelease(release domain.ComponentRelease) error {
 	if release.Type != domain.ReleaseAtomic && release.Type != domain.ReleaseBundle {
 		return fmt.Errorf("%w: release type must be atomic or bundle", domain.ErrInvalid)
 	}
+	if release.RiskLevel != "" && !validRiskLevel(release.RiskLevel) {
+		return fmt.Errorf("%w: invalid release risk level %q", domain.ErrInvalid, release.RiskLevel)
+	}
 	if err := validateReleaseParameters(release); err != nil {
 		return err
 	}
@@ -191,8 +201,14 @@ func validateRelease(release domain.ComponentRelease) error {
 		seenDependencies[dependency.UpstreamComponentID] = struct{}{}
 	}
 	for _, action := range release.Actions {
-		if action.Kind == "" || strings.TrimSpace(action.Playbook) == "" {
+		if !validActionKind(action.Kind) {
+			return fmt.Errorf("%w: invalid action kind %q", domain.ErrInvalid, action.Kind)
+		}
+		if strings.TrimSpace(action.Playbook) == "" {
 			return fmt.Errorf("%w: every action requires a kind and relative playbook", domain.ErrInvalid)
+		}
+		if action.RiskLevel != "" && !validRiskLevel(action.RiskLevel) {
+			return fmt.Errorf("%w: invalid action risk level %q", domain.ErrInvalid, action.RiskLevel)
 		}
 		if strings.HasPrefix(action.Playbook, "/") || strings.Contains(action.Playbook, "..") {
 			return fmt.Errorf("%w: action playbook must be a safe relative path", domain.ErrInvalid)
@@ -227,6 +243,24 @@ func validateRelease(release domain.ComponentRelease) error {
 		}
 	}
 	return nil
+}
+
+func validActionKind(kind domain.ActionKind) bool {
+	switch kind {
+	case domain.ActionInspect, domain.ActionPreflight, domain.ActionInstall, domain.ActionConfigure, domain.ActionVerify, domain.ActionUpgrade, domain.ActionRollback, domain.ActionUninstall:
+		return true
+	default:
+		return false
+	}
+}
+
+func validRiskLevel(level domain.RiskLevel) bool {
+	switch level {
+	case domain.RiskLow, domain.RiskMedium, domain.RiskHigh, domain.RiskDestructive:
+		return true
+	default:
+		return false
+	}
 }
 
 func errorIsNotFound(err error) bool { return errors.Is(err, domain.ErrNotFound) }

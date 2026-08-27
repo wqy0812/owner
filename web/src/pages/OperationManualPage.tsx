@@ -78,6 +78,7 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '搜索运行日志 / 日志流筛选', purpose: '按关键字和 stdout、stderr、system 流定位日志。', availability: '已选择 Run', result: '只过滤当前日志显示，不修改 Run。' },
       { label: '复制结果 / 下载完整日志', purpose: '复制当前筛选结果或下载完整脱敏日志。', availability: '已选择 Run', result: '复制仅包含当前筛选行；下载始终包含该 Run 的全部日志。' },
       { label: '取消', purpose: '请求取消仍在活动状态的 Run。', availability: 'Run 可取消且未等待审批时', result: '改变 Run 状态；提交前先核对环境与 Run ID。' },
+      { label: '预览安全续跑', purpose: '重新校验环境、资源和可执行指纹，只继续安全的未完成步骤。', availability: '本人创建且失败或中断的可续跑 Run', result: '确认后创建关联 Run；同一根链只允许一个活动续跑，续跑编号不可重复。' },
       { label: '全部 / 未读', purpose: '筛选通知。', availability: '通知中心', result: '只改变前台列表范围。' },
       { label: '全部已读 / 标为已读', purpose: '确认已处理全部或单条通知。', availability: '存在未读通知时', result: '写入通知已读状态，不改变 Release 或场景。' },
       { label: '查看关联资源', purpose: '跳转到通知指向的组件或场景。', availability: '通知包含资源链接时', result: '打开关联资源并保留其当前版本状态。' },
@@ -105,20 +106,20 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '组件条目', purpose: '选择组件并读取 Release 列表。', availability: '所有用户', result: '切换详情；编辑 Draft 时其他条目会禁用。' },
       { label: '编辑组件 / 保存组件', purpose: '修改名称、标识、分类和说明。', availability: '组件 Owner 且拥有该组件', result: '保存组件元数据，不修改已发布 Release。' },
       { label: '创建 Draft 编辑合同 / 创建 Draft', purpose: '从现有版本克隆或创建可编辑版本。', availability: '组件 Owner 且没有可编辑 Draft 时', result: '创建新 Draft；Released Release 保持不可变。' },
-      { label: '导入细粒度模板 / 校验并导入', purpose: '从 JSON 模板批量录入细粒度组件、Draft、依赖和独立 Playbook；Action 按文件名严格绑定模板内文件。', availability: '组件 Owner；全部条目、依赖 DAG 和文件引用必须先通过校验', result: '先创建无 Action Draft，再保存托管文件并写回 managed 路径；不会自动验证、加入候选集或发布。' },
+      { label: '批量导入 / 预检并导入', purpose: '从 JSON 模板批量录入细粒度组件、Draft、依赖和独立 Playbook；Action 按文件名严格绑定模板内文件。', availability: '组件 Owner；全部条目、依赖 DAG 和文件引用必须先通过校验', result: '组件、Draft、托管文件和审计记录整批生效或整批失败；不会自动验证、加入候选集或发布。' },
     ],
   },
   {
     page: 'Release 合同与生命周期', path: '/components', description: '先选 Release，再根据其状态进行查看、编辑、环境验证、发布或废弃。', entries: [
       { label: 'Release 版本行', purpose: '选择该版本的依赖和参数合同。', availability: '所有用户', result: '只切换当前查看版本。' },
       { label: 'Draft 发布就绪度 / 编辑合同 / 配置动作 / 构建镜像 / 管理介质', purpose: '汇总发布阻断项并进入对应处理入口。', availability: '组件 Owner 自有 Draft', result: '卡片本身只汇总状态；具体写操作仍需在后续表单确认。' },
-      { label: '查看合同 / 关闭', purpose: '只读查看参数可见性、依赖和映射。', availability: '所有 Release', result: '不修改合同。' },
+      { label: '查看详情 / 关闭', purpose: '只读查看版本信息、环境约束、参数、依赖、生命周期动作和 Playbook。', availability: '所有可见 Release', result: '不修改 Release 或 Playbook。' },
       { label: '配置合同 / 编辑依赖和参数 / 编辑', purpose: '编辑 Draft 的参数与精确依赖映射。', availability: '组件 Owner 自有 Draft', result: '打开合同编辑器；需“保存依赖和参数”才写入。' },
       { label: '编辑可见性与映射', purpose: '从合同查看弹窗转入 Draft 编辑。', availability: '当前 Release 可编辑时', result: '关闭只读视图并打开编辑器。' },
       { label: '保存依赖和参数', purpose: '保存 Draft 参数、依赖及公开参数映射。', availability: '合同编辑器校验通过', result: '更新 Draft，并使相关旧测试证据失效。' },
       { label: '加入候选集 / 撤回候选', purpose: '把已完成交付证据的 Draft 交给场景 Owner 编排，或停止新的候选引用。', availability: '组件 Owner 自有 Draft；加入时必须满足当前合同的生命周期、安装验证和回退证据', result: '候选 Draft 可随场景 Revision 原子发布；Draft 再次编辑会自动撤回候选状态。' },
       { label: '发布 / 确认发布并通知', purpose: '预览下游影响并发布不可变 Release。', availability: '组件 Owner 自有 Draft 且满足发布校验', result: 'Release 进入 Released，并为受影响 Owner 创建通知。' },
-      { label: '废弃 / 确认废弃版本', purpose: '预览影响后停止把旧的已发布 Release 作为推荐版本。', availability: '组件 Owner 自有已发布 Release', result: '确认后状态变为已废弃；历史引用仍保留。' },
+      { label: '废弃草稿 / 废弃 / 确认废弃', purpose: '预览影响后撤销候选 Draft 或停止把旧 Release 作为推荐版本。', availability: '组件 Owner 自有 Draft 或已发布 Release；活动测试中的 Draft，以及已被场景 Run 锁定的版本不可废弃', result: '确认后状态变为已废弃并保留历史引用、Playbook 与介质。' },
     ],
   },
   {
@@ -154,8 +155,9 @@ const SCENARIO_BUTTON_GROUPS: ButtonGuideGroup[] = [
   {
     page: '场景与 Revision', path: '/scenarios', description: '场景 Owner 管理 Draft；Released Revision 永远只读。', entries: [
       { label: '新建场景 / 创建场景', purpose: '创建场景和初始 Draft Revision。', availability: '场景 Owner', result: '生成可编辑 Revision。' },
+      { label: '删除场景', purpose: '清理误建且尚未进入交付生命周期的场景。', availability: '场景 Owner 自有场景，所有 Revision 均未发布且从未产生任何 Run', result: '确认后永久删除场景、未发布 Revision 与相关个人运行参数预设；已发布或有 Run 的场景会被后端拒绝。' },
       { label: '导入模板 / 载入草稿', purpose: '一次载入节点、边和执行策略。', availability: '场景 Owner 自有 Draft', result: '只更新前台草稿，仍需人工检查并保存。' },
-      { label: '复制模板', purpose: '复制当前 Revision 的可移植 JSON 模板。', availability: '已选择 Revision', result: '写入剪贴板，不修改场景。' },
+      { label: '导出 JSON', purpose: '下载当前 Revision 的可移植 JSON 模板。', availability: '已选择 Revision', result: '生成带场景标识和 Revision 编号的 .json 文件，不修改场景。' },
       { label: '场景条目 / Revision 选择', purpose: '切换场景或查看某个 Revision。', availability: '所有用户', result: '只切换详情。' },
       { label: '校验', purpose: '检查 DAG、依赖、动作和参数解析。', availability: '已选择 Revision', result: '返回校验结果，不创建 Run。' },
       { label: '保存草稿', purpose: '保存节点、连线、策略和参数。', availability: '自有 Draft', result: '更新 Draft，并使旧完整测试证据失效。' },
@@ -193,6 +195,8 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '保存新 Revision', purpose: '预览 Inventory、Facts、变量或凭据引用的差异。', availability: '环境 Owner 自有环境且当前分区有改动', result: '打开差异与变更原因确认框，尚未写入。' },
       { label: '确认创建 Revision', purpose: '用填写的变更原因提交预览差异。', availability: '差异确认框且变更原因非空', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },
       { label: '基于此恢复', purpose: '把历史 Revision 的配置复制为一个新 Revision。', availability: '环境 Owner 自有环境的非当前 Revision', result: '要求填写恢复原因；保留原历史，不回写或删除旧 Revision。' },
+      { label: '安全导出 / 含凭据引用导出', purpose: '下载指定 Environment Revision 的可移植配置。', availability: '环境 Owner 自有环境', result: '默认移除 reference；敏感导出仍不包含 Secret 实际值。' },
+      { label: '导入 Revision / 预览差异', purpose: '导入新环境 r1 或既有环境的新 Revision。', availability: '环境 Owner；文件与目标通过预检', result: '按实际非空 reference 要求确认复用；规范化后的预览快照与落库内容一致。' },
     ],
   },
   {
@@ -223,7 +227,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 1. 在 **组件** 页面新建组件，填写名称、标识、说明和 L1-L6 分类。
 2. 点击 **创建 Draft 编辑合同**；已有版本时会复制当前合同，新组件则从空 Draft 开始。
 3. 只有组件 Owner 能修改自己拥有的组件和 Draft。
-4. 需要批量录入时使用 **导入细粒度模板**，点击 **校验并导入** 后仍要逐个完成环境验证与候选交接。
+4. 需要批量录入时使用 **批量导入**；点击 **预检并导入** 后，组件、Draft 和 Playbook 整批生效或整批失败，成功后仍要逐个完成环境验证与候选交接。
 
 ### 2. 配置版本合同
 
@@ -245,7 +249,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 1. 当前合同必须已完成 install + verify 的安装验证，并具备相同规格摘要下的 rollback + verify 回退证据；Draft 再次保存后旧证据失效。
 2. 独立直接发布前，所有上游依赖必须已经 Released；打开影响预览并用 **确认发布并通知** 提交。
 3. 一组相互依赖的 Draft 应先逐个 **加入候选集**，由场景 Owner 编排、测试，再随 Scenario Revision 原子发布；不再交接时使用 **撤回候选**。
-4. 后续变更请创建新 Draft；不再使用的 Released Release 可废弃但不会删除历史。
+4. 后续变更请创建新 Draft；不再使用且没有被场景 Run 锁定的 Released Release 可废弃，但不会删除历史。
 
 ### 5. 前台版本更新时
 
@@ -269,9 +273,10 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 ### 1. 创建并编排 Draft
 
 1. 在 **场景** 页面新建场景，系统会创建初始 Draft Revision。
-2. 从组件库加入已发布 Release 或组件 Owner 共享的候选 Draft；每个节点锁定加入时的精确版本。
-3. 用 DAG 连线表达硬依赖和实际顺序，再配置动作、主机组、节点参数和运行输入。
-4. 可用 **导入模板** 载入节点、边和策略，或用 **复制模板** 导出当前 Revision；通过 **DAG / 节点表** 交叉核对拓扑与节点合同。
+2. 误建且从未发布、从未产生 Run 的场景可使用 **删除场景** 永久清理；若已有发布或运行历史，只能废弃并保留记录。
+3. 从组件库加入已发布 Release 或组件 Owner 共享的候选 Draft；每个节点锁定加入时的精确版本。
+4. 用 DAG 连线表达硬依赖和实际顺序，再配置动作、主机组、节点参数和运行输入。
+5. 可用 **导入模板** 载入节点、边和策略，或用 **导出 JSON** 下载当前 Revision；通过 **DAG / 节点表** 交叉核对拓扑与节点合同。
 
 ### 2. 保存并校验
 
@@ -316,6 +321,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 1. 在 **环境** 页面新建环境，填写架构、操作系统、网络栈和说明。
 2. 在 Inventory 中维护主机地址、SSH 用户、端口和主机组。
 3. 分别维护环境事实、环境变量与 CredentialRef；每次保存都会创建新的 Environment Revision。
+4. 需要迁移配置时使用 Revision 导出/导入；含实际 CredentialRef 引用的文件必须在当前文件上重新确认，编辑或替换文件会清除旧确认。
 
 ### 2. 管理仓库变量与凭据
 

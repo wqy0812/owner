@@ -70,8 +70,3 @@ func (s *Store) DeleteDraftComponentArtifactAndInvalidate(ctx context.Context, r
 	}
 	return tx.Commit()
 }
-
-func (s *Store) CloneComponentArtifacts(ctx context.Context, sourceReleaseID, targetReleaseID string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at) SELECT 'artifact-' || lower(hex(randomblob(12))),?,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at FROM component_release_artifacts WHERE release_id=?`, targetReleaseID, sourceReleaseID)
-	return mapSQLError(err)
-}

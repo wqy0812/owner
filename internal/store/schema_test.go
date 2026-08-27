@@ -28,7 +28,7 @@ func TestDatabaseWithoutFirstVersionContractIsRejected(t *testing.T) {
 	}
 }
 
-func TestSupportedContractsMigrateToSafetyFences(t *testing.T) {
+func TestSupportedContractsMigrateToReuseWorkflows(t *testing.T) {
 	content, err := schemaFiles.ReadFile("schema.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -91,11 +91,29 @@ BEGIN
 END;
 
 `
-	for _, version := range []string{legacySchemaContract, idempotentSchemaContract, candidateSchemaContract, evidenceSchemaContract} {
+	for _, version := range []string{legacySchemaContract, idempotentSchemaContract, candidateSchemaContract, evidenceSchemaContract, safetyFenceSchemaContract} {
 		t.Run(version, func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "previous.db")
 			previous := strings.ReplaceAll(string(content), schemaContract, version)
+			for _, line := range []string{
+				"  retry_of_run_id TEXT REFERENCES runs(id),\n",
+				"  retry_root_run_id TEXT REFERENCES runs(id),\n",
+				"  retry_attempt INTEGER NOT NULL DEFAULT 0,\n",
+				"  retry_start_step INTEGER NOT NULL DEFAULT 0,\n",
+				"CREATE INDEX IF NOT EXISTS idx_runs_retry_root ON runs(retry_root_run_id, retry_attempt);\n",
+				"CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_retry_attempt ON runs(retry_root_run_id, retry_attempt) WHERE retry_root_run_id IS NOT NULL;\n",
+				"CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_retry_root ON runs(retry_root_run_id) WHERE retry_root_run_id IS NOT NULL AND status IN ('awaiting_approval','queued','running');\n",
+			} {
+				previous = strings.Replace(previous, line, "", 1)
+			}
+			presetStart := strings.Index(previous, "CREATE TABLE IF NOT EXISTS run_input_presets")
+			if presetStart >= 0 {
+				presetEnd := strings.Index(previous[presetStart:], "CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_insert")
+				if presetEnd > 0 {
+					previous = previous[:presetStart] + previous[presetStart+presetEnd:]
+				}
+			}
 			previous = strings.Replace(previous, rollbackTriggerSQL, "", 1)
 			if version != evidenceSchemaContract {
 				previous = strings.Replace(previous, candidateTriggerSQL, "", 1)
@@ -149,6 +167,10 @@ VALUES('dirty-release','dirty-component','1.0.0','atomic','draft','',0,0,1,'low'
 			if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'runs_environment_rollback_fence_%'`).Scan(&triggers); queryErr != nil || triggers != 2 {
 				t.Fatalf("environment rollback fence triggers=%d err=%v", triggers, queryErr)
 			}
+			var retryAttemptIndex int
+			if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_runs_retry_attempt'`).Scan(&retryAttemptIndex); queryErr != nil || retryAttemptIndex != 1 {
+				t.Fatalf("retry attempt unique index=%d err=%v", retryAttemptIndex, queryErr)
+			}
 			if version == candidateSchemaContract {
 				var candidate int
 				if queryErr := migrated.DB().QueryRowContext(ctx, `SELECT candidate FROM component_releases WHERE id='dirty-release'`).Scan(&candidate); queryErr != nil || candidate != 0 {
@@ -192,6 +214,10 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	var rollbackFenceTriggers int
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'runs_environment_rollback_fence_%'`).Scan(&rollbackFenceTriggers); err != nil || rollbackFenceTriggers != 2 {
 		t.Fatalf("environment rollback fence triggers=%d err=%v", rollbackFenceTriggers, err)
+	}
+	var retryAttemptIndex int
+	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_runs_retry_attempt'`).Scan(&retryAttemptIndex); err != nil || retryAttemptIndex != 1 {
+		t.Fatalf("retry attempt unique index=%d err=%v", retryAttemptIndex, err)
 	}
 	for table, column := range map[string]string{
 		"environment_revisions":                  "variables_json",

@@ -5,7 +5,6 @@ import type {
   ComponentDependency,
   ComponentRelease,
   ParameterDefinition,
-  PlaybookFile,
 } from '../types/domain';
 
 export type ComponentImportDependency = Omit<ComponentDependency, 'componentId' | 'releaseId'> & { componentSlug: string };
@@ -15,32 +14,6 @@ export type ComponentImportEntry = {
   release: Omit<Partial<ComponentRelease>, 'dependencies'> & { dependencies?: ComponentImportDependency[] };
   playbooks?: Array<{ filename: string; content: string }>;
 };
-
-export interface ComponentImportClient {
-  createComponent(input: Partial<Component>): Promise<Component>;
-  createRelease(componentId: string, input: Partial<ComponentRelease>): Promise<ComponentRelease>;
-  savePlaybook(releaseId: string, filename: string, content: string): Promise<PlaybookFile>;
-  updateRelease(releaseId: string, input: Partial<ComponentRelease>): Promise<ComponentRelease>;
-}
-
-export interface ComponentImportProgress {
-  stage: string;
-  completedComponents: string[];
-  completedReleases: string[];
-  createdDrafts: Array<{ componentSlug: string; releaseId: string }>;
-  savedPlaybooks: string[];
-  remainingComponents: string[];
-}
-
-export class ComponentImportExecutionError extends Error {
-  readonly progress: ComponentImportProgress;
-
-  constructor(message: string, progress: ComponentImportProgress) {
-    super(message);
-    this.name = 'ComponentImportExecutionError';
-    this.progress = progress;
-  }
-}
 
 const ACTION_TYPES = new Set<ActionDefinition['type']>(['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall']);
 const COMPONENT_KINDS = new Set<Component['kind']>(['software', 'software_bundle', 'delivery_stage', 'configuration', 'artifact_set']);
@@ -335,79 +308,4 @@ export function parseComponentImportTemplate(text: string): ComponentImportEntry
   validateDependencyGraph(entries);
   validateDependencyContracts(entries);
   return entries;
-}
-
-function mappedDependencies(entry: ComponentImportEntry, components: Map<string, Component>, releases: Map<string, ComponentRelease>): ComponentDependency[] {
-  return (entry.release.dependencies ?? []).map((dependency) => ({
-    ...dependency,
-    componentId: components.get(dependency.componentSlug)!.id,
-    releaseId: releases.get(dependency.componentSlug)!.id,
-  }));
-}
-
-export async function executeComponentImport(
-  entries: ComponentImportEntry[],
-  client: ComponentImportClient,
-  onProgress: (progress: ComponentImportProgress) => void = () => undefined,
-) {
-  const components = new Map<string, Component>();
-  const releases = new Map<string, ComponentRelease>();
-  const completedComponents: string[] = [];
-  const completedReleases: string[] = [];
-  const createdDrafts: Array<{ componentSlug: string; releaseId: string }> = [];
-  const savedPlaybooks: string[] = [];
-  let stage = '准备导入';
-  const progress = (): ComponentImportProgress => ({
-    stage,
-    completedComponents: [...completedComponents],
-    completedReleases: [...completedReleases],
-    createdDrafts: createdDrafts.map((item) => ({ ...item })),
-    savedPlaybooks: [...savedPlaybooks],
-    remainingComponents: entries.map((entry) => entry.component.slug).filter((slug) => !completedReleases.includes(slug)),
-  });
-  try {
-    for (const [index, entry] of entries.entries()) {
-      stage = `创建组件 ${index + 1}/${entries.length}：${entry.component.name}`;
-      onProgress(progress());
-      components.set(entry.component.slug, await client.createComponent(entry.component));
-      completedComponents.push(entry.component.slug);
-    }
-    const pending = [...entries];
-    while (pending.length) {
-      const readyIndex = pending.findIndex((entry) => (entry.release.dependencies ?? []).every((dependency) => releases.has(dependency.componentSlug)));
-      if (readyIndex < 0) throw new Error('组件依赖顺序在写入期间失效。');
-      const [entry] = pending.splice(readyIndex, 1);
-      const component = components.get(entry.component.slug)!;
-      const dependencies = mappedDependencies(entry, components, releases);
-      const desiredActions = entry.release.actions ?? [];
-      stage = `创建安全 Draft：${entry.component.name} ${entry.release.version ?? ''}`;
-      onProgress(progress());
-      let release = await client.createRelease(component.id, { ...entry.release, dependencies, actions: [] });
-      createdDrafts.push({ componentSlug: entry.component.slug, releaseId: release.id });
-      const managedPaths = new Map<string, string>();
-      for (const playbook of entry.playbooks ?? []) {
-        stage = `保存 Playbook：${entry.component.name}/${playbook.filename}`;
-        onProgress(progress());
-        const saved = await client.savePlaybook(release.id, playbook.filename, playbook.content);
-        managedPaths.set(playbook.filename, saved.path);
-        savedPlaybooks.push(`${entry.component.slug}/${playbook.filename}`);
-      }
-      stage = `绑定 Action：${entry.component.name} ${entry.release.version ?? ''}`;
-      onProgress(progress());
-      release = await client.updateRelease(release.id, {
-        ...entry.release,
-        id: release.id,
-        componentId: component.id,
-        state: 'draft',
-        dependencies,
-        actions: desiredActions.map((action) => ({ ...action, playbook: managedPaths.get(action.playbook)! })),
-      });
-      releases.set(entry.component.slug, release);
-      completedReleases.push(entry.component.slug);
-    }
-    return { components, releases };
-  } catch (reason) {
-    const message = reason instanceof Error ? reason.message : '未知错误';
-    throw new ComponentImportExecutionError(`${stage}失败：${message}`, progress());
-  }
 }

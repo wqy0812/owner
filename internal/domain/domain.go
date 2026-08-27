@@ -621,12 +621,30 @@ type Run struct {
 	Destructive           bool           `json:"destructive"`
 	InputSnapshot         map[string]any `json:"inputSnapshot"`
 	ArtifactDigest        string         `json:"artifactDigest"`
+	RetryOfRunID          string         `json:"retryOfRunId,omitempty"`
+	RetryRootRunID        string         `json:"retryRootRunId,omitempty"`
+	RetryAttempt          int            `json:"retryAttempt,omitempty"`
+	RetryStartStep        int            `json:"retryStartStep,omitempty"`
 	Error                 string         `json:"error,omitempty"`
 	CreatedAt             time.Time      `json:"createdAt"`
 	StartedAt             *time.Time     `json:"startedAt,omitempty"`
 	FinishedAt            *time.Time     `json:"finishedAt,omitempty"`
 	Steps                 []RunStep      `json:"steps,omitempty"`
 	Approval              *Approval      `json:"approval,omitempty"`
+}
+
+type RunInputPreset struct {
+	ID               string         `json:"id"`
+	CreatedBy        string         `json:"createdBy"`
+	ResourceType     string         `json:"resourceType"`
+	ResourceID       string         `json:"resourceId"`
+	Context          string         `json:"context"`
+	Name             string         `json:"name"`
+	Values           map[string]any `json:"values"`
+	DefinitionDigest string         `json:"definitionDigest"`
+	Stale            bool           `json:"stale"`
+	CreatedAt        time.Time      `json:"createdAt"`
+	UpdatedAt        time.Time      `json:"updatedAt"`
 }
 
 type RunStep struct {
@@ -807,8 +825,9 @@ type ImpactRecipient struct {
 }
 
 type ImpactReport struct {
-	ComponentID string            `json:"componentId"`
-	Recipients  []ImpactRecipient `json:"recipients"`
+	ComponentID      string            `json:"componentId"`
+	Recipients       []ImpactRecipient `json:"recipients"`
+	ScenarioRunCount int               `json:"scenarioRunCount"`
 }
 
 var (

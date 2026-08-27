@@ -210,22 +210,31 @@ func (h *Handler) updateReleaseContract(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) cloneRelease(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Version                string         `json:"version"`
-		ReleaseNotes           string         `json:"releaseNotes"`
-		Breaking               bool           `json:"breaking"`
-		EnvironmentConstraints map[string]any `json:"environmentConstraints"`
-	}
+	var input service.ReleaseCloneRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input.Version, input.ReleaseNotes, input.Breaking, input.EnvironmentConstraints)
+	release, err := h.platform.CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeData(w, http.StatusCreated, release)
+}
+
+func (h *Handler) previewReleaseClone(w http.ResponseWriter, r *http.Request) {
+	var input service.ReleaseCloneRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	plan, err := h.platform.PreviewReleaseClone(r.Context(), currentUser(r), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, plan)
 }
 
 func (h *Handler) releaseImpact(w http.ResponseWriter, r *http.Request) {
@@ -345,5 +354,5 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 		scenarioList = append(scenarioList, scenario)
 	}
 	sort.Slice(scenarioList, func(i, j int) bool { return scenarioList[i]["name"].(string) < scenarioList[j]["name"].(string) })
-	return map[string]any{"componentOwners": componentOwners, "scenarioOwners": scenarioOwners, "scenarios": scenarioList, "paths": paths}
+	return map[string]any{"componentOwners": componentOwners, "scenarioOwners": scenarioOwners, "scenarios": scenarioList, "paths": paths, "scenarioRunCount": report.ScenarioRunCount}
 }

@@ -5,6 +5,7 @@ import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
+import { RunInputPresetPicker } from '../components/RunInputPresetPicker';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import {
@@ -17,8 +18,8 @@ import {
 import { ComponentMappingOverview, defaultContractRelease, defaultFixtureValues, DependencyContractList, DependencyEditor, mappedParameterNames, mappingCount, ParameterContractList, ParameterTable, parameterContractErrors } from '../components/ParameterEditors';
 import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
 import { environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
-import { ComponentImportExecutionError, executeComponentImport, parseComponentImportTemplate } from './componentTemplateImport';
-import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, Run, WorkExplanation } from '../types/domain';
+import { parseComponentImportTemplate } from './componentTemplateImport';
+import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImageBuild, ComponentKind, ComponentLayer, ComponentRelease, ComponentRequiredness, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, PlaybookFile, Run, WorkExplanation } from '../types/domain';
 
 type ContractSection = 'dependencies' | 'parameters';
 type ContractEditIntent = ContractSection | 'all';
@@ -179,6 +180,8 @@ export function ComponentsPage() {
   const releaseWorkItem = workbench?.items.find((item) => item.subject.type === 'component_release' && item.subject.id === contractRelease?.id);
   const visibleEditRelease = editRelease?.componentId === selected?.id ? editRelease : undefined;
   const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
+  const deprecationScenarioRunCount = deprecateRelease ? impact?.scenarioRunCount ?? 0 : 0;
+  const deprecationBlocked = deprecationScenarioRunCount > 0;
   const mine = selected?.ownerId === user.id && user.role === 'component_owner';
   const canTest = mine || user.role === 'environment_owner';
   useEffect(() => {
@@ -300,6 +303,7 @@ export function ComponentsPage() {
     setDeprecateRelease(release);
     setPublishRelease(undefined);
     setImpact(undefined);
+    setOperationExplanation(undefined);
     try {
       setImpact(await api.releaseImpact(release.id));
     } catch (reason) {
@@ -347,13 +351,19 @@ export function ComponentsPage() {
 
   async function confirmDeprecate() {
     if (!deprecateRelease) return;
+    if (deprecationBlocked) {
+      notify('error', '无法废弃', `该版本已经被 ${deprecationScenarioRunCount} 个场景 Run 锁定。`);
+      return;
+    }
     setBusy(true);
+    setOperationExplanation(undefined);
     try {
       await api.deprecateRelease(deprecateRelease.id);
-      notify('success', '组件版本已废弃', '历史 Run 和已经锁定此 Release ID 的场景保持不变。');
+      notify('success', deprecateRelease.state === 'draft' ? '组件草稿已废弃' : '组件版本已废弃', '历史 Run、Playbook、介质和已经锁定此 Release ID 的场景保持不变。');
       setDeprecateRelease(undefined);
       signalRefresh(['components', 'notifications']);
     } catch (reason) {
+      setOperationExplanation(actionableExplanation(reason));
       notify('error', '废弃失败', displayError(reason));
     } finally {
       setBusy(false);
@@ -366,7 +376,7 @@ export function ComponentsPage() {
         eyebrow="Component registry"
         title="组件中心"
         description="组件 Owner 在这里维护不可变发布、依赖关系和 Ansible 生命周期动作。"
-        actions={user.role === 'component_owner' ? <><button className="button button--quiet" onClick={() => setComponentImportOpen(true)}><Upload size={16} /> 导入细粒度模板</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建组件</button></> : undefined}
+        actions={user.role === 'component_owner' ? <><button className="button button--quiet" onClick={() => setComponentImportOpen(true)}><Upload size={16} /> 批量导入</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建组件</button></> : undefined}
       />
       {loading && !components ? <LoadingBlock label="正在读取组件目录…" /> : error && !components ? <ErrorBlock message={error} onRetry={() => void reload()} /> : (
         <>
@@ -462,14 +472,14 @@ export function ComponentsPage() {
                     <div>{formatTime(release.releasedAt ?? release.createdAt)}</div>
                     <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                       {canTest && <button className="icon-text" onClick={() => { selectContractRelease(release.id); setTestRelease(release); }}><Beaker size={15} /> 环境验证</button>}
-                      <button className="icon-text" onClick={() => { selectContractRelease(release.id); setInspectRelease(release); }}>查看合同</button>
+                      <button className="icon-text" onClick={() => { selectContractRelease(release.id); setInspectRelease(release); }}>查看详情</button>
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => { selectContractRelease(release.id); setEditingContract(true); }}><PencilLine size={15} /> 配置合同</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setEditRelease(release)}><FileCode2 size={15} /> Playbook</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setImageRelease(release)}><Container size={15} /> 构建镜像</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" onClick={() => setArtifactRelease(release)}><Archive size={15} /> 组件介质</button>}
                       {mine && release.state === 'draft' && <button className="icon-text" disabled={busy || (!release.candidate && !publishReady)} onClick={() => void toggleCandidate(release)}>{release.candidate ? '撤回候选' : '加入候选集'}</button>}
                       {mine && release.state === 'draft' && <button className="icon-text icon-text--primary" disabled={!publishReady} title={publishReady ? undefined : '请先完成生命周期、安装验证和回退验证'} onClick={() => void previewPublish(release)}><Rocket size={15} /> 发布</button>}
-                      {mine && release.state === 'released' && <button className="icon-text icon-text--danger" onClick={() => void previewDeprecate(release)}>废弃</button>}
+                      {mine && (release.state === 'draft' || release.state === 'released') && <button className="icon-text icon-text--danger" onClick={() => void previewDeprecate(release)}>{release.state === 'draft' ? '废弃草稿' : '废弃'}</button>}
                     </div>
                   </div>;
                 })}
@@ -485,14 +495,14 @@ export function ComponentsPage() {
                 <article className="panel">
                   <header className="panel__header">
                     <div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
-                    {mine ? <button type="button" className="button button--quiet" aria-label={editableDraft || contractRelease?.state === 'draft' ? '编辑直接依赖' : '创建 Draft 编辑直接依赖'} onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> {editableDraft || contractRelease?.state === 'draft' ? '编辑' : '创建 Draft 后编辑'}</button> : null}
+                    {mine && contractRelease?.state === 'draft' ? <button type="button" className="button button--quiet" aria-label="编辑直接依赖" onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> 编辑</button> : null}
                   </header>
                   <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
                 </article>
                 <article className="panel">
                   <header className="panel__header">
                     <div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>{contractRelease ? `${contractRelease.version} 的公开参数可被下游引用；内部参数只给本组件使用` : '公开参数可被下游引用；内部参数只给本组件使用'}</p></div></div>
-                    {mine ? <button type="button" className="button button--quiet" aria-label={editableDraft || contractRelease?.state === 'draft' ? '编辑参数合同' : '创建 Draft 编辑参数合同'} onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> {editableDraft || contractRelease?.state === 'draft' ? '编辑' : '创建 Draft 后编辑'}</button> : null}
+                    {mine && contractRelease?.state === 'draft' ? <button type="button" className="button button--quiet" aria-label="编辑参数合同" onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> 编辑</button> : null}
                   </header>
                   <ParameterContractList release={contractRelease} components={components ?? []} />
                 </article>
@@ -535,13 +545,14 @@ export function ComponentsPage() {
         <StatusExplanationPanel explanation={operationExplanation} title="发布操作被阻断" />
         <footer className="modal-actions"><button className="button button--quiet" onClick={() => { setPublishRelease(undefined); setOperationExplanation(undefined); }}>取消</button><button disabled={busy || !impact} className="button button--primary" onClick={() => void confirmPublish()}>{busy ? '发布中…' : '确认发布并通知'}</button></footer>
       </Modal>}
-      {deprecateRelease && <Modal title={`废弃 ${deprecateRelease.version}`} description="该版本将不再作为推荐版本；历史 Run 和已锁定的 Release ID 保持不变。" onClose={() => setDeprecateRelease(undefined)}>
+      {deprecateRelease && <Modal title={`${deprecateRelease.state === 'draft' ? '废弃草稿' : '废弃'} ${deprecateRelease.version}`} description={deprecateRelease.state === 'draft' ? '草稿将退出候选共享并保留在发布历史中；Playbook、介质保留，已被场景 Run 锁定的草稿不能废弃。' : '没有场景 Run 锁定时，该版本可停止作为推荐版本。'} onClose={() => { setDeprecateRelease(undefined); setOperationExplanation(undefined); }}>
         <div className="modal-body">
-          <div className="warning-callout warning-callout--danger"><AlertTriangle size={19} /><div><strong>这是影响下游选择的状态变更</strong><p>请先确认受影响组件和场景。废弃不会删除版本，也不会改写历史运行。</p></div></div>
+          <div className="warning-callout warning-callout--danger"><AlertTriangle size={19} /><div><strong>{deprecationBlocked ? '该组件版本不能废弃' : '这是影响下游选择的状态变更'}</strong><p>{deprecationBlocked ? `该版本已经被 ${deprecationScenarioRunCount} 个场景 Run 锁定；请保留该版本以维持运行记录与交付依据。` : '请先确认受影响组件和场景。仅被场景引用但从未运行的版本仍可废弃。'}</p></div></div>
           <div className="impact-grid"><div><span>下游组件 Owner</span><strong>{impact?.componentOwners?.length ?? '…'}</strong></div><div><span>相关场景 Owner</span><strong>{impact?.scenarioOwners?.length ?? '…'}</strong></div><div><span>受影响场景</span><strong>{impact?.scenarios?.length ?? '…'}</strong></div></div>
           {impact?.paths?.length ? <div className="impact-paths"><strong>影响路径</strong>{impact.paths.slice(0, 5).map((path, index) => <div key={index}>{path.join('  →  ')}</div>)}</div> : null}
         </div>
-        <footer className="modal-actions"><button className="button button--quiet" onClick={() => setDeprecateRelease(undefined)}>取消</button><button disabled={busy || !impact} className="button button--danger" onClick={() => void confirmDeprecate()}>{busy ? '废弃中…' : '确认废弃版本'}</button></footer>
+        <StatusExplanationPanel explanation={operationExplanation} title="废弃操作被阻断" />
+        <footer className="modal-actions"><button className="button button--quiet" onClick={() => { setDeprecateRelease(undefined); setOperationExplanation(undefined); }}>取消</button><button disabled={busy || !impact || deprecationBlocked} className="button button--danger" onClick={() => void confirmDeprecate()}>{busy ? '废弃中…' : deprecateRelease.state === 'draft' ? '确认废弃草稿' : '确认废弃版本'}</button></footer>
       </Modal>}
     </div>
   );
@@ -1059,8 +1070,13 @@ function NewVersionModal({ component, baseRelease, contractIntent, onClose, onDo
     const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on', environmentConstraints };
     try {
       const release = source
-        ? await api.cloneRelease(source.id, input)
+        ? await (async () => {
+          const plan = await api.previewReleaseClone(source.id, input);
+          if (!window.confirm(`复制预览\n${plan.sourceVersion} → ${plan.targetVersion}\n${plan.actions.length} 个 Action · ${plan.playbooks.length} 个 Playbook · ${plan.artifactCount} 个制品引用\n\n确认创建新 Draft？`)) return undefined;
+          return api.cloneRelease(source.id, { ...input, expectedPlanDigest: plan.planDigest });
+        })()
         : await api.createRelease(component.id, { ...input, type: String(form.get('releaseType')) as ComponentRelease['type'], state: 'draft' });
+      if (!release) return;
       notify('success', 'Draft 已创建', '接下来为每个参数选择内部或公开，并映射上游公开参数。');
       onDone(release);
     } catch (reason) {
@@ -1117,6 +1133,21 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
     setPlan(undefined);
   }, [components, release, verifyRelease]);
   const declaredRunInputs = uniqueRunInputs(selectedAction?.allowedParameters ?? []);
+
+  function presetValues() {
+    const dependencyFixtures = Object.fromEntries(mapped.map((name) => {
+      const raw = fixtureValues[name] ?? '';
+      try { return [name, JSON.parse(raw)]; } catch { return [name, raw]; }
+    }));
+    return { runInput: parseRunInput(declaredRunInputs, runInputValues), dependencyFixtures };
+  }
+
+  function applyPreset(values: { runInput?: Record<string, unknown>; dependencyFixtures?: Record<string, unknown> }) {
+    const display = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value);
+    setRunInputValues(Object.fromEntries(Object.entries(values.runInput ?? {}).map(([name, value]) => [name, display(value)])));
+    setFixtureValues((current) => ({ ...current, ...Object.fromEntries(Object.entries(values.dependencyFixtures ?? {}).map(([name, value]) => [name, display(value)])) }));
+    invalidatePlan();
+  }
 
   function invalidatePlan() {
     setPlan(undefined);
@@ -1195,6 +1226,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
         {rollbackVerificationKind === 'target_release' ? <label><span>verify 目标 Release</span><select aria-label="verify 目标 Release" value={verifyReleaseId} onChange={(event) => { setVerifyReleaseId(event.target.value); invalidatePlan(); }}><option value="">请选择包含 verify 的保留版本</option>{retainedVerifyReleases.map((item) => <option key={item.id} value={item.id}>{item.version} · {item.state}{item.id === rollbackAction?.toReleaseId ? ' · 合同目标' : ''}</option>)}</select></label> : null}
       </> : null}
       <label><span>目标环境</span><select aria-label="目标环境" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); invalidatePlan(); }}><option value="">请选择环境</option>{environments?.map((env: Environment) => <option key={env.id} value={env.id}>{env.name} · {env.status ?? 'ready'}</option>)}</select></label>
+      <RunInputPresetPicker key={`${release.id}:${mode}`} resourceType="component_release" resourceId={release.id} context={mode === 'rollback' ? 'component_rollback' : 'component_install_verify'} values={presetValues()} onApply={applyPreset} />
       {mapped.length ? <div className="fixture-fields">{mapped.map((name) => <label key={name}><span>依赖 Fixture · {name}</span><input value={fixtureValues[name] ?? ''} onChange={(event) => { setFixtureValues((current) => ({ ...current, [name]: event.target.value })); invalidatePlan(); }} /></label>)}</div> : null}
       <RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => { setRunInputValues((current) => ({ ...current, [name]: value })); invalidatePlan(); }} />
       {planError ? <div className="form-validation" role="alert">{planError}</div> : null}
@@ -1252,8 +1284,43 @@ function EditReleaseModal({ release, releases, onClose, onDone }: { release: Com
 }
 
 function InspectReleaseModal({ release, components, onClose, onEdit }: { release: ComponentRelease; components: Component[]; onClose: () => void; onEdit?: () => void }) {
-  return <Modal size="wide" title={`${release.version} 参数合同`} description="查看每个参数的可见性，以及本组件引用了哪个上游组件的哪个公开参数。" onClose={onClose}>
+  const [selectedAction, setSelectedAction] = useState(0);
+  const [playbook, setPlaybook] = useState<PlaybookFile>();
+  const [playbookLoading, setPlaybookLoading] = useState(false);
+  const [playbookError, setPlaybookError] = useState('');
+  const action = release.actions?.[selectedAction];
+
+  useEffect(() => {
+    setPlaybook(undefined);
+    setPlaybookError('');
+    setPlaybookLoading(false);
+    if (!action?.playbook) return;
+    const controller = new AbortController();
+    setPlaybookLoading(true);
+    void api.playbook(release.id, action.playbook, controller.signal)
+      .then((value) => setPlaybook(value))
+      .catch((reason) => {
+        if (!controller.signal.aborted) setPlaybookError(displayError(reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPlaybookLoading(false);
+      });
+    return () => controller.abort();
+  }, [action?.playbook, release.id]);
+
+  const actionLabel = ACTION_OPTIONS.find((item) => item.value === action?.type)?.label ?? action?.type ?? '—';
+  return <Modal size="wide" title={`${release.version} Release 详情`} description="只读查看版本合同、生命周期动作与已锁定的 Playbook 内容。" onClose={onClose}>
     <div className="modal-body inspect-contract">
+      <section className="contract-section release-detail-summary">
+        <h3>版本信息</h3>
+        <div className="release-detail-grid">
+          <div><span>状态</span><StatusPill status={release.state} /></div>
+          <div><span>Release 类型</span><strong>{release.type ?? 'atomic'}</strong></div>
+          <div><span>风险等级</span><strong>{release.riskLevel ?? 'low'}</strong></div>
+          <div><span>不兼容变更</span><strong>{release.breaking ? '是' : '否'}</strong></div>
+        </div>
+        <p>{release.releaseNotes || '未填写发布说明'}</p>
+      </section>
       <section className="contract-section">
         <h3>适配环境</h3>
         <EnvironmentConstraints constraints={release.environmentConstraints} />
@@ -1262,6 +1329,23 @@ function InspectReleaseModal({ release, components, onClose, onEdit }: { release
       <section className="contract-section">
         <h3>依赖映射</h3>
         <DependencyContractList dependencies={release.dependencies ?? []} components={components} />
+      </section>
+      <section className="contract-section release-action-inspector">
+        <h3>生命周期动作与 Playbook</h3>
+        {release.actions?.length ? <>
+          <label><span>生命周期动作</span><select aria-label="查看生命周期动作" value={selectedAction} onChange={(event) => setSelectedAction(Number(event.target.value))}>{release.actions.map((item, index) => <option key={item.id ?? `${item.type}-${index}`} value={index}>{ACTION_OPTIONS.find((option) => option.value === item.type)?.label ?? item.type} · {item.name || item.type}</option>)}</select></label>
+          {action && <div className="release-action-facts">
+            <div><span>动作类型</span><strong>{actionLabel}</strong></div>
+            <div><span>Playbook 路径</span><code>{action.playbook || '—'}</code></div>
+            <div><span>主机组 / Limit</span><strong>{action.hostGroup || '—'} / {action.limit || '—'}</strong></div>
+            <div><span>超时 / 风险</span><strong>{action.timeoutSeconds ?? 1800}s / {action.riskLevel ?? 'low'}</strong></div>
+            <div><span>允许参数</span><strong>{action.allowedParameters?.join('、') || '无'}</strong></div>
+            <div><span>CredentialRef</span><strong>{action.requiredCredentials?.join('、') || '无'}</strong></div>
+            <div><span>能力</span><strong>{[action.idempotent ? '幂等' : '', action.destructive ? '破坏性' : ''].filter(Boolean).join('、') || '标准'}</strong></div>
+            <div><span>版本转换</span><strong>{action.fromReleaseId || '—'} → {action.toReleaseId || '—'}</strong></div>
+          </div>}
+          {playbookLoading ? <LoadingBlock label="正在读取 Playbook…" /> : playbookError ? <div className="inline-warning" role="alert"><span>Playbook 读取失败：{playbookError}</span></div> : playbook ? <div className="release-playbook-source"><div><span>{playbook.filename}</span><code>sha256:{playbook.sha256}</code></div><pre className="code-editor release-playbook-preview">{playbook.content}</pre></div> : <div className="mapping-empty">当前动作未配置可读取的 Playbook。</div>}
+        </> : <div className="mapping-empty">当前 Release 尚未配置生命周期动作。</div>}
       </section>
     </div>
     <footer className="modal-actions">
@@ -1296,24 +1380,19 @@ function ComponentTemplateImportModal({ onClose, onDone }: { onClose: () => void
     setBusy(true);
     try {
       const entries = parseComponentImportTemplate(text);
-      await executeComponentImport(entries, api, (state) => setProgress(state.stage));
-      notify('success', `已录入 ${entries.length} 个细粒度组件`, '全部操作均通过前台正常 API 写入并保留审计；版本仍为 Draft，可继续验证并加入候选发布集。');
+      setProgress('服务端正在完整预检组件、依赖和 Playbook…');
+      const plan = await api.previewComponentImport(entries);
+      if (!window.confirm(`导入预览\n${plan.order.length} 个组件\n顺序：${plan.order.join(' → ')}\n\n确认按此计划导入？`)) return;
+      setProgress('服务端正在原子写入组件、Draft 和 Playbook…');
+      const result = await api.importComponents(entries, plan.planDigest);
+      notify('success', `已原子录入 ${result.completedComponents.length} 个细粒度组件`, '服务端已复核计划指纹；版本仍为 Draft，可继续验证并加入候选发布集。');
       onDone();
     } catch (reason) {
-      if (reason instanceof ComponentImportExecutionError) {
-        const components = reason.progress.completedComponents.length ? reason.progress.completedComponents.join('、') : '无';
-        const completed = reason.progress.completedReleases.length ? reason.progress.completedReleases.join('、') : '无';
-        const drafts = reason.progress.createdDrafts.length ? reason.progress.createdDrafts.map((item) => `${item.componentSlug}(${item.releaseId})`).join('、') : '无';
-        const files = reason.progress.savedPlaybooks.length ? reason.progress.savedPlaybooks.join('、') : '无';
-        const remaining = reason.progress.remainingComponents.length ? reason.progress.remainingComponents.join('、') : '无';
-        notify('error', '组件模板导入中止', `${reason.message} 已创建组件：${components}；已完整绑定：${completed}；已创建 Draft：${drafts}；已保存文件：${files}；未完成：${remaining}。保留项需从前台继续修正。`);
-      } else {
-        notify('error', '组件模板校验失败', displayError(reason));
-      }
+      notify('error', '组件模板导入失败', displayError(reason));
     } finally { setBusy(false); setProgress(''); }
   }
 
-  return <Modal size="wide" title="导入细粒度组件模板" description="先创建全部组件，再按依赖拓扑创建 Draft Release 和独立 Playbook；所有写入都走正常前台 API。" onClose={onClose}><div className="modal-body"><textarea aria-label="组件模板 JSON" className="code-editor" rows={22} value={text} disabled={busy} onChange={(event) => setText(event.target.value)} spellCheck={false} />{progress && <div className="inline-warning"><span>{progress}</span></div>}</div><footer className="modal-actions"><button className="button button--quiet" disabled={busy} onClick={onClose}>取消</button><button className="button button--primary" disabled={busy} onClick={() => void runImport()}><Upload size={16} /> {busy ? '导入中…' : '校验并导入'}</button></footer></Modal>;
+  return <Modal size="wide" title="批量导入组件" description="服务端先完整预检且不写入；确认计划指纹后原子创建全部组件、Draft 和独立 Playbook，任一失败则整批不生效。" onClose={onClose}><div className="modal-body"><textarea aria-label="组件模板 JSON" className="code-editor" rows={22} value={text} disabled={busy} onChange={(event) => setText(event.target.value)} spellCheck={false} />{progress && <div className="inline-warning"><span>{progress}</span></div>}</div><footer className="modal-actions"><button className="button button--quiet" disabled={busy} onClick={onClose}>取消</button><button className="button button--primary" disabled={busy} onClick={() => void runImport()}><Upload size={16} /> {busy ? '处理中…' : '预检并导入'}</button></footer></Modal>;
 }
 
 function SaveIcon() { return <PencilLine size={15} />; }

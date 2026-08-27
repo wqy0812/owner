@@ -12,14 +12,18 @@ import type {
   ComponentTestRequest,
   CredentialRef,
   Environment,
+  EnvironmentExportDocument,
   EnvironmentHealthCheck,
   EnvironmentHost,
+  EnvironmentImportPlan,
   EnvironmentRollbackPlan,
   EnvironmentRevision,
   ImpactPreview,
   Notification,
   PlaybookFile,
   Run,
+  RunInputPreset,
+  RunRetryPlan,
   RunStep,
   Scenario,
   ScenarioEdge,
@@ -94,6 +98,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (text && payload === undefined) throw invalidResponse(response.status, '平台 API 返回了损坏的 JSON 响应。');
   return payload as T;
+}
+
+async function download(path: string, body: unknown): Promise<Blob> {
+  const response = await fetch(`${API_ROOT}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'include', cache: 'no-store' });
+  if (!response.ok) {
+    const text = await response.text();
+    const payload = text ? parseJSON(text) : undefined;
+    throw new ApiError(response.status, isApiErrorBody(payload) ? payload : {});
+  }
+  return response.blob();
 }
 
 function parseJSON(value: string): unknown | undefined {
@@ -630,6 +644,10 @@ function normalizeRun(raw: LooseRecord): Run {
     createdBy: optionalString(source, 'requestedBy'),
     createdByName: optionalString(source, 'createdByName'),
     destructive: optionalBoolean(source, 'destructive'),
+    retryOfRunId: optionalString(source, 'retryOfRunId'),
+    retryRootRunId: optionalString(source, 'retryRootRunId'),
+    retryAttempt: optionalNumber(source, 'retryAttempt'),
+    retryStartStep: optionalNumber(source, 'retryStartStep'),
     queuePosition: optionalNumber(source, 'queuePosition'),
     progress: optionalNumber(source, 'progress'),
     steps,
@@ -891,8 +909,17 @@ export const api = {
   async updateComponent(id: string, input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
-  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown> }) {
+  async previewReleaseClone(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown> }) {
+    return unwrap(await post<unknown>(`/component-releases/${releaseId}/clone-plan`, input)) as { sourceReleaseId: string; sourceVersion: string; targetVersion: string; planDigest: string; actions: string[]; playbooks: string[]; artifactCount: number };
+  },
+  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown>; expectedPlanDigest: string }) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
+  },
+  async previewComponentImport(entries: unknown[]) {
+    return unwrap(await post<unknown>('/component-imports/plan', { entries })) as { planDigest: string; order: string[]; items: Array<{ slug: string; name: string; version: string; dependencyCount: number; actionCount: number; playbookCount: number }> };
+  },
+  async importComponents(entries: unknown[], expectedPlanDigest: string) {
+    return unwrap(await post<unknown>('/component-imports', { entries, expectedPlanDigest })) as { completedComponents: string[]; completedReleases: string[]; savedPlaybooks: string[]; createdDrafts: Record<string, string> };
   },
   async createRelease(componentId: string, input: Partial<ComponentRelease>) {
     return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/releases`, serializeRelease(input)));
@@ -940,6 +967,7 @@ export const api = {
       scenarioOwners: narrowPeople(raw.scenarioOwners),
       scenarios: narrowPeople(raw.scenarios),
       paths: narrowStringPaths(raw.paths),
+      scenarioRunCount: typeof raw.scenarioRunCount === 'number' && Number.isInteger(raw.scenarioRunCount) && raw.scenarioRunCount >= 0 ? raw.scenarioRunCount : 0,
     };
   },
   async publishRelease(releaseId: string) {
@@ -979,8 +1007,11 @@ export const api = {
   async scenario(id: string) {
     return normalizeScenario(requireRecord(unwrap(await get<unknown>(`/scenarios/${id}`)), 'scenario'));
   },
-  async cloneScenarioRevision(scenarioId: string) {
-    return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenarios/${scenarioId}/revisions`)), 'scenario revision'));
+  async previewScenarioClone(scenarioId: string, sourceRevisionId: string) {
+    return unwrap(await post<unknown>(`/scenarios/${scenarioId}/revision-clone-plan`, { sourceRevisionId })) as { scenarioId: string; sourceRevisionId: string; sourceRevision: number; nextRevision: number; nodeCount: number; edgeCount: number; planDigest: string };
+  },
+  async cloneScenarioRevision(scenarioId: string, sourceRevisionId: string, expectedPlanDigest: string) {
+    return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenarios/${scenarioId}/revisions`, { sourceRevisionId, expectedPlanDigest })), 'scenario revision'));
   },
   async abandonScenarioRevision(revisionId: string) {
     return normalizeScenario(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/abandon`)), 'scenario'));
@@ -1080,6 +1111,15 @@ export const api = {
   async restoreEnvironmentRevision(environmentId: string, revisionId: string, changeReason: string) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/revisions/${revisionId}/restore`, { changeReason })), 'environment'));
   },
+  async exportEnvironmentRevision(environmentId: string, revisionId: string, includeCredentialReferences: boolean) {
+    return download(`/environments/${environmentId}/revisions/${revisionId}/export`, { includeCredentialReferences });
+  },
+  async previewEnvironmentImport(input: { document: EnvironmentExportDocument; target: { kind: 'new'; name: string; description?: string } | { kind: 'existing'; environmentId: string }; changeReason: string; confirmCredentialReferences?: boolean }) {
+    return unwrap(await post<unknown>('/environment-imports/plan', input)) as EnvironmentImportPlan;
+  },
+  async importEnvironment(input: { document: EnvironmentExportDocument; target: { kind: 'new'; name: string; description?: string } | { kind: 'existing'; environmentId: string }; changeReason: string; confirmCredentialReferences?: boolean; expectedPlanDigest: string }) {
+    return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environment-imports', input)), 'environment'));
+  },
   async auditEvents(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/audit-events', signal)).map((item) => normalizeAuditEvent(requireRecord(item, 'audit event')));
   },
@@ -1091,6 +1131,23 @@ export const api = {
   },
   async cancelRun(id: string) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/runs/${id}/cancel`)), 'run'));
+  },
+  async previewRunRetry(id: string) {
+    return unwrap(await post<unknown>(`/runs/${id}/retry-plan`)) as RunRetryPlan;
+  },
+  async retryRun(id: string, expectedPlanDigest: string) {
+    return normalizeRun(requireRecord(unwrap(await post<unknown>(`/runs/${id}/retry-runs`, { expectedPlanDigest })), 'run'));
+  },
+  async runInputPresets(resourceType: RunInputPreset['resourceType'], resourceId: string, context: RunInputPreset['context'], signal?: AbortSignal) {
+    const query = new URLSearchParams({ resourceType, resourceId, context });
+    return unwrapList(await get<unknown>(`/run-input-presets?${query}`, signal)) as RunInputPreset[];
+  },
+  async saveRunInputPreset(input: Omit<RunInputPreset, 'id' | 'createdBy' | 'definitionDigest' | 'stale' | 'createdAt' | 'updatedAt'> & { id?: string }) {
+    const response = input.id ? await put<unknown>(`/run-input-presets/${input.id}`, input) : await post<unknown>('/run-input-presets', input);
+    return unwrap(response) as RunInputPreset;
+  },
+  async deleteRunInputPreset(id: string) {
+    await request<unknown>(`/run-input-presets/${id}`, { method: 'DELETE' });
   },
   async approve(id: string) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/approve`)), 'run'));

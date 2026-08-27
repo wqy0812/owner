@@ -15,13 +15,14 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Beaker, Boxes, CheckCircle2, ClipboardCopy, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
+import { Beaker, Boxes, CheckCircle2, Download, GitCommitHorizontal, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { describeParameterMapping, mappedParameterNames } from '../components/ParameterEditors';
 import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/RunInputFields';
+import { RunInputPresetPicker } from '../components/RunInputPresetPicker';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
@@ -237,23 +238,34 @@ export function ScenariosPage() {
     } catch (reason) { notify('error', '模板导入失败', displayError(reason)); }
   }
 
-  async function copyTemplate() {
+  function exportTemplate() {
     try {
       const policy = JSON.parse(executionPolicy || '{}') as unknown;
       if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) throw new Error('执行策略必须是 JSON 对象。');
-      await navigator.clipboard.writeText(serializeScenarioTemplate({
+      const content = serializeScenarioTemplate({
         nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component', position, data })),
         edges: edges.map(({ id, source, target }) => ({ id, source, target })),
         executionPolicy: policy as Record<string, unknown>,
-      }));
-      notify('success', '场景模板已复制', `${nodes.length} 个节点 · ${edges.length} 条边。`);
-    } catch (reason) { notify('error', '复制模板失败', displayError(reason)); }
+      });
+      const filenameBase = (selectedScenario?.slug || selectedScenario?.name || 'scenario').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'scenario';
+      const href = URL.createObjectURL(new Blob([`${content}\n`], { type: 'application/json;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = `${filenameBase}-r${revision?.revision ?? 0}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+      notify('success', '场景 JSON 已导出', `${nodes.length} 个节点 · ${edges.length} 条边。`);
+    } catch (reason) { notify('error', '导出 JSON 失败', displayError(reason)); }
   }
 
   async function cloneRevision() {
-    if (!selectedScenario || !revision || !window.confirm(`确认从 Revision ${revision.revision} 创建 Revision ${nextRevisionNumber}？\n新 Revision 将立即成为当前草稿。`)) return; setBusy('clone');
+    if (!selectedScenario || !revision) return; setBusy('clone');
     try {
-      const created = await api.cloneScenarioRevision(selectedScenario.id);
+      const plan = await api.previewScenarioClone(selectedScenario.id, revision.id);
+      if (!window.confirm(`复制预览\nRevision ${plan.sourceRevision} → Revision ${plan.nextRevision}\n${plan.nodeCount} 个节点 · ${plan.edgeCount} 条依赖\n\n确认创建当前 Draft？`)) return;
+      const created = await api.cloneScenarioRevision(selectedScenario.id, revision.id, plan.planDigest);
       setSearchParams({ selected: selectedScenario.id, revision: created.id }, { replace: true });
       notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。');
       signalRefresh('scenarios');
@@ -292,9 +304,9 @@ export function ScenariosPage() {
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>
           {editable && <button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入模板</button>}
-          {revision && <button className="button button--quiet" onClick={() => void copyTemplate()}><ClipboardCopy size={16} /> 复制模板</button>}
+          {revision && <button className="button button--quiet" onClick={exportTemplate}><Download size={16} /> 导出 JSON</button>}
           {editable && <button className="button button--secondary" disabled={busy === 'save'} onClick={() => void save()}><Save size={16} /> 保存草稿</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && (revision?.state === 'released' || revision?.state === 'deprecated') && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 新 Revision</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && (revision?.state === 'released' || revision?.state === 'deprecated') && !selectedScenario.revisions?.some((item) => ['draft', 'testing', 'test_passed'].includes(item.state)) && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 复制为新 Revision</button>}
           {canAbandonDraft && <button className="button button--danger-soft" disabled={busy === 'abandon'} onClick={() => void abandonDraft()}><Undo2 size={16} /> 放弃草稿</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && <button className="button button--danger-soft" disabled={busy === 'deprecate'} onClick={() => void deprecateRevision()}>废弃</button>}
           {canLaunchRevision && <button className="button button--secondary" onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
@@ -337,7 +349,7 @@ export function ScenariosPage() {
         </aside>
       </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由场景 Owner 创建一个场景。" /></div>}
     </>}
-    {testOpen && <Modal title={revision?.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /><StatusExplanationPanel explanation={operationExplanation} title="场景运行被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setTestOpen(false); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision?.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
+    {testOpen && revision && <Modal title={revision.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、环境 revision、运行参数和 Playbook 摘要。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.status ?? 'ready'}</option>)}</select></label><RunInputPresetPicker key={`${revision.id}:${revision.state}`} resourceType="scenario_revision" resourceId={revision.id} context={revision.state === 'released' ? 'scenario_run' : 'scenario_test'} values={{ runInput: parseRunInput(declaredRunInputs, runInputValues) }} onApply={(values) => setRunInputValues(Object.fromEntries(Object.entries(values.runInput ?? {}).map(([name, value]) => [name, typeof value === 'string' ? value : JSON.stringify(value)])))} /><RunInputFields names={declaredRunInputs} values={runInputValues} onChange={(name, value) => setRunInputValues((current) => ({ ...current, [name]: value }))} /><StatusExplanationPanel explanation={operationExplanation} title="场景运行被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setTestOpen(false); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!testEnvironment || busy === 'test'} onClick={() => void test()}><Beaker size={16} /> {revision.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
     {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('scenarios'); }} />}
     {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate} />}
     {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}

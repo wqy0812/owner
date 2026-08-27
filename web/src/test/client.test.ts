@@ -41,6 +41,7 @@ describe('API response contract', () => {
       scenarioOwners: [],
       scenarios: [],
       paths: [['containerd', 'kubernetes']],
+      scenarioRunCount: 0,
     });
   });
 

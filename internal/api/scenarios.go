@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
 )
 
@@ -75,12 +76,31 @@ func (h *Handler) createScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) {
-	revision, err := h.platform.CloneScenarioRevision(r.Context(), currentUser(r), r.PathValue("id"))
+	var input service.ScenarioCloneRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	revision, err := h.platform.CloneScenarioRevision(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	h.writeRevisionDTO(w, r, http.StatusCreated, revision)
+}
+
+func (h *Handler) previewScenarioClone(w http.ResponseWriter, r *http.Request) {
+	var input service.ScenarioCloneRequest
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	plan, err := h.platform.PreviewScenarioClone(r.Context(), currentUser(r), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, plan)
 }
 
 func (h *Handler) abandonScenarioRevision(w http.ResponseWriter, r *http.Request) {

@@ -28,7 +28,10 @@ SELECT EXISTS(
 			return fmt.Errorf("%w: environment has an active run", domain.ErrConflict)
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,error_text,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, r.Error, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
+	if err := validateRunReleaseLifecycle(ctx, tx, r); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, nullString(r.RetryOfRunID), nullString(r.RetryRootRunID), r.RetryAttempt, r.RetryStartStep, r.Error, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -41,15 +44,60 @@ SELECT EXISTS(
 	return tx.Commit()
 }
 
+func validateRunReleaseLifecycle(ctx context.Context, tx *sql.Tx, r domain.Run) error {
+	if r.Status != domain.RunAwaitingApproval && r.Status != domain.RunQueued && r.Status != domain.RunRunning {
+		return nil
+	}
+	if r.Kind == domain.RunComponentTest && r.ComponentReleaseID != "" {
+		var withdrawn int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM component_releases WHERE id=? AND status='deprecated' AND released_at IS NULL)`, r.ComponentReleaseID).Scan(&withdrawn); err != nil {
+			return err
+		}
+		if withdrawn != 0 {
+			return fmt.Errorf("%w: component draft was deprecated before the run was created", domain.ErrConflict)
+		}
+	}
+	if r.Kind != domain.RunScenarioTest && r.Kind != domain.RunScenario {
+		return nil
+	}
+	var invalid int
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM json_each(?, '$.steps') AS step
+  LEFT JOIN component_releases release
+    ON release.id=json_extract(step.value, '$.releaseId')
+  WHERE release.id IS NULL
+     OR CASE
+          WHEN ?='scenario_test' THEN NOT (
+            (release.status='draft' AND release.candidate=1 AND release.verified=1)
+            OR (release.status IN ('released','deprecated') AND release.released_at IS NOT NULL)
+          )
+          ELSE NOT (
+            release.status IN ('released','deprecated')
+            AND release.released_at IS NOT NULL
+          )
+        END
+)`, jsonText(r.InputSnapshot), r.Kind).Scan(&invalid); err != nil {
+		return err
+	}
+	if invalid != 0 {
+		return fmt.Errorf("%w: a locked component release was withdrawn before the run was created", domain.ErrConflict)
+	}
+	return nil
+}
+
 func scanRun(row scanner) (domain.Run, error) {
 	var r domain.Run
-	var component, scenario sql.NullString
+	var component, scenario, retryOf, retryRoot sql.NullString
 	var destructive int
 	var snapshot, created string
 	var started, finished sql.NullString
-	err := row.Scan(&r.ID, &r.Kind, &r.Status, &r.RequestedBy, &r.EnvironmentID, &r.EnvironmentRevisionID, &component, &scenario, &r.Action, &destructive, &snapshot, &r.ArtifactDigest, &r.Error, &created, &started, &finished)
+	err := row.Scan(&r.ID, &r.Kind, &r.Status, &r.RequestedBy, &r.EnvironmentID, &r.EnvironmentRevisionID, &component, &scenario, &r.Action, &destructive, &snapshot, &r.ArtifactDigest, &retryOf, &retryRoot, &r.RetryAttempt, &r.RetryStartStep, &r.Error, &created, &started, &finished)
 	r.ComponentReleaseID = component.String
 	r.ScenarioRevisionID = scenario.String
+	r.RetryOfRunID = retryOf.String
+	r.RetryRootRunID = retryRoot.String
 	r.Destructive = destructive != 0
 	r.InputSnapshot = decodeJSON(snapshot, map[string]any{})
 	r.CreatedAt = parseTime(created)
@@ -58,7 +106,35 @@ func scanRun(row scanner) (domain.Run, error) {
 	return r, err
 }
 
-const runSelect = `SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,error_text,created_at,started_at,finished_at FROM runs`
+const runSelect = `SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at FROM runs`
+
+// CountScenarioRunsForComponentRelease counts scenario Runs whose immutable
+// execution snapshot locked the exact component Release. The snapshot is the
+// authority here: mutable scenario revisions may be edited after an earlier
+// test, while the Run must continue to describe what was actually executed.
+func (s *Store) CountScenarioRunsForComponentRelease(ctx context.Context, releaseID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(DISTINCT runs.id)
+FROM runs
+JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
+WHERE runs.scenario_revision_id IS NOT NULL
+  AND runs.kind IN ('scenario_test','scenario_run')
+  AND json_extract(step.value, '$.releaseId')=?`, releaseID).Scan(&count)
+	return count, err
+}
+
+func (s *Store) HasActiveRetry(ctx context.Context, retryRootRunID string) (bool, error) {
+	var active int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE retry_root_run_id=? AND status IN ('awaiting_approval','queued','running'))`, retryRootRunID).Scan(&active)
+	return active != 0, err
+}
+
+func (s *Store) NextRetryAttempt(ctx context.Context, retryRootRunID string) (int, error) {
+	var attempt int
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(retry_attempt),0)+1 FROM runs WHERE retry_root_run_id=?`, retryRootRunID).Scan(&attempt)
+	return attempt, err
+}
 
 func (s *Store) GetRun(ctx context.Context, id string) (domain.Run, error) {
 	r, err := scanRun(s.db.QueryRowContext(ctx, runSelect+` WHERE id=?`, id))

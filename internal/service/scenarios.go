@@ -50,44 +50,55 @@ func (p *Platform) CreateScenario(ctx context.Context, user domain.User, scenari
 	return scenario, nil
 }
 
-func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, scenarioID string) (domain.ScenarioRevision, error) {
+func (p *Platform) DeleteScenario(ctx context.Context, user domain.User, scenarioID string) error {
 	scenario, err := p.store.GetScenario(ctx, scenarioID, true)
+	if err != nil {
+		return err
+	}
+	if err := requireOwner(user, domain.RoleScenarioOwner, scenario.OwnerID); err != nil {
+		return err
+	}
+	impact, err := p.store.ScenarioDeletionImpact(ctx, scenarioID)
+	if err != nil {
+		return err
+	}
+	if impact.RunCount > 0 {
+		base := fmt.Errorf("%w: scenario is retained by %d run(s)", domain.ErrConflict, impact.RunCount)
+		return actionableExistingError(base, "scenario.run_history", "该场景已有运行记录，必须保留场景与 Revision 快照", "查看运行记录", "/runs")
+	}
+	if impact.PublishedRevisionCount > 0 {
+		base := fmt.Errorf("%w: scenario has %d published revision(s)", domain.ErrConflict, impact.PublishedRevisionCount)
+		return actionableExistingError(base, "scenario.published_history", "该场景已有已发布或已废弃 Revision，不能物理删除", "废弃已发布 Revision", "/scenarios?selected="+scenario.ID)
+	}
+	audit := newAuditEvent(user, "scenario.deleted", "scenario", scenario.ID, map[string]any{
+		"slug": scenario.Slug, "name": scenario.Name, "revisionCount": impact.RevisionCount,
+	})
+	if err := p.store.DeleteScenario(ctx, scenario.ID, audit); err != nil {
+		return err
+	}
+	p.hub.Publish("scenario.deleted", map[string]any{"scenarioId": scenario.ID})
+	return nil
+}
+
+func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, scenarioID string, input ScenarioCloneRequest) (domain.ScenarioRevision, error) {
+	plan, err := p.PreviewScenarioClone(ctx, user, scenarioID, input)
 	if err != nil {
 		return domain.ScenarioRevision{}, err
 	}
-	if err := requireOwner(user, domain.RoleScenarioOwner, scenario.OwnerID); err != nil {
-		return domain.ScenarioRevision{}, err
+	if input.ExpectedPlanDigest == "" || input.ExpectedPlanDigest != plan.PlanDigest {
+		return domain.ScenarioRevision{}, fmt.Errorf("%w: scenario clone plan changed; preview again", domain.ErrConflict)
 	}
-	var source domain.ScenarioRevision
-	for _, revision := range scenario.Revisions {
-		if revision.ID == scenario.CurrentRevisionID || source.ID == "" || revision.Revision > source.Revision {
-			source = revision
-			if revision.ID == scenario.CurrentRevisionID {
-				break
-			}
-		}
-	}
-	if source.ID == "" {
-		return source, fmt.Errorf("%w: scenario has no source revision", domain.ErrConflict)
-	}
-	if source.Status != domain.RevisionReleased && source.Status != domain.RevisionDeprecated {
-		return source, fmt.Errorf("%w: finish or abandon the current draft before creating a new revision", domain.ErrConflict)
-	}
-	for _, revision := range scenario.Revisions {
-		if revision.Status == domain.RevisionDraft || revision.Status == domain.RevisionTesting || revision.Status == domain.RevisionTestPassed {
-			return source, fmt.Errorf("%w: scenario already has an active draft revision", domain.ErrConflict)
-		}
-	}
-	next, err := p.store.NextScenarioRevision(ctx, scenarioID)
+	source, err := p.store.GetScenarioRevision(ctx, input.SourceRevisionID)
 	if err != nil {
 		return source, err
 	}
+	next := plan.NextRevision
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
 	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
 	if err := p.store.CreateScenarioRevision(ctx, source); err != nil {
 		return source, err
 	}
-	p.audit(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next})
+	p.audit(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next, "sourceRevisionId": input.SourceRevisionID, "planDigest": plan.PlanDigest})
 	return source, nil
 }
 

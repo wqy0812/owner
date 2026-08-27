@@ -58,6 +58,7 @@ type lockedStep struct {
 	RequiredCredentials []string               `json:"requiredCredentials"`
 	TimeoutSeconds      int                    `json:"timeoutSeconds"`
 	NeedsApproval       bool                   `json:"needsApproval"`
+	RetrySafe           bool                   `json:"retrySafe"`
 	BackupRef           string                 `json:"backupRef,omitempty"`
 	Backup              *domain.BackupMetadata `json:"backup,omitempty"`
 }
@@ -616,6 +617,7 @@ func (p *Platform) lockAction(component domain.Component, nodeID string, release
 		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables),
 		RequiredCredentials: append([]string(nil), action.RequiredCredentials...), TimeoutSeconds: action.TimeoutSeconds,
 		NeedsApproval: action.NeedsApproval(),
+		RetrySafe:     action.Kind == domain.ActionInspect || action.Kind == domain.ActionPreflight || action.Kind == domain.ActionVerify || (action.Kind == domain.ActionInstall && action.Idempotent),
 	}
 	return step, nil
 }
@@ -1054,24 +1056,9 @@ func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID stri
 		step := &plan.Steps[index]
 		switch step.Action {
 		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
-			release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
-			if err != nil {
+			if err := p.bindInstallBackupStep(ctx, environmentID, runID, kind, capturedAt, step); err != nil {
 				return err
 			}
-			metadata := domain.BackupMetadata{
-				EnvironmentID: environmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID,
-				ActionID: step.ActionID, InstallRunID: runID, CapturedAt: capturedAt,
-				PlaybookSHA256: step.PlaybookDigest, DependencySnapshot: releaseDependencySnapshot(release),
-			}
-			step.BackupRef = path.Join("/var/lib/clusterforge/backups", safeBackupSegment(environmentID), safeBackupSegment(step.ComponentID), safeBackupSegment(step.ReleaseID), safeBackupSegment(runID))
-			step.Backup = &metadata
-			if current, currentErr := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID); currentErr == nil && current.BackupRef != step.BackupRef {
-				step.Variables["clusterforge_replaced_backup_ref"] = current.BackupRef
-				step.Variables["clusterforge_cleanup_replaced_backup_on_success"] = true
-			} else if currentErr != nil && !errors.Is(currentErr, domain.ErrNotFound) {
-				return currentErr
-			}
-			bindBackupVariables(step, "capture", kind != domain.RunScenario)
 		case domain.ActionRollback:
 			installation, err := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID)
 			if err != nil {
@@ -1111,6 +1098,50 @@ func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID stri
 			bindBackupVariables(step, "cleanup", isFinalCleanupStep(plan.Steps, index))
 		}
 	}
+	return nil
+}
+
+func (p *Platform) rebindRetryBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
+	for index := range plan.Steps {
+		switch plan.Steps[index].Action {
+		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
+			if err := p.bindInstallBackupStep(ctx, environmentID, runID, kind, capturedAt, &plan.Steps[index]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Platform) bindInstallBackupStep(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, step *lockedStep) error {
+	release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
+	if err != nil {
+		return err
+	}
+	if step.Variables == nil {
+		step.Variables = map[string]any{}
+	}
+	for _, name := range []string{
+		"clusterforge_backup_ref", "clusterforge_backup_marker", "clusterforge_backup_operation",
+		"clusterforge_backup_cleanup_on_success", "clusterforge_backup_metadata",
+		"clusterforge_replaced_backup_ref", "clusterforge_cleanup_replaced_backup_on_success",
+	} {
+		delete(step.Variables, name)
+	}
+	metadata := domain.BackupMetadata{
+		EnvironmentID: environmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID,
+		ActionID: step.ActionID, InstallRunID: runID, CapturedAt: capturedAt,
+		PlaybookSHA256: step.PlaybookDigest, DependencySnapshot: releaseDependencySnapshot(release),
+	}
+	step.BackupRef = path.Join("/var/lib/clusterforge/backups", safeBackupSegment(environmentID), safeBackupSegment(step.ComponentID), safeBackupSegment(step.ReleaseID), safeBackupSegment(runID))
+	step.Backup = &metadata
+	if current, currentErr := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID); currentErr == nil && current.BackupRef != step.BackupRef {
+		step.Variables["clusterforge_replaced_backup_ref"] = current.BackupRef
+		step.Variables["clusterforge_cleanup_replaced_backup_on_success"] = true
+	} else if currentErr != nil && !errors.Is(currentErr, domain.ErrNotFound) {
+		return currentErr
+	}
+	bindBackupVariables(step, "capture", kind != domain.RunScenario)
 	return nil
 }
 

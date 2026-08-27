@@ -75,6 +75,404 @@ func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
 	}
 }
 
+func TestEnvironmentExportImportAndCredentialReferenceModes(t *testing.T) {
+	f := newAPIFixture(t)
+	owner := f.session(seed.EnvironmentOwnerID)
+	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/credential-refs", map[string]any{
+		"credentialRefs": []any{map[string]any{"name": "SSH_KEY", "kind": "envVarRef", "reference": "CLUSTERFORGE_TEST_SSH_KEY"}},
+		"changeReason":   "配置导出测试凭据引用",
+	}, owner)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update credential refs status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	current := decodeEnvelope(t, updated)["data"].(map[string]any)["currentRevision"].(map[string]any)
+	revisionID := current["id"].(string)
+	safe := f.request(http.MethodPost, "/api/v1/environments/environment-test/revisions/"+revisionID+"/export", map[string]any{"includeCredentialReferences": false}, owner)
+	if safe.Code != http.StatusOK || !strings.Contains(safe.Header().Get("Cache-Control"), "no-store") {
+		t.Fatalf("safe export status=%d body=%s", safe.Code, safe.Body.String())
+	}
+	var document map[string]any
+	if err := json.Unmarshal(safe.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	refs := document["snapshot"].(map[string]any)["credentialRefs"].([]any)
+	if _, exposed := refs[0].(map[string]any)["reference"]; exposed {
+		t.Fatalf("safe export exposed reference: %#v", refs[0])
+	}
+	sensitive := f.request(http.MethodPost, "/api/v1/environments/environment-test/revisions/"+revisionID+"/export", map[string]any{"includeCredentialReferences": true}, owner)
+	if sensitive.Code != http.StatusOK || !strings.Contains(sensitive.Body.String(), "CLUSTERFORGE_TEST_SSH_KEY") {
+		t.Fatalf("sensitive export status=%d body=%s", sensitive.Code, sensitive.Body.String())
+	}
+	var sensitiveDocument map[string]any
+	if err := json.Unmarshal(sensitive.Body.Bytes(), &sensitiveDocument); err != nil {
+		t.Fatal(err)
+	}
+	sensitiveDocument["snapshot"].(map[string]any)["variables"] = map[string]any{"IMAGE_REGISTRY": "registry.example:5000/"}
+	tamperedBytes, err := json.Marshal(sensitiveDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tamperedDocument map[string]any
+	if err := json.Unmarshal(tamperedBytes, &tamperedDocument); err != nil {
+		t.Fatal(err)
+	}
+	tamperedDocument["containsCredentialReferences"] = false
+	tamperedInput := map[string]any{"document": tamperedDocument, "target": map[string]any{"kind": "new", "name": "Unconfirmed Imported Environment"}, "changeReason": "验证凭据确认门禁"}
+	tamperedPlan := f.request(http.MethodPost, "/api/v1/environment-imports/plan", tamperedInput, owner)
+	if tamperedPlan.Code != http.StatusOK || !strings.Contains(tamperedPlan.Body.String(), "必须明确确认复用") {
+		t.Fatalf("tampered import plan status=%d body=%s", tamperedPlan.Code, tamperedPlan.Body.String())
+	}
+	tamperedInput["expectedPlanDigest"] = decodeEnvelope(t, tamperedPlan)["data"].(map[string]any)["planDigest"]
+	if blocked := f.request(http.MethodPost, "/api/v1/environment-imports", tamperedInput, owner); blocked.Code != http.StatusBadRequest || !strings.Contains(blocked.Body.String(), "confirmCredentialReferences") {
+		t.Fatalf("tampered credential confirmation status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+	planInput := map[string]any{"document": sensitiveDocument, "target": map[string]any{"kind": "new", "name": "Imported Environment"}, "changeReason": "验收环境导入", "confirmCredentialReferences": true}
+	planResponse := f.request(http.MethodPost, "/api/v1/environment-imports/plan", planInput, owner)
+	if planResponse.Code != http.StatusOK {
+		t.Fatalf("import plan status=%d body=%s", planResponse.Code, planResponse.Body.String())
+	}
+	planInput["expectedPlanDigest"] = decodeEnvelope(t, planResponse)["data"].(map[string]any)["planDigest"]
+	imported := f.request(http.MethodPost, "/api/v1/environment-imports", planInput, owner)
+	if imported.Code != http.StatusCreated || !strings.Contains(imported.Body.String(), "Imported Environment") {
+		t.Fatalf("environment import status=%d body=%s", imported.Code, imported.Body.String())
+	}
+	importedRevision := decodeEnvelope(t, imported)["data"].(map[string]any)["currentRevision"].(map[string]any)
+	if registry := importedRevision["variables"].(map[string]any)["IMAGE_REGISTRY"]; registry != "registry.example:5000" {
+		t.Fatalf("imported IMAGE_REGISTRY=%v, want normalized value", registry)
+	}
+}
+
+func TestRunInputPresetIsPersonalAndBecomesStale(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	bob := f.session(seed.ComponentOwnerK8sID)
+	listPath := "/api/v1/run-input-presets?resourceType=component_release&resourceId=release-test-runtime-1.1.0&context=component_install_verify"
+	empty := decodeEnvelope(t, f.request(http.MethodGet, listPath, nil, alice))["items"].([]any)
+	if len(empty) != 0 {
+		t.Fatalf("new preset list=%#v, want empty array", empty)
+	}
+	created := f.request(http.MethodPost, "/api/v1/run-input-presets", map[string]any{
+		"resourceType": "component_release", "resourceId": "release-test-runtime-1.1.0", "context": "component_install_verify", "name": "默认验证", "values": map[string]any{"runInput": map[string]any{"expected_version": "1.1.0"}},
+	}, alice)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create preset status=%d body=%s", created.Code, created.Body.String())
+	}
+	listed := f.request(http.MethodGet, listPath, nil, alice)
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), `"stale":true`) {
+		t.Fatalf("list preset status=%d body=%s", listed.Code, listed.Body.String())
+	}
+	if denied := f.request(http.MethodGet, listPath, nil, bob); denied.Code != http.StatusForbidden {
+		t.Fatalf("cross-owner preset list status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	contract := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.1.0/contract", map[string]any{
+		"parameters": []any{map[string]any{"name": "expected_version", "description": "changed", "type": "string", "required": true, "defaultValue": "1.1.0", "visibility": "internal"}}, "dependencies": []any{},
+	}, alice)
+	if contract.Code != http.StatusOK {
+		t.Fatalf("update contract status=%d body=%s", contract.Code, contract.Body.String())
+	}
+	stale := f.request(http.MethodGet, listPath, nil, alice)
+	if !strings.Contains(stale.Body.String(), `"stale":true`) {
+		t.Fatalf("preset did not become stale: %s", stale.Body.String())
+	}
+}
+
+func TestComponentImportPlanDoesNotWriteAndRejectsDatabaseDrift(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	entry := map[string]any{"component": map[string]any{"name": "Imported Unit", "slug": "imported-unit", "description": "", "layer": "runtime_state", "category": "runtime", "kind": "software", "requiredness": "optional"}, "release": map[string]any{"version": "1.0.0", "type": "atomic", "environmentConstraints": map[string]any{}, "parameters": []any{}, "dependencies": []any{}, "actions": []any{}}, "playbooks": []any{}}
+	var before int
+	_ = f.database.DB().QueryRow(`SELECT COUNT(*) FROM components`).Scan(&before)
+	plan := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": []any{entry}}, alice)
+	if plan.Code != http.StatusOK {
+		t.Fatalf("component import plan status=%d body=%s", plan.Code, plan.Body.String())
+	}
+	var after int
+	_ = f.database.DB().QueryRow(`SELECT COUNT(*) FROM components`).Scan(&after)
+	if after != before {
+		t.Fatalf("component import preview wrote rows: before=%d after=%d", before, after)
+	}
+	now := time.Now().UTC()
+	if err := f.database.CreateComponent(context.Background(), domain.Component{ID: "component-import-drift", Slug: "imported-unit", Name: "Drift", Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredOptional, OwnerID: seed.ComponentOwnerRuntimeID, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	digest := decodeEnvelope(t, plan)["data"].(map[string]any)["planDigest"]
+	submit := f.request(http.MethodPost, "/api/v1/component-imports", map[string]any{"entries": []any{entry}, "expectedPlanDigest": digest}, alice)
+	if submit.Code != http.StatusConflict {
+		t.Fatalf("drifted component import status=%d body=%s", submit.Code, submit.Body.String())
+	}
+}
+
+func TestComponentImportRejectsUnknownActionAndRiskEnums(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	entry := func(slug, actionType, releaseRisk, actionRisk string) map[string]any {
+		actions := []any{}
+		playbooks := []any{}
+		if actionType != "" {
+			actions = append(actions, map[string]any{"name": "install", "type": actionType, "playbook": "install.yml", "timeoutSeconds": 60, "riskLevel": actionRisk})
+			playbooks = append(playbooks, map[string]any{"filename": "install.yml", "content": "---\n- hosts: all\n  tasks: []\n"})
+		}
+		return map[string]any{
+			"component": map[string]any{"name": "Invalid Enum", "slug": slug, "layer": "runtime_state", "category": "runtime", "kind": "software", "requiredness": "optional"},
+			"release":   map[string]any{"version": "1.0.0", "type": "atomic", "riskLevel": releaseRisk, "environmentConstraints": map[string]any{}, "parameters": []any{}, "dependencies": []any{}, "actions": actions},
+			"playbooks": playbooks,
+		}
+	}
+	for _, test := range []struct {
+		name  string
+		entry map[string]any
+		want  string
+	}{
+		{"unknown action", entry("invalid-action", "execute_anything", "low", "low"), "invalid action kind"},
+		{"invalid release risk", entry("invalid-release-risk", "", "urgent", ""), "invalid release risk level"},
+		{"invalid action risk", entry("invalid-action-risk", "install", "low", "urgent"), "invalid action risk level"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": []any{test.entry}}, alice)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), test.want) {
+				t.Fatalf("invalid enum status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func componentImportEntry(slug string) map[string]any {
+	filename := "install.yml"
+	return map[string]any{
+		"component": map[string]any{"name": "Imported " + slug, "slug": slug, "description": "", "layer": "runtime_state", "category": "runtime", "kind": "software", "requiredness": "optional"},
+		"release":   map[string]any{"version": "1.0.0", "type": "atomic", "environmentConstraints": map[string]any{}, "parameters": []any{}, "dependencies": []any{}, "actions": []any{map[string]any{"name": "install", "type": "install", "playbook": filename, "timeoutSeconds": 60, "idempotent": true}}},
+		"playbooks": []any{map[string]any{"filename": filename, "content": "---\n- hosts: all\n  tasks: []\n"}},
+	}
+}
+
+func TestComponentImportAtomicallyCommitsNormalizedCatalogAndPlaybook(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	f.platform.ConfigurePlaybookRoot(root)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	entry := componentImportEntry(" imported-atomic ")
+	plan := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": []any{entry}}, alice)
+	if plan.Code != http.StatusOK {
+		t.Fatalf("component import plan status=%d body=%s", plan.Code, plan.Body.String())
+	}
+	digest := decodeEnvelope(t, plan)["data"].(map[string]any)["planDigest"]
+	response := f.request(http.MethodPost, "/api/v1/component-imports", map[string]any{"entries": []any{entry}, "expectedPlanDigest": digest}, alice)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("component import status=%d body=%s", response.Code, response.Body.String())
+	}
+	data := decodeEnvelope(t, response)["data"].(map[string]any)
+	releaseID := data["createdDrafts"].(map[string]any)["imported-atomic"].(string)
+	release, err := f.database.GetComponentRelease(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(release.Actions) != 1 || release.Actions[0].Playbook == "" {
+		t.Fatalf("imported release actions=%#v", release.Actions)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(release.Actions[0].Playbook))); err != nil {
+		t.Fatalf("managed Playbook missing: %v", err)
+	}
+	var audits int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='component_import.completed' AND resource_id=?`, digest).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("component import audit count=%d err=%v", audits, err)
+	}
+}
+
+func TestComponentImportDatabaseFailureRollsBackRowsAuditsAndFiles(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	f.platform.ConfigurePlaybookRoot(root)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	entries := []any{componentImportEntry("atomic-first"), componentImportEntry("atomic-second")}
+	plan := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": entries}, alice)
+	if plan.Code != http.StatusOK {
+		t.Fatalf("component import plan status=%d body=%s", plan.Code, plan.Body.String())
+	}
+	if _, err := f.database.DB().Exec(`CREATE TRIGGER fail_component_import BEFORE INSERT ON components WHEN NEW.slug='atomic-second' BEGIN SELECT RAISE(ABORT,'forced component import failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	digest := decodeEnvelope(t, plan)["data"].(map[string]any)["planDigest"]
+	response := f.request(http.MethodPost, "/api/v1/component-imports", map[string]any{"entries": entries, "expectedPlanDigest": digest}, alice)
+	if response.Code < http.StatusBadRequest {
+		t.Fatalf("failed component import status=%d body=%s", response.Code, response.Body.String())
+	}
+	var rows, audits int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM components WHERE slug IN ('atomic-first','atomic-second')`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE resource_id=?`, digest).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 || audits != 0 {
+		t.Fatalf("failed import left rows=%d audits=%d", rows, audits)
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return fmt.Errorf("failed import left file %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailedIdempotentInstallRetryRebindsBackupToNewRun(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	now := time.Now().UTC()
+	component := domain.Component{ID: "component-retry-safe", Slug: "retry-safe", Name: "Retry Safe", Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredOptional, OwnerID: seed.ComponentOwnerRuntimeID, CreatedAt: now, UpdatedAt: now}
+	if err := f.database.CreateComponent(ctx, component); err != nil {
+		t.Fatal(err)
+	}
+	release := domain.ComponentRelease{ID: "release-retry-safe", ComponentID: component.ID, Version: "1.0.0", Type: domain.ReleaseAtomic, Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, CreatedAt: now, Actions: []domain.ActionDefinition{
+		{ID: "action-retry-install", ReleaseID: "release-retry-safe", Name: "install", Kind: domain.ActionInstall, Playbook: "tests/retry/install.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow, Idempotent: true},
+		{ID: "action-retry-rollback", ReleaseID: "release-retry-safe", Name: "rollback", Kind: domain.ActionRollback, Playbook: "tests/retry/rollback.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
+	}}
+	if err := f.database.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	request := map[string]any{"environmentId": "environment-test", "mode": "install_verify"}
+	plan := f.request(http.MethodPost, "/api/v1/component-releases/release-retry-safe/test-plan", request, alice)
+	if plan.Code != http.StatusOK {
+		t.Fatalf("retry source plan status=%d body=%s", plan.Code, plan.Body.String())
+	}
+	request["expectedPlanDigest"] = decodeEnvelope(t, plan)["data"].(map[string]any)["planDigest"]
+	f.runner.failPlaybook = "tests/retry/install.yml"
+	started := f.request(http.MethodPost, "/api/v1/component-releases/release-retry-safe/test-runs", request, alice)
+	if started.Code != http.StatusAccepted {
+		t.Fatalf("start retry source status=%d body=%s", started.Code, started.Body.String())
+	}
+	sourceID := decodeEnvelope(t, started)["data"].(map[string]any)["id"].(string)
+	waitForRun(t, f.database, sourceID, domain.RunFailed)
+	f.runner.failPlaybook = ""
+	retryPlan := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-plan", nil, alice)
+	if retryPlan.Code != http.StatusOK {
+		t.Fatalf("retry plan status=%d body=%s", retryPlan.Code, retryPlan.Body.String())
+	}
+	retryDigest := decodeEnvelope(t, retryPlan)["data"].(map[string]any)["planDigest"]
+	retried := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-runs", map[string]any{"expectedPlanDigest": retryDigest}, alice)
+	if retried.Code != http.StatusAccepted || !strings.Contains(retried.Body.String(), sourceID) {
+		t.Fatalf("retry run status=%d body=%s", retried.Code, retried.Body.String())
+	}
+	retriedID := decodeEnvelope(t, retried)["data"].(map[string]any)["id"].(string)
+	waitForRun(t, f.database, retriedID, domain.RunSucceeded)
+	installation, err := f.database.GetEnvironmentComponentInstallation(ctx, "environment-test", component.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installation.InstallRunID != retriedID || installation.Backup.InstallRunID != retriedID || !strings.Contains(installation.BackupRef, retriedID) {
+		t.Fatalf("retry backup provenance=%#v, want run %s", installation, retriedID)
+	}
+	rollback := f.request(http.MethodPost, "/api/v1/component-releases/release-retry-safe/test-plan", map[string]any{
+		"environmentId": "environment-test", "mode": "rollback", "rollbackVerification": map[string]any{"kind": "rollback_only"},
+	}, alice)
+	if rollback.Code != http.StatusOK || !strings.Contains(rollback.Body.String(), retriedID) {
+		t.Fatalf("rollback did not accept retry backup status=%d body=%s", rollback.Code, rollback.Body.String())
+	}
+	secondPlan := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-plan", nil, alice)
+	if secondPlan.Code != http.StatusOK {
+		t.Fatalf("second retry plan status=%d body=%s", secondPlan.Code, secondPlan.Body.String())
+	}
+	f.runner.failPlaybook = "tests/retry/install.yml"
+	secondRetry := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-runs", map[string]any{"expectedPlanDigest": decodeEnvelope(t, secondPlan)["data"].(map[string]any)["planDigest"]}, alice)
+	if secondRetry.Code != http.StatusAccepted {
+		t.Fatalf("second retry status=%d body=%s", secondRetry.Code, secondRetry.Body.String())
+	}
+	secondData := decodeEnvelope(t, secondRetry)["data"].(map[string]any)
+	if secondData["retryAttempt"] != float64(2) {
+		t.Fatalf("second retry attempt=%v body=%s", secondData["retryAttempt"], secondRetry.Body.String())
+	}
+	waitForRun(t, f.database, secondData["id"].(string), domain.RunFailed)
+}
+
+func TestRetryChainRejectsASecondActiveBranch(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	source := domain.Run{ID: "run-retry-root", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionInstall, InputSnapshot: map[string]any{}, ArtifactDigest: "fixed-tree-digest", CreatedAt: now, FinishedAt: &now}
+	if err := f.database.CreateRun(ctx, source, nil); err != nil {
+		t.Fatal(err)
+	}
+	failedBranch := source
+	failedBranch.ID = "run-retry-failed-branch"
+	failedBranch.RetryOfRunID = source.ID
+	failedBranch.RetryRootRunID = source.ID
+	failedBranch.RetryAttempt = 1
+	if err := f.database.CreateRun(ctx, failedBranch, nil); err != nil {
+		t.Fatal(err)
+	}
+	duplicateAttempt := failedBranch
+	duplicateAttempt.ID = "run-retry-duplicate-attempt"
+	if err := f.database.CreateRun(ctx, duplicateAttempt, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("duplicate retry attempt store error=%v, want conflict", err)
+	}
+	activeBranch := source
+	activeBranch.ID = "run-retry-active-branch"
+	activeBranch.Status = domain.RunAwaitingApproval
+	activeBranch.RetryOfRunID = source.ID
+	activeBranch.RetryRootRunID = source.ID
+	activeBranch.RetryAttempt = 2
+	activeBranch.FinishedAt = nil
+	if err := f.database.CreateRun(ctx, activeBranch, nil); err != nil {
+		t.Fatal(err)
+	}
+	response := f.request(http.MethodPost, "/api/v1/runs/"+failedBranch.ID+"/retry-plan", nil, f.session(seed.ComponentOwnerRuntimeID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("second retry branch status=%d body=%s", response.Code, response.Body.String())
+	}
+	secondActive := activeBranch
+	secondActive.ID = "run-retry-active-branch-2"
+	secondActive.RetryOfRunID = failedBranch.ID
+	if err := f.database.CreateRun(ctx, secondActive, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("second active retry store error=%v, want conflict", err)
+	}
+}
+
+func TestCreateRunRejectsWithdrawnScenarioDraftAtFinalStoreBoundary(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	createDraft := func(suffix string) domain.ComponentRelease {
+		component := domain.Component{ID: "component-run-fence-" + suffix, Slug: "run-fence-" + suffix, Name: "Run Fence " + suffix, Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredOptional, OwnerID: seed.ComponentOwnerRuntimeID, CreatedAt: now, UpdatedAt: now}
+		if err := f.database.CreateComponent(ctx, component); err != nil {
+			t.Fatal(err)
+		}
+		release := domain.ComponentRelease{ID: "release-run-fence-" + suffix, ComponentID: component.ID, Version: "1.0.0", Type: domain.ReleaseAtomic, Status: domain.ReleaseDraft, Verified: true, Candidate: true, RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, CreatedAt: now}
+		if err := f.database.CreateComponentRelease(ctx, release); err != nil {
+			t.Fatal(err)
+		}
+		return release
+	}
+	createRun := func(id string, release domain.ComponentRelease) error {
+		return f.database.CreateRun(ctx, domain.Run{
+			ID: id, Kind: domain.RunScenarioTest, Status: domain.RunQueued,
+			RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+			ScenarioRevisionID: "scenario-test-runtime-r2", InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}, CreatedAt: now,
+		}, nil)
+	}
+
+	withdrawn := createDraft("withdrawn")
+	if err := f.database.SetReleaseCandidate(ctx, withdrawn.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := createRun("run-withdrawn-candidate", withdrawn); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("withdrawn candidate run error=%v, want conflict", err)
+	}
+
+	deprecated := createDraft("deprecated")
+	if err := f.database.DeprecateComponentRelease(ctx, deprecated.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := createRun("run-deprecated-draft", deprecated); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("deprecated draft run error=%v, want conflict", err)
+	}
+}
+
 func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
@@ -618,9 +1016,10 @@ func TestWorkbenchApprovalActionMatchesViewerPermission(t *testing.T) {
 }
 
 type fakeRunner struct {
-	mu       sync.Mutex
-	calls    []string
-	requests []ansiblerunner.Request
+	mu           sync.Mutex
+	calls        []string
+	requests     []ansiblerunner.Request
+	failPlaybook string
 }
 
 func (f *fakeRunner) Digest(playbook string) (string, string, error) {
@@ -640,6 +1039,9 @@ func (f *fakeRunner) Run(_ context.Context, request ansiblerunner.Request) (ansi
 	f.calls = append(f.calls, request.Playbook)
 	f.requests = append(f.requests, request)
 	f.mu.Unlock()
+	if f.failPlaybook == request.Playbook {
+		return ansiblerunner.Result{TreeSHA256: "fixed-tree-digest", Phases: []ansiblerunner.PhaseResult{{Phase: ansiblerunner.PhaseExecute, ExitCode: 2}}}, errors.New("forced test failure")
+	}
 	if request.LogSink != nil {
 		request.LogSink(ansiblerunner.LogEvent{Time: time.Now().UTC(), Phase: ansiblerunner.PhaseExecute, Stream: ansiblerunner.StreamStdout, Line: "fake execution succeeded"})
 	}
@@ -902,7 +1304,22 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	f.platform.ConfigurePlaybookRoot(root)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	bob := f.session(seed.ComponentOwnerK8sID)
+	carol := f.session(seed.ScenarioOwnerID)
+	dave := f.session(seed.EnvironmentOwnerID)
 	releasePath := "/api/v1/component-releases/release-test-runtime-1.1.0/playbook"
+	releasedRelativePath := "tests/runtime/install.yml"
+	if err := os.MkdirAll(filepath.Join(root, "tests", "runtime"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(releasedRelativePath)), []byte("---\n- hosts: released\n  tasks: []\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	for label, cookie := range map[string]*http.Cookie{"component owner": bob, "scenario owner": carol, "environment owner": dave} {
+		response := f.request(http.MethodGet, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook?path="+releasedRelativePath, nil, cookie)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "hosts: released") {
+			t.Fatalf("%s read released Playbook status=%d body=%s", label, response.Code, response.Body.String())
+		}
+	}
 
 	uploaded := f.multipartFileRequest(releasePath, nil, "playbook", "install.yml", []byte("---\n- hosts: all\n  tasks: []\n"), alice)
 	if uploaded.Code != http.StatusCreated {
@@ -928,6 +1345,12 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if err := f.database.SetReleaseCandidate(context.Background(), "release-test-runtime-1.1.0", true); err != nil {
 		t.Fatal(err)
 	}
+	for label, cookie := range map[string]*http.Cookie{"component owner": bob, "scenario owner": carol, "environment owner": dave} {
+		response := f.request(http.MethodGet, releasePath+"?path="+managedPath, nil, cookie)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "hosts: all") {
+			t.Fatalf("%s read shared candidate Playbook status=%d body=%s", label, response.Code, response.Body.String())
+		}
+	}
 	edited := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n- hosts: workers\n  tasks: []\n"}, alice)
 	if edited.Code != http.StatusOK || !strings.Contains(edited.Body.String(), "hosts: workers") {
 		t.Fatalf("edit Playbook status=%d body=%s", edited.Code, edited.Body.String())
@@ -938,6 +1361,9 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	}
 	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, bob); response.Code != http.StatusForbidden {
 		t.Fatalf("other owner edit Playbook status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodGet, releasePath+"?path="+managedPath, nil, bob); response.Code != http.StatusForbidden {
+		t.Fatalf("other owner read private Draft Playbook status=%d body=%s", response.Code, response.Body.String())
 	}
 	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook", map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, alice); response.Code != http.StatusConflict {
 		t.Fatalf("released Playbook edit status=%d body=%s", response.Code, response.Body.String())
@@ -958,6 +1384,60 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	}
 	if response := f.request(http.MethodGet, releasePath+"?path=managed/component-test-runtime/release-test-runtime-1.1.0/escape.yml", nil, alice); response.Code != http.StatusBadRequest {
 		t.Fatalf("escaping Playbook symlink status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDraftReleaseDeprecationPreservesHistoryAndRejectsActiveTest(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	bob := f.session(seed.ComponentOwnerK8sID)
+	releaseID := "release-test-runtime-1.1.0"
+	path := "/api/v1/component-releases/" + releaseID + "/deprecate"
+	if err := f.database.MarkReleaseVerified(ctx, releaseID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.SetReleaseCandidate(ctx, releaseID, true); err != nil {
+		t.Fatal(err)
+	}
+	activeRun := domain.Run{
+		ID: "run-active-draft-deprecation", Kind: domain.RunComponentTest, Status: domain.RunQueued,
+		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
+		ComponentReleaseID: releaseID, Action: domain.ActionInstall, InputSnapshot: map[string]any{}, CreatedAt: time.Now().UTC(),
+	}
+	if err := f.database.CreateRun(ctx, activeRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.DeprecateComponentRelease(ctx, releaseID, time.Now().UTC()); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "active component test") {
+		t.Fatalf("store allowed active Draft deprecation: %v", err)
+	}
+	if response := f.request(http.MethodPost, path, nil, alice); response.Code != http.StatusConflict {
+		t.Fatalf("deprecate active Draft status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := f.database.DB().ExecContext(ctx, `UPDATE runs SET status='cancelled' WHERE id=?`, activeRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	impact := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/impact", nil, alice)
+	if impact.Code != http.StatusOK || !strings.Contains(impact.Body.String(), "scenario-test-runtime") {
+		t.Fatalf("Draft impact status=%d body=%s", impact.Code, impact.Body.String())
+	}
+	if response := f.request(http.MethodPost, path, nil, bob); response.Code != http.StatusForbidden {
+		t.Fatalf("other owner deprecate Draft status=%d body=%s", response.Code, response.Body.String())
+	}
+	deprecated := f.request(http.MethodPost, path, nil, alice)
+	if deprecated.Code != http.StatusOK {
+		t.Fatalf("deprecate Draft status=%d body=%s", deprecated.Code, deprecated.Body.String())
+	}
+	data := decodeEnvelope(t, deprecated)["data"].(map[string]any)
+	if data["status"] != string(domain.ReleaseDeprecated) || data["candidate"] != false || data["verified"] != true || data["deprecatedAt"] == nil {
+		t.Fatalf("deprecated Draft response=%#v", data)
+	}
+	if response := f.request(http.MethodPost, path, nil, alice); response.Code != http.StatusConflict {
+		t.Fatalf("repeat Draft deprecation status=%d body=%s", response.Code, response.Body.String())
+	}
+	var auditCount int
+	if err := f.database.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE action='component_release.deprecated' AND resource_id=?`, releaseID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("deprecation audit count=%d err=%v", auditCount, err)
 	}
 }
 
@@ -1076,14 +1556,7 @@ func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 		t.Fatalf("image build environment audit count=%d err=%v", auditCount, err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		build, err := f.database.GetComponentImageBuild(context.Background(), buildID)
-		if err == nil && build.Status == domain.ImageBuildSucceeded {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForImageBuild(t, f.database, buildID, domain.ImageBuildSucceeded)
 	visible := f.request(http.MethodGet, "/api/v1/image-builds/"+buildID, nil, alice)
 	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), "@sha256:aaaaaaaa") || !strings.Contains(visible.Body.String(), "build ok") {
 		t.Fatalf("completed build response status=%d body=%s", visible.Code, visible.Body.String())
@@ -1606,29 +2079,67 @@ func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cloned := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", map[string]any{
+	const sourceArtifactID = "artifact-clone-env-source"
+	if _, err := f.database.DB().ExecContext(context.Background(), `INSERT INTO component_release_artifacts(id,release_id,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, sourceArtifactID, releaseID, "package", "fss-test", "components/clone-env/package.tgz", "package.tgz", strings.Repeat("a", 64), 128, "register", "environment-test", "environment-test-r1", seed.ComponentOwnerRuntimeID, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	cloneInput := map[string]any{
 		"version": "1.1.0", "releaseNotes": "add arm64",
 		"environmentConstraints": map[string]any{"architecture": []any{"amd64", "arm64"}, "operatingSystem": []any{"SUSE", "Kylin"}, "ipFamily": []any{"IPv4"}},
-	}, alice)
+	}
+	clonePlan := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone-plan", cloneInput, alice)
+	cloneInput["expectedPlanDigest"] = decodeEnvelope(t, clonePlan)["data"].(map[string]any)["planDigest"]
+	cloned := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", cloneInput, alice)
 	if cloned.Code != http.StatusCreated {
 		t.Fatalf("clone status=%d body=%s", cloned.Code, cloned.Body.String())
 	}
-	constraints := decodeEnvelope(t, cloned)["data"].(map[string]any)["environmentConstraints"].(map[string]any)
+	clonedData := decodeEnvelope(t, cloned)["data"].(map[string]any)
+	constraints := clonedData["environmentConstraints"].(map[string]any)
 	if !reflect.DeepEqual(constraints["architecture"], []any{"amd64", "arm64"}) {
 		t.Fatalf("cloned architecture=%#v", constraints["architecture"])
 	}
 	if !reflect.DeepEqual(constraints["ipFamily"], []any{"IPv4"}) {
 		t.Fatalf("cloned ipFamily=%#v", constraints["ipFamily"])
 	}
-	kept := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", map[string]any{
+	clonedArtifacts := clonedData["artifacts"].([]any)
+	if len(clonedArtifacts) != 1 {
+		t.Fatalf("cloned artifacts=%#v", clonedArtifacts)
+	}
+	clonedArtifact := clonedArtifacts[0].(map[string]any)
+	if clonedArtifact["id"] == sourceArtifactID || clonedArtifact["releaseId"] != clonedData["id"] {
+		t.Fatalf("cloned artifact retained source identity: %#v", clonedArtifact)
+	}
+	keptInput := map[string]any{
 		"version": "1.1.1", "releaseNotes": "keep source constraints",
-	}, alice)
+	}
+	keptPlan := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone-plan", keptInput, alice)
+	keptInput["expectedPlanDigest"] = decodeEnvelope(t, keptPlan)["data"].(map[string]any)["planDigest"]
+	kept := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", keptInput, alice)
 	if kept.Code != http.StatusCreated {
 		t.Fatalf("clone without constraints status=%d body=%s", kept.Code, kept.Body.String())
 	}
 	keptConstraints := decodeEnvelope(t, kept)["data"].(map[string]any)["environmentConstraints"].(map[string]any)
 	if !reflect.DeepEqual(keptConstraints["architecture"], []any{"amd64"}) {
 		t.Fatalf("source constraints were not kept: %#v", keptConstraints)
+	}
+	if _, err := f.database.DB().ExecContext(context.Background(), `CREATE TRIGGER fail_cloned_artifact BEFORE INSERT ON component_release_artifacts WHEN NEW.release_id<>'release-clone-env-1.0.0' BEGIN SELECT RAISE(ABORT, 'forced cloned artifact failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	failedInput := map[string]any{"version": "1.1.2", "releaseNotes": "force artifact failure"}
+	failedPlan := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone-plan", failedInput, alice)
+	failedInput["expectedPlanDigest"] = decodeEnvelope(t, failedPlan)["data"].(map[string]any)["planDigest"]
+	if failed := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone", failedInput, alice); failed.Code < 400 {
+		t.Fatalf("forced artifact failure status=%d body=%s", failed.Code, failed.Body.String())
+	}
+	var partialReleases, partialAudits int
+	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM component_releases WHERE component_id=? AND version='1.1.2'`, componentID).Scan(&partialReleases); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_events WHERE action='component_release.cloned' AND metadata_json LIKE '%1.1.2%'`).Scan(&partialAudits); err != nil {
+		t.Fatal(err)
+	}
+	if partialReleases != 0 || partialAudits != 0 {
+		t.Fatalf("failed clone left partial state: releases=%d audits=%d", partialReleases, partialAudits)
 	}
 }
 
@@ -1665,7 +2176,7 @@ func TestPublishRejectsCrossReleaseTransitionMismatch(t *testing.T) {
 func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 	f := newAPIFixture(t)
 	carol := f.session(seed.ScenarioOwnerID)
-	blockedClone := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol)
+	blockedClone := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", map[string]any{"sourceRevisionId": "scenario-test-runtime-r1"}, carol)
 	if blockedClone.Code != http.StatusConflict {
 		t.Fatalf("clone with active draft status=%d body=%s", blockedClone.Code, blockedClone.Body.String())
 	}
@@ -1687,14 +2198,16 @@ func TestOnlyCurrentScenarioRevisionCanBeMutatedOrTested(t *testing.T) {
 	if !foundAbandoned {
 		t.Fatalf("abandoned revision missing from history: %#v", abandonedScenario["revisions"])
 	}
-	cloned := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol)
+	clonePlan := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revision-clone-plan", map[string]any{"sourceRevisionId": "scenario-test-runtime-r1"}, carol)
+	planDigest := decodeEnvelope(t, clonePlan)["data"].(map[string]any)["planDigest"]
+	cloned := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", map[string]any{"sourceRevisionId": "scenario-test-runtime-r1", "expectedPlanDigest": planDigest}, carol)
 	if cloned.Code != http.StatusCreated {
 		t.Fatalf("clone revision status=%d body=%s", cloned.Code, cloned.Body.String())
 	}
 	if revision := decodeEnvelope(t, cloned)["data"].(map[string]any); revision["revision"] != float64(3) {
 		t.Fatalf("cloned revision=%#v", revision)
 	}
-	if duplicate := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", nil, carol); duplicate.Code != http.StatusConflict {
+	if duplicate := f.request(http.MethodPost, "/api/v1/scenarios/scenario-test-runtime/revisions", map[string]any{"sourceRevisionId": "scenario-test-runtime-r1", "expectedPlanDigest": planDigest}, carol); duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate active draft clone status=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
 	oldGraphEdit := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r2/graph", map[string]any{
@@ -2111,4 +2624,18 @@ func waitForRun(t *testing.T, database *store.Store, runID string, status domain
 	}
 	run, err := database.GetRun(context.Background(), runID)
 	t.Fatalf("run %s status=%s err=%v, want %s", runID, run.Status, err, status)
+}
+
+func waitForImageBuild(t *testing.T, database *store.Store, buildID string, status domain.ImageBuildStatus) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		build, err := database.GetComponentImageBuild(context.Background(), buildID)
+		if err == nil && build.Status == status {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	build, err := database.GetComponentImageBuild(context.Background(), buildID)
+	t.Fatalf("image build %s status=%s err=%v, want %s", buildID, build.Status, err, status)
 }

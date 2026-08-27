@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'first-version-20260825-safety-fences');
+VALUES(1, 'first-version-20260826-reuse-workflows');
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -181,6 +181,10 @@ CREATE TABLE IF NOT EXISTS runs (
   destructive INTEGER NOT NULL DEFAULT 0,
   input_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(input_snapshot_json)),
   artifact_digest TEXT NOT NULL DEFAULT '',
+  retry_of_run_id TEXT REFERENCES runs(id),
+  retry_root_run_id TEXT REFERENCES runs(id),
+  retry_attempt INTEGER NOT NULL DEFAULT 0,
+  retry_start_step INTEGER NOT NULL DEFAULT 0,
   error_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT,
@@ -189,6 +193,26 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_retry_root ON runs(retry_root_run_id, retry_attempt);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_retry_attempt ON runs(retry_root_run_id, retry_attempt) WHERE retry_root_run_id IS NOT NULL;
+DROP INDEX IF EXISTS idx_runs_one_active_retry;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_retry_root ON runs(retry_root_run_id) WHERE retry_root_run_id IS NOT NULL AND status IN ('awaiting_approval','queued','running');
+
+CREATE TABLE IF NOT EXISTS run_input_presets (
+  id TEXT PRIMARY KEY,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  resource_type TEXT NOT NULL CHECK (resource_type IN ('component_release','scenario_revision')),
+  resource_id TEXT NOT NULL,
+  context TEXT NOT NULL CHECK (context IN ('component_install_verify','component_rollback','scenario_test','scenario_run')),
+  name TEXT NOT NULL,
+  values_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(values_json)),
+  definition_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(created_by,resource_type,resource_id,context,name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_input_presets_lookup ON run_input_presets(created_by,resource_type,resource_id,context,name);
 
 CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_insert
 BEFORE INSERT ON runs

@@ -89,12 +89,39 @@ func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRe
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	if err = insertComponentRelease(ctx, tx, r); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentRelease) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Type, r.Status, r.ReleaseNotes, r.Breaking, r.Verified, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
-	if err = replaceReleaseChildren(ctx, tx, r); err != nil {
+	return replaceReleaseChildren(ctx, tx, r)
+}
+
+// CreateClonedComponentRelease commits the cloned Release contract, artifacts,
+// and audit record together. Managed Playbooks are prepared before this call
+// and removed by the service if the transaction fails.
+func (s *Store) CreateClonedComponentRelease(ctx context.Context, r domain.ComponentRelease, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
+	}
+	defer tx.Rollback()
+	if err := insertComponentRelease(ctx, tx, r); err != nil {
+		return err
+	}
+	for _, artifact := range r.Artifacts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,file_station,relative_path,filename,sha256,size_bytes,source_mode,environment_id,environment_revision_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, artifact.ID, r.ID, artifact.Alias, artifact.FileStation, artifact.RelativePath, artifact.Filename, artifact.SHA256, artifact.SizeBytes, artifact.SourceMode, artifact.EnvironmentID, artifact.EnvironmentRevisionID, artifact.CreatedBy, timeText(artifact.CreatedAt)); err != nil {
+			return mapSQLError(err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, audit.ID, audit.ActorID, audit.Action, audit.ResourceType, audit.ResourceID, jsonText(audit.Metadata), timeText(audit.CreatedAt)); err != nil {
+		return mapSQLError(err)
 	}
 	return tx.Commit()
 }
@@ -358,13 +385,50 @@ func (s *Store) PublishComponentRelease(ctx context.Context, id string, at time.
 }
 
 func (s *Store) DeprecateComponentRelease(ctx context.Context, id string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET status='deprecated',deprecated_at=? WHERE id=? AND status='released'`, timeText(at), id)
+	res, err := s.db.ExecContext(ctx, `
+UPDATE component_releases
+SET status='deprecated',candidate=0,deprecated_at=?
+WHERE id=?
+  AND status IN ('draft','released')
+	AND NOT EXISTS (
+	  SELECT 1
+	  FROM runs
+	    JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
+	    WHERE runs.scenario_revision_id IS NOT NULL
+	    AND runs.kind IN ('scenario_test','scenario_run')
+	    AND json_extract(step.value, '$.releaseId')=component_releases.id
+	)
+	AND (
+	  component_releases.status<>'draft'
+	  OR NOT EXISTS (
+	    SELECT 1 FROM runs
+	    WHERE runs.kind='component_test'
+	      AND runs.component_release_id=component_releases.id
+	      AND runs.status IN ('awaiting_approval','queued','running')
+	  )
+	)`, timeText(at), id)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("%w: only released versions can be deprecated", domain.ErrConflict)
+		if count, countErr := s.CountScenarioRunsForComponentRelease(ctx, id); countErr != nil {
+			return countErr
+		} else if count > 0 {
+			return fmt.Errorf("%w: component release is retained by %d scenario run(s)", domain.ErrConflict, count)
+		}
+		var status domain.ReleaseStatus
+		if statusErr := s.db.QueryRowContext(ctx, `SELECT status FROM component_releases WHERE id=?`, id).Scan(&status); statusErr != nil {
+			return mapSQLError(statusErr)
+		}
+		if status == domain.ReleaseDraft {
+			if active, activeErr := s.HasActiveComponentTest(ctx, id); activeErr != nil {
+				return activeErr
+			} else if active {
+				return fmt.Errorf("%w: wait for the active component test before deprecating this draft", domain.ErrConflict)
+			}
+		}
+		return fmt.Errorf("%w: only draft or released versions can be deprecated", domain.ErrConflict)
 	}
 	return nil
 }
