@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api } from '../api/client';
 import { environmentDocumentContainsCredentialReferences } from '../pages/EnvironmentsPage';
 import type { EnvironmentExportDocument } from '../types/domain';
+
+afterEach(() => vi.unstubAllGlobals());
 
 function document(reference?: string, declared = false): EnvironmentExportDocument {
   return {
@@ -19,5 +22,33 @@ describe('environment import credential confirmation', () => {
   it('derives confirmation from actual references instead of the document flag', () => {
     expect(environmentDocumentContainsCredentialReferences(document('SSH_KEY_ENV', false))).toBe(true);
     expect(environmentDocumentContainsCredentialReferences(document(undefined, true))).toBe(false);
+  });
+});
+
+describe('environment import preview response', () => {
+  const planResponse = (warnings: unknown) => new Response(JSON.stringify({
+    data: {
+      planDigest: 'plan-1', targetKind: 'new', nextRevision: 1,
+      hostCount: 0, variableCount: 0, credentialRefCount: 0,
+      changes: ['创建新环境'], warnings,
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  it('requires warnings to follow the V1 array contract', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(planResponse([]))
+      .mockResolvedValueOnce(planResponse(null)));
+
+    await expect(api.previewEnvironmentImport({
+      document: document(undefined, false),
+      target: { kind: 'new', name: 'Imported Environment' },
+      changeReason: '导入环境',
+    })).resolves.toMatchObject({ warnings: [] });
+
+    await expect(api.previewEnvironmentImport({
+      document: document(undefined, false),
+      target: { kind: 'new', name: 'Imported Environment' },
+      changeReason: '导入环境',
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
 });

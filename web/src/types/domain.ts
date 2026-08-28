@@ -507,7 +507,7 @@ export interface Run {
   logTail?: string[];
   resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
   backups?: RunBackup[];
-  artifactTransfers?: Array<{ alias: string; sourceStation: string; targetStation: string; relativePath: string; sha256: string }>;
+  artifactTransfers?: Array<{ alias: string; sourceUrl: string; targetStation: string; relativePath: string; sha256: string }>;
   imageTransfers?: Array<{ sourceRegistry: string; targetRegistry: string; sourceDigest: string; targetDigest: string }>;
   deliveryRequirements?: DeliveryRequirement[];
   deliveryDecisions?: DeliveryDecision[];

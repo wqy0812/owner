@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -55,5 +57,51 @@ func TestHTTPArtifactDeliveryTransfersAndVerifiesMetadata(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHTTPArtifactDeliveryProbeVerifiesSourceIdentityAndSize(t *testing.T) {
+	contents := "immutable artifact"
+	digest := sha256.Sum256([]byte(contents))
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.String() != "https://source.test/runtime.tgz" {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+		}
+		return adapterResponse(http.StatusOK, contents), nil
+	})}
+	delivery := NewHTTPArtifactDelivery(client)
+	var observed int64
+	err := delivery.Probe(context.Background(), ArtifactLocation{URL: "https://source.test/runtime.tgz", ObservedSize: &observed}, ArtifactIdentity{SHA256: hex.EncodeToString(digest[:])})
+	if err != nil || observed != int64(len(contents)) {
+		t.Fatalf("probe observed=%d err=%v", observed, err)
+	}
+	if err := delivery.Probe(context.Background(), ArtifactLocation{URL: "https://source.test/runtime.tgz"}, ArtifactIdentity{SHA256: strings.Repeat("0", 64)}); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("hash mismatch error=%v", err)
+	}
+}
+
+func TestHTTPArtifactDeliveryProbeRejectsIncompleteAndFailedLocations(t *testing.T) {
+	delivery := NewHTTPArtifactDelivery(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return adapterResponse(http.StatusServiceUnavailable, "offline"), nil
+	})})
+	if err := delivery.Probe(context.Background(), ArtifactLocation{URL: "https://source.test/runtime.tgz"}, ArtifactIdentity{}); err == nil || !strings.Contains(err.Error(), "Service Unavailable") {
+		t.Fatalf("failed source error=%v", err)
+	}
+	if err := delivery.Probe(context.Background(), ArtifactLocation{}, ArtifactIdentity{}); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("incomplete target error=%v", err)
+	}
+}
+
+func TestHTTPArtifactDeliveryTransferRejectsMismatchedTargetMetadata(t *testing.T) {
+	checksum := strings.Repeat("a", 64)
+	delivery := NewHTTPArtifactDelivery(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return adapterResponse(http.StatusCreated, `{"relativePath":"components/other.tgz","sha256":"`+checksum+`"}`), nil
+	})})
+	err := delivery.Transfer(context.Background(), ArtifactTransfer{
+		Source: ArtifactLocation{URL: "https://source.test/runtime.tgz"}, Target: ArtifactLocation{FileStation: "target.test", RelativePath: "components/runtime.tgz"},
+		Identity: ArtifactIdentity{SHA256: checksum},
+	})
+	if err == nil || !strings.Contains(err.Error(), "mismatched metadata") {
+		t.Fatalf("metadata mismatch error=%v", err)
 	}
 }

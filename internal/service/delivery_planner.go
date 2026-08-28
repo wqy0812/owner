@@ -128,7 +128,7 @@ func bindDeliveryRequirementVariables(plan *lockedPlan, requirement DeliveryRequ
 			if err := bindArtifactVariables(step, artifact, relativePath, location); err != nil {
 				return err
 			}
-		} else if err := bindImageVariables(step, requirement.Name, location); err != nil {
+		} else if err := bindImageVariables(step, requirement.Name, location, requirement.Identity); err != nil {
 			return err
 		}
 	}

@@ -164,7 +164,13 @@ func (p *Platform) PreviewEnvironmentImport(ctx context.Context, user domain.Use
 	if err != nil {
 		return EnvironmentImportPlan{}, err
 	}
-	plan := EnvironmentImportPlan{TargetKind: input.Target.Kind, HostCount: len(document.Snapshot.Hosts), VariableCount: len(document.Snapshot.Variables), CredentialRefCount: len(document.Snapshot.CredentialRefs)}
+	plan := EnvironmentImportPlan{
+		TargetKind:         input.Target.Kind,
+		HostCount:          len(document.Snapshot.Hosts),
+		VariableCount:      len(document.Snapshot.Variables),
+		CredentialRefCount: len(document.Snapshot.CredentialRefs),
+		Warnings:           make([]string, 0),
+	}
 	if document.ContainsCredentialReferences {
 		plan.Warnings = append(plan.Warnings, "导入文件包含 CredentialRef 引用；提交前必须明确确认复用。")
 	}

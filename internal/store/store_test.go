@@ -332,6 +332,89 @@ func TestArtifactSourceRepairDoesNotAdvancePublicationGeneration(t *testing.T) {
 	}
 }
 
+func TestImageSourceRepairPreservesIdentityWhileDigestChangesInvalidate(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	component := componentFixture("image-source-runtime", "component-alice")
+	if err := s.CreateComponent(ctx, component); err != nil {
+		t.Fatal(err)
+	}
+	release := releaseFixture("image-source-runtime-r1", component.ID, "1.0.0", domain.ReleaseDraft)
+	if err := s.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	image := domain.ComponentImage{
+		ID: "image-source-main", ReleaseID: release.ID, LogicalName: "main", Digest: "sha256:" + strings.Repeat("a", 64),
+		SourceRef: "registry-one.invalid/runtime:1.0.0", SourceUpdatedBy: "component-alice", SourceUpdatedAt: testNow,
+		CreatedBy: "component-alice", CreatedAt: testNow,
+	}
+	if err := s.UpsertDraftComponentImage(ctx, image); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.GetComponentRelease(ctx, release.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.UpdateComponentImageSource(ctx, release.ID, image.LogicalName, "registry-two.invalid/runtime:1.0.0", "component-bob", testNow.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSource, _ := s.GetComponentRelease(ctx, release.ID)
+	if updated.Digest != image.Digest || updated.SourceRef != "registry-two.invalid/runtime:1.0.0" || updated.SourceUpdatedBy != "component-bob" {
+		t.Fatalf("updated image=%+v", updated)
+	}
+	if afterSource.PublicationGeneration != before.PublicationGeneration {
+		t.Fatalf("source-only repair advanced publication generation: before=%d after=%d", before.PublicationGeneration, afterSource.PublicationGeneration)
+	}
+
+	image.Digest = "sha256:" + strings.Repeat("b", 64)
+	image.SourceRef = "registry-three.invalid/runtime:1.0.0"
+	if err := s.UpsertDraftComponentImage(ctx, image); err != nil {
+		t.Fatal(err)
+	}
+	afterIdentity, _ := s.GetComponentRelease(ctx, release.ID)
+	if afterIdentity.PublicationGeneration <= afterSource.PublicationGeneration {
+		t.Fatalf("digest change did not advance publication generation: before=%d after=%d", afterSource.PublicationGeneration, afterIdentity.PublicationGeneration)
+	}
+	images, err := s.ListComponentImages(ctx, release.ID)
+	if err != nil || len(images) != 1 || images[0].Digest != image.Digest {
+		t.Fatalf("images=%+v err=%v", images, err)
+	}
+	if err := s.DeleteDraftComponentImage(ctx, release.ID, image.LogicalName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetComponentImage(ctx, release.ID, image.LogicalName); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("deleted image lookup error=%v", err)
+	}
+	if err := s.DeleteDraftComponentImage(ctx, release.ID, image.LogicalName); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("repeated image delete error=%v", err)
+	}
+}
+
+func TestArtifactMirrorRecordIsIdempotentByTargetAndIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	checksum := strings.Repeat("c", 64)
+	present, err := s.HasComponentArtifactMirror(ctx, "target-fss", "components/runtime.tgz", checksum)
+	if err != nil || present {
+		t.Fatalf("unexpected initial mirror present=%v err=%v", present, err)
+	}
+	if err := s.RecordComponentArtifactMirror(ctx, "source-a", "target-fss", "components/runtime.tgz", checksum, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordComponentArtifactMirror(ctx, "source-b", "target-fss", "components/runtime.tgz", checksum, testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	present, err = s.HasComponentArtifactMirror(ctx, "target-fss", "components/runtime.tgz", checksum)
+	if err != nil || !present {
+		t.Fatalf("recorded mirror present=%v err=%v", present, err)
+	}
+	other, err := s.HasComponentArtifactMirror(ctx, "target-fss", "components/runtime.tgz", strings.Repeat("d", 64))
+	if err != nil || other {
+		t.Fatalf("different identity mirror present=%v err=%v", other, err)
+	}
+}
+
 func TestScenarioTestEvidenceRejectsChangedReleaseDefinition(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

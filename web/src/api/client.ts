@@ -670,7 +670,7 @@ function normalizeRun(raw: LooseRecord): Run {
     playbookSha256: requireString(backup, 'playbookSha256'),
   }));
   const artifactTransfers = optionalRecords(source, 'artifactTransfers')?.map((item) => ({
-    alias: requireString(item, 'alias'), sourceStation: requireString(item, 'sourceStation'), targetStation: requireString(item, 'targetStation'),
+    alias: requireString(item, 'alias'), sourceUrl: requireString(item, 'sourceUrl'), targetStation: requireString(item, 'targetStation'),
     relativePath: requireString(item, 'relativePath'), sha256: requireString(item, 'sha256'),
   }));
   const imageTransfers = optionalRecords(source, 'imageTransfers')?.map((item) => ({
@@ -747,7 +747,7 @@ function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
     requiresApproval: requireBoolean(source, 'requiresApproval'),
     planDigest: requireString(source, 'planDigest'),
     steps,
-    deliveryRequirements: optionalRecords(source, 'deliveryRequirements')?.map(normalizeDeliveryRequirement) ?? [],
+    deliveryRequirements: requireRecords(source, 'deliveryRequirements').map(normalizeDeliveryRequirement),
   };
 }
 
@@ -763,6 +763,21 @@ function normalizeEnvironmentRollbackPlan(raw: LooseRecord): EnvironmentRollback
     })),
     componentCount: requireNumber(raw, 'componentCount'),
     nodeCount: requireNumber(raw, 'nodeCount'),
+  };
+}
+
+function normalizeEnvironmentImportPlan(raw: LooseRecord): EnvironmentImportPlan {
+  return {
+    planDigest: requireString(raw, 'planDigest'),
+    targetKind: requireEnum(raw, ['new', 'existing'] as const, 'targetKind'),
+    targetEnvironmentId: optionalString(raw, 'targetEnvironmentId'),
+    targetCurrentRevisionId: optionalString(raw, 'targetCurrentRevisionId'),
+    nextRevision: requireNumber(raw, 'nextRevision'),
+    hostCount: requireNumber(raw, 'hostCount'),
+    variableCount: requireNumber(raw, 'variableCount'),
+    credentialRefCount: requireNumber(raw, 'credentialRefCount'),
+    changes: requireStringArray(raw, 'changes'),
+    warnings: requireStringArray(raw, 'warnings'),
   };
 }
 
@@ -1185,7 +1200,7 @@ export const api = {
     return download(`/environments/${environmentId}/revisions/${revisionId}/export`, { includeCredentialReferences });
   },
   async previewEnvironmentImport(input: { document: EnvironmentExportDocument; target: { kind: 'new'; name: string; description?: string } | { kind: 'existing'; environmentId: string }; changeReason: string; confirmCredentialReferences?: boolean }) {
-    return unwrap(await post<unknown>('/environment-imports/plan', input)) as EnvironmentImportPlan;
+    return normalizeEnvironmentImportPlan(requireRecord(unwrap(await post<unknown>('/environment-imports/plan', input)), 'environment import plan'));
   },
   async importEnvironment(input: { document: EnvironmentExportDocument; target: { kind: 'new'; name: string; description?: string } | { kind: 'existing'; environmentId: string }; changeReason: string; confirmCredentialReferences?: boolean; expectedPlanDigest: string }) {
     return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environment-imports', input)), 'environment'));

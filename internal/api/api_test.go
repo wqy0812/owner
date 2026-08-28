@@ -142,6 +142,37 @@ func TestEnvironmentExportImportAndCredentialReferenceModes(t *testing.T) {
 	}
 }
 
+func TestEnvironmentImportPlanSerializesEmptyWarningsAsArray(t *testing.T) {
+	f := newAPIFixture(t)
+	owner := f.session(seed.EnvironmentOwnerID)
+	input := map[string]any{
+		"document": map[string]any{
+			"formatVersion": "clusterforge-environment/v1",
+			"exportedAt":    "2026-08-28T00:00:00Z",
+			"source": map[string]any{
+				"environmentId": "environment-source", "environmentName": "Source",
+				"revisionId": "environment-revision-source", "revision": 1,
+			},
+			"snapshot": map[string]any{
+				"facts": map[string]any{}, "hosts": []any{},
+				"variables": map[string]any{}, "credentialRefs": []any{},
+			},
+		},
+		"target":       map[string]any{"kind": "new", "name": "Imported Empty Environment"},
+		"changeReason": "验证空警告契约",
+	}
+
+	response := f.request(http.MethodPost, "/api/v1/environment-imports/plan", input, owner)
+	if response.Code != http.StatusOK {
+		t.Fatalf("environment import plan status=%d body=%s", response.Code, response.Body.String())
+	}
+	data := decodeEnvelope(t, response)["data"].(map[string]any)
+	warnings, ok := data["warnings"].([]any)
+	if !ok || len(warnings) != 0 {
+		t.Fatalf("environment import warnings=%#v, want empty array", data["warnings"])
+	}
+}
+
 func TestRunInputPresetIsPersonalAndBecomesStale(t *testing.T) {
 	f := newAPIFixture(t)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
@@ -341,7 +372,11 @@ func TestFailedIdempotentInstallRetryRebindsBackupToNewRun(t *testing.T) {
 	if plan.Code != http.StatusOK {
 		t.Fatalf("retry source plan status=%d body=%s", plan.Code, plan.Body.String())
 	}
-	request["expectedPlanDigest"] = decodeEnvelope(t, plan)["data"].(map[string]any)["planDigest"]
+	planData := decodeEnvelope(t, plan)["data"].(map[string]any)
+	if requirements, ok := planData["deliveryRequirements"].([]any); !ok || len(requirements) != 0 {
+		t.Fatalf("empty delivery requirements=%#v, want empty array", planData["deliveryRequirements"])
+	}
+	request["expectedPlanDigest"] = planData["planDigest"]
 	f.runner.failPlaybook = "tests/retry/install.yml"
 	started := f.request(http.MethodPost, "/api/v1/component-releases/release-retry-safe/test-runs", request, alice)
 	if started.Code != http.StatusAccepted {

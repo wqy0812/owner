@@ -105,7 +105,7 @@ func (p *Platform) bindComponentImages(ctx context.Context, revision domain.Envi
 				targetPresent = p.imageDelivery.Probe(ctx, ImageLocation{Ref: targetDigest}, ImageDigest{Value: image.Digest}) == nil
 			}
 			if targetPresent {
-				if err := bindImageVariables(step, image.LogicalName, targetDigest); err != nil {
+				if err := bindImageVariables(step, image.LogicalName, targetDigest, image.Digest); err != nil {
 					return err
 				}
 				continue
@@ -143,10 +143,10 @@ func bindArtifactVariables(step *lockedStep, artifact domain.ComponentArtifact, 
 	return nil
 }
 
-func bindImageVariables(step *lockedStep, logicalName, location string) error {
-	variables := map[string]any{logicalName + "_image_ref": location, logicalName + "_image_digest": location}
+func bindImageVariables(step *lockedStep, logicalName, location, digest string) error {
+	variables := map[string]any{logicalName + "_image_ref": location, logicalName + "_image_digest": digest}
 	if logicalName == "main" {
-		variables["component_image_ref"], variables["component_image_digest"] = location, location
+		variables["component_image_ref"], variables["component_image_digest"] = location, digest
 	}
 	for name, value := range variables {
 		if _, exists := step.Variables[name]; exists {

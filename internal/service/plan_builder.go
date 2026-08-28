@@ -653,6 +653,6 @@ func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment doma
 	return ComponentTestPlan{
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		Destructive: destructive, RequiresApproval: destructive, PlanDigest: digest, Steps: steps,
-		DeliveryRequirements: append([]DeliveryRequirement(nil), plan.DeliveryRequirements...),
+		DeliveryRequirements: append([]DeliveryRequirement{}, plan.DeliveryRequirements...),
 	}
 }

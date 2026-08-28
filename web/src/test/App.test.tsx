@@ -1032,6 +1032,7 @@ describe('platform shell and RBAC UI', () => {
         return json({
           environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, requiresApproval: true,
           planDigest: rollbackVerification.kind === 'rollback_only' ? 'digest-rollback-only' : 'digest-target',
+          deliveryRequirements: [],
           steps: rollbackVerification.kind === 'rollback_only' ? [rollbackStep] : [rollbackStep, {
             order: 2, componentId: 'component-runtime', componentName: 'Runtime', releaseId: 'release-runtime-stable', releaseVersion: '1.9.0',
             action: 'verify', playbook: 'managed/runtime/verify.yml', limit: 'runtime_nodes', needsApproval: false,
@@ -1131,6 +1132,7 @@ describe('platform shell and RBAC UI', () => {
       environmentId: environment.id, environmentName: environment.name, environmentRevisionId: 'environment-test-r6',
       sources: [{ runId: 'run-source-install', kind: 'scenario_test', scenarioRevisionId: 'scenario-clean-r1', componentCount: 15 }], componentCount: 15, nodeCount: 21,
       destructive: true, requiresApproval: true, planDigest: 'rollback-plan-digest',
+      deliveryRequirements: [],
       steps: [{
         order: 1, componentId: 'component-coredns', componentName: 'CoreDNS', releaseId: 'release-coredns', releaseVersion: '1.6.5-u1',
         action: 'rollback', playbook: 'managed/coredns/rollback.yml', limit: 'control_plane', needsApproval: true,
