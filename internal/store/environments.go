@@ -7,6 +7,22 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
+type ActiveEnvironmentRun struct {
+	ID     string
+	Status domain.RunStatus
+}
+
+// GetActiveEnvironmentRun keeps serialized-Run selection behind the
+// Environment Store port instead of duplicating SQL in the HTTP layer.
+func (s *Store) GetActiveEnvironmentRun(ctx context.Context, environmentID string) (ActiveEnvironmentRun, error) {
+	var result ActiveEnvironmentRun
+	err := s.db.QueryRowContext(ctx, `SELECT id,status FROM runs WHERE environment_id=? AND status IN ('running','awaiting_approval','queued') ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'awaiting_approval' THEN 1 ELSE 2 END, created_at LIMIT 1`, environmentID).Scan(&result.ID, &result.Status)
+	if err == sql.ErrNoRows {
+		return result, domain.ErrNotFound
+	}
+	return result, err
+}
+
 func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r domain.EnvironmentRevision) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -28,10 +44,7 @@ func insertEnvironmentRevision(ctx context.Context, tx *sql.Tx, r domain.Environ
 	if inventory == "" {
 		inventory = "{}"
 	}
-	if r.MaxConcurrent < 1 {
-		r.MaxConcurrent = 1
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Variables), jsonText(r.CredentialRefs), r.MaxConcurrent, r.CreatedBy, r.ChangeReason, timeText(r.CreatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Variables), jsonText(r.CredentialRefs), r.CreatedBy, r.ChangeReason, timeText(r.CreatedAt))
 	return mapSQLError(err)
 }
 
@@ -141,7 +154,7 @@ func (s *Store) ListEnvironments(ctx context.Context) ([]domain.Environment, err
 func scanEnvironmentRevision(row scanner) (domain.EnvironmentRevision, error) {
 	var r domain.EnvironmentRevision
 	var facts, inventory, variables, refs, created string
-	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &variables, &refs, &r.MaxConcurrent, &r.CreatedBy, &r.ChangeReason, &created)
+	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &variables, &refs, &r.CreatedBy, &r.ChangeReason, &created)
 	r.Facts = decodeJSON(facts, map[string]any{})
 	r.Inventory = []byte(inventory)
 	r.Variables = decodeJSON(variables, map[string]string{})
@@ -151,12 +164,12 @@ func scanEnvironmentRevision(row scanner) (domain.EnvironmentRevision, error) {
 }
 
 func (s *Store) GetEnvironmentRevision(ctx context.Context, id string) (domain.EnvironmentRevision, error) {
-	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_by,change_reason,created_at FROM environment_revisions WHERE id=?`, id))
+	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListEnvironmentRevisions(ctx context.Context, environmentID string) ([]domain.EnvironmentRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_by,change_reason,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
 	if err != nil {
 		return nil, err
 	}

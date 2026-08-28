@@ -1,12 +1,72 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 )
+
+func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
+	platform := &Platform{}
+	plan := lockedPlan{
+		DeliveryRequirements: []DeliveryRequirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
+		DeliveryDecisions:    []DeliveryDecision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
+	}
+	approvedAt := time.Now().UTC()
+	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, nil, domain.User{ID: "environment-owner"}, approvedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finalized.DeliveryDecisions) != 1 || finalized.DeliveryDecisions[0].Mode != "direct" || finalized.DeliveryDecisions[0].DecidedAt != approvedAt {
+		t.Fatalf("carried retry delivery decision=%+v", finalized.DeliveryDecisions)
+	}
+	if len(finalized.DeliveryResults) != 1 || finalized.DeliveryResults[0].Status != "direct" || finalized.DeliveryResults[0].ActualLocation != "https://source.test/runtime.tgz" {
+		t.Fatalf("carried retry delivery result=%+v", finalized.DeliveryResults)
+	}
+}
+
+type presentArtifactDelivery struct{}
+
+func (presentArtifactDelivery) Probe(context.Context, ArtifactLocation, ArtifactIdentity) error {
+	return nil
+}
+func (presentArtifactDelivery) Transfer(context.Context, ArtifactTransfer) error {
+	return errors.New("transfer must not run during approval finalization")
+}
+
+func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
+	platform := &Platform{artifactDelivery: presentArtifactDelivery{}}
+	plan := lockedPlan{
+		Steps: []lockedStep{{ID: "step-1", Variables: map[string]any{}}},
+		DeliveryRequirements: []DeliveryRequirement{{
+			ID: "artifact:runtime", Kind: "artifact", Name: "runtime", Identity: "sha256:" + strings.Repeat("a", 64),
+			Source: "https://source.test/runtime.tgz", Target: "http://target.test/components/runtime.tgz",
+			TransferAvailable: true, TargetStation: "target.test", RelativePath: "components/runtime.tgz", StepIDs: []string{"step-1"},
+		}},
+	}
+	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, []DeliveryDecisionInput{{RequirementID: "artifact:runtime", Mode: "transfer"}}, domain.User{ID: "environment-owner"}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finalized.ArtifactTransfers) != 0 || len(finalized.DeliveryResults) != 1 || finalized.DeliveryResults[0].Status != "reused_target" {
+		t.Fatalf("target-appeared plan=%+v", finalized)
+	}
+}
+
+func TestUnreadableDeliverySourceRoutesToComponentOwner(t *testing.T) {
+	component := domain.Component{ID: "component-runtime", Name: "Runtime", OwnerID: "component-owner"}
+	release := domain.ComponentRelease{ID: "release-runtime", Version: "1.0.0"}
+	err := deliverySourceError(component, release, "介质 runtime", "https://source.invalid/runtime.tgz", "/components?selected=component-runtime", errors.New("unreachable"))
+	var actionable *domain.ActionableError
+	if !errors.As(err, &actionable) || actionable.Explanation.Reasons[0].Code != "delivery.source_unreadable" || actionable.Explanation.PrimaryAction.Href != "/components?selected=component-runtime" || !strings.Contains(err.Error(), "component-owner") {
+		t.Fatalf("unreadable source error=%#v", err)
+	}
+}
 
 func TestResolveParametersPrecedenceAndAllowList(t *testing.T) {
 	got, err := ResolveParameters(
@@ -104,7 +164,7 @@ func TestRequiredParameterWithDefaultIsStaticallyBound(t *testing.T) {
 
 func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release := domain.ComponentRelease{
-		Version: "1.0.0", Type: domain.ReleaseAtomic, RiskLevel: domain.RiskLow,
+		Version: "1.0.0", RiskLevel: domain.RiskLow,
 		Parameters: []domain.ParameterDefinition{{Name: "region", Description: "region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "cn"}},
 		Actions:    []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60}},
 	}
@@ -112,6 +172,11 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release.Actions[0].Playbook = "install-v2.yml"
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not change after action mutation")
+	}
+	before = componentReleaseSpecDigest(release)
+	release.Actions[0].PlaybookSHA256 = strings.Repeat("a", 64)
+	if after := componentReleaseSpecDigest(release); before == after {
+		t.Fatal("release definition digest did not include Playbook content identity")
 	}
 	before = componentReleaseSpecDigest(release)
 	release.Actions[0].RequiredCredentials = []string{"ansible_ssh_pass"}
@@ -138,10 +203,9 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	}
 }
 
-func TestScenarioRevisionSpecDigestChangesWithGraphAndPolicy(t *testing.T) {
+func TestScenarioRevisionSpecDigestChangesWithGraphContent(t *testing.T) {
 	revision := domain.ScenarioRevision{
-		Graph:           domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: "release-runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{"region": "cn"}}}},
-		ExecutionPolicy: map[string]any{"maxParallel": float64(1)},
+		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: "release-runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{"region": "cn"}}}},
 	}
 	before := scenarioRevisionSpecDigest(revision)
 	revision.Graph.Nodes[0].HostGroup = "control_plane"
@@ -149,15 +213,15 @@ func TestScenarioRevisionSpecDigestChangesWithGraphAndPolicy(t *testing.T) {
 		t.Fatal("scenario definition digest did not include graph")
 	}
 	before = scenarioRevisionSpecDigest(revision)
-	revision.ExecutionPolicy["maxParallel"] = float64(2)
+	revision.Graph.Nodes[0].Name = "changed"
 	if after := scenarioRevisionSpecDigest(revision); before == after {
-		t.Fatal("scenario definition digest did not include execution policy")
+		t.Fatal("scenario definition digest did not include node metadata")
 	}
 }
 
 func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
 	install := domain.ActionDefinition{ID: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60, Idempotent: true}
-	release := domain.ComponentRelease{Version: "2.0.0", Type: domain.ReleaseAtomic, Actions: []domain.ActionDefinition{install}}
+	release := domain.ComponentRelease{Version: "2.0.0", Actions: []domain.ActionDefinition{install}}
 	action, err := actionFor(release, domain.ActionUpgrade)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +244,7 @@ func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
 }
 
 func TestIdempotentUpgradeReuseIsOnlyValidForInstall(t *testing.T) {
-	release := domain.ComponentRelease{Version: "1.0.0", Type: domain.ReleaseAtomic, Actions: []domain.ActionDefinition{{
+	release := domain.ComponentRelease{Version: "1.0.0", Actions: []domain.ActionDefinition{{
 		Kind: domain.ActionVerify, Playbook: "verify.yml", TimeoutSeconds: 60, Idempotent: true,
 	}}}
 	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), "only valid for install") {
@@ -228,7 +292,7 @@ func TestInlineSensitiveMapsAreRejectedBeforePersistence(t *testing.T) {
 		}
 	}
 	if err := validateRelease(domain.ComponentRelease{
-		Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Version:    "1.0.0",
 		Parameters: []domain.ParameterDefinition{{Name: "password", Description: "bad", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "do-not-store"}},
 	}); err == nil || strings.Contains(err.Error(), "do-not-store") {
 		t.Fatalf("sensitive release parameter contract rejection=%v", err)

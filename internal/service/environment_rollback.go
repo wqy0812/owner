@@ -335,7 +335,8 @@ func hasLaterCleanupStep(snapshot map[string]any, step lockedStep) bool {
 	return false
 }
 
-func (p *Platform) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error {
+func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error {
+	p := r.platform
 	if run.Kind == domain.RunEnvironmentRollback {
 		expected := installationBaselineFromSteps(plan.Steps)
 		if plan.InstallationBaselineDigest == "" || plan.InstallationBaselineDigest != installationBaselineDigest(expected) || len(plan.InstallationBaseline) != len(expected) {

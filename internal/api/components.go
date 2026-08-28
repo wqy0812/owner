@@ -17,7 +17,6 @@ type componentDTO struct {
 
 type releaseInput struct {
 	Version                string                       `json:"version"`
-	Type                   domain.ReleaseType           `json:"type"`
 	Status                 domain.ReleaseStatus         `json:"status"`
 	ReleaseNotes           string                       `json:"releaseNotes"`
 	Breaking               bool                         `json:"breaking"`
@@ -73,7 +72,7 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 
 func (input releaseInput) domain(existing *domain.ComponentRelease) domain.ComponentRelease {
 	release := domain.ComponentRelease{
-		Version: input.Version, Type: input.Type, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
+		Version: input.Version, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
 		Breaking: input.Breaking, RiskLevel: input.RiskLevel,
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
@@ -111,7 +110,7 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 }
 
 func (h *Handler) listComponents(w http.ResponseWriter, r *http.Request) {
-	components, err := h.platform.ListComponents(r.Context(), currentUser(r))
+	components, err := h.platform.Catalog().ListComponents(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -124,7 +123,7 @@ func (h *Handler) listComponents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getComponent(w http.ResponseWriter, r *http.Request) {
-	component, err := h.platform.GetComponent(r.Context(), currentUser(r), r.PathValue("id"))
+	component, err := h.platform.Catalog().Get(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -138,7 +137,7 @@ func (h *Handler) createComponent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	component, err := h.platform.CreateComponent(r.Context(), currentUser(r), input)
+	component, err := h.platform.Catalog().Create(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -152,7 +151,7 @@ func (h *Handler) updateComponent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	component, err := h.platform.UpdateComponent(r.Context(), currentUser(r), r.PathValue("id"), input)
+	component, err := h.platform.Catalog().Update(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -166,7 +165,7 @@ func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.CreateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(nil))
+	release, err := h.platform.Catalog().CreateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(nil))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -180,12 +179,12 @@ func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	existing, err := h.platform.Store().GetComponentRelease(r.Context(), r.PathValue("id"))
+	existing, err := h.platform.Catalog().GetComponentRelease(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(&existing))
+	release, err := h.platform.Catalog().UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(&existing))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -199,7 +198,7 @@ func (h *Handler) updateReleaseContract(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.UpdateReleaseContract(
+	release, err := h.platform.Catalog().UpdateReleaseContract(
 		r.Context(), currentUser(r), r.PathValue("id"), input.Parameters, dependencyInputs(input.Dependencies),
 	)
 	if err != nil {
@@ -215,7 +214,7 @@ func (h *Handler) cloneRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input)
+	release, err := h.platform.Catalog().CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -229,7 +228,7 @@ func (h *Handler) previewReleaseClone(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.PreviewReleaseClone(r.Context(), currentUser(r), r.PathValue("id"), input)
+	plan, err := h.platform.Catalog().PreviewReleaseClone(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -238,7 +237,7 @@ func (h *Handler) previewReleaseClone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) releaseImpact(w http.ResponseWriter, r *http.Request) {
-	report, err := h.platform.Impact(r.Context(), currentUser(r), r.PathValue("id"))
+	report, err := h.platform.Catalog().Impact(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -247,7 +246,7 @@ func (h *Handler) releaseImpact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) publishRelease(w http.ResponseWriter, r *http.Request) {
-	release, _, err := h.platform.PublishRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	release, _, err := h.platform.Releases().PublishRelease(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -256,7 +255,7 @@ func (h *Handler) publishRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deprecateRelease(w http.ResponseWriter, r *http.Request) {
-	release, err := h.platform.DeprecateRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	release, err := h.platform.Catalog().DeprecateRelease(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -272,7 +271,7 @@ func (h *Handler) setReleaseCandidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.SetReleaseCandidate(r.Context(), currentUser(r), r.PathValue("id"), input.Candidate)
+	release, err := h.platform.Catalog().SetReleaseCandidate(r.Context(), currentUser(r), r.PathValue("id"), input.Candidate)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -286,7 +285,7 @@ func (h *Handler) testRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
+	run, err := h.platform.Execution().StartComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -300,7 +299,7 @@ func (h *Handler) previewReleaseTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.PreviewComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
+	plan, err := h.platform.Execution().PreviewComponentTest(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -309,7 +308,7 @@ func (h *Handler) previewReleaseTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) componentDTO(r *http.Request, component domain.Component) componentDTO {
-	user, _ := h.platform.Store().GetUser(r.Context(), component.OwnerID)
+	user, _ := h.platform.Catalog().GetUser(r.Context(), component.OwnerID)
 	sort.SliceStable(component.Releases, func(i, j int) bool { return component.Releases[i].CreatedAt.After(component.Releases[j].CreatedAt) })
 	output := componentDTO{Component: component, OwnerName: user.Name, ReleaseCount: len(component.Releases)}
 	if len(component.Releases) > 0 {
@@ -326,7 +325,7 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 	paths := make([][]string, 0)
 	pathSeen := map[string]bool{}
 	for _, recipient := range report.Recipients {
-		user, _ := h.platform.Store().GetUser(r.Context(), recipient.UserID)
+		user, _ := h.platform.Catalog().GetUser(r.Context(), recipient.UserID)
 		entry := map[string]any{"id": recipient.UserID, "name": user.Name}
 		if recipient.Role == domain.RoleComponentOwner {
 			componentOwners = append(componentOwners, entry)
@@ -334,7 +333,7 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 			scenarioOwners = append(scenarioOwners, entry)
 		}
 		for _, scenarioID := range recipient.ScenarioIDs {
-			if scenario, err := h.platform.GetScenario(r.Context(), currentUser(r), scenarioID); err == nil {
+			if scenario, err := h.platform.Scenarios().Get(r.Context(), currentUser(r), scenarioID); err == nil {
 				scenarios[scenarioID] = map[string]any{"id": scenario.ID, "name": scenario.Name}
 			}
 		}

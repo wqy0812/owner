@@ -8,6 +8,7 @@ TARGET="${CLUSTERFORGE_DEPLOY_TARGET:-$DEFAULT_TARGET}"
 SSH_PORT="${CLUSTERFORGE_DEPLOY_SSH_PORT:-22}"
 SKIP_TESTS=false
 ALLOW_ACTIVE_RUNS=false
+REBUILD_V1_DB=false
 
 usage() {
   cat <<'EOF'
@@ -20,6 +21,7 @@ Options:
   --ssh-port PORT          SSH port (default: 22)
   --skip-tests             Skip Go, frontend, and whitespace checks
   --allow-active-runs      Restart even when active platform runs exist
+  --rebuild-v1-db          Back up, then rebuild the incompatible V1 test database
   -h, --help               Show this help
 
 Environment variables:
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-active-runs)
       ALLOW_ACTIVE_RUNS=true
+      shift
+      ;;
+    --rebuild-v1-db)
+      REBUILD_V1_DB=true
       shift
       ;;
     -h|--help)
@@ -130,15 +136,20 @@ allow_active_runs=0
 if [[ "$ALLOW_ACTIVE_RUNS" == true ]]; then
   allow_active_runs=1
 fi
+rebuild_v1_db=0
+if [[ "$REBUILD_V1_DB" == true ]]; then
+  rebuild_v1_db=1
+fi
 
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$allow_active_runs" <<'REMOTE_SCRIPT'
+  "$remote_artifact" "$checksum" "$allow_active_runs" "$rebuild_v1_db" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
 expected_checksum="$2"
 allow_active_runs="$3"
+rebuild_v1_db="$4"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 database="/var/lib/clusterforge/platform.db"
@@ -234,6 +245,10 @@ fi
 backup_ready=1
 
 install -m 0755 "$staged_artifact" "$live_binary"
+if [[ "$rebuild_v1_db" -eq 1 ]]; then
+  echo "rebuilding V1 test database after backup: $backup_dir/platform.db"
+  rm -f "$database" "${database}-wal" "${database}-shm"
+fi
 systemctl start "$service_name"
 
 ready=0
@@ -252,6 +267,20 @@ done
 
 installed_checksum="$(sha256sum "$live_binary" | awk '{print $1}')"
 [[ "$installed_checksum" == "$expected_checksum" ]]
+
+python3 - "$database" <<'PY'
+import sqlite3
+import sys
+
+database = sys.argv[1]
+connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+contract = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
+if contract != ("clusterforge-v1-20260828-publication-guards",):
+    raise SystemExit(f"unexpected schema contract: {contract!r}")
+violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+if violations:
+    raise SystemExit(f"foreign key violations: {violations!r}")
+PY
 
 service_touched=0
 trap - ERR INT TERM

@@ -5,11 +5,14 @@ import { DependencyContractList, DependencyEditor, ParameterContractList, Parame
 import { isNodeReachable } from '../pages/ScenariosPage';
 import type { Component, ComponentRelease, ParameterDefinition } from '../types/domain';
 
+const readiness: ComponentRelease['readiness'] = { status: 'ready', blockers: [] };
+
 const kubeletRelease: ComponentRelease = {
   id: 'release-kubelet',
   componentId: 'component-kubelet',
   version: '1.17.5',
   state: 'released',
+  readiness,
   parameters: [
     { name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' },
     { name: 'K8S_VERSION', description: 'Kubernetes 版本', type: 'string', visibility: 'internal' },
@@ -21,9 +24,7 @@ const kubelet: Component = {
   name: 'kubelet',
   ownerId: 'alice',
   layer: 'orchestration_core',
-  category: 'worker',
-  kind: 'software',
-  requiredness: 'core_required',
+  tags: ['worker', 'core'],
   releases: [kubeletRelease],
 };
 
@@ -32,6 +33,7 @@ const proxyRelease: ComponentRelease = {
   componentId: 'component-kube-proxy',
   version: '1.17.5',
   state: 'released',
+  readiness,
   parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
   dependencies: [{
     componentId: 'component-kubelet',
@@ -48,9 +50,7 @@ const proxy: Component = {
   name: 'kube-proxy',
   ownerId: 'alice',
   layer: 'orchestration_core',
-  category: 'network',
-  kind: 'software',
-  requiredness: 'profile_required',
+  tags: ['network'],
   latestRelease: proxyRelease,
   releases: [proxyRelease],
 };
@@ -109,10 +109,8 @@ describe('parameter contract editor', () => {
       name: 'containerd',
       ownerId: 'alice',
       layer: 'runtime_state',
-      category: 'runtime',
-      kind: 'software',
-      requiredness: 'profile_required',
-      releases: [{ id: 'release-containerd', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', parameters: [] }],
+      tags: ['runtime'],
+      releases: [{ id: 'release-containerd', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', readiness, parameters: [] }],
     };
     const seen: ComponentRelease['dependencies'][] = [];
     const view = (dependencies: NonNullable<ComponentRelease['dependencies']>) => (
@@ -158,7 +156,7 @@ describe('parameter contract editor', () => {
   });
 
   it('defaults the contract view to a release that has mappings', () => {
-    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released' };
+    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', readiness };
     expect(defaultContractRelease([empty, proxyRelease], empty)?.id).toBe('release-kube-proxy');
   });
 

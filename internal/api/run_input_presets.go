@@ -7,7 +7,7 @@ import (
 )
 
 func (h *Handler) listRunInputPresets(w http.ResponseWriter, r *http.Request) {
-	presets, err := h.platform.ListRunInputPresets(r.Context(), currentUser(r), r.URL.Query().Get("resourceType"), r.URL.Query().Get("resourceId"), r.URL.Query().Get("context"))
+	presets, err := h.platform.Execution().ListInputPresets(r.Context(), currentUser(r), r.URL.Query().Get("resourceType"), r.URL.Query().Get("resourceId"), r.URL.Query().Get("context"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -24,7 +24,7 @@ func (h *Handler) saveRunInputPreset(w http.ResponseWriter, r *http.Request) {
 	if id := r.PathValue("id"); id != "" {
 		input.ID = id
 	}
-	preset, err := h.platform.SaveRunInputPreset(r.Context(), currentUser(r), input)
+	preset, err := h.platform.Execution().SaveInputPreset(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -37,7 +37,7 @@ func (h *Handler) saveRunInputPreset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteRunInputPreset(w http.ResponseWriter, r *http.Request) {
-	if err := h.platform.DeleteRunInputPreset(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+	if err := h.platform.Execution().DeleteInputPreset(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
 		writeError(w, err)
 		return
 	}

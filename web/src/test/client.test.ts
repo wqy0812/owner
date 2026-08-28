@@ -8,6 +8,22 @@ function response(body: string, contentType: string, status = 200) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('API response contract', () => {
+  it('accepts the simplified Component DTO with tags and derived Release readiness', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ items: [{
+      id: 'component-1', name: 'Runtime', slug: 'runtime', ownerId: 'owner-1', layer: 'runtime_state', tags: ['runtime'],
+      latestRelease: {
+        id: 'release-1', componentId: 'component-1', version: '1.0.0', status: 'draft',
+        readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing', message: '缺少安装证据', actionUrl: '/components?selected=component-1&action=validate' }] },
+        parameters: [], dependencies: [], actions: [], artifacts: [], images: [],
+      },
+    }] }), 'application/json')));
+
+    await expect(api.components()).resolves.toMatchObject([{
+      id: 'component-1', tags: ['runtime'],
+      latestRelease: { readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing' }] } },
+    }]);
+  });
+
   it('rejects a successful HTML response instead of returning a fabricated object', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response('<html>proxy error</html>', 'text/html')));
 
@@ -83,13 +99,13 @@ describe('API response contract', () => {
   it('round-trips the release risk level through the API contract', async () => {
     const fetchMock = vi.fn().mockResolvedValue(response(JSON.stringify({
       data: {
-        id: 'release-1', componentId: 'component-1', version: '1.0.0', type: 'atomic', status: 'draft',
-        riskLevel: 'high', parameters: [], dependencies: [], actions: [], artifacts: [],
+        id: 'release-1', componentId: 'component-1', version: '1.0.0', status: 'draft',
+        riskLevel: 'high', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [],
       },
     }), 'application/json'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.createRelease('component-1', { version: '1.0.0', type: 'atomic', riskLevel: 'high' })).resolves.toMatchObject({ riskLevel: 'high' });
+    await expect(api.createRelease('component-1', { version: '1.0.0', riskLevel: 'high' })).resolves.toMatchObject({ riskLevel: 'high' });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ riskLevel: 'high' });
   });
 

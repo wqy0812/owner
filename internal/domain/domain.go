@@ -36,13 +36,6 @@ const (
 	ReleaseDeprecated ReleaseStatus = "deprecated"
 )
 
-type ReleaseType string
-
-const (
-	ReleaseAtomic ReleaseType = "atomic"
-	ReleaseBundle ReleaseType = "bundle"
-)
-
 type ComponentLayer string
 
 const (
@@ -54,66 +47,19 @@ const (
 	LayerPlatformExtension       ComponentLayer = "platform_extension"
 )
 
-type ComponentCategory string
-
-const (
-	CategoryPreflight      ComponentCategory = "preflight"
-	CategoryBootstrap      ComponentCategory = "bootstrap"
-	CategorySecurity       ComponentCategory = "security"
-	CategoryRuntime        ComponentCategory = "runtime"
-	CategoryStateStore     ComponentCategory = "state_store"
-	CategoryControlPlane   ComponentCategory = "control_plane"
-	CategoryWorker         ComponentCategory = "worker"
-	CategoryNetwork        ComponentCategory = "network"
-	CategoryDNS            ComponentCategory = "dns"
-	CategoryIngress        ComponentCategory = "ingress"
-	CategoryStorage        ComponentCategory = "storage"
-	CategoryObservability  ComponentCategory = "observability"
-	CategoryNodeManagement ComponentCategory = "node_management"
-	CategoryPlatform       ComponentCategory = "platform"
-	CategoryAutoscaling    ComponentCategory = "autoscaling"
-)
-
-type ComponentKind string
-
-const (
-	ComponentSoftware       ComponentKind = "software"
-	ComponentSoftwareBundle ComponentKind = "software_bundle"
-	ComponentDeliveryStage  ComponentKind = "delivery_stage"
-	ComponentConfiguration  ComponentKind = "configuration"
-	ComponentArtifactSet    ComponentKind = "artifact_set"
-)
-
-type ComponentRequiredness string
-
-const (
-	RequiredCore     ComponentRequiredness = "core_required"
-	RequiredProfile  ComponentRequiredness = "profile_required"
-	RequiredOptional ComponentRequiredness = "optional"
-)
-
-var componentCategoriesByLayer = map[ComponentLayer][]ComponentCategory{
-	LayerHostFoundation:          {CategoryPreflight, CategoryBootstrap, CategorySecurity},
-	LayerRuntimeState:            {CategoryRuntime, CategoryStateStore},
-	LayerOrchestrationCore:       {CategoryControlPlane, CategoryWorker, CategoryNetwork},
-	LayerClusterService:          {CategoryNetwork, CategoryDNS, CategoryIngress, CategoryStorage},
-	LayerObservabilityManagement: {CategoryObservability, CategoryNodeManagement},
-	LayerPlatformExtension:       {CategoryPlatform, CategoryAutoscaling},
-}
-
 func ValidateComponentClassification(component Component) error {
-	categories, layerValid := componentCategoriesByLayer[component.Layer]
-	if !layerValid {
+	if component.Layer != LayerHostFoundation && component.Layer != LayerRuntimeState && component.Layer != LayerOrchestrationCore && component.Layer != LayerClusterService && component.Layer != LayerObservabilityManagement && component.Layer != LayerPlatformExtension {
 		return fmt.Errorf("%w: invalid component layer %q", ErrInvalid, component.Layer)
 	}
-	if !slices.Contains(categories, component.Category) {
-		return fmt.Errorf("%w: category %q is not valid for layer %q", ErrInvalid, component.Category, component.Layer)
+	if len(component.Tags) > 8 {
+		return fmt.Errorf("%w: components may define at most 8 tags", ErrInvalid)
 	}
-	if component.Kind != ComponentSoftware && component.Kind != ComponentSoftwareBundle && component.Kind != ComponentDeliveryStage && component.Kind != ComponentConfiguration && component.Kind != ComponentArtifactSet {
-		return fmt.Errorf("%w: invalid component kind %q", ErrInvalid, component.Kind)
-	}
-	if component.Requiredness != RequiredCore && component.Requiredness != RequiredProfile && component.Requiredness != RequiredOptional {
-		return fmt.Errorf("%w: invalid component requiredness %q", ErrInvalid, component.Requiredness)
+	seen := map[string]bool{}
+	for _, tag := range component.Tags {
+		if tag == "" || len(tag) > 32 || tag != strings.ToLower(tag) || strings.TrimSpace(tag) != tag || strings.ContainsAny(tag, " ,") || seen[tag] {
+			return fmt.Errorf("%w: component tags must be unique lowercase values of at most 32 characters", ErrInvalid)
+		}
+		seen[tag] = true
 	}
 	return nil
 }
@@ -128,58 +74,88 @@ const (
 )
 
 type Component struct {
-	ID           string                `json:"id"`
-	Slug         string                `json:"slug"`
-	Name         string                `json:"name"`
-	Description  string                `json:"description"`
-	Layer        ComponentLayer        `json:"layer"`
-	Category     ComponentCategory     `json:"category"`
-	Kind         ComponentKind         `json:"kind"`
-	Requiredness ComponentRequiredness `json:"requiredness"`
-	OwnerID      string                `json:"ownerId"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	UpdatedAt    time.Time             `json:"updatedAt"`
-	Releases     []ComponentRelease    `json:"releases,omitempty"`
+	ID          string             `json:"id"`
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Layer       ComponentLayer     `json:"layer"`
+	Tags        []string           `json:"tags"`
+	OwnerID     string             `json:"ownerId"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
+	Releases    []ComponentRelease `json:"releases,omitempty"`
 }
 
 type ComponentRelease struct {
 	ID           string        `json:"id"`
 	ComponentID  string        `json:"componentId"`
 	Version      string        `json:"version"`
-	Type         ReleaseType   `json:"type"`
 	Status       ReleaseStatus `json:"status"`
 	ReleaseNotes string        `json:"releaseNotes"`
 	Breaking     bool          `json:"breaking"`
-	Verified     bool          `json:"verified"`
-	// Candidate is an explicit component-owner handoff. A verified Draft marked
-	// as a candidate may be composed and tested by a scenario owner, then
-	// released atomically with that scenario revision.
+	// Candidate is an explicit component-owner handoff. A ready Draft marked as
+	// a candidate may be composed and tested by a scenario owner, then released
+	// atomically with that scenario revision.
 	Candidate              bool                  `json:"candidate"`
+	PublicationGeneration  int64                 `json:"-"`
+	Readiness              ReleaseReadiness      `json:"readiness"`
 	RiskLevel              RiskLevel             `json:"riskLevel"`
 	EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
 	Parameters             []ParameterDefinition `json:"parameters"`
 	Dependencies           []ComponentDependency `json:"dependencies"`
 	Actions                []ActionDefinition    `json:"actions"`
 	Artifacts              []ComponentArtifact   `json:"artifacts"`
+	Images                 []ComponentImage      `json:"images"`
 	CreatedAt              time.Time             `json:"createdAt"`
 	ReleasedAt             *time.Time            `json:"releasedAt,omitempty"`
 	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
 }
 
+type ReadinessStatus string
+
+const (
+	ReadinessReady   ReadinessStatus = "ready"
+	ReadinessBlocked ReadinessStatus = "blocked"
+	ReadinessRisky   ReadinessStatus = "risky"
+)
+
+type ReadinessBlocker struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	ActionURL string `json:"actionUrl"`
+}
+
+type ReleaseReadiness struct {
+	Status                ReadinessStatus    `json:"status"`
+	Blockers              []ReadinessBlocker `json:"blockers"`
+	InstallEvidenceRunID  string             `json:"installEvidenceRunId,omitempty"`
+	RollbackEvidenceRunID string             `json:"rollbackEvidenceRunId,omitempty"`
+}
+
 type ComponentArtifact struct {
-	ID                    string    `json:"id"`
-	ReleaseID             string    `json:"releaseId"`
-	Alias                 string    `json:"alias"`
-	FileStation           string    `json:"fileStation"`
-	RelativePath          string    `json:"relativePath"`
-	Filename              string    `json:"filename"`
-	SHA256                string    `json:"sha256"`
-	SizeBytes             int64     `json:"sizeBytes"`
-	SourceMode            string    `json:"sourceMode"`
-	EnvironmentID         string    `json:"environmentId"`
-	EnvironmentRevisionID string    `json:"environmentRevisionId"`
-	CreatedBy             string    `json:"createdBy"`
-	CreatedAt             time.Time `json:"createdAt"`
+	ID              string    `json:"id"`
+	ReleaseID       string    `json:"releaseId"`
+	Alias           string    `json:"alias"`
+	Filename        string    `json:"filename"`
+	SHA256          string    `json:"sha256"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	SourceURL       string    `json:"sourceUrl"`
+	SourceUpdatedBy string    `json:"sourceUpdatedBy"`
+	SourceUpdatedAt time.Time `json:"sourceUpdatedAt"`
+	CreatedBy       string    `json:"createdBy"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+type ComponentImage struct {
+	ID              string    `json:"id"`
+	ReleaseID       string    `json:"releaseId"`
+	LogicalName     string    `json:"logicalName"`
+	Digest          string    `json:"digest"`
+	SourceRef       string    `json:"sourceRef"`
+	SourceUpdatedBy string    `json:"sourceUpdatedBy"`
+	SourceUpdatedAt time.Time `json:"sourceUpdatedAt"`
+	CreatedBy       string    `json:"createdBy"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 type ImageBuildStatus string
@@ -328,6 +304,7 @@ type ActionDefinition struct {
 	Name                string     `json:"name"`
 	Kind                ActionKind `json:"kind"`
 	Playbook            string     `json:"playbook"`
+	PlaybookSHA256      string     `json:"-"`
 	Tags                []string   `json:"tags"`
 	Limit               string     `json:"limit"`
 	HostGroup           string     `json:"hostGroup"`
@@ -377,17 +354,17 @@ type Scenario struct {
 }
 
 type ScenarioRevision struct {
-	ID              string         `json:"id"`
-	ScenarioID      string         `json:"scenarioId"`
-	Revision        int            `json:"revision"`
-	Status          RevisionStatus `json:"status"`
-	Graph           ScenarioGraph  `json:"graph"`
-	ExecutionPolicy map[string]any `json:"executionPolicy"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	TestPassedAt    *time.Time     `json:"testPassedAt,omitempty"`
-	ReleasedAt      *time.Time     `json:"releasedAt,omitempty"`
-	DeprecatedAt    *time.Time     `json:"deprecatedAt,omitempty"`
-	AbandonedAt     *time.Time     `json:"abandonedAt,omitempty"`
+	ID                    string         `json:"id"`
+	ScenarioID            string         `json:"scenarioId"`
+	Revision              int            `json:"revision"`
+	Status                RevisionStatus `json:"status"`
+	PublicationGeneration int64          `json:"-"`
+	Graph                 ScenarioGraph  `json:"graph"`
+	CreatedAt             time.Time      `json:"createdAt"`
+	TestPassedAt          *time.Time     `json:"testPassedAt,omitempty"`
+	ReleasedAt            *time.Time     `json:"releasedAt,omitempty"`
+	DeprecatedAt          *time.Time     `json:"deprecatedAt,omitempty"`
+	AbandonedAt           *time.Time     `json:"abandonedAt,omitempty"`
 }
 
 type ScenarioGraph struct {
@@ -517,7 +494,6 @@ type EnvironmentRevision struct {
 	Inventory      json.RawMessage   `json:"inventory"`
 	Variables      map[string]string `json:"variables"`
 	CredentialRefs []CredentialRef   `json:"credentialRefs"`
-	MaxConcurrent  int               `json:"maxConcurrent"`
 	CreatedBy      string            `json:"createdBy,omitempty"`
 	ChangeReason   string            `json:"changeReason,omitempty"`
 	CreatedAt      time.Time         `json:"createdAt"`

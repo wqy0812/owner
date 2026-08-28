@@ -1,6 +1,6 @@
 # ClusterForge Demo 资产目录
 
-> 文档基线：2026-08-24 当前工作区 Seed 代码
+> 文档基线：2026-08-28 当前工作区 Seed 代码
 > 版本与环境：本文只描述 `NEWPLATFORM_SEED_PROFILE=demo` 创建的 V1 测试数据，不代表生产目录。统一规则见[首版与环境策略](version-policy.md)。
 
 ## 1. 总览
@@ -30,7 +30,7 @@
 
 ## 3. 独立软件目录
 
-以下 6 个 Release 为 Released 且 `verified=true`，用于目录和依赖选择；它们不进入当前 OpenFuyao 场景：
+以下 6 个 Release 为 Released，用于目录和依赖选择；它们不进入当前 OpenFuyao 场景：
 
 | 组件 | Release |
 | --- | --- |
@@ -41,15 +41,15 @@
 | CoreDNS | `v1.12.2-of.1` |
 | kube-proxy | `v1.34.3-of.1.icbc.harbor` |
 
-这些 Release 的验证状态来自 Seed 合同，不是本次工作区对真实集群重新执行后的验收结论。
+Released 是不可变生命周期状态，不等于本次工作区对真实集群重新执行后的验收结论。详情页 Readiness 只根据当前合同和数据库中的安装/回滚双证据派生。
 
 ## 4. OpenFuyao 样例
 
 ### 4.1 组件和 Release
 
-OpenFuyao 包含 6 个组件：`bke-cert`、`bke-bootstrap`、`bke-common`、`bke-addon`、`bke-master` 和 `bke-nodes`。版本均为 `v25.12`，当前 Release 为 Released、`verified=false`。
+OpenFuyao 包含 6 个组件：`bke-cert`、`bke-bootstrap`、`bke-common`、`bke-addon`、`bke-master` 和 `bke-nodes`。版本均为 `v25.12`，当前 Release 为 Released；Seed 不伪造真实环境的安装/回滚双证据。
 
-其中 `bke-addon` 是 `software_bundle`；`bke-master` 显示为 **BKE Cluster Control Plane**，`bke-nodes` 显示为 **BKE Work Nodes**。
+`bke-addon` 是否聚合多个动作或制品由 Release 实际内容表达；`bke-master` 显示为 **BKE Cluster Control Plane**，`bke-nodes` 显示为 **BKE Work Nodes**。
 
 ### 4.2 三个独立 Draft 场景
 
@@ -86,7 +86,7 @@ OpenFuyao 包含 6 个组件：`bke-cert`、`bke-bootstrap`、`bke-common`、`bk
 
 ### 5.1 组件与 Release
 
-Kubernetes 1.17.5 样例包含 15 个核心 Release 和 10 个扩展 Release。Release 均为 Released、`verified=false`；它们来自作业快照和静态门禁，不代表真实六节点安装已通过。
+Kubernetes 1.17.5 样例包含 15 个核心 Release 和 10 个扩展 Release。Release 均为 Released；它们来自作业快照和静态门禁，Seed 不写伪造证据，因此不代表真实六节点安装已通过。
 
 核心能力包括 Host Preflight、Host Bootstrap、Cluster PKI、Encryption Configuration、Docker、etcd、Distribution、三个控制面进程、Bootstrap RBAC、Flannel、kubelet、kube-proxy 和 CoreDNS。
 

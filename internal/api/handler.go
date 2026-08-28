@@ -98,7 +98,11 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/image-builds", h.startComponentImageBuild)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/artifacts/upload", h.uploadComponentArtifact)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/artifacts/register", h.registerComponentArtifact)
+	h.router.HandleFunc("PATCH /api/v1/component-releases/{id}/artifacts/{alias}/source", h.updateComponentArtifactSource)
 	h.router.HandleFunc("DELETE /api/v1/component-releases/{id}/artifacts/{alias}", h.deleteComponentArtifact)
+	h.router.HandleFunc("POST /api/v1/component-releases/{id}/images/register", h.registerComponentImage)
+	h.router.HandleFunc("PATCH /api/v1/component-releases/{id}/images/{name}/source", h.updateComponentImageSource)
+	h.router.HandleFunc("DELETE /api/v1/component-releases/{id}/images/{name}", h.deleteComponentImage)
 	h.router.HandleFunc("GET /api/v1/image-builds/{id}", h.getComponentImageBuild)
 
 	h.router.HandleFunc("GET /api/v1/scenarios", h.listScenarios)
@@ -149,7 +153,7 @@ func (h *Handler) routes() {
 }
 
 func (h *Handler) listSessionUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.platform.Store().ListUsers(r.Context())
+	users, err := h.platform.Identity().ListUsers(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
@@ -162,7 +166,7 @@ func (h *Handler) authenticate(r *http.Request) (domain.User, error) {
 	if err != nil || cookie.Value == "" {
 		return domain.User{}, fmt.Errorf("%w: choose a demo identity", domain.ErrUnauthorized)
 	}
-	return h.platform.Store().UserBySession(r.Context(), tokenHash(cookie.Value))
+	return h.platform.Identity().UserBySession(r.Context(), tokenHash(cookie.Value))
 }
 
 func (h *Handler) switchSession(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +177,7 @@ func (h *Handler) switchSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	user, err := h.platform.Store().GetUser(r.Context(), input.UserID)
+	user, err := h.platform.Identity().GetUser(r.Context(), input.UserID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -184,7 +188,7 @@ func (h *Handler) switchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := time.Now().UTC().Add(24 * time.Hour)
-	if err := h.platform.Store().CreateSession(r.Context(), tokenHash(token), user.ID, expires); err != nil {
+	if err := h.platform.Identity().CreateSession(r.Context(), tokenHash(token), user.ID, expires); err != nil {
 		writeError(w, err)
 		return
 	}

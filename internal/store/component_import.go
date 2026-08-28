@@ -17,12 +17,12 @@ func (s *Store) CreateComponentImport(ctx context.Context, components []domain.C
 	}
 	defer tx.Rollback()
 	for _, component := range components {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO components(id,slug,name,description,layer,category,component_kind,requiredness,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, component.ID, component.Slug, component.Name, component.Description, component.Layer, component.Category, component.Kind, component.Requiredness, component.OwnerID, timeText(component.CreatedAt), timeText(component.UpdatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO components(id,slug,name,description,layer,tags_json,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, component.ID, component.Slug, component.Name, component.Description, component.Layer, jsonText(nonNilStrings(component.Tags)), component.OwnerID, timeText(component.CreatedAt), timeText(component.UpdatedAt)); err != nil {
 			return mapSQLError(err)
 		}
 	}
 	for _, release := range releases {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,release_type,status,release_notes,breaking,verified,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, release.ID, release.ComponentID, release.Version, release.Type, release.Status, release.ReleaseNotes, release.Breaking, release.Verified, release.Candidate, release.RiskLevel, jsonText(release.EnvironmentConstraints), jsonText(release.Parameters), timeText(release.CreatedAt), ptrTimeText(release.ReleasedAt), ptrTimeText(release.DeprecatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,status,release_notes,breaking,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, release.ID, release.ComponentID, release.Version, release.Status, release.ReleaseNotes, release.Breaking, release.Candidate, release.RiskLevel, jsonText(release.EnvironmentConstraints), jsonText(release.Parameters), timeText(release.CreatedAt), ptrTimeText(release.ReleasedAt), ptrTimeText(release.DeprecatedAt)); err != nil {
 			return mapSQLError(err)
 		}
 		if err := replaceReleaseChildren(ctx, tx, release); err != nil {

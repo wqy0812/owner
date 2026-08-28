@@ -3,11 +3,28 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"codex/platform-demo/internal/domain"
 )
+
+func (s *Store) UpdateRunDeliveryResults(ctx context.Context, runID string, results any) error {
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.deliveryResults',json(?)) WHERE id=? AND status='running'`, string(encoded), runID)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return domain.ErrConflict
+	}
+	return nil
+}
 
 func (s *Store) CreateRun(ctx context.Context, r domain.Run, approval *domain.Approval) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -70,7 +87,7 @@ SELECT EXISTS(
   WHERE release.id IS NULL
      OR CASE
           WHEN ?='scenario_test' THEN NOT (
-            (release.status='draft' AND release.candidate=1 AND release.verified=1)
+            (release.status='draft' AND release.candidate=1)
             OR (release.status IN ('released','deprecated') AND release.released_at IS NOT NULL)
           )
           ELSE NOT (
@@ -225,6 +242,14 @@ OR EXISTS (
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// QueuedRunPosition returns the one-based FIFO position of a queued Run in its
+// environment without exposing the runs table or timestamp encoding to API.
+func (s *Store) QueuedRunPosition(ctx context.Context, environmentID string, createdAt time.Time) (int, error) {
+	var position int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE environment_id=? AND status='queued' AND created_at<=?`, environmentID, timeText(createdAt)).Scan(&position)
+	return position, err
 }
 
 func (s *Store) UpdateRunStatus(ctx context.Context, id string, from []domain.RunStatus, to domain.RunStatus, errText string, at time.Time) error {
@@ -420,6 +445,18 @@ SELECT EXISTS(
 	return found != 0, err
 }
 
+func (s *Store) HasSuccessfulComponentInstallVerification(ctx context.Context, releaseID, releaseSpecDigest string) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM runs
+  WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
+    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
+    AND json_extract(input_snapshot_json, '$.componentTestEvidence')='install_verify'
+)`, releaseID, releaseSpecDigest).Scan(&found)
+	return found != 0, err
+}
+
 func (s *Store) HasSuccessfulComponentRollbackVerification(ctx context.Context, releaseID, releaseSpecDigest string) (bool, error) {
 	var found int
 	err := s.db.QueryRowContext(ctx, `
@@ -430,6 +467,28 @@ SELECT EXISTS(
     AND json_extract(input_snapshot_json, '$.componentTestEvidence')='rollback_verify'
 )`, releaseID, releaseSpecDigest).Scan(&found)
 	return found != 0, err
+}
+
+func (s *Store) SuccessfulComponentEvidenceRunIDs(ctx context.Context, releaseID, releaseSpecDigest string) (string, string, error) {
+	lookup := func(evidence string) (string, error) {
+		var id string
+		err := s.db.QueryRowContext(ctx, `
+SELECT id FROM runs
+WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
+  AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
+  AND json_extract(input_snapshot_json, '$.componentTestEvidence')=?
+ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, evidence).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return id, err
+	}
+	installID, err := lookup("install_verify")
+	if err != nil {
+		return "", "", err
+	}
+	rollbackID, err := lookup("rollback_verify")
+	return installID, rollbackID, err
 }
 
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {
@@ -574,6 +633,10 @@ func scanApproval(row scanner) (domain.Approval, error) {
 }
 
 func (s *Store) DecideApproval(ctx context.Context, id, userID, decision, reason string, at time.Time) error {
+	return s.DecideApprovalWithSnapshot(ctx, id, userID, decision, reason, nil, at)
+}
+
+func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot map[string]any, at time.Time) error {
 	if decision != "approved" && decision != "rejected" {
 		return domain.ErrInvalid
 	}
@@ -600,7 +663,13 @@ func (s *Store) DecideApproval(ctx context.Context, id, userID, decision, reason
 	if decision == "rejected" {
 		runStatus = domain.RunRejected
 	}
-	runResult, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`, runStatus, decision, timeText(at), runID)
+	query := `UPDATE runs SET status=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
+	arguments := []any{runStatus, decision, timeText(at), runID}
+	if snapshot != nil {
+		query = `UPDATE runs SET status=?,input_snapshot_json=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
+		arguments = []any{runStatus, jsonText(snapshot), decision, timeText(at), runID}
+	}
+	runResult, err := tx.ExecContext(ctx, query, arguments...)
 	if err != nil {
 		return err
 	}

@@ -9,7 +9,7 @@ import (
 
 func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 	valid := domain.ComponentRelease{
-		Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Version: "1.0.0",
 		Parameters: []domain.ParameterDefinition{{
 			Name: "root", Description: "install root", Type: domain.ParameterTypeString,
 			Required: true, DefaultValue: "/opt", Visibility: domain.ParameterPublic, MinLength: 1,
@@ -19,16 +19,16 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, release := range map[string]domain.ComponentRelease{
-		"missing visibility": {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString}}},
-		"duplicate": {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{
+		"missing visibility": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString}}},
+		"duplicate": {Version: "1", Parameters: []domain.ParameterDefinition{
 			{Name: "root", Description: "a", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
 			{Name: "root", Description: "b", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
 		}},
-		"sensitive public":       {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{{Name: "registryPassword", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic}}},
-		"unknown type":           {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: "blob", Visibility: domain.ParameterInternal}}},
-		"missing mapping target": {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
-		"duplicate dependency":   {Version: "1", Type: domain.ReleaseAtomic, ComponentID: "down", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1"}, {UpstreamComponentID: "up", UpstreamReleaseID: "up-2"}}},
-		"action unknown param":   {Version: "1", Type: domain.ReleaseAtomic, Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Actions: []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "a.yml", TimeoutSeconds: 1, AllowedParameters: []string{"missing"}}}},
+		"sensitive public":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "registryPassword", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic}}},
+		"unknown type":           {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: "blob", Visibility: domain.ParameterInternal}}},
+		"missing mapping target": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
+		"duplicate dependency":   {Version: "1", ComponentID: "down", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1"}, {UpstreamComponentID: "up", UpstreamReleaseID: "up-2"}}},
+		"action unknown param":   {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Actions: []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "a.yml", TimeoutSeconds: 1, AllowedParameters: []string{"missing"}}}},
 	} {
 		if err := validateRelease(release); err == nil {
 			t.Fatalf("%s was accepted", name)
@@ -38,7 +38,7 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 
 func TestValidateReleaseAllowsStandaloneInstallRollback(t *testing.T) {
 	base := domain.ComponentRelease{
-		Version: "1.0.0", Type: domain.ReleaseAtomic,
+		Version: "1.0.0",
 		Actions: []domain.ActionDefinition{{
 			Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", TimeoutSeconds: 60,
 		}},

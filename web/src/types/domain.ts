@@ -9,9 +9,6 @@ export interface User {
 
 export type ReleaseState = 'draft' | 'released' | 'deprecated';
 export type ComponentLayer = 'host_foundation' | 'runtime_state' | 'orchestration_core' | 'cluster_service' | 'observability_management' | 'platform_extension';
-export type ComponentCategory = 'preflight' | 'bootstrap' | 'security' | 'runtime' | 'state_store' | 'control_plane' | 'worker' | 'network' | 'dns' | 'ingress' | 'storage' | 'observability' | 'node_management' | 'platform' | 'autoscaling';
-export type ComponentKind = 'software' | 'software_bundle' | 'delivery_stage' | 'configuration' | 'artifact_set';
-export type ComponentRequiredness = 'core_required' | 'profile_required' | 'optional';
 
 export type ParameterType = 'string' | 'boolean' | 'integer' | 'number' | 'object' | 'array';
 export type ParameterVisibility = 'internal' | 'public';
@@ -86,10 +83,9 @@ export interface ComponentRelease {
   id: string;
   componentId: string;
   version: string;
-  type?: 'atomic' | 'bundle';
   state: ReleaseState;
-  verified?: boolean;
   candidate?: boolean;
+  readiness: ReleaseReadiness;
   breaking?: boolean;
   releaseNotes?: string;
   riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
@@ -98,22 +94,40 @@ export interface ComponentRelease {
   parameters?: ParameterDefinition[];
   actions?: ActionDefinition[];
   artifacts?: ComponentArtifact[];
+  images?: ComponentImage[];
   createdAt?: string;
   releasedAt?: string;
+}
+
+export interface ReleaseReadiness {
+  status: 'ready' | 'blocked' | 'risky';
+  blockers: Array<{ code: string; message: string; actionUrl: string }>;
+  installEvidenceRunId?: string;
+  rollbackEvidenceRunId?: string;
 }
 
 export interface ComponentArtifact {
   id: string;
   releaseId: string;
   alias: string;
-  fileStation: string;
-  relativePath: string;
   filename: string;
   sha256: string;
   sizeBytes: number;
-  sourceMode: 'upload' | 'register';
-  environmentId: string;
-  environmentRevisionId: string;
+  sourceUrl: string;
+  sourceUpdatedBy: string;
+  sourceUpdatedAt: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ComponentImage {
+  id: string;
+  releaseId: string;
+  logicalName: string;
+  digest: string;
+  sourceRef: string;
+  sourceUpdatedBy: string;
+  sourceUpdatedAt: string;
   createdBy: string;
   createdAt: string;
 }
@@ -154,9 +168,7 @@ export interface Component {
   ownerId: string;
   ownerName?: string;
   layer: ComponentLayer;
-  category: ComponentCategory;
-  kind: ComponentKind;
-  requiredness: ComponentRequiredness;
+  tags: string[];
   latestRelease?: ComponentRelease;
   releases?: ComponentRelease[];
   releaseCount?: number;
@@ -198,7 +210,6 @@ export interface ScenarioRevision {
   state: ScenarioState;
   nodes: ScenarioNode[];
   edges: ScenarioEdge[];
-  executionPolicy?: Record<string, unknown>;
   testedAt?: string;
   createdAt?: string;
 }
@@ -246,7 +257,6 @@ export interface EnvironmentRevision {
   hosts: EnvironmentHost[];
   variables: Record<string, string>;
   credentialRefs: CredentialRef[];
-  maxConcurrentRuns?: number;
   createdBy?: string;
   changeReason?: string;
   createdAt?: string;
@@ -295,7 +305,6 @@ export interface EnvironmentExportDocument {
     hosts: EnvironmentHost[];
     variables: Record<string, string>;
     credentialRefs: Array<{ name: string; kind: CredentialRef['type']; reference?: string; configured?: boolean }>;
-    maxConcurrent: number;
   };
 }
 
@@ -436,6 +445,38 @@ export interface Approval {
   riskReason?: string;
   requestedAt?: string;
   decidedAt?: string;
+  decidedBy?: string;
+  decision?: string;
+  reason?: string;
+}
+
+export interface DeliveryRequirement {
+  id: string;
+  kind: 'artifact' | 'image';
+  name: string;
+  identity: string;
+  source: string;
+  target?: string;
+  sourceReadable: boolean;
+  targetPresent: boolean;
+  transferAvailable: boolean;
+  componentName: string;
+}
+
+export interface DeliveryDecision {
+  requirementId: string;
+  mode: 'direct' | 'transfer';
+  decidedBy?: string;
+  decidedAt?: string;
+}
+
+export interface DeliveryResult {
+  requirementId: string;
+  mode: 'direct' | 'transfer';
+  status: 'pending' | 'direct' | 'reused_target' | 'transferred' | 'failed';
+  actualLocation?: string;
+  message?: string;
+  completedAt?: string;
 }
 
 export interface Run {
@@ -468,6 +509,9 @@ export interface Run {
   backups?: RunBackup[];
   artifactTransfers?: Array<{ alias: string; sourceStation: string; targetStation: string; relativePath: string; sha256: string }>;
   imageTransfers?: Array<{ sourceRegistry: string; targetRegistry: string; sourceDigest: string; targetDigest: string }>;
+  deliveryRequirements?: DeliveryRequirement[];
+  deliveryDecisions?: DeliveryDecision[];
+  deliveryResults?: DeliveryResult[];
   createdAt?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -526,6 +570,7 @@ export interface ComponentTestPlan {
   requiresApproval: boolean;
   planDigest: string;
   steps: ComponentTestPlanStep[];
+  deliveryRequirements: DeliveryRequirement[];
 }
 
 export interface EnvironmentRollbackPlan extends ComponentTestPlan {
@@ -572,10 +617,8 @@ export const STATUS_LABELS: Record<string, string> = {
   released: '已发布',
   deprecated: '已废弃',
   abandoned: '已放弃',
-  unverified: '未验证',
   testing: '测试中',
   test_passed: '测试通过',
-  passed: '已验证',
   failed: '失败',
   queued: '排队中',
   awaiting_approval: '等待审批',

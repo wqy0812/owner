@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,7 +13,17 @@ import (
 )
 
 func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]domain.Component, error) {
-	return p.store.ListComponents(ctx, user)
+	components, err := p.store.ListComponents(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	for i := range components {
+		components[i], err = p.decorateComponentReadiness(ctx, components[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return components, nil
 }
 
 func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string) (domain.Component, error) {
@@ -20,11 +32,11 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 		return component, err
 	}
 	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
-		return component, nil
+		return p.decorateComponentReadiness(ctx, component)
 	}
 	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
-		if release.Status == domain.ReleaseReleased || (release.Status == domain.ReleaseDraft && release.Candidate && release.Verified) {
+		if release.Status == domain.ReleaseReleased || (release.Status == domain.ReleaseDraft && release.Candidate) {
 			filtered = append(filtered, release)
 		}
 	}
@@ -32,7 +44,7 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 	if len(filtered) == 0 {
 		return domain.Component{}, domain.ErrNotFound
 	}
-	return component, nil
+	return p.decorateComponentReadiness(ctx, component)
 }
 
 func (p *Platform) CreateComponent(ctx context.Context, user domain.User, component domain.Component) (domain.Component, error) {
@@ -56,8 +68,7 @@ func (p *Platform) CreateComponent(ctx context.Context, user domain.User, compon
 		return component, err
 	}
 	p.audit(ctx, user, "component.created", "component", component.ID, map[string]any{
-		"slug": component.Slug, "layer": component.Layer, "category": component.Category,
-		"kind": component.Kind, "requiredness": component.Requiredness,
+		"slug": component.Slug, "layer": component.Layer, "tags": component.Tags,
 	})
 	return component, nil
 }
@@ -84,16 +95,13 @@ func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id str
 	}
 	component.Description = patch.Description
 	component.Layer = patch.Layer
-	component.Category = patch.Category
-	component.Kind = patch.Kind
-	component.Requiredness = patch.Requiredness
+	component.Tags = append([]string(nil), patch.Tags...)
 	component.UpdatedAt = time.Now().UTC()
 	if err := p.store.UpdateComponent(ctx, component); err != nil {
 		return component, err
 	}
 	p.audit(ctx, user, "component.updated", "component", component.ID, map[string]any{
-		"slug": component.Slug, "layer": component.Layer, "category": component.Category,
-		"kind": component.Kind, "requiredness": component.Requiredness,
+		"slug": component.Slug, "layer": component.Layer, "tags": component.Tags,
 	})
 	return component, nil
 }
@@ -109,14 +117,11 @@ func (p *Platform) CreateRelease(ctx context.Context, user domain.User, componen
 	release.ID = newID("release")
 	release.ComponentID = componentID
 	release.Status = domain.ReleaseDraft
-	release.Verified = false
-	if release.Type == "" {
-		release.Type = domain.ReleaseAtomic
-	}
 	if release.RiskLevel == "" {
 		release.RiskLevel = domain.RiskLow
 	}
 	release.CreatedAt = time.Now().UTC()
+	p.populatePlaybookDigests(component, &release, nil)
 	rewriteReleaseChildren(&release)
 	if err := p.validateReleaseContract(ctx, release, false); err != nil {
 		return release, err
@@ -145,6 +150,31 @@ func rewriteReleaseChildren(release *domain.ComponentRelease) {
 	}
 }
 
+func (p *Platform) populatePlaybookDigests(component domain.Component, release *domain.ComponentRelease, previous []domain.ActionDefinition) {
+	known := make(map[string]string, len(previous))
+	for _, action := range previous {
+		if action.PlaybookSHA256 != "" {
+			known[action.Playbook] = action.PlaybookSHA256
+		}
+	}
+	for index := range release.Actions {
+		action := &release.Actions[index]
+		if action.PlaybookSHA256 = known[action.Playbook]; action.PlaybookSHA256 != "" {
+			continue
+		}
+		_, resolved, err := p.resolveManagedPlaybookPath(component, *release, action.Playbook, false)
+		if err != nil {
+			continue
+		}
+		contents, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		digest := sha256.Sum256(contents)
+		action.PlaybookSHA256 = hex.EncodeToString(digest[:])
+	}
+}
+
 func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id string, patch domain.ComponentRelease) (domain.ComponentRelease, error) {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
@@ -168,16 +198,13 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		return release, actionableExistingError(base, "release.validation_in_progress", "活动测试 Run 已锁定当前 Draft 定义", "查看运行", "/runs")
 	}
 	patch.ID, patch.ComponentID, patch.Status, patch.CreatedAt = release.ID, release.ComponentID, release.Status, release.CreatedAt
-	// Any change to actions, dependencies, constraints or parameters invalidates
-	// the evidence produced by an earlier component test.
-	patch.Verified = false
-	patch.Candidate = false
-	if patch.Type == "" {
-		patch.Type = release.Type
-	}
+	// Evidence is derived from the current spec digest. Definition changes make
+	// old runs inapplicable without mutating the owner's candidate intent.
+	patch.Candidate = release.Candidate
 	if patch.RiskLevel == "" {
 		patch.RiskLevel = release.RiskLevel
 	}
+	p.populatePlaybookDigests(component, &patch, release.Actions)
 	rewriteReleaseChildren(&patch)
 	if err := p.validateReleaseContract(ctx, patch, false); err != nil {
 		return release, err
@@ -230,13 +257,24 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID 
 		source.EnvironmentConstraints = input.EnvironmentConstraints
 	}
 	source.Status = domain.ReleaseDraft
-	source.Verified = false
 	source.Candidate = false
 	source.CreatedAt = time.Now().UTC()
 	source.ReleasedAt, source.DeprecatedAt = nil, nil
 	for index := range source.Artifacts {
 		source.Artifacts[index].ID = newID("artifact")
 		source.Artifacts[index].ReleaseID = newReleaseID
+		source.Artifacts[index].CreatedAt = source.CreatedAt
+		source.Artifacts[index].CreatedBy = user.ID
+		source.Artifacts[index].SourceUpdatedAt = source.CreatedAt
+		source.Artifacts[index].SourceUpdatedBy = user.ID
+	}
+	for index := range source.Images {
+		source.Images[index].ID = newID("image")
+		source.Images[index].ReleaseID = newReleaseID
+		source.Images[index].CreatedAt = source.CreatedAt
+		source.Images[index].CreatedBy = user.ID
+		source.Images[index].SourceUpdatedAt = source.CreatedAt
+		source.Images[index].SourceUpdatedBy = user.ID
 	}
 	for index := range source.Actions {
 		switch source.Actions[index].Kind {
@@ -280,10 +318,6 @@ func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id
 		return release, err
 	}
 	if candidate {
-		if !release.Verified {
-			base := fmt.Errorf("%w: run a successful component test before sharing a candidate", domain.ErrConflict)
-			return release, actionableExistingError(base, "release.install_evidence_missing", "候选共享要求当前合同通过安装和 Verify", "前往环境验证", fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID))
-		}
 		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
 			return release, err
 		}
@@ -296,22 +330,11 @@ func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id
 }
 
 func (p *Platform) validateReleaseForCandidate(ctx context.Context, release domain.ComponentRelease) error {
-	if err := p.validateReleaseEvidence(ctx, release); err != nil {
+	readiness, err := p.releaseReadiness(ctx, release)
+	if err != nil {
 		return err
 	}
-	if err := p.validateReleaseContract(ctx, release, true); err != nil {
-		return err
-	}
-	for _, dependency := range release.Dependencies {
-		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
-		if err != nil {
-			return err
-		}
-		if upstream.Status != domain.ReleaseReleased && !(upstream.Status == domain.ReleaseDraft && upstream.Candidate && upstream.Verified) {
-			return fmt.Errorf("%w: candidate dependencies must be released or verified candidates", domain.ErrInvalid)
-		}
-	}
-	return nil
+	return readinessError(readiness)
 }
 
 func (p *Platform) Impact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
@@ -357,74 +380,6 @@ func (p *Platform) Impact(ctx context.Context, user domain.User, releaseID strin
 		return domain.ImpactReport{}, err
 	}
 	return report, nil
-}
-
-func (p *Platform) PublishRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, domain.ImpactReport, error) {
-	release, err := p.store.GetComponentRelease(ctx, id)
-	if err != nil {
-		return release, domain.ImpactReport{}, err
-	}
-	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
-	if err != nil {
-		return release, domain.ImpactReport{}, err
-	}
-	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
-		return release, domain.ImpactReport{}, err
-	}
-	if release.Status != domain.ReleaseDraft {
-		base := fmt.Errorf("%w: only a draft can be published", domain.ErrConflict)
-		return release, domain.ImpactReport{}, actionableExistingError(base, "resource.immutable", "只有 Draft Release 可以发布", "查看 Release", fmt.Sprintf("/components?selected=%s&release=%s", component.ID, release.ID))
-	}
-	if err := p.validateReleaseForPublish(ctx, release); err != nil {
-		return release, domain.ImpactReport{}, actionableExistingError(err, "release.contract_invalid", "Release 合同未满足发布规则", "编辑合同", fmt.Sprintf("/components?selected=%s&release=%s&action=contract", component.ID, release.ID))
-	}
-	if err := p.validateReleaseEvidence(ctx, release); err != nil {
-		return release, domain.ImpactReport{}, actionableExistingError(err, "release.evidence_missing", "当前合同缺少安装或回滚成功证据", "前往环境验证", fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID))
-	}
-	oldVersion, oldErr := p.store.LatestReleasedVersion(ctx, release.ComponentID)
-	if oldErr != nil && !errors.Is(oldErr, domain.ErrNotFound) {
-		return release, domain.ImpactReport{}, oldErr
-	}
-	report, err := p.Impact(ctx, user, id)
-	if err != nil {
-		return release, report, err
-	}
-	now := time.Now().UTC()
-	if err := p.store.PublishComponentRelease(ctx, id, now); err != nil {
-		return release, report, err
-	}
-	release.Status, release.ReleasedAt = domain.ReleaseReleased, &now
-	notifications := make([]domain.Notification, 0, len(report.Recipients))
-	for _, recipient := range report.Recipients {
-		pathNames := make([][]string, 0, len(recipient.Paths))
-		for _, path := range recipient.Paths {
-			pathNames = append(pathNames, path.ComponentNames)
-		}
-		notifications = append(notifications, domain.Notification{
-			ID: newID("notification"), UserID: recipient.UserID, Type: "component_release_impact",
-			Title:       fmt.Sprintf("%s 发布 %s", component.Name, release.Version),
-			Body:        fmt.Sprintf("上游组件从 %s 更新为 %s；请评估锁定版本和兼容性。", valueOr(oldVersion, "首次发布"), release.Version),
-			ResourceURL: "/components?selected=" + component.ID,
-			Payload: map[string]any{
-				"componentId": component.ID, "componentName": component.Name,
-				"oldVersion": oldVersion, "newVersion": release.Version,
-				"releaseNotes": release.ReleaseNotes, "breaking": release.Breaking,
-				"impactPaths": pathNames, "scenarioIds": recipient.ScenarioIDs,
-			}, CreatedAt: now,
-		})
-	}
-	if err := p.store.CreateNotifications(ctx, notifications); err != nil {
-		return release, report, err
-	}
-	p.audit(ctx, user, "component_release.published", "component_release", id, map[string]any{
-		"componentId": component.ID, "oldVersion": oldVersion, "newVersion": release.Version,
-		"breaking": release.Breaking, "verified": release.Verified, "recipientCount": len(notifications),
-	})
-	p.hub.Publish("release.published", map[string]any{"releaseId": id, "componentId": component.ID})
-	if len(notifications) > 0 {
-		p.hub.Publish("notification", map[string]any{"releaseId": id, "count": len(notifications)})
-	}
-	return release, report, nil
 }
 
 func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
@@ -491,7 +446,7 @@ func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.C
 			return fmt.Errorf("%w: upstream dependency release does not belong to component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
 		}
 		if upstream.Status != domain.ReleaseReleased {
-			sharedCandidate := upstream.Status == domain.ReleaseDraft && upstream.Candidate && upstream.Verified
+			sharedCandidate := upstream.Status == domain.ReleaseDraft && upstream.Candidate
 			sameOwnerDraft := false
 			if upstream.Status == domain.ReleaseDraft {
 				if downstreamOwnerID == "" {
@@ -508,7 +463,7 @@ func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.C
 				sameOwnerDraft = upstreamComponent.OwnerID == downstreamOwnerID
 			}
 			if !sharedCandidate && !sameOwnerDraft {
-				return fmt.Errorf("%w: upstream dependency must lock a released version, a verified shared candidate, or a private Draft owned by the same component owner", domain.ErrInvalid)
+				return fmt.Errorf("%w: upstream dependency must lock a released version, a shared candidate, or a private Draft owned by the same component owner", domain.ErrInvalid)
 			}
 		}
 		for _, mapping := range dependency.ParameterMappings {
@@ -558,28 +513,8 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 	if err := p.validateReleaseContract(ctx, release, true); err != nil {
 		return err
 	}
-	for _, action := range release.Actions {
-		switch action.Kind {
-		case domain.ActionUpgrade:
-			if action.ToReleaseID != release.ID || action.FromReleaseID == release.ID {
-				return fmt.Errorf("%w: upgrade action must point from an earlier release to this release", domain.ErrInvalid)
-			}
-			from, err := p.store.GetComponentRelease(ctx, action.FromReleaseID)
-			if err != nil || from.ComponentID != release.ComponentID || from.Status != domain.ReleaseReleased {
-				return fmt.Errorf("%w: upgrade fromReleaseId must lock a released version of the same component", domain.ErrInvalid)
-			}
-		case domain.ActionRollback:
-			if action.FromReleaseID == "" && action.ToReleaseID == "" {
-				continue
-			}
-			if action.FromReleaseID != release.ID || action.ToReleaseID == release.ID {
-				return fmt.Errorf("%w: rollback action must point from this release to an earlier release", domain.ErrInvalid)
-			}
-			to, err := p.store.GetComponentRelease(ctx, action.ToReleaseID)
-			if err != nil || to.ComponentID != release.ComponentID || to.Status != domain.ReleaseReleased {
-				return fmt.Errorf("%w: rollback toReleaseId must lock a released version of the same component", domain.ErrInvalid)
-			}
-		}
+	if err := p.validateReleaseTransitionContracts(ctx, release); err != nil {
+		return err
 	}
 	links, err := p.store.ListReleasedDependencyLinks(ctx)
 	if err != nil {
@@ -601,39 +536,15 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 			return fmt.Errorf("%w: dependency would create a component cycle", domain.ErrInvalid)
 		}
 	}
-	if digester, ok := p.runner.(digestRunner); ok {
-		for _, action := range release.Actions {
-			if _, _, digestErr := digester.Digest(action.Playbook); digestErr != nil {
-				return fmt.Errorf("%w: action %s playbook is not executable: %v", domain.ErrInvalid, action.Name, digestErr)
-			}
-		}
-	}
 	return nil
 }
 
 func (p *Platform) validateReleaseEvidence(ctx context.Context, release domain.ComponentRelease) error {
-	required := map[domain.ActionKind]bool{domain.ActionInstall: false, domain.ActionVerify: false, domain.ActionRollback: false}
-	for _, action := range release.Actions {
-		if _, ok := required[action.Kind]; ok {
-			required[action.Kind] = true
-		}
-	}
-	for kind, present := range required {
-		if !present {
-			return fmt.Errorf("%w: release must define %s lifecycle action", domain.ErrInvalid, kind)
-		}
-	}
-	if !release.Verified {
-		return fmt.Errorf("%w: release must pass install and verify before delivery", domain.ErrConflict)
-	}
-	rollback, err := p.store.HasSuccessfulComponentRollbackVerification(ctx, release.ID, componentReleaseSpecDigest(release))
+	readiness, err := p.releaseReadiness(ctx, release)
 	if err != nil {
 		return err
 	}
-	if !rollback {
-		return fmt.Errorf("%w: release must pass rollback and post-rollback verification for the current contract", domain.ErrConflict)
-	}
-	return nil
+	return readinessError(readiness)
 }
 
 func dependencyPathExists(graph map[string][]string, start, target string) bool {

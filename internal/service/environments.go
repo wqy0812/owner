@@ -41,7 +41,7 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
-		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1,
+		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{},
 		CreatedBy: user.ID, ChangeReason: "创建环境", CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision

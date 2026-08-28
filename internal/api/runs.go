@@ -10,15 +10,15 @@ import (
 )
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := h.platform.Store().ListRuns(r.Context(), currentUser(r))
+	runs, err := h.platform.Execution().ListRuns(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	output := make([]map[string]any, 0, len(runs))
 	for i := range runs {
-		runs[i].Steps, _ = h.platform.Store().ListRunSteps(r.Context(), runs[i].ID)
-		if a, aErr := h.platform.Store().GetApprovalByRun(r.Context(), runs[i].ID); aErr == nil {
+		runs[i].Steps, _ = h.platform.Execution().ListRunSteps(r.Context(), runs[i].ID)
+		if a, aErr := h.platform.Execution().GetApprovalByRun(r.Context(), runs[i].ID); aErr == nil {
 			runs[i].Approval = &a
 		}
 		output = append(output, h.runDTO(r, runs[i]))
@@ -31,7 +31,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, domain.ErrForbidden)
 		return
 	}
-	run, err := h.platform.Store().GetRun(r.Context(), r.PathValue("id"))
+	run, err := h.platform.Execution().GetRun(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -40,7 +40,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
-	run, err := h.platform.CancelRun(r.Context(), currentUser(r), r.PathValue("id"))
+	run, err := h.platform.Execution().Cancel(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -49,7 +49,7 @@ func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) previewRunRetry(w http.ResponseWriter, r *http.Request) {
-	plan, err := h.platform.PreviewRunRetry(r.Context(), currentUser(r), r.PathValue("id"))
+	plan, err := h.platform.Execution().PreviewRetry(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -63,7 +63,7 @@ func (h *Handler) retryRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.RetryRun(r.Context(), currentUser(r), r.PathValue("id"), input)
+	run, err := h.platform.Execution().Retry(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -81,7 +81,8 @@ func (h *Handler) rejectRun(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) decideRun(w http.ResponseWriter, r *http.Request, decision string) {
 	var input struct {
-		Reason string `json:"reason"`
+		Reason            string                          `json:"reason"`
+		DeliveryDecisions []service.DeliveryDecisionInput `json:"deliveryDecisions"`
 	}
 	if r.ContentLength > 0 {
 		if err := decodeJSON(r, &input); err != nil {
@@ -89,7 +90,7 @@ func (h *Handler) decideRun(w http.ResponseWriter, r *http.Request, decision str
 			return
 		}
 	}
-	run, err := h.platform.DecideApproval(r.Context(), currentUser(r), r.PathValue("id"), decision, input.Reason)
+	run, err := h.platform.Execution().DecideApproval(r.Context(), currentUser(r), r.PathValue("id"), decision, input.Reason, input.DeliveryDecisions)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -107,7 +108,7 @@ func (h *Handler) batchDecideRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	runs, err := h.platform.BatchDecideApprovals(r.Context(), currentUser(r), input.ApprovalIDs, input.Decision, input.Reason)
+	runs, err := h.platform.Execution().BatchDecideApprovals(r.Context(), currentUser(r), input.ApprovalIDs, input.Decision, input.Reason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -120,7 +121,7 @@ func (h *Handler) batchDecideRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) canViewRun(r *http.Request, user domain.User, runID string) bool {
-	visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+	visible, err := h.platform.Execution().CanViewRun(r.Context(), user, runID)
 	return err == nil && visible
 }
 
@@ -134,23 +135,23 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
 	}
-	if environment, err := h.platform.Store().GetEnvironment(r.Context(), run.EnvironmentID, false); err == nil {
+	if environment, err := h.platform.Execution().GetEnvironment(r.Context(), run.EnvironmentID, false); err == nil {
 		output["environmentName"] = environment.Name
 	}
-	if requester, err := h.platform.Store().GetUser(r.Context(), run.RequestedBy); err == nil {
+	if requester, err := h.platform.Execution().GetUser(r.Context(), run.RequestedBy); err == nil {
 		output["createdByName"] = requester.Name
 	}
 	if run.ComponentReleaseID != "" {
-		if release, err := h.platform.Store().GetComponentRelease(r.Context(), run.ComponentReleaseID); err == nil {
+		if release, err := h.platform.Execution().GetComponentRelease(r.Context(), run.ComponentReleaseID); err == nil {
 			output["version"] = release.Version
-			if component, componentErr := h.platform.Store().GetComponent(r.Context(), release.ComponentID, false); componentErr == nil {
+			if component, componentErr := h.platform.Execution().GetComponent(r.Context(), release.ComponentID, false); componentErr == nil {
 				output["componentId"], output["componentName"], output["name"] = component.ID, component.Name, component.Name+" "+release.Version+" test"
 			}
 		}
 	}
 	if run.ScenarioRevisionID != "" {
-		if revision, err := h.platform.Store().GetScenarioRevision(r.Context(), run.ScenarioRevisionID); err == nil {
-			if scenario, scenarioErr := h.platform.Store().GetScenario(r.Context(), revision.ScenarioID, false); scenarioErr == nil {
+		if revision, err := h.platform.Execution().GetScenarioRevision(r.Context(), run.ScenarioRevisionID); err == nil {
+			if scenario, scenarioErr := h.platform.Execution().GetScenario(r.Context(), revision.ScenarioID, false); scenarioErr == nil {
 				output["scenarioId"], output["scenarioName"], output["name"] = scenario.ID, scenario.Name, scenario.Name
 			}
 		}
@@ -189,15 +190,19 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		riskReason := "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。"
 		artifactTransfers, _ := run.InputSnapshot["artifactTransfers"].([]any)
 		imageTransfers, _ := run.InputSnapshot["imageTransfers"].([]any)
+		deliveryRequirements, _ := run.InputSnapshot["deliveryRequirements"].([]any)
 		if run.Kind == domain.RunEnvironmentRollback {
 			riskReason = "整集群回滚会按逆序执行所有已安装组件的 rollback，并在成功后删除安装清单与备份基线。"
+		} else if len(deliveryRequirements) > 0 {
+			riskReason = fmt.Sprintf("有 %d 项内容未命中环境目标；请逐项选择直接使用来源或平移到环境目标。", len(deliveryRequirements))
 		} else if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
-			riskReason = fmt.Sprintf("目标环境与版本来源不一致：需平移 %d 个镜像、%d 个介质。批准后平台先传输并校验指纹，再执行组件动作。", len(imageTransfers), len(artifactTransfers))
+			riskReason = fmt.Sprintf("目标环境与版本来源不一致：需平移 %d 个镜像、%d 个介质。", len(imageTransfers), len(artifactTransfers))
 		}
 		output["approval"] = map[string]any{
 			"id": run.Approval.ID, "runId": run.Approval.RunID, "status": run.Approval.Status,
 			"riskReason":  riskReason,
 			"requestedAt": run.Approval.RequestedAt, "decidedAt": run.Approval.DecidedAt,
+			"decidedBy": run.Approval.DecidedBy, "decision": run.Approval.Decision, "reason": run.Approval.Reason,
 		}
 	}
 	if value, ok := run.InputSnapshot["artifactTransfers"]; ok {
@@ -206,7 +211,12 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	if value, ok := run.InputSnapshot["imageTransfers"]; ok {
 		output["imageTransfers"] = value
 	}
-	logs, _ := h.platform.Store().ListRunLogTail(r.Context(), run.ID, 200)
+	for _, key := range []string{"deliveryRequirements", "deliveryDecisions", "deliveryResults"} {
+		if value, ok := run.InputSnapshot[key]; ok {
+			output[key] = value
+		}
+	}
+	logs, _ := h.platform.Execution().ListRunLogTail(r.Context(), run.ID, 200)
 	tail := make([]string, 0, len(logs))
 	for _, logLine := range logs {
 		tail = append(tail, fmt.Sprintf("[%s] %s", logLine.Stream, logLine.Message))
@@ -220,7 +230,7 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	}
 	if run.Status == domain.RunQueued {
 		var position int
-		_ = h.platform.Store().DB().QueryRowContext(r.Context(), `SELECT COUNT(*) FROM runs WHERE environment_id=? AND status='queued' AND created_at<=?`, run.EnvironmentID, run.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")).Scan(&position)
+		position, _ = h.platform.Execution().QueuedRunPosition(r.Context(), run.EnvironmentID, run.CreatedAt)
 		output["queuePosition"] = position
 	}
 	return output

@@ -79,7 +79,7 @@ func (h *Handler) cachedRunVisibility(r *http.Request, user domain.User, runID s
 		}
 		// Serialize cache misses so one run.log fan-out performs one visibility
 		// query rather than one query per subscriber.
-		visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+		visible, err := h.platform.Execution().CanViewRun(r.Context(), user, runID)
 		if err != nil {
 			h.visibilityMu.Unlock()
 			return false
@@ -88,7 +88,7 @@ func (h *Handler) cachedRunVisibility(r *http.Request, user domain.User, runID s
 		h.visibilityMu.Unlock()
 		return visible
 	}
-	visible, err := h.platform.Store().CanViewRun(r.Context(), user, runID)
+	visible, err := h.platform.Execution().CanViewRun(r.Context(), user, runID)
 	if err != nil {
 		return false
 	}

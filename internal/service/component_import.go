@@ -41,13 +41,10 @@ type ComponentImportEntry struct {
 	Component struct {
 		Name, Slug, Description string
 		Layer                   domain.ComponentLayer
-		Category                domain.ComponentCategory
-		Kind                    domain.ComponentKind
-		Requiredness            domain.ComponentRequiredness
+		Tags                    []string `json:"tags"`
 	} `json:"component"`
 	Release struct {
 		Version                string                       `json:"version"`
-		Type                   domain.ReleaseType           `json:"type"`
 		ReleaseNotes           string                       `json:"releaseNotes"`
 		Breaking               bool                         `json:"breaking"`
 		RiskLevel              domain.RiskLevel             `json:"riskLevel"`
@@ -100,6 +97,7 @@ func normalizeComponentImportRequest(input ComponentImportRequest) ComponentImpo
 		entry.Component.Name = strings.TrimSpace(entry.Component.Name)
 		entry.Component.Slug = strings.TrimSpace(entry.Component.Slug)
 		entry.Component.Description = strings.TrimSpace(entry.Component.Description)
+		entry.Component.Tags = normalizeStrings(entry.Component.Tags)
 		entry.Release.Version = strings.TrimSpace(entry.Release.Version)
 		entry.Release.ReleaseNotes = strings.TrimSpace(entry.Release.ReleaseNotes)
 		entry.Release.Parameters = append([]domain.ParameterDefinition(nil), entry.Release.Parameters...)
@@ -148,7 +146,7 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 	}
 	bySlug := map[string]ComponentImportEntry{}
 	for _, entry := range input.Entries {
-		component := domain.Component{Name: entry.Component.Name, Slug: entry.Component.Slug, Layer: entry.Component.Layer, Category: entry.Component.Category, Kind: entry.Component.Kind, Requiredness: entry.Component.Requiredness}
+		component := domain.Component{Name: entry.Component.Name, Slug: entry.Component.Slug, Layer: entry.Component.Layer, Tags: entry.Component.Tags}
 		if component.Name == "" {
 			return ComponentImportPlan{}, fmt.Errorf("%w: component name is required", domain.ErrInvalid)
 		}
@@ -161,11 +159,11 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		if _, duplicate := bySlug[component.Slug]; duplicate {
 			return ComponentImportPlan{}, fmt.Errorf("%w: duplicate component slug %q", domain.ErrInvalid, component.Slug)
 		}
-		var exists int
-		if err := p.store.DB().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM components WHERE slug=?)`, component.Slug).Scan(&exists); err != nil {
+		exists, err := p.store.ComponentSlugExists(ctx, component.Slug)
+		if err != nil {
 			return ComponentImportPlan{}, err
 		}
-		if exists != 0 {
+		if exists {
 			return ComponentImportPlan{}, fmt.Errorf("%w: component slug %q already exists", domain.ErrConflict, component.Slug)
 		}
 		bySlug[component.Slug] = entry
@@ -175,9 +173,6 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		indegree[slug] = 0
 		if entry.Release.Version == "" {
 			return ComponentImportPlan{}, fmt.Errorf("%w: %s release version is required", domain.ErrInvalid, slug)
-		}
-		if entry.Release.Type != domain.ReleaseAtomic && entry.Release.Type != domain.ReleaseBundle {
-			return ComponentImportPlan{}, fmt.Errorf("%w: %s release type is invalid", domain.ErrInvalid, slug)
 		}
 		if err := rejectSensitiveMap(entry.Release.EnvironmentConstraints, "environment constraint"); err != nil {
 			return ComponentImportPlan{}, err
@@ -223,7 +218,7 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 				return ComponentImportPlan{}, fmt.Errorf("%w: Playbook %q is not referenced by an action", domain.ErrInvalid, filename)
 			}
 		}
-		validationRelease := domain.ComponentRelease{ID: "import-release-" + slug, ComponentID: "import-component-" + slug, Version: entry.Release.Version, Type: entry.Release.Type, RiskLevel: entry.Release.RiskLevel, EnvironmentConstraints: entry.Release.EnvironmentConstraints, Parameters: entry.Release.Parameters, Actions: actions}
+		validationRelease := domain.ComponentRelease{ID: "import-release-" + slug, ComponentID: "import-component-" + slug, Version: entry.Release.Version, RiskLevel: entry.Release.RiskLevel, EnvironmentConstraints: entry.Release.EnvironmentConstraints, Parameters: entry.Release.Parameters, Actions: actions}
 		if validationRelease.RiskLevel == "" {
 			validationRelease.RiskLevel = domain.RiskLow
 		}
@@ -377,14 +372,13 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 		entry := bySlug[slug]
 		component := domain.Component{
 			ID: newID("component"), Name: entry.Component.Name, Slug: slug, Description: entry.Component.Description,
-			Layer: entry.Component.Layer, Category: entry.Component.Category, Kind: entry.Component.Kind,
-			Requiredness: entry.Component.Requiredness, OwnerID: user.ID, CreatedAt: now, UpdatedAt: now,
+			Layer: entry.Component.Layer, Tags: entry.Component.Tags, OwnerID: user.ID, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := domain.ValidateComponentClassification(component); err != nil {
 			return preparedComponentImport{}, err
 		}
 		release := domain.ComponentRelease{
-			ID: newID("release"), ComponentID: component.ID, Version: entry.Release.Version, Type: entry.Release.Type,
+			ID: newID("release"), ComponentID: component.ID, Version: entry.Release.Version,
 			Status: domain.ReleaseDraft, ReleaseNotes: entry.Release.ReleaseNotes, Breaking: entry.Release.Breaking,
 			RiskLevel: entry.Release.RiskLevel, EnvironmentConstraints: entry.Release.EnvironmentConstraints,
 			Parameters: entry.Release.Parameters, CreatedAt: now,
@@ -407,9 +401,12 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 			})
 		}
 		managed := make(map[string]string, len(entry.Playbooks))
+		managedDigests := make(map[string]string, len(entry.Playbooks))
 		for _, playbook := range entry.Playbooks {
 			relative := managedReleasePrefix(components[slug], release) + playbook.Filename
 			managed[playbook.Filename] = relative
+			digest := sha256.Sum256([]byte(playbook.Content))
+			managedDigests[playbook.Filename] = hex.EncodeToString(digest[:])
 			prepared.Files = append(prepared.Files, componentImportFile{Component: components[slug], Release: release, RelativePath: relative, Content: playbook.Content})
 			prepared.Result.SavedPlaybooks = append(prepared.Result.SavedPlaybooks, slug+"/"+playbook.Filename)
 		}
@@ -423,7 +420,7 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 				risk = domain.RiskLow
 			}
 			release.Actions = append(release.Actions, domain.ActionDefinition{
-				Name: action.Name, Kind: action.Type, Playbook: managed[action.Playbook], Tags: action.Tags,
+				Name: action.Name, Kind: action.Type, Playbook: managed[action.Playbook], PlaybookSHA256: managedDigests[action.Playbook], Tags: action.Tags,
 				Limit: action.Limit, HostGroup: action.HostGroup, TimeoutSeconds: timeout,
 				AllowedParameters: action.AllowedParameters, RequiredCredentials: action.RequiredCredentials,
 				RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent,
@@ -439,8 +436,7 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 	}
 	for _, component := range prepared.Components {
 		prepared.Audits = append(prepared.Audits, newAuditEvent(user, "component.created", "component", component.ID, map[string]any{
-			"slug": component.Slug, "layer": component.Layer, "category": component.Category,
-			"kind": component.Kind, "requiredness": component.Requiredness, "componentImport": plan.PlanDigest,
+			"slug": component.Slug, "layer": component.Layer, "tags": component.Tags, "componentImport": plan.PlanDigest,
 		}))
 	}
 	for _, release := range prepared.Releases {

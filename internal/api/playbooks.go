@@ -11,7 +11,7 @@ import (
 )
 
 func (h *Handler) getReleasePlaybook(w http.ResponseWriter, r *http.Request) {
-	playbook, err := h.platform.ReadReleasePlaybook(r.Context(), currentUser(r), r.PathValue("id"), r.URL.Query().Get("path"))
+	playbook, err := h.platform.Catalog().ReadPlaybook(r.Context(), currentUser(r), r.PathValue("id"), r.URL.Query().Get("path"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -28,7 +28,7 @@ func (h *Handler) saveReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	playbook, err := h.platform.SaveReleasePlaybook(r.Context(), currentUser(r), r.PathValue("id"), input.Filename, []byte(input.Content))
+	playbook, err := h.platform.Catalog().SavePlaybook(r.Context(), currentUser(r), r.PathValue("id"), input.Filename, []byte(input.Content))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -61,7 +61,7 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 	if filename == "" {
 		filename = header.Filename
 	}
-	playbook, err := h.platform.SaveReleasePlaybook(r.Context(), currentUser(r), r.PathValue("id"), filename, contents)
+	playbook, err := h.platform.Catalog().SavePlaybook(r.Context(), currentUser(r), r.PathValue("id"), filename, contents)
 	if err != nil {
 		writeError(w, err)
 		return

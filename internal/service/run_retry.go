@@ -142,7 +142,11 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 		SourceID, Status, EnvironmentRevisionID, ArtifactDigest string
 		Start                                                   int
 		Steps                                                   []lockedStep
-	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, start, locked.Steps[start:]})
+		DeliveryRequirements                                    []DeliveryRequirement
+		DeliveryDecisions                                       []DeliveryDecision
+		ArtifactTransfers                                       []lockedArtifactTransfer
+		ImageTransfers                                          []lockedImageTransfer
+	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, start, locked.Steps[start:], locked.DeliveryRequirements, locked.DeliveryDecisions, locked.ArtifactTransfers, locked.ImageTransfers})
 	return result, nil
 }
 

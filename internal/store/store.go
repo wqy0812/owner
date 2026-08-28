@@ -16,6 +16,11 @@ import (
 
 type Store struct{ db *sql.DB }
 
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		path = "newplatform.db"
@@ -78,9 +83,7 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 			return fmt.Errorf("unsupported database schema: missing schema contract: %w", err)
 		}
 		if version != schemaContract {
-			if err := s.migrateSchemaContract(ctx, version); err != nil {
-				return err
-			}
+			return fmt.Errorf("unsupported database schema contract %q: expected %q", version, schemaContract)
 		}
 	}
 	content, err := schemaFiles.ReadFile("schema.sql")
@@ -98,90 +101,6 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (s *Store) migrateSchemaContract(ctx context.Context, version string) error {
-	if version != safetyFenceSchemaContract && version != evidenceSchemaContract && version != candidateSchemaContract && version != idempotentSchemaContract && version != legacySchemaContract {
-		return fmt.Errorf("unsupported database schema contract %q: expected %q", version, schemaContract)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var idempotentColumn int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('action_definitions') WHERE name='idempotent'`).Scan(&idempotentColumn); err != nil {
-		return fmt.Errorf("inspect action idempotency migration: %w", err)
-	}
-	if idempotentColumn == 0 {
-		if _, err := tx.ExecContext(ctx, `ALTER TABLE action_definitions ADD COLUMN idempotent INTEGER NOT NULL DEFAULT 0 CHECK (idempotent IN (0,1))`); err != nil {
-			return fmt.Errorf("add action idempotency capability: %w", err)
-		}
-	}
-	var candidateColumn int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('component_releases') WHERE name='candidate'`).Scan(&candidateColumn); err != nil {
-		return fmt.Errorf("inspect candidate release migration: %w", err)
-	}
-	if candidateColumn == 0 {
-		if _, err := tx.ExecContext(ctx, `ALTER TABLE component_releases ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1))`); err != nil {
-			return fmt.Errorf("add candidate release capability: %w", err)
-		}
-	}
-	// Exact predecessors could contain a candidate whose evidence was revoked
-	// without clearing the sharing flag. Repair those rows before schema.sql
-	// installs the candidate invariant triggers.
-	if _, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=0 WHERE candidate=1 AND verified<>1`); err != nil {
-		return fmt.Errorf("repair invalid candidate releases: %w", err)
-	}
-	var invalidCandidates int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_releases WHERE candidate=1 AND verified<>1`).Scan(&invalidCandidates); err != nil {
-		return fmt.Errorf("verify candidate release repair: %w", err)
-	}
-	if invalidCandidates != 0 {
-		return fmt.Errorf("candidate release repair left %d invalid rows", invalidCandidates)
-	}
-	for _, column := range []struct {
-		name       string
-		definition string
-	}{
-		{"retry_of_run_id", "TEXT REFERENCES runs(id)"},
-		{"retry_root_run_id", "TEXT REFERENCES runs(id)"},
-		{"retry_attempt", "INTEGER NOT NULL DEFAULT 0"},
-		{"retry_start_step", "INTEGER NOT NULL DEFAULT 0"},
-	} {
-		var present int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name=?`, column.name).Scan(&present); err != nil {
-			return fmt.Errorf("inspect runs.%s migration: %w", column.name, err)
-		}
-		if present == 0 {
-			if _, err := tx.ExecContext(ctx, `ALTER TABLE runs ADD COLUMN `+column.name+` `+column.definition); err != nil {
-				return fmt.Errorf("add runs.%s: %w", column.name, err)
-			}
-		}
-	}
-	for _, statement := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_runs_retry_root ON runs(retry_root_run_id,retry_attempt)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_retry_attempt ON runs(retry_root_run_id,retry_attempt) WHERE retry_root_run_id IS NOT NULL`,
-		`DROP INDEX IF EXISTS idx_runs_one_active_retry`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_retry_root ON runs(retry_root_run_id) WHERE retry_root_run_id IS NOT NULL AND status IN ('awaiting_approval','queued','running')`,
-		`CREATE TABLE IF NOT EXISTS run_input_presets (id TEXT PRIMARY KEY,created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,resource_type TEXT NOT NULL CHECK (resource_type IN ('component_release','scenario_revision')),resource_id TEXT NOT NULL,context TEXT NOT NULL CHECK (context IN ('component_install_verify','component_rollback','scenario_test','scenario_run')),name TEXT NOT NULL,values_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(values_json)),definition_digest TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(created_by,resource_type,resource_id,context,name))`,
-		`CREATE INDEX IF NOT EXISTS idx_run_input_presets_lookup ON run_input_presets(created_by,resource_type,resource_id,context,name)`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("apply reuse workflow migration: %w", err)
-		}
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE schema_contract SET version=? WHERE id=1 AND version=?`, schemaContract, version)
-	if err != nil {
-		return fmt.Errorf("update schema contract: %w", err)
-	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
-		return fmt.Errorf("schema contract changed while migration was running")
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit schema migration: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) Reset(ctx context.Context) error {
 	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_health_checks", "run_input_presets", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -197,6 +116,10 @@ func (s *Store) Reset(ctx context.Context) error {
 			tx.Rollback()
 			return err
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=1 WHERE id=1`); err != nil {
+		tx.Rollback()
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
 CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END;

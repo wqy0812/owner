@@ -19,7 +19,7 @@ func (h *Handler) exportEnvironmentRevision(w http.ResponseWriter, r *http.Reque
 		writeError(w, err)
 		return
 	}
-	document, err := h.platform.ExportEnvironmentRevision(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("revisionId"), input.IncludeCredentialReferences)
+	document, err := h.platform.Environments().ExportRevision(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("revisionId"), input.IncludeCredentialReferences)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -38,7 +38,7 @@ func (h *Handler) previewEnvironmentImport(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.PreviewEnvironmentImport(r.Context(), currentUser(r), input)
+	plan, err := h.platform.Environments().PreviewImport(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -52,7 +52,7 @@ func (h *Handler) importEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.ImportEnvironment(r.Context(), currentUser(r), input)
+	environment, err := h.platform.Environments().Import(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return

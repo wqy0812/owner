@@ -24,7 +24,6 @@ type EnvironmentTransferSnapshot struct {
 	Hosts          []InventoryHost        `json:"hosts"`
 	Variables      map[string]string      `json:"variables"`
 	CredentialRefs []domain.CredentialRef `json:"credentialRefs"`
-	MaxConcurrent  int                    `json:"maxConcurrent"`
 }
 
 type EnvironmentExportDocument struct {
@@ -61,7 +60,7 @@ func (p *Platform) ExportEnvironmentRevision(ctx context.Context, user domain.Us
 			refs[index].Reference = ""
 		}
 	}
-	document := EnvironmentExportDocument{FormatVersion: environmentExportFormat, ExportedAt: time.Now().UTC(), ContainsCredentialReferences: includeReferences, Source: EnvironmentExportSource{EnvironmentID: environment.ID, EnvironmentName: environment.Name, RevisionID: revision.ID, Revision: revision.Revision}, Snapshot: EnvironmentTransferSnapshot{Facts: cloneMap(revision.Facts), Hosts: inventory.Hosts, Variables: cloneStringMap(revision.Variables), CredentialRefs: refs, MaxConcurrent: revision.MaxConcurrent}}
+	document := EnvironmentExportDocument{FormatVersion: environmentExportFormat, ExportedAt: time.Now().UTC(), ContainsCredentialReferences: includeReferences, Source: EnvironmentExportSource{EnvironmentID: environment.ID, EnvironmentName: environment.Name, RevisionID: revision.ID, Revision: revision.Revision}, Snapshot: EnvironmentTransferSnapshot{Facts: cloneMap(revision.Facts), Hosts: inventory.Hosts, Variables: cloneStringMap(revision.Variables), CredentialRefs: refs}}
 	action := "environment.revision_exported"
 	if includeReferences {
 		action = "environment.revision_sensitive_exported"
@@ -135,9 +134,6 @@ func validateTransferSnapshot(snapshot *EnvironmentTransferSnapshot) error {
 		return err
 	}
 	snapshot.Variables = variables
-	if snapshot.MaxConcurrent < 1 || snapshot.MaxConcurrent > 64 {
-		return fmt.Errorf("%w: maxConcurrent must be between 1 and 64", domain.ErrInvalid)
-	}
 	return nil
 }
 
@@ -236,9 +232,6 @@ func environmentSnapshotDiff(current domain.EnvironmentRevision, incoming Enviro
 	if digestValue(current.CredentialRefs) != digestValue(incoming.CredentialRefs) {
 		changes = append(changes, "CredentialRef 将更新")
 	}
-	if current.MaxConcurrent != incoming.MaxConcurrent {
-		changes = append(changes, "最大并发数将更新")
-	}
 	if len(changes) == 0 {
 		changes = append(changes, "配置内容无变化，但仍会创建有审计记录的新 Revision")
 	}
@@ -269,7 +262,7 @@ func (p *Platform) ImportEnvironment(ctx context.Context, user domain.User, inpu
 	now := time.Now().UTC()
 	if input.Target.Kind == "new" {
 		environment := domain.Environment{ID: newID("environment"), Name: strings.TrimSpace(input.Target.Name), Description: input.Target.Description, OwnerID: user.ID, CreatedAt: now, UpdatedAt: now}
-		revision := domain.EnvironmentRevision{ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1, Facts: cloneMap(document.Snapshot.Facts), Inventory: inventory, Variables: cloneStringMap(document.Snapshot.Variables), CredentialRefs: append([]domain.CredentialRef(nil), document.Snapshot.CredentialRefs...), MaxConcurrent: document.Snapshot.MaxConcurrent, CreatedBy: user.ID, ChangeReason: valueOr(strings.TrimSpace(input.ChangeReason), "从导入文件创建"), CreatedAt: now}
+		revision := domain.EnvironmentRevision{ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1, Facts: cloneMap(document.Snapshot.Facts), Inventory: inventory, Variables: cloneStringMap(document.Snapshot.Variables), CredentialRefs: append([]domain.CredentialRef(nil), document.Snapshot.CredentialRefs...), CreatedBy: user.ID, ChangeReason: valueOr(strings.TrimSpace(input.ChangeReason), "从导入文件创建"), CreatedAt: now}
 		environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
 		if err := p.store.CreateEnvironment(ctx, environment, revision); err != nil {
 			return environment, err
@@ -277,7 +270,7 @@ func (p *Platform) ImportEnvironment(ctx context.Context, user domain.User, inpu
 		p.audit(ctx, user, "environment.imported", "environment", environment.ID, map[string]any{"revisionId": revision.ID, "planDigest": plan.PlanDigest, "sourceRevisionId": input.Document.Source.RevisionID})
 		return environment, nil
 	}
-	revision := domain.EnvironmentRevision{ID: newID("environment-revision"), EnvironmentID: plan.TargetEnvironmentID, Revision: plan.NextRevision, Facts: cloneMap(document.Snapshot.Facts), Inventory: inventory, Variables: cloneStringMap(document.Snapshot.Variables), CredentialRefs: append([]domain.CredentialRef(nil), document.Snapshot.CredentialRefs...), MaxConcurrent: document.Snapshot.MaxConcurrent, CreatedBy: user.ID, ChangeReason: strings.TrimSpace(input.ChangeReason), CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: newID("environment-revision"), EnvironmentID: plan.TargetEnvironmentID, Revision: plan.NextRevision, Facts: cloneMap(document.Snapshot.Facts), Inventory: inventory, Variables: cloneStringMap(document.Snapshot.Variables), CredentialRefs: append([]domain.CredentialRef(nil), document.Snapshot.CredentialRefs...), CreatedBy: user.ID, ChangeReason: strings.TrimSpace(input.ChangeReason), CreatedAt: now}
 	if err := p.store.CreateEnvironmentRevision(ctx, revision); err != nil {
 		return domain.Environment{}, err
 	}

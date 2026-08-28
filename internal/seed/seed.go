@@ -62,7 +62,7 @@ func (s Seeder) Run(ctx context.Context) error {
 	return s.appendAuditIfMissing(ctx, domain.AuditEvent{
 		ID: "audit-k8s-1.17.5-demo-seeded", ActorID: "system", Action: "demo.kubernetes_1_17_5.seeded",
 		ResourceType: "scenario", ResourceID: "scenario-k8s-1.17.5",
-		Metadata: map[string]any{"snapshot": "examples/ansible/k8s-1.17.5-cluster", "model": "minimal-components", "verified": false}, CreatedAt: now,
+		Metadata: map[string]any{"snapshot": "examples/ansible/k8s-1.17.5-cluster", "model": "minimal-components", "evidence": "not_seeded"}, CreatedAt: now,
 	})
 }
 
@@ -129,13 +129,9 @@ type seededComponent struct {
 func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 	constraints := map[string]any{"architecture": []any{"amd64"}, "ipFamily": []any{"IPv4"}, "operatingSystem": []any{"Kylin"}}
 	plainRelease := func(id, componentID, version string) domain.ComponentRelease {
-		releaseType := domain.ReleaseAtomic
-		if componentID == "component-kubernetes" {
-			releaseType = domain.ReleaseBundle
-		}
 		return domain.ComponentRelease{
-			ID: id, ComponentID: componentID, Version: version, Type: releaseType, Status: domain.ReleaseReleased,
-			Verified: true, RiskLevel: domain.RiskLow, EnvironmentConstraints: constraints, Parameters: []domain.ParameterDefinition{}, CreatedAt: now, ReleasedAt: ptr(now),
+			ID: id, ComponentID: componentID, Version: version, Status: domain.ReleaseReleased,
+			RiskLevel: domain.RiskLow, EnvironmentConstraints: constraints, Parameters: []domain.ParameterDefinition{}, CreatedAt: now, ReleasedAt: ptr(now),
 		}
 	}
 	components := []seededComponent{
@@ -163,72 +159,70 @@ func (s Seeder) seedComponents(ctx context.Context, now time.Time) error {
 }
 
 func component(id, slug, name, description, owner string, now time.Time) domain.Component {
-	layer, category, kind, requiredness := componentClassification(id)
+	layer, tags := componentMetadata(id)
 	return domain.Component{
 		ID: id, Slug: slug, Name: name, Description: description,
-		Layer: layer, Category: category, Kind: kind, Requiredness: requiredness,
+		Layer: layer, Tags: tags,
 		OwnerID: owner, CreatedAt: now, UpdatedAt: now,
 	}
 }
 
-func componentClassification(id string) (domain.ComponentLayer, domain.ComponentCategory, domain.ComponentKind, domain.ComponentRequiredness) {
+func componentMetadata(id string) (domain.ComponentLayer, []string) {
 	switch id {
 	case "component-bke-cert":
-		return domain.LayerHostFoundation, domain.CategorySecurity, domain.ComponentDeliveryStage, domain.RequiredProfile
+		return domain.LayerHostFoundation, []string{"security", "delivery"}
 	case "component-bke-bootstrap":
-		return domain.LayerHostFoundation, domain.CategoryBootstrap, domain.ComponentDeliveryStage, domain.RequiredProfile
+		return domain.LayerHostFoundation, []string{"bootstrap", "delivery"}
 	case "component-host-preflight":
-		return domain.LayerHostFoundation, domain.CategoryPreflight, domain.ComponentDeliveryStage, domain.RequiredCore
+		return domain.LayerHostFoundation, []string{"preflight", "core"}
 	case "component-host-bootstrap":
-		return domain.LayerHostFoundation, domain.CategoryBootstrap, domain.ComponentConfiguration, domain.RequiredCore
+		return domain.LayerHostFoundation, []string{"bootstrap", "configuration", "core"}
 	case "component-cluster-pki":
-		return domain.LayerHostFoundation, domain.CategorySecurity, domain.ComponentArtifactSet, domain.RequiredCore
+		return domain.LayerHostFoundation, []string{"security", "artifacts", "core"}
 	case "component-kubernetes-encryption-config":
-		return domain.LayerHostFoundation, domain.CategorySecurity, domain.ComponentConfiguration, domain.RequiredProfile
+		return domain.LayerHostFoundation, []string{"security", "configuration"}
 	case "component-containerd":
-		return domain.LayerRuntimeState, domain.CategoryRuntime, domain.ComponentSoftware, domain.RequiredProfile
+		return domain.LayerRuntimeState, []string{"runtime"}
 	case "component-docker":
-		return domain.LayerRuntimeState, domain.CategoryRuntime, domain.ComponentSoftware, domain.RequiredProfile
+		return domain.LayerRuntimeState, []string{"runtime"}
 	case "component-etcd":
-		return domain.LayerRuntimeState, domain.CategoryStateStore, domain.ComponentSoftware, domain.RequiredCore
+		return domain.LayerRuntimeState, []string{"state_store", "core"}
 	case "component-kubernetes":
-		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentSoftwareBundle, domain.RequiredCore
+		return domain.LayerOrchestrationCore, []string{"control_plane", "core"}
 	case "component-kubernetes-distribution":
-		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentSoftwareBundle, domain.RequiredCore
+		return domain.LayerOrchestrationCore, []string{"control_plane", "distribution", "core"}
 	case "component-kube-apiserver", "component-kube-controller-manager", "component-kube-scheduler":
-		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentSoftware, domain.RequiredCore
+		return domain.LayerOrchestrationCore, []string{"control_plane", "core"}
 	case "component-kubernetes-bootstrap-rbac":
-		return domain.LayerOrchestrationCore, domain.CategoryControlPlane, domain.ComponentConfiguration, domain.RequiredCore
+		return domain.LayerOrchestrationCore, []string{"control_plane", "configuration", "core"}
 	case "component-kubelet":
-		return domain.LayerOrchestrationCore, domain.CategoryWorker, domain.ComponentSoftware, domain.RequiredCore
+		return domain.LayerOrchestrationCore, []string{"worker", "core"}
 	case "component-kube-proxy":
-		return domain.LayerOrchestrationCore, domain.CategoryNetwork, domain.ComponentSoftware, domain.RequiredProfile
+		return domain.LayerOrchestrationCore, []string{"network"}
 	case "component-calico", "component-flannel":
-		return domain.LayerClusterService, domain.CategoryNetwork, domain.ComponentSoftware, domain.RequiredProfile
+		return domain.LayerClusterService, []string{"network"}
 	case "component-coredns":
-		return domain.LayerClusterService, domain.CategoryDNS, domain.ComponentSoftware, domain.RequiredCore
+		return domain.LayerClusterService, []string{"dns", "core"}
 	case "component-haproxy":
-		return domain.LayerClusterService, domain.CategoryIngress, domain.ComponentSoftware, domain.RequiredOptional
+		return domain.LayerClusterService, []string{"ingress", "optional"}
 	case "component-glusterfs-client":
-		return domain.LayerClusterService, domain.CategoryStorage, domain.ComponentSoftware, domain.RequiredOptional
+		return domain.LayerClusterService, []string{"storage", "optional"}
 	case "component-node-logging":
-		return domain.LayerObservabilityManagement, domain.CategoryNodeManagement, domain.ComponentConfiguration, domain.RequiredOptional
+		return domain.LayerObservabilityManagement, []string{"node_management", "configuration", "optional"}
 	case "component-blackbox-exporter", "component-node-exporter", "component-metrics-server":
-		return domain.LayerObservabilityManagement, domain.CategoryObservability, domain.ComponentSoftware, domain.RequiredOptional
+		return domain.LayerObservabilityManagement, []string{"observability", "optional"}
 	case "component-amc", "component-go-pprof-toolkit":
-		return domain.LayerObservabilityManagement, domain.CategoryNodeManagement, domain.ComponentSoftware, domain.RequiredOptional
+		return domain.LayerObservabilityManagement, []string{"node_management", "optional"}
 	case "component-prometheus-access-bootstrap":
-		return domain.LayerObservabilityManagement, domain.CategoryObservability, domain.ComponentConfiguration, domain.RequiredOptional
+		return domain.LayerObservabilityManagement, []string{"observability", "configuration", "optional"}
 	case "component-bke-common", "component-bke-master", "component-bke-nodes":
-		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentDeliveryStage, domain.RequiredProfile
+		return domain.LayerPlatformExtension, []string{"platform", "delivery"}
 	case "component-bke-addon":
-		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentSoftwareBundle, domain.RequiredProfile
+		return domain.LayerPlatformExtension, []string{"platform", "addon"}
 	case "component-autoscaling-rbac":
-		return domain.LayerPlatformExtension, domain.CategoryAutoscaling, domain.ComponentConfiguration, domain.RequiredOptional
+		return domain.LayerPlatformExtension, []string{"autoscaling", "configuration", "optional"}
 	default:
-		// Unknown component ID — assign a safe default classification
-		// rather than crashing the process.
-		return domain.LayerPlatformExtension, domain.CategoryPlatform, domain.ComponentSoftware, domain.RequiredOptional
+		return domain.LayerPlatformExtension, []string{"platform", "optional"}
 	}
 }
 
@@ -284,12 +278,8 @@ func (s Seeder) createScenarioRevisionIfMissing(ctx context.Context, value domai
 	if err != nil {
 		return err
 	}
-	policy, err := json.Marshal(value.ExecutionPolicy)
-	if err != nil {
-		return err
-	}
-	_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		value.ID, value.ScenarioID, value.Revision, value.Status, string(graph), string(policy), seedTime(value.CreatedAt), seedPtrTime(value.TestPassedAt), seedPtrTime(value.ReleasedAt), seedPtrTime(value.DeprecatedAt))
+	_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,created_at,test_passed_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		value.ID, value.ScenarioID, value.Revision, value.Status, string(graph), seedTime(value.CreatedAt), seedPtrTime(value.TestPassedAt), seedPtrTime(value.ReleasedAt), seedPtrTime(value.DeprecatedAt))
 	return err
 }
 
@@ -319,12 +309,8 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		if inventory == "" {
 			inventory = "{}"
 		}
-		maxConcurrent := revision.MaxConcurrent
-		if maxConcurrent < 1 {
-			maxConcurrent = 1
-		}
-		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,max_concurrent,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(variables), string(credentialRefs), maxConcurrent, revision.CreatedBy, revision.ChangeReason, seedTime(revision.CreatedAt))
+		_, err = s.Store.DB().ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			revision.ID, revision.EnvironmentID, revision.Revision, string(facts), inventory, string(variables), string(credentialRefs), revision.CreatedBy, revision.ChangeReason, seedTime(revision.CreatedAt))
 		return err
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err

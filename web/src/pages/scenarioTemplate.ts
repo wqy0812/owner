@@ -4,7 +4,6 @@ import { COMPONENT_LAYERS } from '../types/componentClassification';
 export interface ScenarioTemplate {
   nodes: ScenarioNode[];
   edges: ScenarioEdge[];
-  executionPolicy: Record<string, unknown>;
 }
 
 const ACTION_TYPES = new Set<ActionDefinition['type']>(['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall']);
@@ -35,8 +34,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { throw new Error('场景模板不是有效 JSON。'); }
   if (!isRecord(raw) || !Array.isArray(raw.nodes) || !Array.isArray(raw.edges)) throw new Error('模板必须包含 nodes 和 edges 数组。');
-  assertOnlyKeys(raw, ['nodes', 'edges', 'executionPolicy'], '场景模板');
-  if (!isRecord(raw.executionPolicy ?? {})) throw new Error('executionPolicy 必须是对象。');
+  assertOnlyKeys(raw, ['nodes', 'edges'], '场景模板');
 
   const nodeIDs = new Set<string>();
   const nodes = raw.nodes.map((value, index) => {
@@ -110,7 +108,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     }
   }
   if (visited !== nodes.length) throw new Error('场景节点和边必须组成无环 DAG。');
-  return { nodes, edges, executionPolicy: raw.executionPolicy as Record<string, unknown> ?? {} };
+  return { nodes, edges };
 }
 
 export function validateScenarioTemplateReferences(template: ScenarioTemplate, components: Component[]) {
@@ -130,6 +128,5 @@ export function serializeScenarioTemplate(template: ScenarioTemplate) {
   return JSON.stringify({
     nodes: template.nodes.map(({ id, position, data }) => ({ id, type: 'component', position, data })),
     edges: template.edges.map(({ id, source, target }) => ({ id, source, target })),
-    executionPolicy: template.executionPolicy,
   }, null, 2);
 }

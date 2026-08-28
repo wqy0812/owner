@@ -6,25 +6,18 @@ import (
 )
 
 func TestValidateComponentClassification(t *testing.T) {
-	for layer, categories := range componentCategoriesByLayer {
-		for _, category := range categories {
-			component := Component{Layer: layer, Category: category, Kind: ComponentSoftware, Requiredness: RequiredProfile}
-			if err := ValidateComponentClassification(component); err != nil {
-				t.Fatalf("valid classification %s/%s: %v", layer, category, err)
-			}
-		}
-	}
-	for _, kind := range []ComponentKind{ComponentConfiguration, ComponentArtifactSet} {
-		component := Component{Layer: LayerHostFoundation, Category: CategorySecurity, Kind: kind, Requiredness: RequiredCore}
+	for _, layer := range []ComponentLayer{LayerHostFoundation, LayerRuntimeState, LayerOrchestrationCore, LayerClusterService, LayerObservabilityManagement, LayerPlatformExtension} {
+		component := Component{Layer: layer, Tags: []string{"runtime", "core"}}
 		if err := ValidateComponentClassification(component); err != nil {
-			t.Fatalf("valid component kind %s: %v", kind, err)
+			t.Fatalf("valid metadata %s: %v", layer, err)
 		}
 	}
 	for _, invalid := range []Component{
-		{Layer: LayerRuntimeState, Category: CategoryNetwork, Kind: ComponentSoftware, Requiredness: RequiredProfile},
-		{Layer: "unknown", Category: CategoryRuntime, Kind: ComponentSoftware, Requiredness: RequiredProfile},
-		{Layer: LayerRuntimeState, Category: CategoryRuntime, Kind: "unknown", Requiredness: RequiredProfile},
-		{Layer: LayerRuntimeState, Category: CategoryRuntime, Kind: ComponentSoftware, Requiredness: "unknown"},
+		{Layer: "unknown"},
+		{Layer: LayerRuntimeState, Tags: []string{"UPPER"}},
+		{Layer: LayerRuntimeState, Tags: []string{"has space"}},
+		{Layer: LayerRuntimeState, Tags: []string{"duplicate", "duplicate"}},
+		{Layer: LayerRuntimeState, Tags: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}},
 	} {
 		if err := ValidateComponentClassification(invalid); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid classification %+v returned %v", invalid, err)

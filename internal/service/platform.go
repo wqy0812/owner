@@ -12,23 +12,20 @@ import (
 	"sync"
 	"time"
 
-	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
 )
 
-type Runner interface {
-	Run(context.Context, ansiblerunner.Request) (ansiblerunner.Result, error)
-}
-
 type Platform struct {
-	store          *store.Store
-	runner         Runner
-	hub            *EventHub
-	playbookRoot   string
-	imageBuildRoot string
-	dockerBinary   string
-	dialContext    func(context.Context, string, string) (net.Conn, error)
+	store            *store.Store
+	runner           Runner
+	artifactDelivery ArtifactDelivery
+	imageDelivery    ImageDelivery
+	hub              *EventHub
+	playbookRoot     string
+	imageBuildRoot   string
+	dockerBinary     string
+	dialContext      func(context.Context, string, string) (net.Conn, error)
 
 	rootCtx         context.Context
 	cancel          context.CancelFunc
@@ -36,6 +33,21 @@ type Platform struct {
 	workers         map[string]environmentWorkerState
 	nextWorkerToken uint64
 	active          map[string]context.CancelFunc
+
+	identity           *IdentityService
+	catalog            *CatalogService
+	scenarios          *ScenarioService
+	environments       *EnvironmentService
+	execution          *ExecutionService
+	readModel          *ReadModelService
+	releaseCoordinator *ReleaseCoordinator
+	planBuilder        *PlanBuilder
+	runCreator         *RunCreator
+	runScheduler       *RunScheduler
+	runExecutor        *RunExecutor
+	lifecycleRecorder  *LifecycleRecorder
+	rollbackPlanner    *RollbackPlanner
+	approvals          *ApprovalService
 }
 
 type environmentWorkerState struct {
@@ -48,12 +60,28 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 		hub = NewEventHub()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Platform{
+	platform := &Platform{
 		store: database, runner: runner, hub: hub,
+		artifactDelivery: NewHTTPArtifactDelivery(nil), imageDelivery: NewDockerImageDelivery("docker"),
 		dialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
 		rootCtx:     ctx, cancel: cancel,
 		workers: make(map[string]environmentWorkerState), active: make(map[string]context.CancelFunc),
 	}
+	platform.identity = &IdentityService{store: database}
+	platform.catalog = &CatalogService{platform: platform, store: database}
+	platform.scenarios = &ScenarioService{platform: platform, store: database}
+	platform.environments = &EnvironmentService{platform: platform, store: database}
+	platform.execution = &ExecutionService{platform: platform, store: database}
+	platform.readModel = &ReadModelService{platform: platform, store: database}
+	platform.releaseCoordinator = &ReleaseCoordinator{platform: platform, store: database}
+	platform.planBuilder = &PlanBuilder{platform: platform}
+	platform.runCreator = &RunCreator{platform: platform}
+	platform.runScheduler = &RunScheduler{platform: platform}
+	platform.runExecutor = &RunExecutor{platform: platform}
+	platform.lifecycleRecorder = &LifecycleRecorder{platform: platform}
+	platform.rollbackPlanner = &RollbackPlanner{platform: platform}
+	platform.approvals = &ApprovalService{platform: platform}
+	return platform
 }
 
 func (p *Platform) ConfigureEnvironmentHealthDialer(dial func(context.Context, string, string) (net.Conn, error)) {
@@ -62,8 +90,7 @@ func (p *Platform) ConfigureEnvironmentHealthDialer(dial func(context.Context, s
 	}
 }
 
-func (p *Platform) Store() *store.Store { return p.store }
-func (p *Platform) Hub() *EventHub      { return p.hub }
+func (p *Platform) Hub() *EventHub { return p.hub }
 
 // ConfigurePlaybookRoot enables owner-managed Playbooks below the same tree
 // used by the Ansible runner. Each Draft receives its own directory so online
@@ -75,6 +102,19 @@ func (p *Platform) ConfigurePlaybookRoot(root string) {
 func (p *Platform) ConfigureImageBuilder(buildRoot, dockerBinary string) {
 	p.imageBuildRoot = strings.TrimSpace(buildRoot)
 	p.dockerBinary = strings.TrimSpace(dockerBinary)
+	p.imageDelivery = NewDockerImageDelivery(p.dockerBinary)
+}
+
+// ConfigureDeliveryAdapters installs the statically assembled delivery ports.
+// Nil values preserve the current adapter, which keeps startup wiring explicit
+// while allowing isolated acceptance tests to avoid external registries.
+func (p *Platform) ConfigureDeliveryAdapters(artifact ArtifactDelivery, image ImageDelivery) {
+	if artifact != nil {
+		p.artifactDelivery = artifact
+	}
+	if image != nil {
+		p.imageDelivery = image
+	}
 }
 
 func (p *Platform) Start(ctx context.Context) error {
@@ -174,9 +214,6 @@ func actionFor(release domain.ComponentRelease, kind domain.ActionKind) (domain.
 func validateRelease(release domain.ComponentRelease) error {
 	if strings.TrimSpace(release.Version) == "" {
 		return fmt.Errorf("%w: version is required", domain.ErrInvalid)
-	}
-	if release.Type != domain.ReleaseAtomic && release.Type != domain.ReleaseBundle {
-		return fmt.Errorf("%w: release type must be atomic or bundle", domain.ErrInvalid)
 	}
 	if release.RiskLevel != "" && !validRiskLevel(release.RiskLevel) {
 		return fmt.Errorf("%w: invalid release risk level %q", domain.ErrInvalid, release.RiskLevel)

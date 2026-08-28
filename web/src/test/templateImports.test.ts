@@ -6,10 +6,10 @@ import type { Component } from '../types/domain';
 function componentTemplate(overrides: Record<string, unknown> = {}) {
   return [{
     component: {
-      name: 'Runtime', slug: 'runtime', description: 'runtime', layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'core_required',
+      name: 'Runtime', slug: 'runtime', description: 'runtime', layer: 'runtime_state', tags: ['runtime', 'core'],
     },
     release: {
-      version: '1.0.0', type: 'atomic', parameters: [], dependencies: [],
+      version: '1.0.0', parameters: [], dependencies: [],
       actions: [
         { name: 'install', type: 'install', playbook: 'install.yml', timeoutSeconds: 60 },
         { name: 'verify', type: 'verify', playbook: 'verify.yml', timeoutSeconds: 60 },
@@ -85,18 +85,17 @@ describe('scenario template import', () => {
       data: { label: 'Runtime', componentId: 'component-runtime', releaseId: 'release-runtime', action: 'install' as const, hostGroup: 'workers', values: {}, runInputs: [] },
     }],
     edges: [],
-    executionPolicy: { failure: 'stop' },
   };
 
-  it('round-trips nodes, edges, and execution policy without loss', () => {
+  it('round-trips nodes and edges without loss', () => {
     expect(parseScenarioTemplate(serializeScenarioTemplate(template))).toEqual(template);
   });
 
   it('rejects malformed nodes, invalid coordinates, and missing edge endpoints', () => {
-    expect(() => parseScenarioTemplate('{"nodes":[{}],"edges":[],"executionPolicy":{}}')).toThrow(/节点结构无效/);
+    expect(() => parseScenarioTemplate('{"nodes":[{}],"edges":[]}')).toThrow(/节点结构无效/);
     expect(() => parseScenarioTemplate(JSON.stringify({ ...template, nodes: [{ ...template.nodes[0], position: { x: 'bad', y: 1 } }] }))).toThrow(/有限坐标/);
     expect(() => parseScenarioTemplate(JSON.stringify({ ...template, edges: [{ id: 'missing', source: 'runtime', target: 'absent' }] }))).toThrow(/不存在的节点/);
-    expect(() => parseScenarioTemplate(JSON.stringify({ ...template, executionPolicy: [] }))).toThrow(/必须是对象/);
+    expect(() => parseScenarioTemplate(JSON.stringify({ ...template, executionPolicy: {} }))).toThrow(/不支持字段 executionPolicy/);
     expect(() => parseScenarioTemplate(JSON.stringify({ ...template, edges: [{ id: 'legacy', source: 'runtime', target: 'runtime', label: 'legacy' }] }))).toThrow(/不支持字段 label/);
   });
 
@@ -116,8 +115,8 @@ describe('scenario template import', () => {
 
     const component = {
       id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: 'component-alice',
-      layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'core_required',
-      releases: [{ id: 'release-runtime', componentId: 'component-runtime', version: '1.0.0', state: 'released', actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
+      layer: 'runtime_state', tags: ['runtime', 'core'],
+      releases: [{ id: 'release-runtime', componentId: 'component-runtime', version: '1.0.0', state: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
     } as Component;
     expect(() => validateScenarioTemplateReferences(template, [component])).toThrow(/不支持 install/);
     const verifiedTemplate: any = structuredClone(template);

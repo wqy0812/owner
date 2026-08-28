@@ -9,7 +9,7 @@ function document(reference?: string, declared = false): EnvironmentExportDocume
     containsCredentialReferences: declared,
     source: { environmentId: 'environment-source', environmentName: 'Source', revisionId: 'revision-source', revision: 1 },
     snapshot: {
-      facts: {}, hosts: [], variables: {}, maxConcurrent: 1,
+      facts: {}, hosts: [], variables: {},
       credentialRefs: [{ name: 'SSH_KEY', kind: 'envVarRef', reference }],
     },
   };

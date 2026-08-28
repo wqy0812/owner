@@ -151,24 +151,23 @@ func openFuyaoParameterDefault(parameters []domain.ParameterDefinition, key stri
 func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComponent {
 	type spec struct {
 		id, slug, name, owner, group string
-		kind                         domain.ReleaseType
 		parameters                   []string
 		credentials                  []string
 		tags                         []string
 		dependencies                 []domain.ComponentDependency
 	}
 	specs := []spec{
-		{id: "component-bke-cert", slug: "bke-cert", name: "BKE Certificates", owner: ComponentOwnerRuntimeID, group: "bootstrap_host", kind: domain.ReleaseAtomic,
+		{id: "component-bke-cert", slug: "bke-cert", name: "BKE Certificates", owner: ComponentOwnerRuntimeID, group: "bootstrap_host",
 			parameters: []string{"cluster_id", "target_host_group", "SERVICE_IP_RANGE_IPV4", "KUBERNETES_CLUSTER_IP", "certOutputPath", "certOutputFile", "cert_config", "CERT_EXPIRY_TIME"}, credentials: openFuyaoSSHCredentials, tags: []string{"ins"}},
-		{id: "component-bke-bootstrap", slug: "bke-bootstrap", name: "BKE Bootstrap", owner: ComponentOwnerRuntimeID, group: "bootstrap_host", kind: domain.ReleaseAtomic,
+		{id: "component-bke-bootstrap", slug: "bke-bootstrap", name: "BKE Bootstrap", owner: ComponentOwnerRuntimeID, group: "bootstrap_host",
 			parameters: []string{"cluster_id", "target_host_group", "BKE_ADMIN", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS", "ENV_CHART_REPO_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_IP", "ENV_DOCKER_HARBOR_PORT", "ENV_DOCKER_HARBOR_PORJECT", "ENV_FILESTATION_URL", "BOOTSTRAP_IMAGE", "ENV_AMC_USABLITY_ADDR", "ENV_AMC_USABLITY_PORT", "openFuyao_version"}, credentials: openFuyaoSSHCredentials, tags: []string{"rcv", "ins"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-cert", UpstreamReleaseID: "release-bke-cert-25.12", Purpose: "management cluster certificate bootstrap"}}},
-		{id: "component-bke-common", slug: "bke-common", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "management_cluster_k8smaster", kind: domain.ReleaseAtomic,
+		{id: "component-bke-common", slug: "bke-common", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_PORT"}, credentials: openFuyaoRegistryCredentials, tags: []string{"image_plugin", "ins"}},
-		{id: "component-bke-addon", slug: "bke-addon", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster", kind: domain.ReleaseBundle,
+		{id: "component-bke-addon", slug: "bke-addon", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "strategy", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "chart_museum_url", "helm_repo_name", "addon_params"}, credentials: openFuyaoRepositoryCredentials, tags: []string{"init"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-25.12", Purpose: "image credential provider and cluster logging"}}},
-		{id: "component-bke-master", slug: "bke-master", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster", kind: domain.ReleaseAtomic,
+		{id: "component-bke-master", slug: "bke-master", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{
 				"cluster_id", "cluster_role", "target_host_group", "strategy", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS",
 				"ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_IP", "ENV_DOCKER_HARBOR_PORT", "ENV_DOCKER_HARBOR_PORJECT",
@@ -180,7 +179,7 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 				"bkeagent_deployer_tag", "IP_MOD_VERSION", "certOutputPath", "certOutputFile", "addon_params",
 			}, credentials: openFuyaoRegistryCredentials, tags: []string{"rcv", "ins"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-25.12", Purpose: "cluster manifests and chart repository preparation"}}},
-		{id: "component-bke-nodes", slug: "bke-nodes", name: "BKE Work Nodes", owner: ComponentOwnerK8sID, group: "work_cluster_k8snode", kind: domain.ReleaseAtomic,
+		{id: "component-bke-nodes", slug: "bke-nodes", name: "BKE Work Nodes", owner: ComponentOwnerK8sID, group: "work_cluster_k8snode",
 			parameters: []string{"cluster_id", "cluster_role", "target_host_group", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS", "ENV_FILESTATION_URL", "NET_IPV4_IP_LOCAL_PORT_RANGE"}, credentials: openFuyaoSSHCredentials, tags: []string{"image_plugin", "rcv", "ins"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-master", UpstreamReleaseID: "release-bke-master-25.12", Purpose: "ready work-cluster control plane"}}},
 	}
@@ -194,9 +193,9 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 			parameters = openFuyaoParameterDefault(parameters, "cluster_id", "demo-work-cluster")
 		}
 		release := domain.ComponentRelease{
-			ID: releaseID, ComponentID: item.id, Version: "v25.12", Type: item.kind, Status: domain.ReleaseReleased,
+			ID: releaseID, ComponentID: item.id, Version: "v25.12", Status: domain.ReleaseReleased,
 			ReleaseNotes: "OpenFuyao v25.12 作业快照的平台变量契约；真实介质和目标环境尚未验真。",
-			Verified:     false, RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
+			RiskLevel:    domain.RiskDestructive, EnvironmentConstraints: constraints,
 			Parameters: parameters, Dependencies: item.dependencies,
 			Actions: []domain.ActionDefinition{{
 				ID: "action-" + item.slug + "-install", ReleaseID: releaseID,
@@ -273,15 +272,15 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 	}{
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao", Slug: "openfuyao-management-cluster", Name: "OpenFuyao Management Cluster Build", Description: "构建 OpenFuyao 管理集群；包含恢复步骤，执行前必须审批。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: "scenario-openfuyao", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: managerNodes, Edges: chainEdges("open-manager", managerNodes)}, ExecutionPolicy: openFuyaoExecutionPolicy(), CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: "scenario-openfuyao", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: managerNodes, Edges: chainEdges("open-manager", managerNodes)}, CreatedAt: now},
 		},
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao-work-cluster", Slug: "openfuyao-work-cluster", Name: "OpenFuyao Work Cluster Build", Description: "独立构建业务集群控制面，不自动纳管工作节点。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-cluster-r1", ScenarioID: "scenario-openfuyao-work-cluster", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: workNodes, Edges: chainEdges("open-work", workNodes)}, ExecutionPolicy: openFuyaoExecutionPolicy(), CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-cluster-r1", ScenarioID: "scenario-openfuyao-work-cluster", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: workNodes, Edges: chainEdges("open-work", workNodes)}, CreatedAt: now},
 		},
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao-work-nodes", Slug: "openfuyao-work-node-enrollment", Name: "OpenFuyao Work Node Enrollment", Description: "先只读确认业务集群就绪，再独立纳管工作节点。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-nodes-r1", ScenarioID: "scenario-openfuyao-work-nodes", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: enrollmentNodes, Edges: chainEdges("open-enroll", enrollmentNodes)}, ExecutionPolicy: openFuyaoExecutionPolicy(), CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-nodes-r1", ScenarioID: "scenario-openfuyao-work-nodes", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: enrollmentNodes, Edges: chainEdges("open-enroll", enrollmentNodes)}, CreatedAt: now},
 		},
 	}
 	for _, definition := range definitions {
@@ -290,10 +289,6 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 		}
 	}
 	return nil
-}
-
-func openFuyaoExecutionPolicy() map[string]any {
-	return map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}
 }
 
 func openFuyaoDefaultParameters() map[string]any {
@@ -354,6 +349,6 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 	}
 	sort.Slice(credentialRefs, func(i, j int) bool { return credentialRefs[i].Name < credentialRefs[j].Name })
 	environment := domain.Environment{ID: "environment-openfuyao-template", Name: "OpenFuyao Preflight Template", Description: "包含管理集群、业务控制面和业务节点的 TEST-NET 脱敏模板；不会连接真实基础设施。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "Kylin", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, MaxConcurrent: 1, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "Kylin", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
 	return s.createEnvironmentIfMissing(ctx, environment, revision)
 }

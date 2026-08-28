@@ -20,15 +20,24 @@ const components = [{
   ownerId: alice.id,
   description: 'CRI runtime',
   layer: 'runtime_state',
-  category: 'runtime',
-  kind: 'software',
-  requiredness: 'profile_required',
-  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] },
-  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', verified: true, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
+  tags: ['runtime'],
+  latestRelease: { id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] },
+  releases: [{ id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', requiredCredentials: ['ansible_ssh_pass', 'registry_user'] }, { kind: 'verify', playbook: 'verify.yml', requiredCredentials: ['ansible_ssh_pass'] }, { kind: 'rollback', playbook: 'rollback.yml' }] }],
 }];
 
 function json(data: unknown, status = 200) {
-  return Promise.resolve(new Response(JSON.stringify(status >= 400 ? data : Array.isArray(data) ? { items: data } : { data }), {
+  const completeReleaseDTOs = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(completeReleaseDTOs);
+    if (!value || typeof value !== 'object') return value;
+    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, completeReleaseDTOs(item)]));
+    if (typeof result.componentId === 'string' && typeof result.version === 'string' && typeof result.status === 'string' && !result.readiness) {
+      result.readiness = { status: 'ready', blockers: [] };
+    }
+    return result;
+  };
+  const currentContractData = completeReleaseDTOs(data);
+  const body = status >= 400 ? data : Array.isArray(data) ? { items: currentContractData } : { data: currentContractData };
+  return Promise.resolve(new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   }));
@@ -68,7 +77,6 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         state: 'draft',
         nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
-        executionPolicy: {},
       },
       revisions: [{
         id: 'scenario-openfuyao-r1',
@@ -77,7 +85,6 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         state: 'draft',
         nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
-        executionPolicy: {},
       }],
     }] : []);
     if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
@@ -264,8 +271,8 @@ describe('platform shell and RBAC UI', () => {
     const scenarios = ['a', 'b'].map((id) => ({
       id: `scenario-${id}`, name: `Scenario ${id.toUpperCase()}`, ownerId: carol.id, slug: `scenario-${id}`,
       currentRevisionId: `scenario-${id}-r1`,
-      currentRevision: { id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [], executionPolicy: {} },
-      revisions: [{ id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [], executionPolicy: {} }],
+      currentRevision: { id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [] },
+      revisions: [{ id: `scenario-${id}-r1`, scenarioId: `scenario-${id}`, revision: 1, state: 'draft', nodes: [], edges: [] }],
     }));
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -285,7 +292,7 @@ describe('platform shell and RBAC UI', () => {
     let candidateBody: Record<string, unknown> | undefined;
     const release = {
       id: 'release-stale-candidate', componentId: 'component-stale-candidate', version: '1.0.0-rc1', status: 'draft',
-      candidate: true, verified: false, parameters: [], dependencies: [],
+      candidate: true, readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [],
       actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
     };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -297,7 +304,7 @@ describe('platform shell and RBAC UI', () => {
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-stale-candidate', name: 'Stale Candidate', slug: 'stale-candidate', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'core_required',
+        layer: 'runtime_state', tags: ['runtime'],
         latestRelease: release, releases: [release],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -379,11 +386,11 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
         latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
         releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }, {
-        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', tags: ['network'],
         latestRelease: {
           id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
           parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
@@ -412,12 +419,12 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-controller-manager', name: 'kube-controller-manager', slug: 'kube-controller-manager', ownerId: alice.id,
-        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        layer: 'orchestration_core', tags: ['control_plane'],
         latestRelease: { id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', status: 'released' },
         releases: [{ id: 'release-controller-manager', componentId: 'component-controller-manager', version: 'controller-1.17.5', status: 'released' }],
       }, {
         id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
-        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        layer: 'orchestration_core', tags: ['control_plane'],
         latestRelease: { id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', status: 'released' },
         releases: [{ id: 'release-scheduler', componentId: 'component-scheduler', version: 'scheduler-1.17.5', status: 'released' }],
       }]);
@@ -437,12 +444,12 @@ describe('platform shell and RBAC UI', () => {
 
   it('keeps component navigation locked until a Draft save finishes and its dialog unmounts', async () => {
     const schedulerDraft = {
-      id: 'release-scheduler-draft', componentId: 'component-scheduler', version: '1.17.5-r2', type: 'atomic',
+      id: 'release-scheduler-draft', componentId: 'component-scheduler', version: '1.17.5-r2',
       status: 'draft', releaseNotes: 'Scheduler draft', parameters: [], dependencies: [],
       actions: [{ name: 'rollback', kind: 'rollback', playbook: 'managed/scheduler/kube-scheduler-rollback.yml', fromReleaseId: '1.17.5-r2', toReleaseId: '1.17.5' }],
     };
     const proxyDraft = {
-      id: 'release-proxy-draft', componentId: 'component-proxy', version: '1.17.5-r2', type: 'atomic',
+      id: 'release-proxy-draft', componentId: 'component-proxy', version: '1.17.5-r2',
       status: 'draft', releaseNotes: 'Proxy draft', parameters: [], dependencies: [], actions: [],
     };
     let resolveSave!: (response: Response) => void;
@@ -453,11 +460,11 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/component-releases/release-scheduler-draft') && init?.method === 'PUT') return saveResponse;
       if (url.endsWith('/components')) return json([{
         id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
-        layer: 'orchestration_core', category: 'control_plane', kind: 'software', requiredness: 'core_required',
+        layer: 'orchestration_core', tags: ['control_plane'],
         latestRelease: schedulerDraft, releases: [schedulerDraft],
       }, {
         id: 'component-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id,
-        layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        layer: 'orchestration_core', tags: ['network'],
         latestRelease: proxyDraft, releases: [proxyDraft],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -494,7 +501,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', tags: ['network'],
         latestRelease: { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', status: 'released', parameters: [], dependencies: [] },
         releases: [
           { id: 'release-kube-proxy-new', componentId: 'component-kube-proxy', version: '1.34.3', status: 'released', parameters: [], dependencies: [] },
@@ -505,7 +512,7 @@ describe('platform shell and RBAC UI', () => {
           },
         ],
       }, {
-        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
         latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
         releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }]);
@@ -541,11 +548,11 @@ describe('platform shell and RBAC UI', () => {
         return json({ ...draft, ...JSON.parse(String(init.body)), status: 'draft' });
       }
       if (url.endsWith('/components')) return json([{
-        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
         latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
         releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
       }, {
-        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', category: 'network', kind: 'software', requiredness: 'profile_required',
+        id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', tags: ['network'],
         latestRelease: draft,
         releases: [draft],
       }]);
@@ -616,7 +623,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
         latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
         releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
       }]);
@@ -644,7 +651,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', category: 'worker', kind: 'software', requiredness: 'core_required',
+        id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
         latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] },
         releases: [{ id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.17.6', status: 'draft', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'internal' }] }],
       }]);
@@ -708,7 +715,7 @@ describe('platform shell and RBAC UI', () => {
   it('shows Draft readiness and links current install and rollback evidence', async () => {
     const draft = {
       ...components[0].releases[0], id: 'release-containerd-draft', version: 'v2.2.0-rc1', status: 'draft',
-      verified: true, dependencies: [], parameters: [],
+      readiness: { status: 'ready', blockers: [], installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback' }, dependencies: [], parameters: [],
       actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
     };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -736,7 +743,7 @@ describe('platform shell and RBAC UI', () => {
   it('does not count rollback-only runs as Draft delivery evidence', async () => {
     const draft = {
       ...components[0].releases[0], id: 'release-containerd-rollback-only', version: 'v2.2.0-rc2', status: 'draft',
-      verified: true, dependencies: [], parameters: [],
+      readiness: { status: 'blocked', blockers: [{ code: 'rollback_evidence_missing', message: '当前合同缺少回滚及回滚后验证证据', actionUrl: '/components?action=validate' }], installEvidenceRunId: 'run-install' }, dependencies: [], parameters: [],
       actions: [{ kind: 'install', playbook: 'install.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
     };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -831,7 +838,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-draft-deprecate', name: 'Draft Component', slug: 'draft-component', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'optional', latestRelease: draft, releases: [draft],
+        layer: 'runtime_state', tags: ['runtime'], latestRelease: draft, releases: [draft],
       }]);
       if (url.endsWith('/component-releases/release-draft-deprecate/impact')) return json({ componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
       if (url.endsWith('/component-releases/release-draft-deprecate/deprecate') && init?.method === 'POST') {
@@ -858,7 +865,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('shows released details and Playbook content without Draft edit shortcuts', async () => {
     const released = {
-      id: 'release-readonly', componentId: 'component-readonly', version: '1.2.3', status: 'released', type: 'atomic', riskLevel: 'medium',
+      id: 'release-readonly', componentId: 'component-readonly', version: '1.2.3', status: 'released', riskLevel: 'medium',
       releaseNotes: 'immutable release details', parameters: [], dependencies: [],
       actions: [{ name: 'install', kind: 'install', playbook: 'managed/readonly/install.yml', hostGroup: 'workers', timeoutSeconds: 900, requiredCredentials: ['SSH_KEY'] }],
     };
@@ -867,7 +874,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
         id: 'component-readonly', name: 'Readonly Component', slug: 'readonly-component', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'optional', latestRelease: released, releases: [released],
+        layer: 'runtime_state', tags: ['runtime'], latestRelease: released, releases: [released],
       }]);
       if (url.includes('/component-releases/release-readonly/playbook?path=')) return json({
         path: 'managed/readonly/install.yml', filename: 'install.yml', content: '---\n- hosts: workers\n  tasks: []\n', sha256: 'abc123',
@@ -893,7 +900,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', tags: ['runtime'],
         latestRelease: {
           id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE', 'Kylin'], ipFamily: ['IPv4'] },
@@ -926,7 +933,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
-        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        id: 'component-containerd', name: 'containerd', slug: 'containerd', ownerId: alice.id, layer: 'runtime_state', tags: ['runtime'],
         latestRelease: {
           id: 'release-containerd-2', componentId: 'component-containerd', version: 'v2.1.1', status: 'released',
           environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
@@ -971,21 +978,19 @@ describe('platform shell and RBAC UI', () => {
     });
   });
 
-  it('submits the complete component classification contract', async () => {
+  it('submits the simplified component metadata contract', async () => {
     const fetchMock = installFetch();
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '新建组件' }));
     await userEvent.type(screen.getByPlaceholderText('例如 containerd'), 'storage driver');
     await userEvent.type(screen.getByPlaceholderText('containerd'), 'storage-driver');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '组件层级' }), 'cluster_service');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '能力类别' }), 'storage');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '组件形态' }), 'software');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '必选性' }), 'optional');
+    await userEvent.type(screen.getByRole('textbox', { name: '标签' }), 'storage, optional');
     await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components') && init?.method === 'POST');
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-        layer: 'cluster_service', category: 'storage', kind: 'software', requiredness: 'optional',
+        layer: 'cluster_service', tags: ['storage', 'optional'],
       });
     });
   });
@@ -1002,7 +1007,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('previews rollback versions, invalidates stale plans, and submits rollback-only with the digest', async () => {
     const draft = {
-      id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1', type: 'atomic',
+      id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1',
       status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
       actions: [
         { name: 'install', kind: 'install', playbook: 'managed/runtime/install.yml' },
@@ -1039,9 +1044,9 @@ describe('platform shell and RBAC UI', () => {
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        layer: 'runtime_state', tags: ['runtime'],
         latestRelease: draft, releases: [draft, {
-          id: 'release-runtime-stable', componentId: 'component-runtime', version: '1.9.0', type: 'atomic',
+          id: 'release-runtime-stable', componentId: 'component-runtime', version: '1.9.0',
           status: 'released', releaseNotes: 'Stable', parameters: [], dependencies: [],
           actions: [{ name: 'verify', kind: 'verify', playbook: 'managed/runtime/verify.yml', hostGroup: 'runtime_nodes' }],
         }],
@@ -1163,7 +1168,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('locks the selected environment when submitting a Dockerfile image build', async () => {
     const draft = {
-      id: 'release-image-draft', componentId: 'component-image', version: '1.0.0-rc1', type: 'atomic',
+      id: 'release-image-draft', componentId: 'component-image', version: '1.0.0-rc1',
       status: 'draft', releaseNotes: 'Image candidate', parameters: [], dependencies: [], actions: [],
     };
     let submitted: FormData | undefined;
@@ -1181,7 +1186,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/component-releases/release-image-draft/image-builds')) return json([]);
       if (url.endsWith('/components')) return json([{
         id: 'component-image', name: 'Image component', slug: 'image', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required', latestRelease: draft, releases: [draft],
+        layer: 'runtime_state', tags: ['runtime'], latestRelease: draft, releases: [draft],
       }]);
       if (url.endsWith('/environments')) return json([{
         id: 'environment-build', name: 'Build Environment', ownerId: dave.id,
@@ -1207,7 +1212,7 @@ describe('platform shell and RBAC UI', () => {
 
   it('sends an explicit empty CredentialRef list and keeps it cleared after reopening', async () => {
     let draft = {
-      id: 'release-credential-draft', componentId: 'component-credential', version: '1.0.0-rc1', type: 'atomic' as const,
+      id: 'release-credential-draft', componentId: 'component-credential', version: '1.0.0-rc1',
       status: 'draft' as const, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
       actions: [{ id: 'action-install', name: 'install', kind: 'install' as const, playbook: 'managed/credential/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
     };
@@ -1222,7 +1227,7 @@ describe('platform shell and RBAC UI', () => {
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-credential', name: 'Credential component', slug: 'credential', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        layer: 'runtime_state', tags: ['runtime'],
         latestRelease: draft, releases: [draft],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -1249,11 +1254,11 @@ describe('platform shell and RBAC UI', () => {
 
   it('persists multiple lifecycle actions with distinct managed Playbooks', async () => {
     const previousRelease = {
-      id: 'release-docker-previous', componentId: 'component-docker', version: '25.0.0', type: 'atomic',
+      id: 'release-docker-previous', componentId: 'component-docker', version: '25.0.0',
       status: 'released', releaseNotes: 'Previous Docker Runtime', parameters: [], dependencies: [], actions: [],
     };
     let draft = {
-      id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0', type: 'atomic',
+      id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0',
       status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
       actions: [{ name: 'install', kind: 'install', playbook: 'managed/docker/release-docker-draft/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
     };
@@ -1286,7 +1291,7 @@ describe('platform shell and RBAC UI', () => {
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-docker', name: 'Docker Runtime', slug: 'docker', ownerId: alice.id,
-        layer: 'runtime_state', category: 'runtime', kind: 'software', requiredness: 'profile_required',
+        layer: 'runtime_state', tags: ['runtime'],
         latestRelease: draft, releases: [draft, previousRelease],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -1382,7 +1387,8 @@ describe('platform shell and RBAC UI', () => {
         reader.onerror = () => reject(reader.error);
         reader.readAsText(exportedBlob!);
       });
-      expect(JSON.parse(exportedText)).toMatchObject({ nodes: [{ id: 'bke-cert' }], edges: [], executionPolicy: {} });
+      expect(JSON.parse(exportedText)).toMatchObject({ nodes: [{ id: 'bke-cert' }], edges: [] });
+      expect(JSON.parse(exportedText)).not.toHaveProperty('executionPolicy');
       expect(clipboardWrite).not.toHaveBeenCalled();
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:scenario-export');
       expect(await screen.findByText('场景 JSON 已导出')).toBeInTheDocument();
@@ -1408,7 +1414,7 @@ describe('platform shell and RBAC UI', () => {
   it('confirms before creating a revision and does not submit when cancelled', async () => {
     const released = {
       id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released',
-      nodes: [], edges: [], executionPolicy: {},
+      nodes: [], edges: [],
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1445,11 +1451,11 @@ describe('platform shell and RBAC UI', () => {
   it('shows revision history and can abandon the current draft', async () => {
     const released = {
       id: 'scenario-history-r1', scenarioId: 'scenario-history', revision: 1, state: 'released',
-      nodes: [], edges: [], executionPolicy: {},
+      nodes: [], edges: [],
     };
     const draft = {
       id: 'scenario-history-r2', scenarioId: 'scenario-history', revision: 2, state: 'draft',
-      nodes: [], edges: [], executionPolicy: {},
+      nodes: [], edges: [],
     };
     const abandoned = { ...draft, state: 'abandoned' };
     let scenario = {
@@ -1493,7 +1499,7 @@ describe('platform shell and RBAC UI', () => {
   it('confirms and deletes a never-published scenario', async () => {
     const draft = {
       id: 'scenario-delete-r1', scenarioId: 'scenario-delete', revision: 1, state: 'draft',
-      nodes: [], edges: [], executionPolicy: {},
+      nodes: [], edges: [],
     };
     let scenarios = [{
       id: 'scenario-delete', slug: 'scenario-delete', name: 'Disposable Scenario', ownerId: carol.id,

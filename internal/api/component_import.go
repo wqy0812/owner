@@ -12,7 +12,7 @@ func (h *Handler) previewComponentImport(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.PreviewComponentImport(r.Context(), currentUser(r), input)
+	plan, err := h.platform.Catalog().PreviewImport(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -26,7 +26,7 @@ func (h *Handler) importComponents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	result, err := h.platform.ImportComponents(r.Context(), currentUser(r), input)
+	result, err := h.platform.Catalog().Import(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return

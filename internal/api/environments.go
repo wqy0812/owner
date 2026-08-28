@@ -9,7 +9,7 @@ import (
 )
 
 func (h *Handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
-	environments, err := h.platform.ListEnvironments(r.Context(), currentUser(r))
+	environments, err := h.platform.Environments().List(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -31,7 +31,7 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.CreateEnvironment(r.Context(), currentUser(r), domain.Environment{Name: input.Name, Description: input.Description}, input.Facts)
+	environment, err := h.platform.Environments().Create(r.Context(), currentUser(r), domain.Environment{Name: input.Name, Description: input.Description}, input.Facts)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -48,7 +48,7 @@ func (h *Handler) updateInventory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.UpdateInventory(r.Context(), currentUser(r), r.PathValue("id"), input.Hosts, input.ChangeReason)
+	environment, err := h.platform.Environments().UpdateInventory(r.Context(), currentUser(r), r.PathValue("id"), input.Hosts, input.ChangeReason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -65,7 +65,7 @@ func (h *Handler) updateFacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.UpdateEnvironmentFacts(r.Context(), currentUser(r), r.PathValue("id"), input.Facts, input.ChangeReason)
+	environment, err := h.platform.Environments().UpdateFacts(r.Context(), currentUser(r), r.PathValue("id"), input.Facts, input.ChangeReason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -82,7 +82,7 @@ func (h *Handler) updateVariables(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.UpdateEnvironmentVariables(r.Context(), currentUser(r), r.PathValue("id"), input.Variables, input.ChangeReason)
+	environment, err := h.platform.Environments().UpdateVariables(r.Context(), currentUser(r), r.PathValue("id"), input.Variables, input.ChangeReason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -107,7 +107,7 @@ func (h *Handler) updateCredentialRefs(w http.ResponseWriter, r *http.Request) {
 	for _, item := range input.CredentialRefs {
 		refs = append(refs, domain.CredentialRef{Name: item.Name, Kind: item.Kind, Reference: item.Reference})
 	}
-	environment, err := h.platform.UpdateCredentialRefs(r.Context(), currentUser(r), r.PathValue("id"), refs, input.ChangeReason)
+	environment, err := h.platform.Environments().UpdateCredentialRefs(r.Context(), currentUser(r), r.PathValue("id"), refs, input.ChangeReason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -116,7 +116,7 @@ func (h *Handler) updateCredentialRefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) checkEnvironmentHealth(w http.ResponseWriter, r *http.Request) {
-	check, err := h.platform.CheckEnvironmentHealth(r.Context(), currentUser(r), r.PathValue("id"))
+	check, err := h.platform.Environments().CheckHealth(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -125,7 +125,7 @@ func (h *Handler) checkEnvironmentHealth(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) previewEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
-	plan, err := h.platform.PreviewEnvironmentRollback(r.Context(), currentUser(r), r.PathValue("id"))
+	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -139,7 +139,7 @@ func (h *Handler) startEnvironmentRollback(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartEnvironmentRollback(r.Context(), currentUser(r), r.PathValue("id"), input)
+	run, err := h.platform.Execution().StartRollback(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -155,7 +155,7 @@ func (h *Handler) restoreEnvironmentRevision(w http.ResponseWriter, r *http.Requ
 		writeError(w, err)
 		return
 	}
-	environment, err := h.platform.RestoreEnvironmentRevision(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("revisionId"), input.ChangeReason)
+	environment, err := h.platform.Environments().RestoreRevision(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("revisionId"), input.ChangeReason)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -185,13 +185,12 @@ func environmentRevisionDTO(revision domain.EnvironmentRevision) map[string]any 
 		"revision": revision.Revision, "facts": revision.Facts,
 		"hosts":     hosts,
 		"variables": revision.Variables, "credentialRefs": refs,
-		"maxConcurrent": revision.MaxConcurrent,
-		"createdBy":     revision.CreatedBy, "changeReason": revision.ChangeReason, "createdAt": revision.CreatedAt,
+		"createdBy": revision.CreatedBy, "changeReason": revision.ChangeReason, "createdAt": revision.CreatedAt,
 	}
 }
 
 func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment) map[string]any {
-	owner, _ := h.platform.Store().GetUser(r.Context(), environment.OwnerID)
+	owner, _ := h.platform.Environments().GetUser(r.Context(), environment.OwnerID)
 	var revision any
 	if environment.Revision != nil {
 		revision = environmentRevisionDTO(*environment.Revision)
@@ -203,10 +202,11 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 	status := "ready"
 	schedulingStatus := "idle"
 	activeRunID := ""
-	var activeStatus string
-	if err := h.platform.Store().DB().QueryRowContext(r.Context(), `SELECT id,status FROM runs WHERE environment_id=? AND status IN ('running','awaiting_approval','queued') ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'awaiting_approval' THEN 1 ELSE 2 END, created_at LIMIT 1`, environment.ID).Scan(&activeRunID, &activeStatus); err == nil {
+	var activeStatus domain.RunStatus
+	if active, err := h.platform.Environments().ActiveRun(r.Context(), environment.ID); err == nil {
+		activeRunID, activeStatus = active.ID, active.Status
 		status = "locked"
-		schedulingStatus = activeStatus
+		schedulingStatus = string(activeStatus)
 	}
 	return map[string]any{
 		"id": environment.ID, "name": environment.Name, "description": environment.Description,
@@ -222,7 +222,7 @@ func (h *Handler) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, domain.ErrForbidden)
 		return
 	}
-	events, err := h.platform.Store().ListAudit(r.Context(), 500)
+	events, err := h.platform.Environments().ListAudit(r.Context(), 500)
 	if err != nil {
 		writeError(w, err)
 		return

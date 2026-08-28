@@ -165,10 +165,10 @@ make build
 1. 切换到“组件 Owner A”或“组件 Owner B”。
 2. 进入“组件”。
 3. 单击“新建组件”。
-4. 填写组件名称、标识和说明，并选择 L1-L6 层级、能力类别、组件形态和必选性。
+4. 填写组件名称、标识、说明，选择 L1-L6 层级，并按需填写少量检索标签。
 5. 单击“创建组件”。
 
-标识只能使用小写字母、数字和单连字符，例如 `containerd` 或 `kube-apiserver`，并且全局唯一。能力类别会随层级过滤，其中网络类别可用于 L3 kube-proxy 或 L4 CNI。分层只影响目录展示和编排提示，不会自动建立依赖或决定执行顺序。
+标识只能使用小写字母、数字和单连字符，例如 `containerd` 或 `kube-apiserver`，并且全局唯一。层级和标签只影响目录展示与检索，不会自动建立依赖或决定执行顺序。
 
 ### 3.2 编辑组件元数据
 
@@ -183,10 +183,10 @@ make build
 
 1. 选择自己拥有的组件。
 2. 单击“创建 Draft 编辑合同”。
-3. 填写版本号、发布说明、Release 类型和 Breaking 标记。
+3. 填写版本号、发布说明和 Breaking 标记。
 4. 单击“创建 Draft”。
 
-如果组件已有版本，新 Draft 会复制当前最新可见版本的类型、依赖和动作；如果是首个版本，需要选择 `atomic` 或 `bundle`，然后继续配置。
+如果组件已有版本，新 Draft 会复制当前最新可见版本的依赖、动作、介质和镜像内容身份；首个版本直接按实际内容配置，不再选择 `atomic` 或 `bundle`。
 
 需要批量录入细粒度组件时，可在组件页使用“批量导入”，粘贴 JSON 后单击“预检并导入”。平台最多处理 50 个条目，并在首次写入前校验全部组件字段、参数类型、公开参数映射、依赖 DAG、Action 和 Playbook。每个 `release.actions[].playbook` 必须填写 `playbooks[].filename` 中唯一存在的文件名；允许多个 Action 复用同一文件，但拒绝缺失、重复和未引用文件。新组件模板不接受无法预先解析 ID 的显式 Upgrade 或目标版本 Rollback；应使用幂等 Install，或创建后在前台绑定既有 Release。确认预检指纹后，服务端先暂存 Playbook，再在单一 SQLite 事务内写入所有组件、Draft、依赖、Action 和审计记录。任一数据库或文件步骤失败时整批失败并清理未提交 Playbook；启动恢复会根据事务结果保留已提交文件或清理孤儿文件。导入成功也不会自动验证、加入候选集或发布。
 
@@ -194,11 +194,10 @@ make build
 
 在发布历史中找到 Draft，使用“配置合同”和“Playbook”（或顶部“编辑依赖和参数”“编辑版本与 Playbook”）维护下列内容：
 
-- 版本和 Release 类型。
-- 发布说明和 Breaking 标记。
+- 版本、发布说明和 Breaking 标记。
 - 结构化环境约束：架构、操作系统、操作系统版本、Docker 版本和网络栈。
 - 结构化参数表：名称、说明、类型、必填、默认值、可见性、枚举和最小长度。可见性必须显式选择 `internal` 或 `public`。
-- 依赖下拉框和参数映射：编辑期可锁定同一组件 Owner 的私有 Draft；跨 Owner 只能选择已发布或已验证且共享的候选 Release。直接发布链最终必须全部锁定已发布上游；相互依赖的新 Draft 应走候选集与场景原子发布。
+- 依赖下拉框和参数映射：编辑期可锁定同一组件 Owner 的私有 Draft；跨 Owner 只能选择已发布或已共享且 Readiness 未阻断的候选 Release。直接发布链最终必须全部锁定已发布上游；相互依赖的新 Draft 应走候选集与场景原子发布。
 - 结构化生命周期动作及在线 Playbook 编辑器：动作类型、路径、tags、主机组、参数、凭据引用、超时、风险、幂等及版本转换端点分别填写。
 
 示例环境约束：
@@ -271,11 +270,14 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 1. 确认介质环境已配置 `FILE_STATION=host:port`。
 2. 在 Draft 发布行单击“组件介质”，填写小写下划线别名。
 3. 选择“上传文件”或“登记已有路径”，并输入 SHA-256 文本或上传 `.sha256` 文件。
-4. 平台调用 file-station 重新计算指纹；Release 只保存站点、固定相对路径和 SHA-256。
+4. 平台调用 file-station 重新计算指纹；Release 保存 alias、文件名和 SHA-256 内容身份，并单独保存可修复的 `sourceUrl`。
 
 上传路径固定为 `components/<组件 slug>/<版本>/<文件名>`。运行时会注入
-`<alias>_path`、`<alias>_url`、`<alias>_sha256`。发布后介质不可修改；Draft
-移除操作只解除引用，不删除 file-station 上的物理文件。
+`<alias>_path`、`<alias>_url`、`<alias>_sha256`。同一 SHA-256 的来源地址可在任何
+Release 状态下修复，不改变状态、候选意图或历史证据；变更 SHA-256 必须编辑 Draft
+或创建新 Draft，并使旧证据失效。Draft 移除操作只解除引用，不删除 file-station
+上的物理文件。镜像同理以 logicalName + OCI digest 作为内容身份，`sourceRef` 只是
+可变来源。
 
 ### 3.7 发起组件测试
 
@@ -283,11 +285,12 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；可以选择一个同组件的 Released/Deprecated Release 追加其 Verify，也可以选择“仅执行 Draft rollback”。Verify 目标不会覆盖 rollback 合同。
 3. 选择共享环境并填写动作声明允许的运行参数。
 4. 如果该 Release 或所选 Verify 目标声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
-5. 单击“预览执行计划”，确认每一步所属版本、Playbook、目标主机组和审批要求。
-6. 只有预览成功后才能确认提交；任何环境、策略、目标版本或输入变化都会使旧计划失效，需要重新预览。
-7. 进入“运行”查看状态、步骤、解析参数来源和日志。
+5. 单击“预览执行计划”，确认每一步所属版本、Playbook、目标主机组和审批要求。目标环境已有相同内容时直接复用；目标缺失但来源可读时会列出逐项交付要求。
+6. 只有预览成功后才能确认提交；任何环境 Revision、交付目标、目标版本或输入变化都会使旧计划失效，需要重新预览。
+7. 需要审批时，Environment Owner 对每项内容选择“直接使用来源”或“平移到目标”。介质由目标 FSS 主动拉取并校验 SHA-256，镜像按 digest 平移；审批期间目标内容出现时执行器直接复用。
+8. 进入“运行”查看状态、步骤、锁定的交付选择、实际交付结果、解析参数来源和日志。
 
-安装验证的主动作按 Upgrade → Install → Configure → Preflight → Inspect 的顺序选择第一个已定义动作；如果定义了 Verify，会自动追加 Verify。测试成功后，版本显示为已验证；如果测试期间 Draft 又被修改，旧测试不会把新内容标记为已验证。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
+安装验证的主动作按 Upgrade → Install → Configure → Preflight → Inspect 的顺序选择第一个已定义动作；如果定义了 Verify，会自动追加 Verify。平台依据当前 Release 内容身份、Playbook 摘要和成功 Run 实时计算 Readiness；测试后再修改 Draft 会让旧证据自动失效，但不会静默撤回 Component Owner 的候选意图。Fixture 测试只证明组件能够消费参数，实际组件间传递必须通过场景完整测试。
 
 计划预览执行与正式提交相同的权限、参数、CredentialRef、备份、Playbook 摘要和 Inventory 校验，但不会创建 Run 或 Approval。确认提交时后端重新规划并核对 `planDigest`；若 Draft、环境 Revision、输入或可执行内容已变化，会返回 Conflict，必须刷新计划。
 
@@ -314,7 +317,7 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
 
 “仅执行 Draft 回退”用于验证清理动作本身，不包含回退目标的 verify，因此不会满足候选共享或发布门禁。要形成交付证据，回退测试必须选择同组件的 Released/Deprecated 目标 Release 并成功执行其 verify。
 
-需要与一组相互依赖的 Draft 一起交付时，不要逐个直接发布：每个组件 Owner 在证据完整后单击“加入候选集”。该显式交接会让场景 Owner 看见 Draft；场景经完整测试后使用“预览候选集并发布”，把 Scenario Revision 与全部候选 Release 原子发布。组件 Owner 可在交接失效前使用“撤回候选”；任何后续合同或 Playbook 修改也会自动撤回候选状态并使验证证据失效。
+需要与一组相互依赖的 Draft 一起交付时，不要逐个直接发布：每个组件 Owner 在 Readiness 满足后单击“加入候选集”。该显式交接会让场景 Owner看见 Draft 及统一阻断原因；场景经完整测试后使用“预览候选集并发布”，把 Scenario Revision 与全部候选 Release 原子发布。组件 Owner 可使用“撤回候选”。后续合同、内容身份或 Playbook 修改会保留候选意图但使 Readiness 变为 blocked，必须重新完成证据后才能继续测试或发布。
 
 ### 3.9 废弃组件版本
 
@@ -357,14 +360,13 @@ Environment Revision。环境 Owner 后续修改仓库地址不会改变已有�
    - 依赖参数来源：唯一上游自动绑定，多个可达节点时必须选择。
    - 节点参数 JSON。已被上游映射的参数不能再填。
    - 允许的运行时输入。
-4. 根据需要编辑“执行策略 JSON”。
-5. 单击“保存草稿”。
+4. 单击“保存草稿”。
 
-大图可使用“导入模板”一次载入 `nodes`、`edges` 和 `executionPolicy`，或使用“导出 JSON”下载当前图。边的 V1 合同只包含 `id/source/target`，不保存展示标签。导入会先校验唯一节点/边 ID、有限坐标、端点、无环 DAG、当前可见 Release、组件归属、可执行动作和执行策略；全部通过后才替换浏览器中的未保存草稿，失败时保留原图。导出的文件重新导入后会保留规范化的节点、边和执行策略。细粒度组件也可在组件中心通过“批量导入”一次创建最多 50 个组件，系统先创建组件，再按 Release 依赖拓扑创建 Draft 和独立托管 Playbook。
+大图可使用“导入模板”一次载入 `nodes` 和 `edges`，或使用“导出 JSON”下载当前图。边的 V1 合同只包含 `id/source/target`，不保存展示标签。导入会先校验唯一节点/边 ID、有限坐标、端点、无环 DAG、当前可见 Release、组件归属和可执行动作；全部通过后才替换浏览器中的未保存草稿，失败时保留原图。细粒度组件也可在组件中心通过“批量导入”一次创建最多 50 个组件，系统先创建组件，再按 Release 依赖拓扑创建 Draft 和独立托管 Playbook。
 
 节点会锁定加入时的精确 Release，不会自动跟随组件最新版本。
 
-当前界面和后端都没有场景“阶段”字段。层级标签只用于识别组件分类；主机组决定执行目标，DAG 连线决定顺序。执行策略 JSON 当前只保存、不驱动并发或失败处理，不要把它当作已经生效的运行策略。
+当前界面和后端都没有场景“阶段”或通用执行策略字段。层级标签只用于识别组件分层；主机组决定执行目标，DAG 连线决定顺序。V1 固定在依赖满足后执行，任一步骤失败即停止。
 
 Kubernetes reset 与 join 的可复用 Playbook 约束见 [`docs/kubernetes-reset-bootstrap-standard.md`](kubernetes-reset-bootstrap-standard.md)：控制面 reset 使用 `serial: 1`，工作节点可并行；必须处理 kubelet 残留挂载、CNI 和端口后置条件；bootstrap join 优先复用健康的 bootstrap token Secret 和 CA hash。
 
@@ -442,7 +444,7 @@ Kubernetes reset 与 join 的可复用 Playbook 约束见 [`docs/kubernetes-rese
 
 1. 单击“新 Revision”。
 2. 确认将创建的 Revision 编号以及它会立即成为当前草稿。
-3. 系统复制现有图和执行策略为新 Draft；同一场景不能重复创建活动 Draft。
+3. 系统复制现有图为新 Draft；同一场景不能重复创建活动 Draft。
 4. 更新组件节点、依赖顺序或参数。
 5. 重新保存、校验、完整测试和发布。
 
@@ -705,7 +707,7 @@ Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条�
 模板包含四个 TEST-NET 主机组：`bootstrap_host`、
 `management_cluster_k8smaster`、`work_cluster_k8smaster`、
 `work_cluster_k8snode`。管理与业务场景已分别固定
-`cluster_role=manager|work`、策略和目标主机组，界面不提供危险 Run Input
+`cluster_role=manager|work`、组件参数 `strategy` 和目标主机组，界面不提供危险 Run Input
 覆盖。普通参数按 `operation`、`network`、`versions`、`artifact_sources`、
 `certificates`、`addon_params` 分组，通过点路径 Bindings 映射到 Ansible
 实际变量名。
@@ -783,7 +785,7 @@ match”时应重新执行安装验证并捕获新基线，不要手工指向旧
 
 ### 9.6 Run 执行中失败
 
-先查看顶部失败摘要并定位失败 Step，再核对 Summary 和历史日志，区分 Syntax Check、List Hosts 还是 Execute 阶段。失败或中断的组件测试、场景测试和场景运行可点击“预览安全续跑”：平台只在 Environment Revision、Release/Scenario 定义、Playbook 与制品指纹均未变化，且第一个未完成 Action 为只读动作或声明幂等的 install 时创建关联 Run。每条根 Run 续跑链同一时间只允许一个活动分支，`retryAttempt` 按整条链单调递增且不可重复。其他情况必须完整重新预览和执行。
+先查看顶部失败摘要并定位失败 Step，再核对 Summary 和历史日志，区分 Syntax Check、List Hosts 还是 Execute 阶段。失败或中断的组件测试、场景测试和场景运行可点击“预览安全续跑”：平台只在 Environment Revision、Release/Scenario 定义、Playbook 与内容指纹均未变化，且第一个未完成 Action 为只读动作或声明幂等的 install 时创建关联 Run。续跑保留原 Run 锁定的逐项交付选择，新审批确认后仍会重新探测目标；目标已出现时直接复用，否则按原来源安全直用或平移。每条根 Run 续跑链同一时间只允许一个活动分支，`retryAttempt` 按整条链单调递增且不可重复。其他情况必须完整重新预览和执行。
 
 组件 Release 和场景 Revision 的复制必须先预览；来源在确认前变化时旧计划失效。Release 复制会把新 Draft、依赖、Action、介质引用和审计记录作为一个数据库事务提交；托管 Playbook 使用受限目录和恢复 manifest，任一事务步骤失败时不会留下可见 Draft，进程中断后也会在启动时清理未提交文件。组件批量导入同样由服务端先完整预检，再按摘要提交。
 
@@ -794,6 +796,7 @@ match”时应重新执行安装验证并捕获新基线，不要手工指向旧
 - 原 Running Run 会变为 Interrupted，不会自动重跑。
 - 原 Queued Run 会重新进入调度。
 - 被中断的场景测试 Revision 会回到 Draft。
+- Release Readiness 从 SQLite 中的当前合同和成功证据实时重算，不依赖内存或 SSE 是否收到历史事件。
 
 ## 10. 数据重置与验证
 

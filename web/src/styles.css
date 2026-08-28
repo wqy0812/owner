@@ -492,10 +492,10 @@ h1, h2, h3, p { margin-top: 0; }
 .contract-hint { padding: 0 16px; }
 
 .status-pill { display: inline-flex; align-items: center; width: max-content; padding: 3px 7px; border-radius: 20px; color: #68728a; background: #eef0f4; font-size: 8px; font-weight: 700; white-space: nowrap; }
-.status-pill--released, .status-pill--succeeded, .status-pill--passed, .status-pill--test_passed, .status-pill--approved, .status-pill--ready { color: #147b5e; background: #e8f7f1; }
+.status-pill--released, .status-pill--succeeded, .status-pill--test_passed, .status-pill--approved, .status-pill--ready { color: #147b5e; background: #e8f7f1; }
 .status-pill--draft, .status-pill--queued, .status-pill--pending { color: #5c67a0; background: #eef0fb; }
 .status-pill--running, .status-pill--testing { color: #4561c3; background: #eaf0ff; }
-.status-pill--awaiting_approval, .status-pill--unverified, .status-pill--locked { color: #a56b14; background: #fff3dd; }
+.status-pill--awaiting_approval, .status-pill--locked { color: #a56b14; background: #fff3dd; }
 .status-pill--failed, .status-pill--cancelled, .status-pill--interrupted, .status-pill--rejected, .status-pill--deprecated, .status-pill--abandoned, .status-pill--offline { color: #b44257; background: #ffedf1; }
 
 .scenario-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 15px; min-height: 65px; margin-bottom: 13px; padding: 12px 14px; }

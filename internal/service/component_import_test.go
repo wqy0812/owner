@@ -73,11 +73,11 @@ func TestRecoverComponentImportFilesKeepsCommittedPromotion(t *testing.T) {
 	if err := platform.promoteComponentImportFiles(manifest); err != nil {
 		t.Fatal(err)
 	}
-	component := domain.Component{ID: file.Component.ID, Slug: file.Component.Slug, Name: "Committed", Layer: domain.LayerRuntimeState, Category: domain.CategoryRuntime, Kind: domain.ComponentSoftware, Requiredness: domain.RequiredOptional, OwnerID: "component-import-owner", CreatedAt: now, UpdatedAt: now}
+	component := domain.Component{ID: file.Component.ID, Slug: file.Component.Slug, Name: "Committed", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: "component-import-owner", CreatedAt: now, UpdatedAt: now}
 	if err := database.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
-	release := domain.ComponentRelease{ID: file.Release.ID, ComponentID: component.ID, Version: "1.0.0", Type: domain.ReleaseAtomic, Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, CreatedAt: now}
+	release := domain.ComponentRelease{ID: file.Release.ID, ComponentID: component.ID, Version: "1.0.0", Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, CreatedAt: now}
 	if err := database.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}

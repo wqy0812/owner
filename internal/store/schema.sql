@@ -6,7 +6,14 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'first-version-20260826-reuse-workflows');
+VALUES(1, 'clusterforge-v1-20260828-publication-guards');
+
+CREATE TABLE IF NOT EXISTS publication_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0)
+);
+
+INSERT OR IGNORE INTO publication_state(id, generation) VALUES(1, 1);
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -32,31 +39,18 @@ CREATE TABLE IF NOT EXISTS components (
   updated_at TEXT NOT NULL,
   layer TEXT NOT NULL DEFAULT 'platform_extension'
     CHECK (layer IN ('host_foundation','runtime_state','orchestration_core','cluster_service','observability_management','platform_extension')),
-  category TEXT NOT NULL DEFAULT 'platform'
-    CHECK (
-      (layer='host_foundation' AND category IN ('preflight','bootstrap','security')) OR
-      (layer='runtime_state' AND category IN ('runtime','state_store')) OR
-      (layer='orchestration_core' AND category IN ('control_plane','worker','network')) OR
-      (layer='cluster_service' AND category IN ('network','dns','ingress','storage')) OR
-      (layer='observability_management' AND category IN ('observability','node_management')) OR
-      (layer='platform_extension' AND category IN ('platform','autoscaling'))
-    ),
-  component_kind TEXT NOT NULL DEFAULT 'software'
-    CHECK (component_kind IN ('software','software_bundle','delivery_stage','configuration','artifact_set')),
-  requiredness TEXT NOT NULL DEFAULT 'optional'
-    CHECK (requiredness IN ('core_required','profile_required','optional'))
+  tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json))
 );
 
 CREATE TABLE IF NOT EXISTS component_releases (
   id TEXT PRIMARY KEY,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
   version TEXT NOT NULL,
-  release_type TEXT NOT NULL CHECK (release_type IN ('atomic','bundle')),
   status TEXT NOT NULL CHECK (status IN ('draft','released','deprecated')),
   release_notes TEXT NOT NULL DEFAULT '',
   breaking INTEGER NOT NULL DEFAULT 0,
-  verified INTEGER NOT NULL DEFAULT 0,
   candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1)),
+  publication_generation INTEGER NOT NULL DEFAULT 1 CHECK (publication_generation > 0),
   risk_level TEXT NOT NULL DEFAULT 'low',
   environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   parameters_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parameters_json)),
@@ -76,26 +70,13 @@ CREATE TABLE IF NOT EXISTS component_dependencies (
   UNIQUE(release_id, upstream_component_id)
 );
 
-CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_insert
-BEFORE INSERT ON component_releases
-WHEN NEW.candidate=1 AND NEW.verified<>1
-BEGIN
-  SELECT RAISE(ABORT, 'candidate release must be verified');
-END;
-
-CREATE TRIGGER IF NOT EXISTS component_releases_candidate_requires_verified_update
-BEFORE UPDATE OF candidate,verified ON component_releases
-WHEN NEW.candidate=1 AND NEW.verified<>1
-BEGIN
-  SELECT RAISE(ABORT, 'candidate release must be verified');
-END;
-
 CREATE TABLE IF NOT EXISTS action_definitions (
   id TEXT PRIMARY KEY,
   release_id TEXT NOT NULL REFERENCES component_releases(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   kind TEXT NOT NULL,
   playbook TEXT NOT NULL,
+  playbook_sha256 TEXT NOT NULL DEFAULT '',
   tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
   limit_pattern TEXT NOT NULL DEFAULT '',
   host_group TEXT NOT NULL DEFAULT '',
@@ -128,8 +109,8 @@ CREATE TABLE IF NOT EXISTS scenario_revisions (
   scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('draft','testing','test_passed','released','deprecated')),
+  publication_generation INTEGER NOT NULL DEFAULT 1 CHECK (publication_generation > 0),
   graph_json TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[]}' CHECK (json_valid(graph_json)),
-  execution_policy_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(execution_policy_json)),
   created_at TEXT NOT NULL,
   test_passed_at TEXT,
   released_at TEXT,
@@ -161,7 +142,6 @@ CREATE TABLE IF NOT EXISTS environment_revisions (
   inventory_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(inventory_json)),
   variables_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(variables_json)),
   credential_refs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(credential_refs_json)),
-  max_concurrent INTEGER NOT NULL DEFAULT 1,
   created_by TEXT NOT NULL DEFAULT '',
   change_reason TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
@@ -381,14 +361,12 @@ CREATE TABLE IF NOT EXISTS component_release_artifacts (
   id TEXT PRIMARY KEY,
   release_id TEXT NOT NULL REFERENCES component_releases(id) ON DELETE CASCADE,
   alias TEXT NOT NULL,
-  file_station TEXT NOT NULL,
-  relative_path TEXT NOT NULL,
   filename TEXT NOT NULL,
   sha256 TEXT NOT NULL,
-  size_bytes INTEGER NOT NULL,
-  source_mode TEXT NOT NULL CHECK (source_mode IN ('upload','register')),
-  environment_id TEXT NOT NULL REFERENCES environments(id),
-  environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  source_url TEXT NOT NULL,
+  source_updated_by TEXT NOT NULL REFERENCES users(id),
+  source_updated_at TEXT NOT NULL,
   created_by TEXT NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL,
   UNIQUE(release_id, alias)
@@ -396,6 +374,22 @@ CREATE TABLE IF NOT EXISTS component_release_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_component_release_artifacts_release
 ON component_release_artifacts(release_id, alias);
+
+CREATE TABLE IF NOT EXISTS component_release_images (
+  id TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES component_releases(id) ON DELETE CASCADE,
+  logical_name TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  source_updated_by TEXT NOT NULL REFERENCES users(id),
+  source_updated_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE(release_id, logical_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_component_release_images_release
+ON component_release_images(release_id, logical_name);
 
 CREATE TABLE IF NOT EXISTS component_artifact_mirrors (
   target_file_station TEXT NOT NULL,
@@ -426,3 +420,84 @@ CREATE TABLE IF NOT EXISTS environment_health_checks (
 
 CREATE INDEX IF NOT EXISTS idx_environment_health_checks_latest
 ON environment_health_checks(environment_id, checked_at DESC);
+
+-- Publication generations are optimistic-concurrency fences. They advance for
+-- every definition or candidate-intent change, but deliberately ignore mutable
+-- artifact/image source locations.
+CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_insert
+AFTER INSERT ON component_dependencies
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_update
+AFTER UPDATE ON component_dependencies
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_delete
+AFTER DELETE ON component_dependencies
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS action_definitions_publication_insert
+AFTER INSERT ON action_definitions
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS action_definitions_publication_update
+AFTER UPDATE ON action_definitions
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS action_definitions_publication_delete
+AFTER DELETE ON action_definitions
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_insert
+AFTER INSERT ON component_release_artifacts
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_update
+AFTER UPDATE OF release_id,alias,filename,sha256 ON component_release_artifacts
+WHEN OLD.release_id<>NEW.release_id OR OLD.alias<>NEW.alias OR OLD.filename<>NEW.filename OR OLD.sha256<>NEW.sha256
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_delete
+AFTER DELETE ON component_release_artifacts
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_images_publication_insert
+AFTER INSERT ON component_release_images
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_images_publication_update
+AFTER UPDATE OF release_id,logical_name,digest ON component_release_images
+WHEN OLD.release_id<>NEW.release_id OR OLD.logical_name<>NEW.logical_name OR OLD.digest<>NEW.digest
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_images_publication_delete
+AFTER DELETE ON component_release_images
+BEGIN
+  UPDATE component_releases SET publication_generation=publication_generation+1 WHERE id=OLD.release_id;
+END;

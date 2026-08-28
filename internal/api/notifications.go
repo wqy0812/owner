@@ -7,7 +7,7 @@ import (
 )
 
 func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
-	notifications, err := h.platform.Store().ListNotifications(r.Context(), currentUser(r).ID, false)
+	notifications, err := h.platform.ReadModel().ListNotifications(r.Context(), currentUser(r).ID, false)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -31,11 +31,11 @@ func (h *Handler) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &domain.ValidationError{Message: "notifications cannot be reverted to unread in this demo"})
 		return
 	}
-	if err := h.platform.Store().MarkNotificationRead(r.Context(), r.PathValue("id"), currentUser(r).ID); err != nil {
+	if err := h.platform.ReadModel().MarkNotificationRead(r.Context(), r.PathValue("id"), currentUser(r).ID); err != nil {
 		writeError(w, err)
 		return
 	}
-	notification, err := h.platform.Store().GetNotification(r.Context(), r.PathValue("id"))
+	notification, err := h.platform.ReadModel().GetNotification(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return

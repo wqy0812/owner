@@ -125,14 +125,10 @@ func (s Seeder) seedKubernetes1175Catalog(ctx context.Context, now time.Time) er
 			}
 			dependencies = append(dependencies, item)
 		}
-		releaseType := domain.ReleaseAtomic
-		if spec.componentID == "component-kubernetes-distribution" {
-			releaseType = domain.ReleaseBundle
-		}
 		release := domain.ComponentRelease{
-			ID: spec.releaseID, ComponentID: spec.componentID, Version: spec.version, Type: releaseType,
+			ID: spec.releaseID, ComponentID: spec.componentID, Version: spec.version,
 			Status: domain.ReleaseReleased, ReleaseNotes: "来自 6909da3 作业快照的最小逻辑组件；介质未完成部署验真。",
-			Verified: false, RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
+			RiskLevel: domain.RiskDestructive, EnvironmentConstraints: constraints,
 			Parameters: kubernetes1175ReleaseParameters(spec.componentID), Dependencies: dependencies, Actions: actions,
 			CreatedAt: now, ReleasedAt: ptr(now),
 		}
@@ -214,7 +210,7 @@ func kubernetes1175CoreGraph(prefix string) domain.ScenarioGraph {
 func (s Seeder) seedKubernetes1175Scenarios(ctx context.Context, now time.Time) error {
 	coreGraph := kubernetes1175CoreGraph("k8s1175-")
 	core := domain.Scenario{ID: "scenario-k8s-1.17.5", Slug: "kubernetes-1-17-5-cluster-build", Name: "Kubernetes 1.17.5 Cluster Build", Description: "按最小逻辑组件编排的 Kubernetes 1.17.5 核心集群 DAG。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
-	coreRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-r1", ScenarioID: core.ID, Revision: 1, Status: domain.RevisionDraft, Graph: coreGraph, ExecutionPolicy: map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}, CreatedAt: now}
+	coreRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-r1", ScenarioID: core.ID, Revision: 1, Status: domain.RevisionDraft, Graph: coreGraph, CreatedAt: now}
 	if _, err := s.createScenarioIfMissing(ctx, core, coreRevision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 core scenario: %w", err)
 	}
@@ -255,7 +251,7 @@ func (s Seeder) seedKubernetes1175Scenarios(ctx context.Context, now time.Time) 
 		extendedGraph.Edges = append(extendedGraph.Edges, domain.ScenarioEdge{ID: fmt.Sprintf("k8s1175-ext-optional-edge-%02d", i+1), Source: "k8s1175-ext-" + pair[0], Target: "k8s1175-ext-" + pair[1]})
 	}
 	extended := domain.Scenario{ID: "scenario-k8s-1.17.5-extended", Slug: "kubernetes-1-17-5-extended-cluster-build", Name: "Kubernetes 1.17.5 Extended Cluster Build", Description: "完整包含核心 DAG，并追加源快照中具有真实任务入口的附加能力。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
-	extendedRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-extended-r1", ScenarioID: extended.ID, Revision: 1, Status: domain.RevisionDraft, Graph: extendedGraph, ExecutionPolicy: map[string]any{"maxUnavailableNodes": 1, "failurePolicy": "manual_intervention", "destructive": true}, CreatedAt: now}
+	extendedRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-extended-r1", ScenarioID: extended.ID, Revision: 1, Status: domain.RevisionDraft, Graph: extendedGraph, CreatedAt: now}
 	if _, err := s.createScenarioIfMissing(ctx, extended, extendedRevision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 extended scenario: %w", err)
 	}
@@ -271,7 +267,7 @@ func (s Seeder) seedKubernetes1175Environment(ctx context.Context, now time.Time
 		map[string]any{"name": "worker-1", "address": "192.0.2.21", "groups": []any{"k8snode"}, "port": 22, "user": "sysop"},
 	}})
 	environment := domain.Environment{ID: "environment-k8s-1.17.5-template", Name: "Kubernetes 1.17.5 SUSE Template", Description: "TEST-NET 脱敏模板；未知校验和和镜像 digest 保持为空，安装入口 fail-closed。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "SUSE", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.80:8080"}, CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, MaxConcurrent: 1, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-k8s-1.17.5-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "SUSE", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.80:8080"}, CredentialRefs: []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "NEWPLATFORM_K8S1175_ENCRYPTION_KEY", Configured: true}}, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
 	if err := s.createEnvironmentIfMissing(ctx, environment, revision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 environment: %w", err)
 	}

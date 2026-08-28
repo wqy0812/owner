@@ -92,3 +92,43 @@ func TestWriteAuthorizationChecksumAndPathSafety(t *testing.T) {
 		t.Fatalf("symlink escape status=%d body=%s", escapeResult.Code, escapeResult.Body.String())
 	}
 }
+
+func TestTargetFetchesSourceAndRejectsHashMismatch(t *testing.T) {
+	contents := []byte("target-side-fetch")
+	digest := sha256.Sum256(contents)
+	checksum := hex.EncodeToString(digest[:])
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(contents)
+	}))
+	defer source.Close()
+
+	root := t.TempDir()
+	station, err := New(root, []string{"127.0.0.1/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(path, expected string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/fetch", strings.NewReader(`{"sourceUrl":"`+source.URL+`/runtime.tgz","path":"`+path+`","sha256":"`+expected+`","sizeBytes":17}`))
+		request.RemoteAddr = "127.0.0.1:12345"
+		response := httptest.NewRecorder()
+		station.ServeHTTP(response, request)
+		return response
+	}
+
+	success := fetch("components/runtime.tgz", checksum)
+	if success.Code != http.StatusCreated || !strings.Contains(success.Body.String(), checksum) {
+		t.Fatalf("fetch status=%d body=%s", success.Code, success.Body.String())
+	}
+	stored, err := os.ReadFile(filepath.Join(root, "components", "runtime.tgz"))
+	if err != nil || !bytes.Equal(stored, contents) {
+		t.Fatalf("fetched contents=%q err=%v", stored, err)
+	}
+
+	failure := fetch("components/bad.tgz", strings.Repeat("0", 64))
+	if failure.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("hash mismatch status=%d body=%s", failure.Code, failure.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "components", "bad.tgz")); !os.IsNotExist(err) {
+		t.Fatalf("hash mismatch left target file: %v", err)
+	}
+}

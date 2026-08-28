@@ -127,51 +127,26 @@ func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, com
 			}
 			digest := componentReleaseSpecDigest(release)
 			componentHref := fmt.Sprintf("/components?selected=%s&release=%s", component.ID, release.ID)
-			contractAction := workAction("编辑合同", componentHref+"&action=contract")
-			lifecycleAction := workAction("配置生命周期", componentHref+"&action=lifecycle")
-			validationAction := workAction("前往环境验证", componentHref+"&action=validate")
 			latest := latestMatchingRun(runs, func(run domain.Run) bool {
 				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && snapshotString(run, "componentReleaseSpecDigest") == digest
 			})
-			latestInstallEvidence := latestMatchingRun(runs, func(run domain.Run) bool {
-				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && run.Status == domain.RunSucceeded && snapshotString(run, "componentTestEvidence") == "install_verify"
-			})
-			latestRollbackEvidence := latestMatchingRun(runs, func(run domain.Run) bool {
-				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && run.Status == domain.RunSucceeded && snapshotString(run, "componentTestEvidence") == "rollback_verify"
-			})
 			reasons := []domain.WorkReason{}
-			if contractErr := p.validateReleaseForPublish(ctx, release); contractErr != nil {
-				reasons = append(reasons, domain.WorkReason{Code: "release.contract_invalid", Message: contractErr.Error(), Cause: ruleCause("Release 发布合同校验未通过"), NextAction: contractAction})
+			readiness, readinessErr := p.releaseReadiness(ctx, release)
+			if readinessErr != nil {
+				return nil, nil, readinessErr
 			}
-			configured := map[domain.ActionKind]bool{}
-			for _, action := range release.Actions {
-				configured[action.Kind] = true
-			}
-			for _, required := range []struct {
-				kind  domain.ActionKind
-				label string
-			}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}} {
-				if !configured[required.kind] {
-					reasons = append(reasons, domain.WorkReason{Code: "release.lifecycle_missing", Message: "缺少 " + required.label + " 生命周期动作", Cause: ruleCause("发布规则要求 Install、Verify 和 Rollback 生命周期完整"), NextAction: lifecycleAction})
+			for _, blocker := range readiness.Blockers {
+				evidenceRunID := ""
+				if blocker.Code == "install_evidence_missing" {
+					evidenceRunID = readiness.InstallEvidenceRunID
 				}
-			}
-			if !release.Verified {
-				if latestInstallEvidence != nil && snapshotString(*latestInstallEvidence, "componentReleaseSpecDigest") != digest {
-					reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_stale", Message: "安装及 Verify 证据来自旧合同，不能证明当前 Draft", EvidenceRunID: latestInstallEvidence.ID, Cause: p.evidenceInvalidationCause(ctx, "component_release", release.ID, latestInstallEvidence), NextAction: validationAction})
-				} else {
-					reasons = append(reasons, domain.WorkReason{Code: "release.install_evidence_missing", Message: "当前合同缺少安装及 Verify 成功证据", Cause: ruleCause("发布规则要求当前合同具备成功的安装和 Verify Run"), NextAction: validationAction})
+				if blocker.Code == "rollback_evidence_missing" {
+					evidenceRunID = readiness.RollbackEvidenceRunID
 				}
-			}
-			rollbackVerified, rollbackErr := p.store.HasSuccessfulComponentRollbackVerification(ctx, release.ID, digest)
-			if rollbackErr != nil {
-				return nil, nil, rollbackErr
-			}
-			if !rollbackVerified {
-				if latestRollbackEvidence != nil && snapshotString(*latestRollbackEvidence, "componentReleaseSpecDigest") != digest {
-					reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_stale", Message: "回滚证据来自旧合同，不能证明当前 Draft", EvidenceRunID: latestRollbackEvidence.ID, Cause: p.evidenceInvalidationCause(ctx, "component_release", release.ID, latestRollbackEvidence), NextAction: validationAction})
-				} else {
-					reasons = append(reasons, domain.WorkReason{Code: "release.rollback_evidence_missing", Message: "当前合同缺少回滚及回滚后验证证据", Cause: ruleCause("发布规则要求当前合同具备成功的回滚及回滚后验证 Run"), NextAction: validationAction})
-				}
+				reasons = append(reasons, domain.WorkReason{
+					Code: blocker.Code, Message: blocker.Message, EvidenceRunID: evidenceRunID,
+					Cause: ruleCause("Release Readiness 统一校验未通过"), NextAction: workAction("处理阻断", blocker.ActionURL),
+				})
 			}
 
 			priority, status := domain.WorkPriorityHigh, domain.WorkStatusBlocked
@@ -216,12 +191,25 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 		if !ok || (revision.Status != domain.RevisionDraft && revision.Status != domain.RevisionTesting && revision.Status != domain.RevisionTestPassed) {
 			continue
 		}
-		digest := scenarioRevisionSpecDigest(revision)
 		scenarioHref := fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)
 		graphAction := workAction("检查场景问题", scenarioHref+"&action=inspect")
 		testAction := workAction("前往场景测试", scenarioHref+"&action=test")
+		matchesCurrentDefinition := map[string]bool{}
+		for _, run := range runs {
+			if run.Kind != domain.RunScenarioTest || run.ScenarioRevisionID != revision.ID {
+				continue
+			}
+			matches, matchErr := p.releaseCoordinator.scenarioRunDefinitionCurrent(ctx, run, revision)
+			if matchErr != nil {
+				return nil, nil, matchErr
+			}
+			matchesCurrentDefinition[run.ID] = matches
+		}
 		latest := latestMatchingRun(runs, func(run domain.Run) bool {
-			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && snapshotString(run, "scenarioRevisionSpecDigest") == digest
+			return matchesCurrentDefinition[run.ID]
+		})
+		latestSuccessfulCurrent := latestMatchingRun(runs, func(run domain.Run) bool {
+			return matchesCurrentDefinition[run.ID] && run.Status == domain.RunSucceeded
 		})
 		latestSuccessfulTest := latestMatchingRun(runs, func(run domain.Run) bool {
 			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && run.Status == domain.RunSucceeded
@@ -243,8 +231,8 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 		action := domain.WorkAction{Label: "前往场景测试", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID)}
 		switch revision.Status {
 		case domain.RevisionDraft:
-			if latestSuccessfulTest != nil && snapshotString(*latestSuccessfulTest, "scenarioRevisionSpecDigest") != digest {
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据来自旧场景定义，需要重新测试当前 Revision", EvidenceRunID: latestSuccessfulTest.ID, Cause: p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest), NextAction: testAction})
+			if latestSuccessfulTest != nil && !matchesCurrentDefinition[latestSuccessfulTest.ID] {
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据来自旧场景或旧 Release 定义，需要重新测试当前 Revision", EvidenceRunID: latestSuccessfulTest.ID, Cause: p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest), NextAction: testAction})
 			} else {
 				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前 Revision 尚未通过完整环境测试", Cause: ruleCause("场景发布规则要求当前 Revision 完成一次完整环境测试"), NextAction: testAction})
 			}
@@ -264,11 +252,18 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 				action = domain.WorkAction{Label: "检查场景问题", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)}
 			}
 		case domain.RevisionTestPassed:
-			if len(issues) == 0 {
+			if len(issues) == 0 && latestSuccessfulCurrent != nil {
 				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 已测试通过", scenario.Name, revision.Revision)
 				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前 Revision 可以预览候选集并发布", Cause: ruleCause("DAG 校验和当前定义的完整测试证据均已满足"), NextAction: workAction("预览候选集并发布", scenarioHref+"&action=publish")})
 				action = domain.WorkAction{Label: "预览候选集并发布", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=publish", scenario.ID, revision.ID)}
+			} else if len(issues) == 0 {
+				reason := domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据对应的组件 Release 定义已变化，需要重新测试", Cause: ruleCause("场景测试证据必须同时匹配 DAG 和每个锁定 Release 的当前定义"), NextAction: testAction}
+				if latestSuccessfulTest != nil {
+					reason.EvidenceRunID = latestSuccessfulTest.ID
+					reason.Cause = p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest)
+				}
+				reasons = append(reasons, reason)
 			} else {
 				title = fmt.Sprintf("%s r%d 存在发布阻塞", scenario.Name, revision.Revision)
 				action = domain.WorkAction{Label: "检查场景问题", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s", scenario.ID, revision.ID)}
@@ -456,11 +451,7 @@ func (p *Platform) runMatchesCurrentDefinition(ctx context.Context, run domain.R
 		if err != nil {
 			return false, nil
 		}
-		locked := snapshotString(run, "scenarioRevisionSpecDigest")
-		if locked == "" {
-			return revision.Status == domain.RevisionReleased || revision.Status == domain.RevisionDeprecated, nil
-		}
-		return locked == scenarioRevisionSpecDigest(revision), nil
+		return p.releaseCoordinator.scenarioRunDefinitionCurrent(ctx, run, revision)
 	}
 	return true, nil
 }

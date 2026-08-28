@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -50,6 +49,16 @@ func normalizeArtifactAlias(value string) (string, error) {
 	return value, nil
 }
 
+func normalizeArtifactSourceURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+		return "", fmt.Errorf("%w: artifact sourceUrl must be an HTTP or HTTPS URL", domain.ErrInvalid)
+	}
+	parsed.Path = path.Clean("/" + strings.TrimPrefix(parsed.Path, "/"))
+	return parsed.String(), nil
+}
+
 func normalizeSHA256(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if len(value) != sha256.Size*2 {
@@ -86,25 +95,36 @@ func artifactSegment(value string) string {
 	return clean
 }
 
-func (p *Platform) artifactContext(ctx context.Context, user domain.User, releaseID, environmentID, alias string) (domain.ComponentRelease, domain.Component, domain.Environment, string, string, error) {
+func (p *Platform) ownedReleaseForArtifact(ctx context.Context, user domain.User, releaseID, alias string, draftOnly bool) (domain.ComponentRelease, domain.Component, string, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
-		return release, domain.Component{}, domain.Environment{}, "", "", err
+		return release, domain.Component{}, "", err
 	}
 	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 	if err != nil {
-		return release, component, domain.Environment{}, "", "", err
+		return release, component, "", err
 	}
 	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+		return release, component, "", err
+	}
+	if draftOnly && release.Status != domain.ReleaseDraft {
+		return release, component, "", fmt.Errorf("%w: artifact content can only be changed on a draft release", domain.ErrConflict)
+	}
+	if draftOnly {
+		if active, activeErr := p.store.HasActiveComponentTest(ctx, release.ID); activeErr != nil {
+			return release, component, "", activeErr
+		} else if active {
+			return release, component, "", fmt.Errorf("%w: wait for the active component test before changing artifact content", domain.ErrConflict)
+		}
+	}
+	alias, err = normalizeArtifactAlias(alias)
+	return release, component, alias, err
+}
+
+func (p *Platform) artifactUploadContext(ctx context.Context, user domain.User, releaseID, environmentID, alias string) (domain.ComponentRelease, domain.Component, domain.Environment, string, string, error) {
+	release, component, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, true)
+	if err != nil {
 		return release, component, domain.Environment{}, "", "", err
-	}
-	if release.Status != domain.ReleaseDraft {
-		return release, component, domain.Environment{}, "", "", fmt.Errorf("%w: artifacts can only be changed on a draft release", domain.ErrConflict)
-	}
-	if active, activeErr := p.store.HasActiveComponentTest(ctx, release.ID); activeErr != nil {
-		return release, component, domain.Environment{}, "", "", activeErr
-	} else if active {
-		return release, component, domain.Environment{}, "", "", fmt.Errorf("%w: wait for the active component test before changing artifacts", domain.ErrConflict)
 	}
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
@@ -121,20 +141,11 @@ func (p *Platform) artifactContext(ctx context.Context, user domain.User, releas
 	if err != nil {
 		return release, component, environment, "", "", err
 	}
-	alias, err = normalizeArtifactAlias(alias)
-	if err != nil {
-		return release, component, environment, "", "", err
-	}
-	for _, artifact := range release.Artifacts {
-		if artifact.FileStation != station {
-			return release, component, environment, "", "", fmt.Errorf("%w: release artifacts are locked to %s; remove them before choosing another file station", domain.ErrConflict, artifact.FileStation)
-		}
-	}
 	return release, component, environment, station, alias, nil
 }
 
 func (p *Platform) UploadComponentArtifact(ctx context.Context, user domain.User, releaseID, environmentID, alias, filename, expectedSHA string, input io.Reader) (domain.ComponentArtifact, error) {
-	release, component, environment, station, alias, err := p.artifactContext(ctx, user, releaseID, environmentID, alias)
+	release, component, _, station, alias, err := p.artifactUploadContext(ctx, user, releaseID, environmentID, alias)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
 	}
@@ -165,11 +176,12 @@ func (p *Platform) UploadComponentArtifact(ctx context.Context, user domain.User
 	if err := json.NewDecoder(response.Body).Decode(&metadata); err != nil {
 		return domain.ComponentArtifact{}, fmt.Errorf("decode file station response: %w", err)
 	}
-	return p.saveComponentArtifact(ctx, user, release, environment, station, alias, "upload", metadata)
+	sourceURL := artifactURL(station, metadata.RelativePath)
+	return p.saveComponentArtifact(ctx, user, release, alias, sourceURL, metadata)
 }
 
-func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.User, releaseID, environmentID, alias, relativePath, expectedSHA string) (domain.ComponentArtifact, error) {
-	release, _, environment, station, alias, err := p.artifactContext(ctx, user, releaseID, environmentID, alias)
+func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.User, releaseID, alias, filename, sourceURL, expectedSHA string) (domain.ComponentArtifact, error) {
+	release, _, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, true)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
 	}
@@ -177,43 +189,76 @@ func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.Us
 	if err != nil {
 		return domain.ComponentArtifact{}, err
 	}
-	payload, _ := json.Marshal(map[string]string{"path": strings.TrimSpace(relativePath), "sha256": expectedSHA})
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+station+"/api/v1/register", bytes.NewReader(payload))
+	sourceURL, err = normalizeArtifactSourceURL(sourceURL)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
 	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return domain.ComponentArtifact{}, fmt.Errorf("verify artifact on file station: %w", err)
+	filename = path.Base(strings.TrimSpace(filename))
+	if filename == "." || filename == "/" || filename == "" {
+		return domain.ComponentArtifact{}, fmt.Errorf("%w: artifact filename is required", domain.ErrInvalid)
 	}
-	defer response.Body.Close()
-	var metadata fssFileMetadata
-	if response.StatusCode != http.StatusOK {
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-		return domain.ComponentArtifact{}, fmt.Errorf("%w: file station registration failed (%s): %s", domain.ErrConflict, response.Status, strings.TrimSpace(string(message)))
+	size := int64(0)
+	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL, ObservedSize: &size}, ArtifactIdentity{SHA256: expectedSHA}); err != nil {
+		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)
 	}
-	if err := json.NewDecoder(response.Body).Decode(&metadata); err != nil {
-		return domain.ComponentArtifact{}, fmt.Errorf("decode file station response: %w", err)
-	}
-	return p.saveComponentArtifact(ctx, user, release, environment, station, alias, "register", metadata)
+	return p.saveComponentArtifact(ctx, user, release, alias, sourceURL, fssFileMetadata{Filename: filename, SHA256: expectedSHA, SizeBytes: size})
 }
 
-func (p *Platform) saveComponentArtifact(ctx context.Context, user domain.User, release domain.ComponentRelease, environment domain.Environment, station, alias, mode string, metadata fssFileMetadata) (domain.ComponentArtifact, error) {
+func (p *Platform) saveComponentArtifact(ctx context.Context, user domain.User, release domain.ComponentRelease, alias, sourceURL string, metadata fssFileMetadata) (domain.ComponentArtifact, error) {
 	if metadata.SHA256 == "" || metadata.SHA256 != strings.ToLower(metadata.SHA256) {
 		return domain.ComponentArtifact{}, fmt.Errorf("%w: file station returned invalid artifact metadata", domain.ErrConflict)
 	}
-	artifact := domain.ComponentArtifact{
-		ID: newID("artifact"), ReleaseID: release.ID, Alias: alias, FileStation: station,
-		RelativePath: metadata.RelativePath, Filename: metadata.Filename, SHA256: metadata.SHA256,
-		SizeBytes: metadata.SizeBytes, SourceMode: mode, EnvironmentID: environment.ID,
-		EnvironmentRevisionID: environment.CurrentRevisionID, CreatedBy: user.ID, CreatedAt: time.Now().UTC(),
-	}
+	now := time.Now().UTC()
+	artifact := domain.ComponentArtifact{ID: newID("artifact"), ReleaseID: release.ID, Alias: alias, Filename: metadata.Filename, SHA256: metadata.SHA256, SizeBytes: metadata.SizeBytes, SourceURL: sourceURL, SourceUpdatedBy: user.ID, SourceUpdatedAt: now, CreatedBy: user.ID, CreatedAt: now}
 	if err := p.store.UpsertDraftComponentArtifactAndInvalidate(ctx, artifact); err != nil {
 		return domain.ComponentArtifact{}, err
 	}
-	p.audit(ctx, user, "component.artifact_saved", "component_release", release.ID, map[string]any{"alias": alias, "fileStation": station, "path": metadata.RelativePath, "sha256": metadata.SHA256, "sourceMode": mode})
+	items, err := p.store.ListComponentArtifacts(ctx, release.ID)
+	if err != nil {
+		return domain.ComponentArtifact{}, err
+	}
+	for _, saved := range items {
+		if saved.Alias == alias {
+			artifact = saved
+			break
+		}
+	}
+	p.audit(ctx, user, "component.artifact_saved", "component_release", release.ID, map[string]any{"alias": alias, "filename": metadata.Filename, "sha256": metadata.SHA256, "sourceUrl": sourceURL})
 	return artifact, nil
+}
+
+func (p *Platform) UpdateComponentArtifactSource(ctx context.Context, user domain.User, releaseID, alias, sourceURL string) (domain.ComponentArtifact, error) {
+	release, _, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, false)
+	if err != nil {
+		return domain.ComponentArtifact{}, err
+	}
+	sourceURL, err = normalizeArtifactSourceURL(sourceURL)
+	if err != nil {
+		return domain.ComponentArtifact{}, err
+	}
+	currentArtifacts, err := p.store.ListComponentArtifacts(ctx, release.ID)
+	if err != nil {
+		return domain.ComponentArtifact{}, err
+	}
+	var current domain.ComponentArtifact
+	for _, artifact := range currentArtifacts {
+		if artifact.Alias == alias {
+			current = artifact
+			break
+		}
+	}
+	if current.ID == "" {
+		return domain.ComponentArtifact{}, domain.ErrNotFound
+	}
+	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL}, ArtifactIdentity{SHA256: current.SHA256, SizeBytes: current.SizeBytes}); err != nil {
+		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)
+	}
+	updated, err := p.store.UpdateComponentArtifactSource(ctx, release.ID, alias, sourceURL, user.ID, time.Now().UTC())
+	if err != nil {
+		return domain.ComponentArtifact{}, err
+	}
+	p.audit(ctx, user, "component.artifact_source_updated", "component_release", release.ID, map[string]any{"alias": alias, "sourceUrl": sourceURL, "sha256": updated.SHA256})
+	return updated, nil
 }
 
 func (p *Platform) DeleteComponentArtifact(ctx context.Context, user domain.User, releaseID, alias string) error {

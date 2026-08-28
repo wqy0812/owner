@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，但允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-25 当前工作区代码
+> 文档基线：2026-08-28 当前工作区代码
 >
 > 适用对象：首次接触本仓库的前端、后端、测试和运维开发人员
 >
@@ -25,7 +25,7 @@ owner/
 │   ├── domain/                       # 领域对象、枚举和领域校验
 │   ├── fss/                          # 文件介质站服务实现
 │   ├── seed/                         # 演示数据初始化
-│   ├── service/                      # 业务规则、权限、规划与调度
+│   ├── service/                      # 模块应用服务、发布协调、规划、调度与静态适配端口
 │   ├── store/                        # SQLite 首版结构合同与持久化
 │   └── ui/                           # React 静态资源服务与嵌入
 ├── web/
@@ -56,16 +56,21 @@ React / Vite
 internal/api
     ▼
 internal/service
+    ├── Catalog / Scenario / Environment / Execution / Read Model
+    ├── ReleaseCoordinator ───── 联合发布事务
     ├── internal/store ───────── SQLite
-    ├── internal/ansible ─────── ansible-playbook ── 目标主机
-    ├── Docker CLI ───────────── 镜像仓库
-    └── HTTP ─────────────────── FSS 文件介质站
+    ├── ActionRunner ──────────── ansible-playbook ── 目标主机
+    ├── ImageDelivery ─────────── Docker CLI ──────── 镜像仓库
+    └── ArtifactDelivery ──────── HTTP ────────────── FSS 文件介质站
 ```
 
 核心运行原则：
 
 - API 层负责 HTTP 协议转换，不承载核心业务规则。
+- API 层不取得 Store/DB，只调用对应模块应用服务；`Platform` 是静态装配门面。
 - Service 层是权限、状态转换、参数合同和调度规则的权威实现。
+- Scenario 只维护 Revision/DAG/测试状态，联合发布由 `ReleaseCoordinator` 完成。
+- Run 规划、创建、调度、执行、证据记录、回滚规划和审批各有独立对象与文件。
 - Store 层负责持久化、事务和并发状态抢占，不决定业务权限。
 - Domain 层保存跨层共享的数据结构、枚举、通用错误和纯领域校验。
 - Run 在创建时锁定组件 Release、场景 Revision、环境 Revision、运行输入和 Playbook 摘要。
@@ -79,7 +84,7 @@ internal/service
 主平台入口位于 `cmd/server/main.go`，负责：
 
 1. 读取 `.env` 和 `NEWPLATFORM_*` 配置。
-2. 打开 SQLite；空库初始化当前结构，精确命中的已声明前序 V1 合同执行经过测试的加法迁移，未知合同拒绝启动。
+2. 打开 SQLite；空库初始化当前结构，已有库必须精确匹配当前合同，否则拒绝启动。
 3. 按 Seed Profile 初始化身份或演示数据。
 4. 创建 Ansible Runner、Platform Service 和 EventHub。
 5. 启动队列恢复、HTTP 服务和优雅退出流程。
@@ -93,6 +98,7 @@ internal/service
 - `GET /healthz`：健康检查。
 - `PUT /api/v1/files`：上传并校验 SHA-256。
 - `POST /api/v1/register`：登记文件站上已有文件。
+- `POST /api/v1/fetch`：目标 FSS 从锁定来源 URL 主动获取并校验 SHA-256。
 - 普通 GET 路径：下载文件站根目录下的规则文件。
 - 写请求按 `CLUSTERFORGE_FSS_WRITE_ALLOW_CIDRS` 限制来源地址。
 - 路径解析拒绝绝对路径、目录穿越、符号链接越界和非规则文件。
@@ -104,11 +110,11 @@ FSS 使用独立配置前缀 `CLUSTERFORGE_FSS_*`，不直接连接平台 SQLite
 领域层集中定义：
 
 - 用户与固定角色。
-- Component、ComponentRelease、候选交接、依赖、幂等动作和组件介质。
+- Component、ComponentRelease、Readiness、候选交接、依赖、幂等动作、介质与镜像内容身份。
 - Scenario、ScenarioRevision、DAG 节点和边。
 - Environment、EnvironmentRevision、Inventory、变量和 CredentialRef。
 - Run（含整集群 `environment_rollback`）、RunStep、RunLog、Approval、Notification 和 AuditEvent。
-- 组件分类、生命周期状态、动作类型、风险等级与通用领域错误。
+- 组件层级/标签、生命周期状态、动作类型、风险等级与通用领域错误。
 
 新增跨层字段时，先更新这里的领域结构，再同步 Store、Service、API 和前端类型。不要仅在 API DTO 或前端中维护另一套业务状态。
 
@@ -143,7 +149,7 @@ Service 是业务核心，主要职责包括：
 - 按环境维护 FIFO Worker，恢复异常中断的 Run。
 - 执行审批、取消、通知、审计和日志脱敏。
 - 调用 Docker CLI 构建镜像。
-- 上传或登记组件介质，并在运行前按环境文件站进行校验和平移。
+- 维护介质/镜像内容身份与可变来源；规划目标优先、来源回退和逐项交付选择，执行时由目标 FSS/Registry 拉取或平移。
 
 新增业务能力时，应优先把可测试的规则写在 Service 层，而不是放进 API Handler 或 React 页面。
 
@@ -152,11 +158,12 @@ Service 是业务核心，主要职责包括：
 Store 基于 `modernc.org/sqlite`，包含：
 
 - `store.go`：连接、事务辅助和基础查询。
+- `release_coordinator.go`：以定义代次、Release 摘要、Scenario 测试证据和全局发布纪元保护独立发布及原子联合发布事务。
 - 资源文件：组件、场景、环境、Run、事件、安装记录、镜像构建和介质查询。
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前合同为 `first-version-20260825-safety-fences`。结构变化必须更新 `schema.sql` 和合同；仅允许从代码中显式列出的 `first-version-20260824`、动作幂等、候选 Release、候选证据四个精确前序合同执行经过测试的加法迁移，迁移会修复异常的未验证候选并安装候选证据与整环境回滚隔离触发器。未知合同或破坏性历史结构仍会失败关闭。
+数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260828-publication-guards`。本批按 V1 测试环境决策删除旧分类、Release 类型、执行策略、环境并发和 `verified` 列，不提供旧库迁移或双写；空库创建当前结构，旧合同和未知合同均失败关闭。测试部署首次切换必须先备份并显式使用守护脚本的 `--rebuild-v1-db`。
 
 ### 3.7 `internal/ansible`
 
@@ -306,12 +313,12 @@ make build
 | 新增 API | `internal/api` 路由与 Handler，同时在 Service 层实现规则并补 API 测试 |
 | 修改权限或状态机 | `internal/service`，必要时同步 Domain；前端只展示结果 |
 | 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；需要保留数据时增加精确前序合同迁移，并补 schema/store 测试 |
-| 修改 Run 规划或调度 | `internal/service/runs.go`、`logic.go` 及相关测试 |
+| 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
 | 新增组件示例 | `examples/ansible`、`internal/seed` 及 Seed/组件脚本测试 |
 | 新增前端页面 | `web/src/pages`、`App.tsx`、API Client、类型和测试 |
-| 修改制品或文件站 | `internal/service/artifacts.go`、`internal/store/artifacts.go`、`internal/fss` 和组件页 |
-| 修改镜像构建 | `internal/service/image_builds.go`、Store/API 和组件页 |
+| 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`delivery_adapters.go`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
+| 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、Delivery 适配器、Store/API 和组件页 |
 | 修改测试部署 | `deploy` 与 `scripts`，并执行实际测试环境验证 |
 
 ## 9. 修改前后的检查原则

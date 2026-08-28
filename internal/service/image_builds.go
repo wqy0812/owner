@@ -215,10 +215,23 @@ func (p *Platform) executeComponentImageBuild(build domain.ComponentImageBuild, 
 		p.failImageBuild(build, errors.New("registry did not return an immutable image digest"))
 		return
 	}
-	finished := time.Now().UTC()
-	if err := p.store.UpdateComponentImageBuildStatus(context.Background(), build.ID, []domain.ImageBuildStatus{domain.ImageBuildRunning}, domain.ImageBuildSucceeded, pushedDigest, "", finished); err != nil {
+	digest, err := digestFromResolvedImageRef(pushedDigest)
+	if err != nil {
+		p.failImageBuild(build, err)
 		return
 	}
+	finished := time.Now().UTC()
+	image := domain.ComponentImage{
+		ID: newID("image"), ReleaseID: build.ReleaseID, LogicalName: "main", Digest: digest,
+		SourceRef: build.ImageRef, SourceUpdatedBy: build.RequestedBy, SourceUpdatedAt: finished,
+		CreatedBy: build.RequestedBy, CreatedAt: finished,
+	}
+	if err := p.store.CompleteComponentImageBuild(context.Background(), build.ID, pushedDigest, image, finished); err != nil {
+		p.failImageBuild(build, err)
+		return
+	}
+	actor, _ := p.store.GetUser(context.Background(), build.RequestedBy)
+	p.audit(context.Background(), actor, "component.image_saved", "component_release", build.ReleaseID, map[string]any{"logicalName": image.LogicalName, "digest": image.Digest, "sourceRef": image.SourceRef, "buildId": build.ID})
 	p.emitImageBuildLog(build, "system", "published "+pushedDigest)
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": build.ReleaseID, "status": domain.ImageBuildSucceeded, "imageDigest": pushedDigest})
 }

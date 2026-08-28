@@ -113,12 +113,13 @@ func (p *Platform) SaveReleasePlaybook(ctx context.Context, user domain.User, re
 	if err := temporary.Close(); err != nil {
 		return PlaybookFile{}, fmt.Errorf("close playbook: %w", err)
 	}
-	// A Playbook write changes executable evidence even when the Draft action
-	// already points at this managed path. Revoke delivery state before making
-	// the file visible so a crash cannot leave changed executable content marked
-	// as verified or shared with a scenario owner.
-	if err := p.store.InvalidateDraftReleaseDelivery(ctx, release.ID); err != nil {
-		return PlaybookFile{}, fmt.Errorf("invalidate component verification: %w", err)
+	digest := sha256.Sum256(contents)
+	playbookSHA256 := hex.EncodeToString(digest[:])
+	// Change the persisted content identity before exposing the staged file.
+	// If publication is interrupted, readiness fails closed against the new
+	// digest instead of accepting evidence for the previous executable bytes.
+	if err := p.store.UpdateDraftActionPlaybookDigest(ctx, release.ID, clean, playbookSHA256); err != nil {
+		return PlaybookFile{}, fmt.Errorf("update Playbook content identity: %w", err)
 	}
 	if err := os.Rename(temporaryPath, resolved); err != nil {
 		return PlaybookFile{}, fmt.Errorf("publish playbook: %w", err)
@@ -157,8 +158,13 @@ func (p *Platform) authorizePlaybook(ctx context.Context, user domain.User, rele
 	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
 		return release, component, nil
 	}
-	if !user.Role.Valid() || (release.Status != domain.ReleaseReleased && !(release.Status == domain.ReleaseDraft && release.Candidate && release.Verified)) {
+	if !user.Role.Valid() || (release.Status != domain.ReleaseReleased && !(release.Status == domain.ReleaseDraft && release.Candidate)) {
 		return release, component, domain.ErrForbidden
+	}
+	if release.Status == domain.ReleaseDraft {
+		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
+			return release, component, domain.ErrForbidden
+		}
 	}
 	return release, component, nil
 }

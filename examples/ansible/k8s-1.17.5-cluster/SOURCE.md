@@ -14,7 +14,7 @@
 - L4：Flannel `0.11.0`、CoreDNS `1.3.1`。
 - 附加：Node Logging、HAProxy、Blackbox Exporter、Node Exporter `0.18.0`、Metrics Server `0.3.1`、AMC、GlusterFS Client `3.12.6`、Go/pprof Toolkit、Prometheus Access Bootstrap、Autoscaling RBAC。
 
-无法从快照确认上游软件版本的 HAProxy、Blackbox Exporter、AMC 和 Go/pprof Toolkit 使用目录版本 `source-6909da3`，保持 `verified=false`。只有模板、没有任务入口的 process-exporter、Event Monitor 和 CSI 不建立可执行组件。
+无法从快照确认上游软件版本的 HAProxy、Blackbox Exporter、AMC 和 Go/pprof Toolkit 使用目录版本 `source-6909da3`。这些 Release 不附带伪造的真实环境证据；只有模板、没有任务入口的 process-exporter、Event Monitor 和 CSI 不建立可执行组件。
 
 ## 两条场景 DAG
 

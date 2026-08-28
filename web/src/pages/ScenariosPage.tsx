@@ -25,7 +25,7 @@ import { parseRunInput, RunInputFields, uniqueRunInputs } from '../components/Ru
 import { RunInputPresetPicker } from '../components/RunInputPresetPicker';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import { COMPONENT_CATEGORY_LABELS, COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
+import { COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
 import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from './scenarioTemplate';
 
@@ -85,7 +85,6 @@ export function ScenariosPage() {
   const [view, setView] = useState<'graph' | 'table'>('graph');
   const [testEnvironment, setTestEnvironment] = useState('');
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
-	const [executionPolicy, setExecutionPolicy] = useState('{}');
   const [busy, setBusy] = useState<string>();
 
   const isCurrentRevision = Boolean(revision && revision.id === (selectedScenario?.currentRevisionId ?? currentRevision?.id));
@@ -124,7 +123,6 @@ export function ScenariosPage() {
     setSelectedNodeId(undefined);
     setValidation(undefined);
     setRunInputValues({});
-		setExecutionPolicy(JSON.stringify(revision?.executionPolicy ?? {}, null, 2));
   }, [revision?.id, setEdges, setNodes]);
 
   useEffect(() => setDeleteExplanation(undefined), [selectedScenario?.id]);
@@ -192,10 +190,9 @@ export function ScenariosPage() {
     if (!revision) return;
     setBusy('save');
     try {
-      const policy = JSON.parse(executionPolicy || '{}') as Record<string, unknown>;
-      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })), edges: edges.map(({ id, source, target }) => ({ id, source, target })) as ScenarioEdge[], executionPolicy: policy });
+      await api.saveGraph(revision.id, { nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })), edges: edges.map(({ id, source, target }) => ({ id, source, target })) as ScenarioEdge[] });
       notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh('scenarios');
-    } catch (reason) { notify('error', '保存失败', reason instanceof SyntaxError ? '执行策略必须是有效 JSON。' : displayError(reason)); } finally { setBusy(undefined); }
+    } catch (reason) { notify('error', '保存失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function validate() {
@@ -237,7 +234,6 @@ export function ScenariosPage() {
       validateScenarioTemplateReferences(parsed, components ?? []);
       setNodes(parsed.nodes);
       setEdges(parsed.edges);
-      setExecutionPolicy(JSON.stringify(parsed.executionPolicy, null, 2));
       setImportOpen(false);
       setValidation(undefined);
       notify('success', '场景模板已载入', `${parsed.nodes.length} 个节点 · ${parsed.edges.length} 条边；请检查后保存草稿。`);
@@ -246,12 +242,9 @@ export function ScenariosPage() {
 
   function exportTemplate() {
     try {
-      const policy = JSON.parse(executionPolicy || '{}') as unknown;
-      if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) throw new Error('执行策略必须是 JSON 对象。');
       const content = serializeScenarioTemplate({
         nodes: nodes.map(({ id, position, data }) => ({ id, type: 'component', position, data })),
         edges: edges.map(({ id, source, target }) => ({ id, source, target })),
-        executionPolicy: policy as Record<string, unknown>,
       });
       const filenameBase = (selectedScenario?.slug || selectedScenario?.name || 'scenario').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'scenario';
       const href = URL.createObjectURL(new Blob([`${content}\n`], { type: 'application/json;charset=utf-8' }));
@@ -346,7 +339,7 @@ export function ScenariosPage() {
             const available = components?.filter((component) => component.layer === layer.value && (component.latestRelease?.state === 'released' || component.latestRelease?.candidate)) ?? [];
             return <section className="palette-layer" key={layer.value}><div className="palette-layer__header"><span>{layer.code}</span><strong>{layer.label}</strong></div>{available.length ? available.map((component) => {
               const used = nodes.filter((node) => node.data.componentId === component.id).length;
-              return <button key={component.id} disabled={!editable} onClick={() => addComponent(component)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{COMPONENT_CATEGORY_LABELS[component.category]} · {component.latestRelease?.version}{component.latestRelease?.candidate ? ' · 候选' : ''}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
+              return <button key={component.id} disabled={!editable} onClick={() => addComponent(component)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{component.tags.join(' · ') || '暂无标签'} · {component.latestRelease?.version}{component.latestRelease?.candidate ? ' · 候选' : ''}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
             }) : <div className="palette-layer__empty">本层暂无已发布或候选组件</div>}</section>;
           })}</div>
           <div className="palette-hint"><GitCommitHorizontal size={17} /><p>分层只用于分类提示；连线才表示硬依赖和实际执行顺序。</p></div>
@@ -360,7 +353,6 @@ export function ScenariosPage() {
         </section>
         <aside className="node-inspector panel">
           <header><Settings2 size={17} /><div><h3>节点配置</h3><p>参数与目标主机组</p></div></header>
-          <div className="inspector-form"><label><span>执行策略 JSON</span><textarea aria-label="执行策略 JSON" className="code-editor code-editor--small" value={executionPolicy} disabled={!editable} onChange={(event) => setExecutionPolicy(event.target.value)} /></label></div>
           {selectedNode ? <div className="inspector-form"><label><span>显示名称</span><input value={selectedNode.data.label} disabled={!editable} onChange={(event) => updateSelected({ label: event.target.value })} /></label><label><span>组件分层</span><input value={selectedNodeComponent ? `${componentLayer(selectedNodeComponent.layer).code} · ${componentLayer(selectedNodeComponent.layer).label}` : '—'} disabled /></label><label><span>精确版本</span><input value={selectedNode.data.version ?? ''} disabled /></label><label><span>生命周期动作</span><select value={selectedNode.data.action ?? availableNodeActions[0]} disabled={!editable} onChange={(event) => updateSelected({ action: event.target.value as ScenarioNodeData['action'] })}>{availableNodeActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label><label><span>主机组</span><input value={selectedNode.data.hostGroup ?? ''} disabled={!editable} onChange={(event) => updateSelected({ hostGroup: event.target.value })} /></label>{mappingDependencies.length ? <div className="source-picker"><strong>依赖参数来源</strong>{mappingDependencies.map((dependency) => {
             const options = sourceOptionsByDependency[dependency.id ?? dependency.releaseId] ?? [];
             const selectedSource = selectedNode.data.dependencySources?.[dependency.id ?? ''];
@@ -382,8 +374,8 @@ export function ScenariosPage() {
 }
 
 function ScenarioTemplateModal({ onClose, onImport }: { onClose: () => void; onImport: (text: string) => void }) {
-  const [text, setText] = useState('{\n  "nodes": [],\n  "edges": [],\n  "executionPolicy": {}\n}');
-  return <Modal size="wide" title="导入场景模板" description="一次导入节点、边和执行策略；载入后仍需人工检查并保存。" onClose={onClose}><div className="modal-body"><textarea aria-label="场景模板 JSON" className="code-editor" rows={18} value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" onClick={() => onImport(text)}><Upload size={16} /> 载入草稿</button></footer></Modal>;
+  const [text, setText] = useState('{\n  "nodes": [],\n  "edges": []\n}');
+  return <Modal size="wide" title="导入场景模板" description="一次导入节点和边；载入后仍需人工检查并保存。" onClose={onClose}><div className="modal-body"><textarea aria-label="场景模板 JSON" className="code-editor" rows={18} value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" onClick={() => onImport(text)}><Upload size={16} /> 载入草稿</button></footer></Modal>;
 }
 
 function CreateScenarioModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {

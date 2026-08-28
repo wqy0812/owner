@@ -284,8 +284,8 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 	}
 	for _, spec := range kubernetes1175ReleaseSpecs {
 		release, err := database.GetComponentRelease(ctx, spec.releaseID)
-		if err != nil || release.Verified {
-			t.Fatalf("new release %s must exist as unverified: %+v err=%v", spec.releaseID, release, err)
+		if err != nil {
+			t.Fatalf("new release %s must exist: %+v err=%v", spec.releaseID, release, err)
 		}
 		if strings.Contains(spec.releaseID, "source-6909da3") && release.Version != "source-6909da3" {
 			t.Fatalf("unknown source version was fabricated for %s: %s", spec.releaseID, release.Version)
@@ -304,11 +304,7 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		if err != nil {
 			t.Fatalf("get %s: %v", releaseID, err)
 		}
-		wantType := domain.ReleaseAtomic
-		if releaseID == "release-kubernetes-distribution-1.17.5" {
-			wantType = domain.ReleaseBundle
-		}
-		if release.Type != wantType || release.Status != domain.ReleaseReleased || release.Verified || len(release.Actions) != 2 {
+		if release.Status != domain.ReleaseReleased || len(release.Actions) != 2 {
 			t.Fatalf("unexpected release contract for %s: %+v", releaseID, release)
 		}
 		primary, verify := release.Actions[0], release.Actions[1]

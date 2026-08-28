@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.register(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/fetch":
+		if !s.writeAllowed(r) {
+			http.Error(w, "write source is not allowed", http.StatusForbidden)
+			return
+		}
+		s.fetch(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/"):
 		http.NotFound(w, r)
 	default:
@@ -271,6 +278,103 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, fileMetadata{RelativePath: relative, Filename: filepath.Base(target), SHA256: actual, SizeBytes: info.Size()})
+}
+
+func (s *Server) fetch(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		SourceURL string `json:"sourceUrl"`
+		Path      string `json:"path"`
+		SHA256    string `json:"sha256"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	parsed, err := url.Parse(strings.TrimSpace(input.SourceURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+		http.Error(w, "sourceUrl must be an HTTP or HTTPS URL", http.StatusBadRequest)
+		return
+	}
+	relative, err := safeRelativePath(input.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	expected, err := expectedSHA(input.SHA256)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		http.Error(w, "fetch source failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		http.Error(w, "source returned "+response.Status, http.StatusBadGateway)
+		return
+	}
+	s.storeFetched(w, relative, expected, response.Body)
+}
+
+func (s *Server) storeFetched(w http.ResponseWriter, relative, expected string, input io.Reader) {
+	target, err := s.resolve(relative)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".fetch-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	temporaryName := temporary.Name()
+	committed := false
+	defer func() {
+		_ = temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryName)
+		}
+	}()
+	hash := sha256.New()
+	size, err := io.Copy(io.MultiWriter(temporary, hash), input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if actual != expected {
+		http.Error(w, "fetched content SHA-256 does not match", http.StatusUnprocessableEntity)
+		return
+	}
+	if err := temporary.Sync(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := temporary.Close(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Chmod(temporaryName, 0o644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(temporaryName, target); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed = true
+	writeJSON(w, http.StatusCreated, fileMetadata{RelativePath: relative, Filename: filepath.Base(target), SHA256: actual, SizeBytes: size})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

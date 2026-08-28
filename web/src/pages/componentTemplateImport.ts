@@ -10,15 +10,12 @@ import type {
 export type ComponentImportDependency = Omit<ComponentDependency, 'componentId' | 'releaseId'> & { componentSlug: string };
 
 export type ComponentImportEntry = {
-  component: Pick<Component, 'name' | 'layer' | 'category' | 'kind' | 'requiredness'> & { slug: string; description?: string };
+  component: Pick<Component, 'name' | 'layer' | 'tags'> & { slug: string; description?: string };
   release: Omit<Partial<ComponentRelease>, 'dependencies'> & { dependencies?: ComponentImportDependency[] };
   playbooks?: Array<{ filename: string; content: string }>;
 };
 
 const ACTION_TYPES = new Set<ActionDefinition['type']>(['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall']);
-const COMPONENT_KINDS = new Set<Component['kind']>(['software', 'software_bundle', 'delivery_stage', 'configuration', 'artifact_set']);
-const REQUIREDNESS = new Set<Component['requiredness']>(['core_required', 'profile_required', 'optional']);
-const RELEASE_TYPES = new Set<NonNullable<ComponentRelease['type']>>(['atomic', 'bundle']);
 const PARAMETER_TYPES = new Set<ParameterDefinition['type']>(['string', 'integer', 'number', 'boolean', 'object', 'array']);
 const RISK_LEVELS = new Set<NonNullable<ComponentRelease['riskLevel']>>(['low', 'medium', 'high', 'destructive']);
 const PLAYBOOK_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:yml|yaml)$/;
@@ -108,22 +105,17 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
   const component = value.component;
   const release = value.release;
   assertOnlyKeys(value, ['component', 'release', 'playbooks'], `第 ${index + 1} 项`);
-  assertOnlyKeys(component, ['name', 'slug', 'description', 'layer', 'category', 'kind', 'requiredness'], `第 ${index + 1} 项 component`);
-  assertOnlyKeys(release, ['version', 'type', 'releaseNotes', 'breaking', 'riskLevel', 'environmentConstraints', 'parameters', 'dependencies', 'actions'], `第 ${index + 1} 项 release`);
+  assertOnlyKeys(component, ['name', 'slug', 'description', 'layer', 'tags'], `第 ${index + 1} 项 component`);
+  assertOnlyKeys(release, ['version', 'releaseNotes', 'breaking', 'riskLevel', 'environmentConstraints', 'parameters', 'dependencies', 'actions'], `第 ${index + 1} 项 release`);
   const slug = nonEmptyString(component.slug, `第 ${index + 1} 项 component.slug`);
   if (!SLUG.test(slug)) throw new Error(`${slug} 的 slug 只能包含小写字母、数字和连字符。`);
   const layer = nonEmptyString(component.layer, `${slug}.component.layer`) as Component['layer'];
   const layerDefinition = COMPONENT_LAYERS.find((item) => item.value === layer);
   if (!layerDefinition) throw new Error(`${slug} 的组件分层无效。`);
-  const category = nonEmptyString(component.category, `${slug}.component.category`) as Component['category'];
-  if (!layerDefinition.categories.includes(category)) throw new Error(`${slug} 的 category 不属于所选分层。`);
-  const kind = nonEmptyString(component.kind, `${slug}.component.kind`) as Component['kind'];
-  if (!COMPONENT_KINDS.has(kind)) throw new Error(`${slug} 的组件类型无效。`);
-  const requiredness = nonEmptyString(component.requiredness, `${slug}.component.requiredness`) as Component['requiredness'];
-  if (!REQUIREDNESS.has(requiredness)) throw new Error(`${slug} 的必选级别无效。`);
+  const tags = stringArray(component.tags, `${slug}.component.tags`);
+  if (tags.length > 8) throw new Error(`${slug} 最多允许 8 个标签。`);
+  if (tags.some((tag) => tag.length > 32 || tag !== tag.toLowerCase() || /[\s,]/.test(tag))) throw new Error(`${slug} 的标签必须为不超过 32 字符的小写非空白文本。`);
   const version = nonEmptyString(release.version, `${slug}.release.version`);
-  const releaseType = nonEmptyString(release.type, `${slug}.release.type`) as NonNullable<ComponentRelease['type']>;
-  if (!RELEASE_TYPES.has(releaseType)) throw new Error(`${slug} 的 Release 类型无效。`);
   if (release.environmentConstraints !== undefined && !isRecord(release.environmentConstraints)) {
     throw new Error(`${slug}.release.environmentConstraints 必须是对象。`);
   }
@@ -244,11 +236,10 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     component: {
       name: nonEmptyString(component.name, `${slug}.component.name`), slug,
       description: optionalString(component.description, `${slug}.component.description`) ?? '',
-      layer, category, kind, requiredness,
+      layer, tags,
     },
     release: {
       version,
-      type: releaseType,
       releaseNotes,
       breaking,
       riskLevel,

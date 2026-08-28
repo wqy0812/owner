@@ -25,7 +25,7 @@ func maintenanceTestPlatform(t *testing.T) (*Platform, domain.User, domain.Envir
 		t.Fatal(err)
 	}
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{{Name: "node-1", Address: "127.0.0.1", Port: 22, Groups: []string{"all"}}}})
-	revision := domain.EnvironmentRevision{ID: "environment-r1", EnvironmentID: "environment-1", Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.invalid:5000"}, CredentialRefs: []domain.CredentialRef{}, MaxConcurrent: 1, CreatedBy: owner.ID, ChangeReason: "创建环境", CreatedAt: time.Now().UTC()}
+	revision := domain.EnvironmentRevision{ID: "environment-r1", EnvironmentID: "environment-1", Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.invalid:5000"}, CredentialRefs: []domain.CredentialRef{}, CreatedBy: owner.ID, ChangeReason: "创建环境", CreatedAt: time.Now().UTC()}
 	environment := domain.Environment{ID: "environment-1", Name: "Lab", OwnerID: owner.ID, CurrentRevisionID: revision.ID, Revision: &revision, CreatedAt: revision.CreatedAt, UpdatedAt: revision.CreatedAt}
 	if err := database.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestEnvironmentHealthCheckPersistsReachability(t *testing.T) {
 	if check.Status != "degraded" || len(check.Results) != 2 || !check.Results[0].Reachable || check.Results[1].Reachable {
 		t.Fatalf("health check=%+v", check)
 	}
-	stored, err := platform.Store().LatestEnvironmentHealthCheck(context.Background(), environment.ID)
+	stored, err := platform.Environments().LatestHealthCheck(context.Background(), environment.ID)
 	if err != nil || stored.ID != check.ID || stored.EnvironmentRevisionID != environment.CurrentRevisionID {
 		t.Fatalf("stored health=%+v err=%v", stored, err)
 	}

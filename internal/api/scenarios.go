@@ -10,9 +10,8 @@ import (
 )
 
 type graphInput struct {
-	Nodes           []flowNodeInput       `json:"nodes"`
-	Edges           []domain.ScenarioEdge `json:"edges"`
-	ExecutionPolicy map[string]any        `json:"executionPolicy"`
+	Nodes []flowNodeInput       `json:"nodes"`
+	Edges []domain.ScenarioEdge `json:"edges"`
 }
 
 type flowNodeInput struct {
@@ -44,12 +43,12 @@ func (input graphInput) domain() domain.ScenarioGraph {
 }
 
 func (h *Handler) listScenarios(w http.ResponseWriter, r *http.Request) {
-	scenarios, err := h.platform.ListScenarios(r.Context(), currentUser(r))
+	scenarios, err := h.platform.Scenarios().List(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	releases, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	releases, err := h.platform.Scenarios().ListReleaseDisplayMetadata(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
@@ -67,7 +66,7 @@ func (h *Handler) createScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	scenario, err := h.platform.CreateScenario(r.Context(), currentUser(r), input)
+	scenario, err := h.platform.Scenarios().Create(r.Context(), currentUser(r), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -76,7 +75,7 @@ func (h *Handler) createScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteScenario(w http.ResponseWriter, r *http.Request) {
-	if err := h.platform.DeleteScenario(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+	if err := h.platform.Scenarios().Delete(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -89,7 +88,7 @@ func (h *Handler) cloneScenarioRevision(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	revision, err := h.platform.CloneScenarioRevision(r.Context(), currentUser(r), r.PathValue("id"), input)
+	revision, err := h.platform.Scenarios().CloneRevision(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -103,7 +102,7 @@ func (h *Handler) previewScenarioClone(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.PreviewScenarioClone(r.Context(), currentUser(r), r.PathValue("id"), input)
+	plan, err := h.platform.Scenarios().PreviewClone(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -112,7 +111,7 @@ func (h *Handler) previewScenarioClone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) abandonScenarioRevision(w http.ResponseWriter, r *http.Request) {
-	scenario, err := h.platform.AbandonScenarioRevision(r.Context(), currentUser(r), r.PathValue("id"))
+	scenario, err := h.platform.Scenarios().AbandonRevision(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -121,7 +120,7 @@ func (h *Handler) abandonScenarioRevision(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
-	scenario, err := h.platform.GetScenario(r.Context(), currentUser(r), r.PathValue("id"))
+	scenario, err := h.platform.Scenarios().Get(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -136,12 +135,7 @@ func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	graph := input.domain()
-	if input.ExecutionPolicy == nil {
-		if existing, getErr := h.platform.Store().GetScenarioRevision(r.Context(), r.PathValue("id")); getErr == nil {
-			input.ExecutionPolicy = existing.ExecutionPolicy
-		}
-	}
-	revision, err := h.platform.SaveScenarioGraph(r.Context(), currentUser(r), r.PathValue("id"), graph, input.ExecutionPolicy)
+	revision, err := h.platform.Scenarios().SaveGraph(r.Context(), currentUser(r), r.PathValue("id"), graph)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -150,7 +144,7 @@ func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
-	issues, err := h.platform.ValidateScenario(r.Context(), currentUser(r), r.PathValue("id"))
+	issues, err := h.platform.Scenarios().Validate(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -167,7 +161,7 @@ func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) candidateReleaseSet(w http.ResponseWriter, r *http.Request) {
-	set, err := h.platform.CandidateReleaseSet(r.Context(), currentUser(r), r.PathValue("id"))
+	set, err := h.platform.Releases().CandidateReleaseSet(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -181,7 +175,7 @@ func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartScenarioTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
+	run, err := h.platform.Execution().StartScenarioTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -195,7 +189,7 @@ func (h *Handler) runScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.StartScenarioRun(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
+	run, err := h.platform.Execution().StartScenarioRun(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -204,7 +198,7 @@ func (h *Handler) runScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) publishScenario(w http.ResponseWriter, r *http.Request) {
-	revision, err := h.platform.PublishScenario(r.Context(), currentUser(r), r.PathValue("id"))
+	revision, err := h.platform.Releases().PublishScenario(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -213,7 +207,7 @@ func (h *Handler) publishScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deprecateScenario(w http.ResponseWriter, r *http.Request) {
-	revision, err := h.platform.DeprecateScenario(r.Context(), currentUser(r), r.PathValue("id"))
+	revision, err := h.platform.Scenarios().Deprecate(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -222,7 +216,7 @@ func (h *Handler) deprecateScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeScenarioDTO(w http.ResponseWriter, r *http.Request, status int, scenario domain.Scenario) {
-	metadata, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	metadata, err := h.platform.Scenarios().ListReleaseDisplayMetadata(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
@@ -231,7 +225,7 @@ func (h *Handler) writeScenarioDTO(w http.ResponseWriter, r *http.Request, statu
 }
 
 func (h *Handler) writeRevisionDTO(w http.ResponseWriter, r *http.Request, status int, revision domain.ScenarioRevision) {
-	metadata, err := h.platform.Store().ListReleaseDisplayMetadata(r.Context())
+	metadata, err := h.platform.Scenarios().ListReleaseDisplayMetadata(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
@@ -240,7 +234,7 @@ func (h *Handler) writeRevisionDTO(w http.ResponseWriter, r *http.Request, statu
 }
 
 func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
-	owner, _ := h.platform.Store().GetUser(r.Context(), scenario.OwnerID)
+	owner, _ := h.platform.Scenarios().GetUser(r.Context(), scenario.OwnerID)
 	sort.SliceStable(scenario.Revisions, func(i, j int) bool { return scenario.Revisions[i].Revision > scenario.Revisions[j].Revision })
 	revisions := make([]map[string]any, 0, len(scenario.Revisions))
 	var current map[string]any
@@ -284,8 +278,7 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	return map[string]any{
 		"id": revision.ID, "scenarioId": revision.ScenarioID, "revision": revision.Revision,
 		"state": state, "nodes": nodes, "edges": revision.Graph.Edges,
-		"executionPolicy": revision.ExecutionPolicy,
-		"testPassedAt":    revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
+		"testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}
 }
 

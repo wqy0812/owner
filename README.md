@@ -74,15 +74,18 @@ make build
 ./scripts/deploy-test-88-55.sh --help
 ./scripts/deploy-test-88-55.sh --skip-tests
 ./scripts/deploy-test-88-55.sh --target root@192.168.88.55 --ssh-port 22
+./scripts/deploy-test-88-55.sh --rebuild-v1-db
 ```
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
+
+本次模块化/简化合同为 `clusterforge-v1-20260828-publication-guards`，按 V1 决策不提供旧字段迁移。首次把该合同部署到已有测试库时必须显式使用 `--rebuild-v1-db`：脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，停服务后才删除工作库并由新版本重建/Seed；启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 
 ## 组件分层
 
-组件按 L1 主机基础与安全、L2 运行时与状态存储、L3 Kubernetes 编排核心、L4 集群网络/服务发现/存储、L5 可观测与节点管理、L6 平台扩展分组。每个组件同时记录能力类别、组件形态和必选性；环境架构、操作系统、IP 协议族等仍属于 Release 的环境约束。
+组件按 L1 主机基础与安全、L2 运行时与状态存储、L3 Kubernetes 编排核心、L4 集群网络/服务发现/存储、L5 可观测与节点管理、L6 平台扩展分组，并可填写少量自由标签用于检索。环境架构、操作系统、IP 协议族等仍属于 Release 的环境约束；调度与依赖不从标签推导。
 
 分层用于目录展示、检索和编排提示，不代表精确执行顺序。Release 依赖锁定精确上游版本，场景 DAG 的边决定实际拓扑和执行顺序。
 
@@ -103,7 +106,7 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 
 加密密钥值不进入 Seed、数据库或作业快照；环境模板通过 CredentialRef 将 Ansible 变量 `K8S_ENCRYPTION_KEY` 指向后端进程环境变量 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY`。部署方必须提供一个经审核的 32 字节密钥的 base64 值。当前 Kubernetes 1.17.5 Action 尚未把该引用声明为 `requiredCredentials`，因此环境 Owner 在审批前必须人工确认引用和后端变量均已配置，并依赖 Playbook 预检失败关闭。
 
-所有外部压缩包/二进制都要求 64 位十六进制 SHA256，容器镜像要求 `sha256:` digest；模板中的未知值保持为空，组件预检会在任何远端写操作前失败。无法从源快照确认软件版本的附加 Release 使用 `source-6909da3` 且 `verified=false`，不推测上游版本。
+所有外部压缩包/二进制都要求 64 位十六进制 SHA256，容器镜像要求 `sha256:` digest；模板中的未知值保持为空，组件预检会在任何远端写操作前失败。无法从源快照确认软件版本的附加 Release 使用 `source-6909da3`，不推测上游版本；真实就绪结论由当前合同和双证据派生的 Readiness 表达。
 
 扩展场景完整包含核心 DAG，并追加 Node Logging、HAProxy、Blackbox/Node Exporter、Metrics Server、AMC、GlusterFS Client、Go/pprof、Prometheus Access 和 Autoscaling RBAC。快照位于 `examples/ansible/k8s-1.17.5-cluster`；本地语法、任务枚举和代码测试通过，不等于真实 SUSE 三控制节点加工作节点的安装、介质验真和集群收敛验收。
 

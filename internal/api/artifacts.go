@@ -58,7 +58,7 @@ func (h *Handler) uploadComponentArtifact(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer file.Close()
-	artifact, err := h.platform.UploadComponentArtifact(r.Context(), currentUser(r), r.PathValue("id"), r.FormValue("environmentId"), r.FormValue("alias"), header.Filename, checksum, file)
+	artifact, err := h.platform.Catalog().UploadArtifact(r.Context(), currentUser(r), r.PathValue("id"), r.FormValue("environmentId"), r.FormValue("alias"), header.Filename, checksum, file)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -68,16 +68,16 @@ func (h *Handler) uploadComponentArtifact(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) registerComponentArtifact(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		EnvironmentID string `json:"environmentId"`
-		Alias         string `json:"alias"`
-		RelativePath  string `json:"relativePath"`
-		SHA256        string `json:"sha256"`
+		Alias     string `json:"alias"`
+		Filename  string `json:"filename"`
+		SourceURL string `json:"sourceUrl"`
+		SHA256    string `json:"sha256"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	artifact, err := h.platform.RegisterComponentArtifact(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.Alias, input.RelativePath, input.SHA256)
+	artifact, err := h.platform.Catalog().RegisterArtifact(r.Context(), currentUser(r), r.PathValue("id"), input.Alias, input.Filename, input.SourceURL, input.SHA256)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -85,8 +85,24 @@ func (h *Handler) registerComponentArtifact(w http.ResponseWriter, r *http.Reque
 	writeData(w, http.StatusCreated, artifact)
 }
 
+func (h *Handler) updateComponentArtifactSource(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		SourceURL string `json:"sourceUrl"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	artifact, err := h.platform.Catalog().UpdateArtifactSource(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("alias"), input.SourceURL)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, artifact)
+}
+
 func (h *Handler) deleteComponentArtifact(w http.ResponseWriter, r *http.Request) {
-	if err := h.platform.DeleteComponentArtifact(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("alias")); err != nil {
+	if err := h.platform.Catalog().DeleteArtifact(r.Context(), currentUser(r), r.PathValue("id"), r.PathValue("alias")); err != nil {
 		writeError(w, err)
 		return
 	}

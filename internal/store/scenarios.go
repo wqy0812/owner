@@ -109,7 +109,7 @@ AND resource_id IN (SELECT id FROM scenario_revisions WHERE scenario_id=?)`, sce
 }
 
 func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRevision) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.ExecutionPolicy), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
 	return mapSQLError(err)
 }
 
@@ -254,11 +254,10 @@ func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, 
 
 func scanScenarioRevision(row scanner) (domain.ScenarioRevision, error) {
 	var r domain.ScenarioRevision
-	var graph, policy, created string
+	var graph, created string
 	var tested, released, deprecated, abandoned sql.NullString
-	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &graph, &policy, &created, &tested, &released, &deprecated, &abandoned)
+	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &r.PublicationGeneration, &graph, &created, &tested, &released, &deprecated, &abandoned)
 	r.Graph = decodeJSON(graph, domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}})
-	r.ExecutionPolicy = decodeJSON(policy, map[string]any{})
 	r.CreatedAt = parseTime(created)
 	r.TestPassedAt = parseNullTime(tested)
 	r.ReleasedAt = parseNullTime(released)
@@ -268,12 +267,16 @@ func scanScenarioRevision(row scanner) (domain.ScenarioRevision, error) {
 }
 
 func (s *Store) GetScenarioRevision(ctx context.Context, id string) (domain.ScenarioRevision, error) {
-	r, err := scanScenarioRevision(s.db.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE id=?`, id))
+	return getScenarioRevision(ctx, s.db, id)
+}
+
+func getScenarioRevision(ctx context.Context, q queryer, id string) (domain.ScenarioRevision, error) {
+	r, err := scanScenarioRevision(q.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,publication_generation,graph_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, releasedOnly bool) ([]domain.ScenarioRevision, error) {
-	q := `SELECT id,scenario_id,revision,status,graph_json,execution_policy_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE scenario_id=?`
+	q := `SELECT id,scenario_id,revision,status,publication_generation,graph_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE scenario_id=?`
 	if releasedOnly {
 		q += ` AND status='released'`
 	}
@@ -294,8 +297,8 @@ func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, re
 	return out, rows.Err()
 }
 
-func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.ScenarioGraph, policy map[string]any) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,execution_policy_json=?,status='draft',test_passed_at=NULL WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), jsonText(policy), id)
+func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.ScenarioGraph) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), id)
 	if err != nil {
 		return err
 	}
@@ -336,33 +339,6 @@ func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from [
 		return fmt.Errorf("%w: invalid scenario revision transition", domain.ErrConflict)
 	}
 	return nil
-}
-
-// PublishCandidateReleaseSet commits a tested scenario revision and every
-// opted-in Draft it locks in one SQLite transaction.
-func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionID string, releaseIDs []string, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, releaseID := range releaseIDs {
-		result, updateErr := tx.ExecContext(ctx, `UPDATE component_releases SET status='released',candidate=0,released_at=? WHERE id=? AND status='draft' AND candidate=1 AND verified=1`, timeText(at), releaseID)
-		if updateErr != nil {
-			return updateErr
-		}
-		if changed, _ := result.RowsAffected(); changed != 1 {
-			return fmt.Errorf("%w: candidate release %s changed before atomic publish", domain.ErrConflict, releaseID)
-		}
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='released',released_at=? WHERE id=? AND status='test_passed' AND test_passed_at IS NOT NULL`, timeText(at), revisionID)
-	if err != nil {
-		return err
-	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
-		return fmt.Errorf("%w: scenario revision changed before atomic publish", domain.ErrConflict)
-	}
-	return tx.Commit()
 }
 
 func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at time.Time) error {
