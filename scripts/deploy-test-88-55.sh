@@ -275,7 +275,7 @@ import sys
 database = sys.argv[1]
 connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
 contract = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
-if contract != ("clusterforge-v1-20260828-publication-guards",):
+if contract != ("clusterforge-v1-20260828-environment-lifecycle",):
     raise SystemExit(f"unexpected schema contract: {contract!r}")
 violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 if violations:

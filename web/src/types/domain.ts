@@ -292,7 +292,20 @@ export interface Environment {
   currentRevision?: EnvironmentRevision;
   revisions?: EnvironmentRevision[];
   healthCheck?: EnvironmentHealthCheck;
+  archivedAt?: string;
   updatedAt?: string;
+}
+
+export interface EnvironmentLifecycle {
+  revisionCount: number;
+  runCount: number;
+  activeRunCount: number;
+  imageBuildCount: number;
+  activeImageBuildCount: number;
+  installationCount: number;
+  archived: boolean;
+  canDelete: boolean;
+  canArchive: boolean;
 }
 
 export interface EnvironmentExportDocument {

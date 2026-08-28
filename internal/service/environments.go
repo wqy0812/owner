@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/store"
 )
 
 type InventoryHost struct {
@@ -24,6 +26,18 @@ type InventoryHost struct {
 
 type InventoryDocument struct {
 	Hosts []InventoryHost `json:"hosts"`
+}
+
+type EnvironmentLifecycle struct {
+	RevisionCount         int  `json:"revisionCount"`
+	RunCount              int  `json:"runCount"`
+	ActiveRunCount        int  `json:"activeRunCount"`
+	ImageBuildCount       int  `json:"imageBuildCount"`
+	ActiveImageBuildCount int  `json:"activeImageBuildCount"`
+	InstallationCount     int  `json:"installationCount"`
+	Archived              bool `json:"archived"`
+	CanDelete             bool `json:"canDelete"`
+	CanArchive            bool `json:"canArchive"`
 }
 
 func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, environment domain.Environment, facts map[string]any) (domain.Environment, error) {
@@ -52,10 +66,20 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	return environment, nil
 }
 
-func (p *Platform) ListEnvironments(ctx context.Context, user domain.User) ([]domain.Environment, error) {
-	environments, err := p.store.ListEnvironments(ctx)
+func (p *Platform) ListEnvironments(ctx context.Context, user domain.User, includeArchived ...bool) ([]domain.Environment, error) {
+	include := len(includeArchived) > 0 && includeArchived[0] && user.Role == domain.RoleEnvironmentOwner
+	environments, err := p.store.ListEnvironments(ctx, include)
 	if err != nil {
 		return nil, err
+	}
+	if include {
+		visible := environments[:0]
+		for _, environment := range environments {
+			if environment.ArchivedAt == nil || environment.OwnerID == user.ID {
+				visible = append(visible, environment)
+			}
+		}
+		environments = visible
 	}
 	for i := range environments {
 		if environments[i].Revision != nil {
@@ -67,6 +91,132 @@ func (p *Platform) ListEnvironments(ctx context.Context, user domain.User) ([]do
 		}
 	}
 	return environments, nil
+}
+
+func environmentLifecycleFromImpact(environment domain.Environment, impact store.EnvironmentLifecycleImpact) EnvironmentLifecycle {
+	return EnvironmentLifecycle{
+		RevisionCount: impact.RevisionCount, RunCount: impact.RunCount, ActiveRunCount: impact.ActiveRunCount,
+		ImageBuildCount: impact.ImageBuildCount, ActiveImageBuildCount: impact.ActiveImageBuildCount, InstallationCount: impact.InstallationCount,
+		Archived:   environment.ArchivedAt != nil,
+		CanDelete:  impact.RunCount == 0 && impact.ImageBuildCount == 0 && impact.InstallationCount == 0,
+		CanArchive: environment.ArchivedAt == nil && impact.ActiveRunCount == 0 && impact.ActiveImageBuildCount == 0 && impact.InstallationCount == 0,
+	}
+}
+
+func (p *Platform) GetEnvironmentLifecycle(ctx context.Context, user domain.User, environmentID string) (EnvironmentLifecycle, error) {
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return EnvironmentLifecycle{}, err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return EnvironmentLifecycle{}, err
+	}
+	impact, err := p.store.EnvironmentLifecycleImpact(ctx, environmentID)
+	if err != nil {
+		return EnvironmentLifecycle{}, err
+	}
+	return environmentLifecycleFromImpact(environment, impact), nil
+}
+
+func (p *Platform) DeleteEnvironment(ctx context.Context, user domain.User, environmentID string) error {
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return err
+	}
+	impact, err := p.store.EnvironmentLifecycleImpact(ctx, environmentID)
+	if err != nil {
+		return err
+	}
+	if impact.InstallationCount > 0 {
+		base := fmt.Errorf("%w: environment has %d installation baseline(s)", domain.ErrConflict, impact.InstallationCount)
+		return actionableExistingError(base, "environment.installations_present", "该环境仍有组件安装基线，必须先回滚至干净状态", "一键回滚至干净状态", "/environments?selected="+environment.ID+"&action=rollback")
+	}
+	if impact.RunCount > 0 {
+		base := fmt.Errorf("%w: environment is retained by %d run(s)", domain.ErrConflict, impact.RunCount)
+		return actionableExistingError(base, "environment.run_history", "该环境已有运行记录，必须保留环境与 Revision 快照；可以改为归档", "查看运行记录", "/runs")
+	}
+	if impact.ImageBuildCount > 0 {
+		base := fmt.Errorf("%w: environment is retained by %d image build(s)", domain.ErrConflict, impact.ImageBuildCount)
+		return actionableExistingError(base, "environment.build_history", "该环境已有镜像构建记录，必须保留环境与 Revision 快照；可以改为归档", "查看组件构建记录", "/components")
+	}
+	audit := newAuditEvent(user, "environment.deleted", "environment", environment.ID, map[string]any{
+		"name": environment.Name, "revisionCount": impact.RevisionCount,
+	})
+	if err := p.store.DeleteEnvironment(ctx, environment.ID, audit); err != nil {
+		return err
+	}
+	p.hub.Publish("environment.deleted", map[string]any{"environmentId": environment.ID})
+	return nil
+}
+
+func (p *Platform) ArchiveEnvironment(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return environment, err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return environment, err
+	}
+	if environment.ArchivedAt != nil {
+		return environment, fmt.Errorf("%w: environment is already archived", domain.ErrConflict)
+	}
+	impact, err := p.store.EnvironmentLifecycleImpact(ctx, environmentID)
+	if err != nil {
+		return environment, err
+	}
+	if impact.ActiveRunCount > 0 {
+		base := fmt.Errorf("%w: environment has %d active run(s)", domain.ErrConflict, impact.ActiveRunCount)
+		return environment, actionableExistingError(base, "environment.active_runs", "该环境仍有活动 Run，必须等待结束或取消后再归档", "查看运行记录", "/runs")
+	}
+	if impact.ActiveImageBuildCount > 0 {
+		base := fmt.Errorf("%w: environment has %d active image build(s)", domain.ErrConflict, impact.ActiveImageBuildCount)
+		return environment, actionableExistingError(base, "environment.active_image_builds", "该环境仍有排队或执行中的镜像构建，必须等待结束后再归档", "查看组件构建记录", "/components")
+	}
+	if impact.InstallationCount > 0 {
+		base := fmt.Errorf("%w: environment has %d installation baseline(s)", domain.ErrConflict, impact.InstallationCount)
+		return environment, actionableExistingError(base, "environment.installations_present", "归档会禁止新的回滚操作，请先把环境回滚至干净状态", "一键回滚至干净状态", "/environments?selected="+environment.ID+"&action=rollback")
+	}
+	now := time.Now().UTC()
+	audit := newAuditEvent(user, "environment.archived", "environment", environment.ID, map[string]any{
+		"name": environment.Name, "runCount": impact.RunCount, "imageBuildCount": impact.ImageBuildCount,
+	})
+	if err := p.store.ArchiveEnvironment(ctx, environment.ID, now, audit); err != nil {
+		return environment, err
+	}
+	environment.ArchivedAt, environment.UpdatedAt = &now, now
+	p.hub.Publish("environment.archived", map[string]any{"environmentId": environment.ID})
+	return environment, nil
+}
+
+func (p *Platform) UnarchiveEnvironment(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
+	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
+	if err != nil {
+		return environment, err
+	}
+	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return environment, err
+	}
+	if environment.ArchivedAt == nil {
+		return environment, fmt.Errorf("%w: environment is not archived", domain.ErrConflict)
+	}
+	now := time.Now().UTC()
+	audit := newAuditEvent(user, "environment.unarchived", "environment", environment.ID, map[string]any{"name": environment.Name})
+	if err := p.store.UnarchiveEnvironment(ctx, environment.ID, now, audit); err != nil {
+		return environment, err
+	}
+	environment.ArchivedAt, environment.UpdatedAt = nil, now
+	p.hub.Publish("environment.unarchived", map[string]any{"environmentId": environment.ID})
+	return environment, nil
+}
+
+func ensureEnvironmentActive(environment domain.Environment) error {
+	if environment.ArchivedAt != nil {
+		return actionableExistingError(fmt.Errorf("%w: environment is archived", domain.ErrConflict), "environment.archived", "该环境已归档，不能再创建 Revision、健康检查、构建或 Run", "恢复环境", "/environments?selected="+environment.ID)
+	}
+	return nil
 }
 
 func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {
@@ -210,6 +360,9 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
 		return environment, err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return environment, err
+	}
 	if environment.Revision == nil {
 		return environment, fmt.Errorf("%w: environment has no current revision", domain.ErrConflict)
 	}
@@ -240,6 +393,9 @@ func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.U
 		return environment, err
 	}
 	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return environment, err
+	}
+	if err := ensureEnvironmentActive(environment); err != nil {
 		return environment, err
 	}
 	target, err := p.store.GetEnvironmentRevision(ctx, revisionID)
@@ -280,6 +436,9 @@ func (p *Platform) CheckEnvironmentHealth(ctx context.Context, user domain.User,
 		return domain.EnvironmentHealthCheck{}, err
 	}
 	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+		return domain.EnvironmentHealthCheck{}, err
+	}
+	if err := ensureEnvironmentActive(environment); err != nil {
 		return domain.EnvironmentHealthCheck{}, err
 	}
 	if environment.Revision == nil {
@@ -349,6 +508,14 @@ func (p *Platform) CheckEnvironmentHealth(ctx context.Context, user domain.User,
 		Status: status, Results: results, CheckedAt: time.Now().UTC(),
 	}
 	if err := p.store.SaveEnvironmentHealthCheck(ctx, check); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			current, currentErr := p.store.GetEnvironment(ctx, environmentID, false)
+			if currentErr == nil {
+				if activeErr := ensureEnvironmentActive(current); activeErr != nil {
+					return domain.EnvironmentHealthCheck{}, activeErr
+				}
+			}
+		}
 		return domain.EnvironmentHealthCheck{}, err
 	}
 	reachable := 0

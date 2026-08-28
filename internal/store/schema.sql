@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260828-publication-guards');
+VALUES(1, 'clusterforge-v1-20260828-environment-lifecycle');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS environments (
   description TEXT NOT NULL DEFAULT '',
   owner_id TEXT NOT NULL REFERENCES users(id),
   current_revision_id TEXT,
+  archived_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -147,6 +148,13 @@ CREATE TABLE IF NOT EXISTS environment_revisions (
   created_at TEXT NOT NULL,
   UNIQUE(environment_id, revision)
 );
+
+CREATE TRIGGER IF NOT EXISTS environment_revisions_active_environment_insert
+BEFORE INSERT ON environment_revisions
+WHEN EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot create revisions');
+END;
 
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
@@ -173,6 +181,21 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS runs_active_environment_insert
+BEFORE INSERT ON runs
+WHEN EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot create runs');
+END;
+
+CREATE TRIGGER IF NOT EXISTS runs_active_environment_update
+BEFORE UPDATE OF status,environment_id ON runs
+WHEN NEW.status IN ('running','awaiting_approval','queued')
+AND EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot receive runs');
+END;
 CREATE INDEX IF NOT EXISTS idx_runs_retry_root ON runs(retry_root_run_id, retry_attempt);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_retry_attempt ON runs(retry_root_run_id, retry_attempt) WHERE retry_root_run_id IS NOT NULL;
 DROP INDEX IF EXISTS idx_runs_one_active_retry;
@@ -331,6 +354,23 @@ ON component_image_builds(release_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_component_image_builds_environment_created
 ON component_image_builds(environment_id, created_at DESC);
 
+CREATE TRIGGER IF NOT EXISTS component_image_builds_active_environment_insert
+BEFORE INSERT ON component_image_builds
+WHEN NEW.environment_id IS NOT NULL
+AND EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot create image builds');
+END;
+
+CREATE TRIGGER IF NOT EXISTS component_image_builds_active_environment_update
+BEFORE UPDATE OF status,environment_id ON component_image_builds
+WHEN NEW.status IN ('queued','running')
+AND NEW.environment_id IS NOT NULL
+AND EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot activate image builds');
+END;
+
 CREATE TABLE IF NOT EXISTS component_image_build_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   build_id TEXT NOT NULL REFERENCES component_image_builds(id) ON DELETE CASCADE,
@@ -417,6 +457,13 @@ CREATE TABLE IF NOT EXISTS environment_health_checks (
   results_json TEXT NOT NULL CHECK (json_valid(results_json)),
   checked_at TEXT NOT NULL
 );
+
+CREATE TRIGGER IF NOT EXISTS environment_health_checks_active_environment_insert
+BEFORE INSERT ON environment_health_checks
+WHEN EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot record health checks');
+END;
 
 CREATE INDEX IF NOT EXISTS idx_environment_health_checks_latest
 ON environment_health_checks(environment_id, checked_at DESC);

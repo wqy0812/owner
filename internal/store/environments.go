@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -10,6 +12,15 @@ import (
 type ActiveEnvironmentRun struct {
 	ID     string
 	Status domain.RunStatus
+}
+
+type EnvironmentLifecycleImpact struct {
+	RevisionCount         int `json:"revisionCount"`
+	RunCount              int `json:"runCount"`
+	ActiveRunCount        int `json:"activeRunCount"`
+	ImageBuildCount       int `json:"imageBuildCount"`
+	ActiveImageBuildCount int `json:"activeImageBuildCount"`
+	InstallationCount     int `json:"installationCount"`
 }
 
 // GetActiveEnvironmentRun keeps serialized-Run selection behind the
@@ -39,6 +50,131 @@ func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r d
 	return tx.Commit()
 }
 
+func environmentLifecycleImpact(ctx context.Context, q queryer, environmentID string) (EnvironmentLifecycleImpact, error) {
+	var impact EnvironmentLifecycleImpact
+	var exists int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM environments WHERE id=?`, environmentID).Scan(&exists); err != nil {
+		return impact, err
+	}
+	if exists == 0 {
+		return impact, domain.ErrNotFound
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_revisions WHERE environment_id=?`, environmentID).Scan(&impact.RevisionCount); err != nil {
+		return impact, err
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('running','awaiting_approval','queued') THEN 1 ELSE 0 END),0) FROM runs WHERE environment_id=?`, environmentID).Scan(&impact.RunCount, &impact.ActiveRunCount); err != nil {
+		return impact, err
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END),0) FROM component_image_builds WHERE environment_id=?`, environmentID).Scan(&impact.ImageBuildCount, &impact.ActiveImageBuildCount); err != nil {
+		return impact, err
+	}
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_component_installations WHERE environment_id=?`, environmentID).Scan(&impact.InstallationCount); err != nil {
+		return impact, err
+	}
+	return impact, nil
+}
+
+func (s *Store) EnvironmentLifecycleImpact(ctx context.Context, environmentID string) (EnvironmentLifecycleImpact, error) {
+	return environmentLifecycleImpact(ctx, s.db, environmentID)
+}
+
+func insertEnvironmentLifecycleAudit(ctx context.Context, tx *sql.Tx, audit domain.AuditEvent) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, audit.ID, audit.ActorID, audit.Action, audit.ResourceType, audit.ResourceID, jsonText(audit.Metadata), timeText(audit.CreatedAt))
+	return mapSQLError(err)
+}
+
+// DeleteEnvironment permanently removes only environments that have never
+// been used by a Run or image build and have no current installation baseline.
+func (s *Store) DeleteEnvironment(ctx context.Context, environmentID string, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	impact, err := environmentLifecycleImpact(ctx, tx, environmentID)
+	if err != nil {
+		return err
+	}
+	if impact.RunCount > 0 {
+		return fmt.Errorf("%w: environment run history must be retained", domain.ErrConflict)
+	}
+	if impact.ImageBuildCount > 0 {
+		return fmt.Errorf("%w: environment image build history must be retained", domain.ErrConflict)
+	}
+	if impact.InstallationCount > 0 {
+		return fmt.Errorf("%w: environment installations must be rolled back first", domain.ErrConflict)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM environments WHERE id=?`, environmentID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return domain.ErrNotFound
+	}
+	if err := insertEnvironmentLifecycleAudit(ctx, tx, audit); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ArchiveEnvironment(ctx context.Context, environmentID string, archivedAt time.Time, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	impact, err := environmentLifecycleImpact(ctx, tx, environmentID)
+	if err != nil {
+		return err
+	}
+	if impact.ActiveRunCount > 0 {
+		return fmt.Errorf("%w: active environment runs must finish first", domain.ErrConflict)
+	}
+	if impact.ActiveImageBuildCount > 0 {
+		return fmt.Errorf("%w: active environment image builds must finish first", domain.ErrConflict)
+	}
+	if impact.InstallationCount > 0 {
+		return fmt.Errorf("%w: environment installations must be rolled back first", domain.ErrConflict)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE environments SET archived_at=?,updated_at=? WHERE id=? AND archived_at IS NULL`, timeText(archivedAt), timeText(archivedAt), environmentID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: environment is already archived", domain.ErrConflict)
+	}
+	if err := insertEnvironmentLifecycleAudit(ctx, tx, audit); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) UnarchiveEnvironment(ctx context.Context, environmentID string, restoredAt time.Time, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM environments WHERE id=?`, environmentID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return domain.ErrNotFound
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE environments SET archived_at=NULL,updated_at=? WHERE id=? AND archived_at IS NOT NULL`, timeText(restoredAt), environmentID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: environment is not archived", domain.ErrConflict)
+	}
+	if err := insertEnvironmentLifecycleAudit(ctx, tx, audit); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func insertEnvironmentRevision(ctx context.Context, tx *sql.Tx, r domain.EnvironmentRevision) error {
 	inventory := string(r.Inventory)
 	if inventory == "" {
@@ -57,13 +193,20 @@ func (s *Store) CreateEnvironmentRevision(ctx context.Context, r domain.Environm
 	if err = insertEnvironmentRevision(ctx, tx, r); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE environments SET current_revision_id=?,updated_at=? WHERE id=?`, r.ID, timeText(r.CreatedAt), r.EnvironmentID)
+	res, err := tx.ExecContext(ctx, `UPDATE environments SET current_revision_id=?,updated_at=? WHERE id=? AND archived_at IS NULL`, r.ID, timeText(r.CreatedAt), r.EnvironmentID)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return domain.ErrNotFound
+		var exists int
+		if queryErr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM environments WHERE id=?`, r.EnvironmentID).Scan(&exists); queryErr != nil {
+			return queryErr
+		}
+		if exists == 0 {
+			return domain.ErrNotFound
+		}
+		return fmt.Errorf("%w: environment is archived", domain.ErrConflict)
 	}
 	return tx.Commit()
 }
@@ -82,13 +225,17 @@ func (s *Store) UpdateEnvironmentMetadata(ctx context.Context, e domain.Environm
 
 func (s *Store) GetEnvironment(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error) {
 	var e domain.Environment
-	var current sql.NullString
+	var current, archived sql.NullString
 	var cr, up string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,description,owner_id,current_revision_id,created_at,updated_at FROM environments WHERE id=?`, id).Scan(&e.ID, &e.Name, &e.Description, &e.OwnerID, &current, &cr, &up)
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,description,owner_id,current_revision_id,archived_at,created_at,updated_at FROM environments WHERE id=?`, id).Scan(&e.ID, &e.Name, &e.Description, &e.OwnerID, &current, &archived, &cr, &up)
 	if err != nil {
 		return e, mapSQLError(err)
 	}
 	e.CurrentRevisionID = current.String
+	if archived.Valid {
+		value := parseTime(archived.String)
+		e.ArchivedAt = &value
+	}
 	e.CreatedAt = parseTime(cr)
 	e.UpdatedAt = parseTime(up)
 	if current.Valid {
@@ -104,8 +251,13 @@ func (s *Store) GetEnvironment(ctx context.Context, id string, includeRevisions 
 	return e, err
 }
 
-func (s *Store) ListEnvironments(ctx context.Context) ([]domain.Environment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,description,owner_id,current_revision_id,created_at,updated_at FROM environments ORDER BY name`)
+func (s *Store) ListEnvironments(ctx context.Context, includeArchived ...bool) ([]domain.Environment, error) {
+	query := `SELECT id,name,description,owner_id,current_revision_id,archived_at,created_at,updated_at FROM environments`
+	if len(includeArchived) == 0 || !includeArchived[0] {
+		query += ` WHERE archived_at IS NULL`
+	}
+	query += ` ORDER BY archived_at IS NOT NULL,name`
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +265,16 @@ func (s *Store) ListEnvironments(ctx context.Context) ([]domain.Environment, err
 	var out []domain.Environment
 	for rows.Next() {
 		var e domain.Environment
-		var current sql.NullString
+		var current, archived sql.NullString
 		var cr, up string
-		if err := rows.Scan(&e.ID, &e.Name, &e.Description, &e.OwnerID, &current, &cr, &up); err != nil {
+		if err := rows.Scan(&e.ID, &e.Name, &e.Description, &e.OwnerID, &current, &archived, &cr, &up); err != nil {
 			return nil, err
 		}
 		e.CurrentRevisionID = current.String
+		if archived.Valid {
+			value := parseTime(archived.String)
+			e.ArchivedAt = &value
+		}
 		e.CreatedAt = parseTime(cr)
 		e.UpdatedAt = parseTime(up)
 		out = append(out, e)

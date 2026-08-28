@@ -130,6 +130,9 @@ func (p *Platform) artifactUploadContext(ctx context.Context, user domain.User, 
 	if err != nil {
 		return release, component, environment, "", "", err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return release, component, environment, "", "", err
+	}
 	if environment.Revision == nil {
 		return release, component, environment, "", "", fmt.Errorf("%w: selected environment has no current revision", domain.ErrConflict)
 	}

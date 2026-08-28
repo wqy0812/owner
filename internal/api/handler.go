@@ -122,6 +122,10 @@ func (h *Handler) routes() {
 
 	h.router.HandleFunc("GET /api/v1/environments", h.listEnvironments)
 	h.router.HandleFunc("POST /api/v1/environments", h.createEnvironment)
+	h.router.HandleFunc("GET /api/v1/environments/{id}/lifecycle", h.getEnvironmentLifecycle)
+	h.router.HandleFunc("DELETE /api/v1/environments/{id}", h.deleteEnvironment)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/archive", h.archiveEnvironment)
+	h.router.HandleFunc("POST /api/v1/environments/{id}/unarchive", h.unarchiveEnvironment)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/inventory", h.updateInventory)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/facts", h.updateFacts)
 	h.router.HandleFunc("PUT /api/v1/environments/{id}/variables", h.updateVariables)

@@ -20,6 +20,7 @@ import type {
   EnvironmentHealthCheck,
   EnvironmentHost,
   EnvironmentImportPlan,
+  EnvironmentLifecycle,
   EnvironmentRollbackPlan,
   EnvironmentRevision,
   ImpactPreview,
@@ -585,7 +586,22 @@ function normalizeEnvironment(raw: LooseRecord): Environment {
     currentRevision: revision ? normalizeEnvironmentRevision(revision) : undefined,
     revisions,
     healthCheck: healthCheck ? normalizeEnvironmentHealthCheck(healthCheck) : undefined,
+    archivedAt: optionalString(raw, 'archivedAt'),
     updatedAt: optionalString(raw, 'updatedAt'),
+  };
+}
+
+function normalizeEnvironmentLifecycle(raw: LooseRecord): EnvironmentLifecycle {
+  return {
+    revisionCount: requireNumber(raw, 'revisionCount'),
+    runCount: requireNumber(raw, 'runCount'),
+    activeRunCount: requireNumber(raw, 'activeRunCount'),
+    imageBuildCount: requireNumber(raw, 'imageBuildCount'),
+    activeImageBuildCount: requireNumber(raw, 'activeImageBuildCount'),
+    installationCount: requireNumber(raw, 'installationCount'),
+    archived: requireBoolean(raw, 'archived'),
+    canDelete: requireBoolean(raw, 'canDelete'),
+    canArchive: requireBoolean(raw, 'canArchive'),
   };
 }
 
@@ -1156,11 +1172,23 @@ export const api = {
   async deprecateScenario(revisionId: string) {
     return normalizeRevision(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/deprecate`)), 'scenario revision'));
   },
-  async environments(signal?: AbortSignal) {
-    return unwrapList(await get<unknown>('/environments', signal)).map((item) => normalizeEnvironment(requireRecord(item, 'environment')));
+  async environments(signal?: AbortSignal, includeArchived = false) {
+    return unwrapList(await get<unknown>(includeArchived ? '/environments?includeArchived=true' : '/environments', signal)).map((item) => normalizeEnvironment(requireRecord(item, 'environment')));
   },
   async createEnvironment(input: Partial<Environment> & { facts?: Record<string, unknown> }) {
     return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environments', input)), 'environment'));
+  },
+  async environmentLifecycle(environmentId: string) {
+    return normalizeEnvironmentLifecycle(requireRecord(unwrap(await get<unknown>(`/environments/${environmentId}/lifecycle`)), 'environment lifecycle'));
+  },
+  async deleteEnvironment(environmentId: string) {
+    await request<unknown>(`/environments/${environmentId}`, { method: 'DELETE' });
+  },
+  async archiveEnvironment(environmentId: string) {
+    return normalizeEnvironment(requireRecord(unwrap(await post<unknown>(`/environments/${environmentId}/archive`)), 'environment'));
+  },
+  async unarchiveEnvironment(environmentId: string) {
+    return normalizeEnvironment(requireRecord(unwrap(await post<unknown>(`/environments/${environmentId}/unarchive`)), 'environment'));
   },
   async updateInventory(environmentId: string, hosts: EnvironmentHost[], changeReason = '') {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/inventory`, { hosts, changeReason })), 'environment'));

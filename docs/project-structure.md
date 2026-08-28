@@ -163,7 +163,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260828-publication-guards`。本批按 V1 测试环境决策删除旧分类、Release 类型、执行策略、环境并发和 `verified` 列，不提供旧库迁移或双写；空库创建当前结构，旧合同和未知合同均失败关闭。测试部署首次切换必须先备份并显式使用守护脚本的 `--rebuild-v1-db`。
+数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260828-environment-lifecycle`。当前结构包含模块化发布围栏和环境 `archived_at` 生命周期状态；按 V1 测试环境决策不提供旧库迁移或双写，空库创建当前结构，旧合同和未知合同均失败关闭。测试部署首次切换必须先备份并显式使用守护脚本的 `--rebuild-v1-db`。
 
 ### 3.7 `internal/ansible`
 

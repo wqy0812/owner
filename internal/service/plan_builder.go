@@ -50,6 +50,9 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 	if err != nil {
 		return preparedComponentTest{}, err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return preparedComponentTest{}, err
+	}
 	if environment.Revision == nil {
 		return preparedComponentTest{}, fmt.Errorf("%w: environment has no revision", domain.ErrConflict)
 	}
@@ -207,6 +210,9 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 	}
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
+		return domain.Run{}, err
+	}
+	if err := ensureEnvironmentActive(environment); err != nil {
 		return domain.Run{}, err
 	}
 	if environment.Revision == nil {

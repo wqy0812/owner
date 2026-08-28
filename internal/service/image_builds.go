@@ -49,6 +49,9 @@ func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.Use
 	if err != nil {
 		return domain.ComponentImageBuild{}, err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return domain.ComponentImageBuild{}, err
+	}
 	if environment.Revision == nil {
 		return domain.ComponentImageBuild{}, fmt.Errorf("%w: selected environment has no current revision", domain.ErrConflict)
 	}

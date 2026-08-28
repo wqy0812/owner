@@ -9,7 +9,7 @@ import (
 )
 
 func (h *Handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
-	environments, err := h.platform.Environments().List(r.Context(), currentUser(r))
+	environments, err := h.platform.Environments().List(r.Context(), currentUser(r), r.URL.Query().Get("includeArchived") == "true")
 	if err != nil {
 		writeError(w, err)
 		return
@@ -19,6 +19,41 @@ func (h *Handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
 		output = append(output, h.environmentDTO(r, environment))
 	}
 	writeItems(w, output)
+}
+
+func (h *Handler) getEnvironmentLifecycle(w http.ResponseWriter, r *http.Request) {
+	lifecycle, err := h.platform.Environments().Lifecycle(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, lifecycle)
+}
+
+func (h *Handler) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	if err := h.platform.Environments().Delete(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func (h *Handler) archiveEnvironment(w http.ResponseWriter, r *http.Request) {
+	environment, err := h.platform.Environments().Archive(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
+}
+
+func (h *Handler) unarchiveEnvironment(w http.ResponseWriter, r *http.Request) {
+	environment, err := h.platform.Environments().Unarchive(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
 }
 
 func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -208,11 +243,15 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 		status = "locked"
 		schedulingStatus = string(activeStatus)
 	}
+	if environment.ArchivedAt != nil {
+		status = "offline"
+	}
 	return map[string]any{
 		"id": environment.ID, "name": environment.Name, "description": environment.Description,
 		"ownerId": environment.OwnerID, "ownerName": owner.Name, "currentRevisionId": environment.CurrentRevisionID,
 		"currentRevision": revision, "revisions": revisions, "status": status, "schedulingStatus": schedulingStatus, "activeRunId": activeRunID,
 		"healthCheck": environment.HealthCheck,
+		"archivedAt":  environment.ArchivedAt,
 		"createdAt":   environment.CreatedAt, "updatedAt": environment.UpdatedAt,
 	}
 }

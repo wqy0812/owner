@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, AlertTriangle, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
+import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -33,7 +33,7 @@ export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
+  const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal, user.role === 'environment_owner'), [user.id, user.role], 'environments');
   const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const selectedId = searchParams.get('selected') ?? '';
@@ -56,8 +56,14 @@ export function EnvironmentsPage() {
   const [rollbackError, setRollbackError] = useState<string>();
   const [rollbackExplanation, setRollbackExplanation] = useState<WorkExplanation>();
   const [rollbackBusy, setRollbackBusy] = useState<'preview' | 'submit'>();
+  const [lifecycleOpen, setLifecycleOpen] = useState(false);
+  const [lifecycle, setLifecycle] = useState<EnvironmentLifecycle>();
+  const [lifecycleBusy, setLifecycleBusy] = useState<'load' | 'delete' | 'archive' | 'unarchive'>();
+  const [lifecycleError, setLifecycleError] = useState<string>();
+  const [lifecycleExplanation, setLifecycleExplanation] = useState<WorkExplanation>();
   const handledDeepLink = useRef<string>();
-  const editable = user.role === 'environment_owner' && selected?.ownerId === user.id;
+  const ownsSelected = user.role === 'environment_owner' && selected?.ownerId === user.id;
+  const editable = ownsSelected && !selected?.archivedAt;
 
   useEffect(() => {
     setHosts(selected?.currentRevision?.hosts ?? []);
@@ -227,6 +233,48 @@ export function EnvironmentsPage() {
     } finally { setRollbackBusy(undefined); }
   }
 
+  async function openLifecycle() {
+    if (!selected || !ownsSelected || anyDirty) return;
+    setLifecycleOpen(true);
+    setLifecycle(undefined);
+    setLifecycleError(undefined);
+    setLifecycleExplanation(undefined);
+    setLifecycleBusy('load');
+    try {
+      setLifecycle(await api.environmentLifecycle(selected.id));
+    } catch (reason) {
+      setLifecycleError(displayError(reason));
+      setLifecycleExplanation(actionableExplanation(reason));
+    } finally { setLifecycleBusy(undefined); }
+  }
+
+  async function applyLifecycle(action: 'delete' | 'archive' | 'unarchive') {
+    if (!selected) return;
+    setLifecycleBusy(action);
+    setLifecycleError(undefined);
+    setLifecycleExplanation(undefined);
+    try {
+      if (action === 'delete') {
+        await api.deleteEnvironment(selected.id);
+        notify('success', '环境已删除', '从未使用的环境及其 Revision、健康检查已永久删除，审计记录已保留。');
+        setSearchParams({});
+      } else if (action === 'archive') {
+        await api.archiveEnvironment(selected.id);
+        notify('success', '环境已归档', '历史 Run、Revision 和构建证据仍可追溯；该环境不再参与新任务选择。');
+      } else {
+        await api.unarchiveEnvironment(selected.id);
+        notify('success', '环境已恢复', '该环境重新出现在组件构建和场景运行的目标选择中。');
+      }
+      setLifecycleOpen(false);
+      setLifecycle(undefined);
+      signalRefresh(['environments', 'workbench']);
+    } catch (reason) {
+      setLifecycleError(displayError(reason));
+      setLifecycleExplanation(actionableExplanation(reason));
+      try { setLifecycle(await api.environmentLifecycle(selected.id)); } catch { /* Retain the actionable mutation error. */ }
+    } finally { setLifecycleBusy(undefined); }
+  }
+
   function selectEnvironment(id: string) {
     if (anyDirty) {
       notify('info', '存在未保存更改', '请先保存或放弃当前编辑，再切换环境。');
@@ -249,13 +297,14 @@ export function EnvironmentsPage() {
     {loading && !environments ? <LoadingBlock label="正在读取共享环境…" /> : error && !environments ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="catalog-layout">
       <aside className="catalog-list panel">
         <div className="catalog-list__header"><strong>共享环境</strong><span>{environments?.length ?? 0}</span></div>
-        {environments?.map((environment) => <button key={environment.id} className={`catalog-item${selected?.id === environment.id ? ' active' : ''}`} onClick={() => selectEnvironment(environment.id)}><span className="catalog-item__icon catalog-item__icon--cyan"><CloudCog size={18} /></span><span><strong>{environment.name}</strong><small>r{environment.currentRevision?.revision ?? 1} · {environment.currentRevision?.hosts?.length ?? 0} 台主机</small></span><StatusPill status={environment.schedulingStatus ?? 'idle'}>{schedulingLabel(environment)}</StatusPill></button>)}
+        {environments?.map((environment) => <button key={environment.id} className={`catalog-item${selected?.id === environment.id ? ' active' : ''}`} onClick={() => selectEnvironment(environment.id)}><span className="catalog-item__icon catalog-item__icon--cyan"><CloudCog size={18} /></span><span><strong>{environment.name}</strong><small>r{environment.currentRevision?.revision ?? 1} · {environment.currentRevision?.hosts?.length ?? 0} 台主机</small></span><StatusPill status={environment.archivedAt ? 'offline' : environment.schedulingStatus ?? 'idle'}>{environment.archivedAt ? '已归档' : schedulingLabel(environment)}</StatusPill></button>)}
       </aside>
       {selected ? <section className="detail-stack">
         <article className="panel environment-hero">
           <div><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
-          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.schedulingStatus ?? 'idle'}>{schedulingLabel(selected)}</StatusPill></div>{editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button><button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button></>}</div>
+          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.archivedAt ? 'offline' : selected.schedulingStatus ?? 'idle'}>{selected.archivedAt ? '已归档' : schedulingLabel(selected)}</StatusPill></div>{ownsSelected && <button className={selected.archivedAt ? 'button button--secondary' : 'button button--danger-soft'} disabled={anyDirty || lifecycleBusy !== undefined} onClick={() => void openLifecycle()}>{selected.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />} {selected.archivedAt ? '恢复环境' : '移除环境'}</button>}{editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button><button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button></>}</div>
         </article>
+        {selected.archivedAt && <div className="inline-warning"><Archive size={17} /><span>该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。</span></div>}
         <StatusExplanationPanel item={environmentWorkItem} />
         <section className="fact-grid">
           <article><Cpu size={18} /><span>架构</span><strong>{String(facts.architecture ?? 'amd64')}</strong></article>
@@ -291,11 +340,32 @@ export function EnvironmentsPage() {
       </section> : <section className="panel"><EmptyState title="没有可见环境" /></section>}
     </div>}
     {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
-    {importOpen && <EnvironmentImportModal environments={environments ?? []} selected={selected} onClose={() => setImportOpen(false)} onDone={(environment) => { setImportOpen(false); signalRefresh(['environments', 'workbench']); setSearchParams({ selected: environment.id }); }} />}
+    {importOpen && <EnvironmentImportModal environments={(environments ?? []).filter((environment) => !environment.archivedAt)} selected={selected?.archivedAt ? undefined : selected} onClose={() => setImportOpen(false)} onDone={(environment) => { setImportOpen(false); signalRefresh(['environments', 'workbench']); setSearchParams({ selected: environment.id }); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新 Revision" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧 Revision。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前 Revision。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
     {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
+    {lifecycleOpen && selected && <EnvironmentLifecycleModal environment={selected} lifecycle={lifecycle} error={lifecycleError} explanation={lifecycleExplanation} busy={lifecycleBusy} onRetry={() => void openLifecycle()} onClose={() => { if (!lifecycleBusy) setLifecycleOpen(false); }} onConfirm={(action) => void applyLifecycle(action)} />}
   </div>;
+}
+
+function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; lifecycle?: EnvironmentLifecycle; error?: string; explanation?: WorkExplanation; busy?: 'load' | 'delete' | 'archive' | 'unarchive'; onRetry: () => void; onClose: () => void; onConfirm: (action: 'delete' | 'archive' | 'unarchive') => void }) {
+  const [confirmation, setConfirmation] = useState('');
+  const confirmed = confirmation === environment.name;
+  const action = lifecycle?.archived ? 'unarchive' : lifecycle?.canDelete ? 'delete' : 'archive';
+  const blocked = !lifecycle || (!lifecycle.archived && !lifecycle.canDelete && !lifecycle.canArchive);
+  const title = lifecycle?.archived ? '恢复归档环境' : lifecycle?.canDelete ? '永久删除环境' : '归档环境';
+  const buttonLabel = action === 'delete' ? '永久删除环境' : action === 'archive' ? '确认归档环境' : '恢复环境';
+  return <Modal title={title} description={`目标环境：${environment.name}`} onClose={onClose}>
+    <div className="modal-body cluster-rollback-preview">
+      {busy === 'load' ? <LoadingBlock label="正在核对 Run、构建记录和安装基线…" /> : error && !lifecycle ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></> : lifecycle ? <>
+        <section className="cluster-rollback-summary"><div><span>Revision</span><strong>{lifecycle.revisionCount}</strong></div><div><span>历史 Run</span><strong>{lifecycle.runCount}</strong></div><div><span>镜像构建</span><strong>{lifecycle.imageBuildCount}</strong></div><div><span>安装基线</span><strong>{lifecycle.installationCount}</strong></div></section>
+        {lifecycle.archived ? <div className="warning-callout"><ArchiveRestore size={19} /><div><strong>恢复后可再次执行任务</strong><p>环境会重新出现在组件构建、组件验证和场景运行的目标选择中；历史记录不会改变。</p></div></div> : lifecycle.canDelete ? <div className="warning-callout"><Trash2 size={19} /><div><strong>这是不可恢复的永久删除</strong><p>仅因为该环境从未产生 Run、镜像构建或安装基线才允许删除。Environment Revision 和健康检查会删除，审计记录保留。</p></div></div> : lifecycle.canArchive ? <div className="warning-callout"><Archive size={19} /><div><strong>已有历史证据，只能归档</strong><p>归档不会删除 Run、构建和 Revision；环境将退出所有新任务选择，之后可以恢复。</p></div></div> : <div className="warning-callout"><AlertTriangle size={19} /><div><strong>当前不能移除环境</strong><p>{lifecycle.activeRunCount ? `仍有 ${lifecycle.activeRunCount} 个活动 Run；请先等待结束或取消。` : lifecycle.activeImageBuildCount ? `仍有 ${lifecycle.activeImageBuildCount} 个活动镜像构建；请先等待结束。` : `仍有 ${lifecycle.installationCount} 个安装基线；请先一键回滚至干净状态。`}</p></div></div>}
+        {error && <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></>}
+        {!blocked && <label><span>输入环境名称以确认</span><input aria-label="确认环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>}
+      </> : null}
+    </div>
+    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>取消</button><button className={action === 'delete' ? 'button button--danger' : 'button button--primary'} disabled={blocked || !confirmed || busy !== undefined} onClick={() => onConfirm(action)}>{busy && busy !== 'load' ? '处理中…' : buttonLabel}</button></footer>
+  </Modal>;
 }
 
 function ClusterRollbackModal({ environment, plan, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {

@@ -100,6 +100,9 @@ func (p *Platform) prepareEnvironmentRollback(ctx context.Context, user domain.U
 	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
 		return preparedEnvironmentRollback{}, err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return preparedEnvironmentRollback{}, err
+	}
 	if environment.Revision == nil {
 		return preparedEnvironmentRollback{}, fmt.Errorf("%w: environment has no current revision", domain.ErrConflict)
 	}

@@ -145,11 +145,23 @@ func (s *ScenarioService) Deprecate(ctx context.Context, user domain.User, id st
 }
 
 // Environment application boundary.
-func (s *EnvironmentService) List(ctx context.Context, user domain.User) ([]domain.Environment, error) {
-	return s.platform.ListEnvironments(ctx, user)
+func (s *EnvironmentService) List(ctx context.Context, user domain.User, includeArchived ...bool) ([]domain.Environment, error) {
+	return s.platform.ListEnvironments(ctx, user, includeArchived...)
 }
 func (s *EnvironmentService) Create(ctx context.Context, user domain.User, input domain.Environment, facts map[string]any) (domain.Environment, error) {
 	return s.platform.CreateEnvironment(ctx, user, input, facts)
+}
+func (s *EnvironmentService) Lifecycle(ctx context.Context, user domain.User, id string) (EnvironmentLifecycle, error) {
+	return s.platform.GetEnvironmentLifecycle(ctx, user, id)
+}
+func (s *EnvironmentService) Delete(ctx context.Context, user domain.User, id string) error {
+	return s.platform.DeleteEnvironment(ctx, user, id)
+}
+func (s *EnvironmentService) Archive(ctx context.Context, user domain.User, id string) (domain.Environment, error) {
+	return s.platform.ArchiveEnvironment(ctx, user, id)
+}
+func (s *EnvironmentService) Unarchive(ctx context.Context, user domain.User, id string) (domain.Environment, error) {
+	return s.platform.UnarchiveEnvironment(ctx, user, id)
 }
 func (s *EnvironmentService) UpdateInventory(ctx context.Context, user domain.User, id string, hosts []InventoryHost, reason ...string) (domain.Environment, error) {
 	return s.platform.UpdateInventory(ctx, user, id, hosts, reason...)

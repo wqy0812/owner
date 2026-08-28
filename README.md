@@ -79,7 +79,7 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-本次模块化/简化合同为 `clusterforge-v1-20260828-publication-guards`，按 V1 决策不提供旧字段迁移。首次把该合同部署到已有测试库时必须显式使用 `--rebuild-v1-db`：脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，停服务后才删除工作库并由新版本重建/Seed；启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
+当前合同为 `clusterforge-v1-20260828-environment-lifecycle`，包含模块化发布围栏以及环境删除/归档状态，按 V1 决策不提供旧字段迁移。首次把该合同部署到已有测试库时必须显式使用 `--rebuild-v1-db`：脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，停服务后才删除工作库并由新版本重建/Seed；启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 

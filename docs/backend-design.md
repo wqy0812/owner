@@ -209,6 +209,8 @@ V1 固定每个环境一个活跃 Run、FIFO 串行，不保存可配置并发�
 
 每次保存 Inventory、Facts、Variables 或 CredentialRefs 都会创建新 Environment Revision，并记录创建者、变更原因和时间。历史 Revision 不会原地恢复；恢复操作会复制目标快照并创建一个编号递增的新 Revision。已创建的 Run 继续引用旧 Revision，不会被后来修改或恢复影响。
 
+环境移除受生命周期约束：只有从未产生 Run、镜像构建且没有安装基线的环境可以由实际 Environment Owner 永久删除；删除会在同一事务内级联清理 Revision 与健康检查并写入 `environment.deleted` 审计。已有 Run 或构建历史的环境必须保留快照，只能在没有活动 Run、没有活动镜像构建、没有安装基线时归档。归档环境默认不出现在新构建、新验证和新场景运行的环境列表中，也不能创建 Revision、健康检查、Run 或镜像构建；Owner 可以从环境页查看并恢复。数据库触发器为归档与新写入之间的竞态提供最终围栏。
+
 环境 Owner 可以对当前 Revision 发起只读健康检查。检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION` 的 TCP 连通性，结果锁定来源 Revision 并写入审计；它不执行 SSH 登录、Registry API、文件下载或 Ansible，因此不能替代组件预检和真实环境验收。
 
 ### 4.5 Run、Step、Approval 与 Log
@@ -283,6 +285,7 @@ SQLite 主要表如下：
 | 发起场景测试或运行 | 否 | 仅本人场景 | 可以 |
 | 创建/修改环境 Revision | 否 | 否 | 仅本人环境 |
 | 检查环境连通性、从历史快照创建新 Revision | 否 | 否 | 仅本人环境 |
+| 删除未使用环境、归档或恢复历史环境 | 否 | 否 | 仅本人环境；删除/归档受生命周期门禁 |
 | 审批危险 Run | 否 | 否 | 仅本人环境上的 Run |
 | 取消 Run | 本人发起 | 本人发起 | 本人环境上的 Run |
 | 查看审计 API | 否 | 否 | 可以 |
@@ -562,7 +565,11 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET / POST | `/environments` | 列表 / 创建环境 |
+| GET / POST | `/environments` | 可执行环境列表 / 创建环境；Owner 可用 `includeArchived=true` 查看自己的归档环境 |
+| GET | `/environments/{id}/lifecycle` | 读取 Revision、Run、构建和安装基线影响及允许动作 |
+| DELETE | `/environments/{id}` | 永久删除从未运行、构建或安装的环境 |
+| POST | `/environments/{id}/archive` | 在无活动 Run、无活动镜像构建、无安装基线时归档历史环境 |
+| POST | `/environments/{id}/unarchive` | 恢复归档环境并重新允许任务选择 |
 | POST | `/environments/{id}/revisions/{revisionId}/export` | 导出指定 Revision；默认不含凭据引用 |
 | POST | `/environment-imports/plan` | 预览导入新环境或既有环境的新 Revision |
 | POST | `/environment-imports` | 按预检指纹提交环境导入 |

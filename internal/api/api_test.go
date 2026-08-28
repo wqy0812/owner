@@ -75,6 +75,142 @@ func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
 	}
 }
 
+func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	owner := f.session(seed.EnvironmentOwnerID)
+	nonOwner := f.session(seed.ComponentOwnerRuntimeID)
+
+	createEnvironment := func(name string) (string, string) {
+		response := f.request(http.MethodPost, "/api/v1/environments", map[string]any{"name": name, "facts": map[string]any{}}, owner)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create environment status=%d body=%s", response.Code, response.Body.String())
+		}
+		data := decodeEnvelope(t, response)["data"].(map[string]any)
+		return data["id"].(string), data["currentRevisionId"].(string)
+	}
+
+	deletableID, _ := createEnvironment("Disposable Environment")
+	if denied := f.request(http.MethodGet, "/api/v1/environments/"+deletableID+"/lifecycle", nil, nonOwner); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner lifecycle status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	lifecycle := f.request(http.MethodGet, "/api/v1/environments/"+deletableID+"/lifecycle", nil, owner)
+	if lifecycle.Code != http.StatusOK {
+		t.Fatalf("unused environment lifecycle status=%d body=%s", lifecycle.Code, lifecycle.Body.String())
+	}
+	lifecycleData := decodeEnvelope(t, lifecycle)["data"].(map[string]any)
+	if lifecycleData["canDelete"] != true || lifecycleData["revisionCount"] != float64(1) {
+		t.Fatalf("unused environment lifecycle=%#v", lifecycleData)
+	}
+	if denied := f.request(http.MethodDelete, "/api/v1/environments/"+deletableID, nil, nonOwner); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner delete status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	if deleted := f.request(http.MethodDelete, "/api/v1/environments/"+deletableID, nil, owner); deleted.Code != http.StatusOK {
+		t.Fatalf("delete unused environment status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := f.database.GetEnvironment(ctx, deletableID, true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("deleted environment still exists: %v", err)
+	}
+
+	historyID, historyRevisionID := createEnvironment("Historical Environment")
+	finished := time.Now().UTC()
+	if err := f.database.CreateRun(ctx, domain.Run{
+		ID: "run-retains-environment", Kind: domain.RunComponentTest, Status: domain.RunFailed,
+		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
+		InputSnapshot: map[string]any{}, CreatedAt: finished.Add(-time.Minute), FinishedAt: &finished,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if blocked := f.request(http.MethodDelete, "/api/v1/environments/"+historyID, nil, owner); blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "运行记录") {
+		t.Fatalf("delete historical environment status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+	archived := f.request(http.MethodPost, "/api/v1/environments/"+historyID+"/archive", nil, owner)
+	if archived.Code != http.StatusOK || !strings.Contains(archived.Body.String(), "archivedAt") {
+		t.Fatalf("archive historical environment status=%d body=%s", archived.Code, archived.Body.String())
+	}
+	if activeList := f.request(http.MethodGet, "/api/v1/environments", nil, owner); strings.Contains(activeList.Body.String(), historyID) {
+		t.Fatalf("archived environment remained selectable: %s", activeList.Body.String())
+	}
+	if ownerArchiveList := f.request(http.MethodGet, "/api/v1/environments?includeArchived=true", nil, owner); !strings.Contains(ownerArchiveList.Body.String(), historyID) {
+		t.Fatalf("owner cannot inspect archived environment: %s", ownerArchiveList.Body.String())
+	}
+	if otherArchiveList := f.request(http.MethodGet, "/api/v1/environments?includeArchived=true", nil, nonOwner); strings.Contains(otherArchiveList.Body.String(), historyID) {
+		t.Fatalf("archived environment leaked into task selection: %s", otherArchiveList.Body.String())
+	}
+	if update := f.request(http.MethodPut, "/api/v1/environments/"+historyID+"/facts", map[string]any{"facts": map[string]any{}, "changeReason": "不应允许"}, owner); update.Code != http.StatusConflict || !strings.Contains(update.Body.String(), "已归档") {
+		t.Fatalf("archived environment update status=%d body=%s", update.Code, update.Body.String())
+	}
+	if err := f.database.CreateRun(ctx, domain.Run{
+		ID: "run-rejected-for-archived-environment", Kind: domain.RunComponentTest, Status: domain.RunQueued,
+		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
+		InputSnapshot: map[string]any{}, CreatedAt: time.Now().UTC(),
+	}, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("archived environment database fence error=%v", err)
+	}
+	if err := f.database.SaveEnvironmentHealthCheck(ctx, domain.EnvironmentHealthCheck{
+		ID: "health-rejected-for-archived-environment", EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
+		Status: "healthy", Results: []domain.EnvironmentEndpointCheck{}, CheckedAt: time.Now().UTC(),
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("archived environment health-check fence error=%v", err)
+	}
+	restored := f.request(http.MethodPost, "/api/v1/environments/"+historyID+"/unarchive", nil, owner)
+	if restored.Code != http.StatusOK || decodeEnvelope(t, restored)["data"].(map[string]any)["archivedAt"] != nil {
+		t.Fatalf("unarchive environment status=%d body=%s", restored.Code, restored.Body.String())
+	}
+	if activeList := f.request(http.MethodGet, "/api/v1/environments", nil, owner); !strings.Contains(activeList.Body.String(), historyID) {
+		t.Fatalf("restored environment is not selectable: %s", activeList.Body.String())
+	}
+
+	buildID, buildRevisionID := createEnvironment("Building Environment")
+	if err := f.database.CreateComponentImageBuild(ctx, domain.ComponentImageBuild{
+		ID: "image-build-retains-environment", ReleaseID: "release-test-runtime-1.1.0",
+		EnvironmentID: buildID, EnvironmentRevisionID: buildRevisionID, RequestedBy: seed.ComponentOwnerRuntimeID,
+		Status: domain.ImageBuildQueued, DockerfileSHA256: strings.Repeat("a", 64), ImageTag: "test", ImageRef: "registry.example/test:latest", CreatedAt: finished,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	buildLifecycle := f.request(http.MethodGet, "/api/v1/environments/"+buildID+"/lifecycle", nil, owner)
+	buildLifecycleData := decodeEnvelope(t, buildLifecycle)["data"].(map[string]any)
+	if buildLifecycleData["activeImageBuildCount"] != float64(1) || buildLifecycleData["canArchive"] != false {
+		t.Fatalf("active image build lifecycle=%#v", buildLifecycleData)
+	}
+	if blocked := f.request(http.MethodPost, "/api/v1/environments/"+buildID+"/archive", nil, owner); blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "镜像构建") {
+		t.Fatalf("archive building environment status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	installedID, installedRevisionID := createEnvironment("Installed Environment")
+	installRunID := "run-retains-installed-environment"
+	if err := f.database.CreateRun(ctx, domain.Run{
+		ID: installRunID, Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
+		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: installedID, EnvironmentRevisionID: installedRevisionID,
+		ComponentReleaseID: "release-test-runtime-1.1.0", InputSnapshot: map[string]any{}, CreatedAt: finished, FinishedAt: &finished,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.database.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
+		EnvironmentID: installedID, ComponentID: "component-test-runtime", ReleaseID: "release-test-runtime-1.1.0", InstallRunID: installRunID,
+		BackupRef:   "/var/lib/clusterforge/backups/" + installedID + "/component-test-runtime/" + installRunID,
+		Backup:      domain.BackupMetadata{EnvironmentID: installedID, ComponentID: "component-test-runtime", ReleaseID: "release-test-runtime-1.1.0", InstallRunID: installRunID, CapturedAt: finished, DependencySnapshot: map[string]any{}},
+		InstalledAt: finished,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if blocked := f.request(http.MethodPost, "/api/v1/environments/"+installedID+"/archive", nil, owner); blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "回滚至干净状态") {
+		t.Fatalf("archive installed environment status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	var deletedAudits, archivedAudits, restoredAudits int
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='environment.deleted' AND resource_id=?`, deletableID).Scan(&deletedAudits); err != nil || deletedAudits != 1 {
+		t.Fatalf("environment delete audits=%d err=%v", deletedAudits, err)
+	}
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='environment.archived' AND resource_id=?`, historyID).Scan(&archivedAudits); err != nil || archivedAudits != 1 {
+		t.Fatalf("environment archive audits=%d err=%v", archivedAudits, err)
+	}
+	if err := f.database.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='environment.unarchived' AND resource_id=?`, historyID).Scan(&restoredAudits); err != nil || restoredAudits != 1 {
+		t.Fatalf("environment unarchive audits=%d err=%v", restoredAudits, err)
+	}
+}
+
 func TestEnvironmentExportImportAndCredentialReferenceModes(t *testing.T) {
 	f := newAPIFixture(t)
 	owner := f.session(seed.EnvironmentOwnerID)

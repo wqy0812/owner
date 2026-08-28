@@ -191,6 +191,8 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '添加引用 / 删除凭据引用', purpose: '维护 CredentialRef 类型与引用位置。', availability: '环境 Owner 自有环境', result: '只保存引用，不把实际凭据返回前台。' },
       { label: '立即检查', purpose: '对当前 Revision 的主机 SSH 端口、Registry 和介质站执行只读 TCP 连通性检查。', availability: '环境 Owner 自有环境', result: '保存带 Revision 来源的健康结果和审计记录；不会创建 Run 或执行安装。' },
       { label: '一键回滚至干净状态 / 创建回滚 Run（待审批）', purpose: '从当前安装清单自动生成分层逆序 rollback 计划。', availability: '环境 Owner 自有且调度空闲的环境', result: '逐项校验来源 Run、备份和 Playbook 指纹；按来源时间倒序、来源内步骤逆序，输入环境名称后创建待审批 Run。' },
+      { label: '移除环境 / 永久删除环境 / 确认归档环境', purpose: '先统计 Revision、Run、镜像构建和安装基线，再选择永久删除或保留历史的归档。', availability: '环境 Owner 自有环境；删除仅限从未使用，归档要求无活动 Run、无活动构建且无安装基线', result: '删除不可恢复但保留审计；归档保留全部历史并退出新任务选择。' },
+      { label: '恢复环境', purpose: '让归档环境重新参与组件构建、验证和场景运行。', availability: '环境 Owner 自有归档环境', result: '清除归档状态，不修改 Revision、Run、构建或审计历史。' },
       { label: '放弃本页更改', purpose: '撤销当前配置分区尚未保存的修改。', availability: '环境 Owner 自有环境且当前分区有改动', result: '恢复当前 Revision 的该分区内容，不影响其他分区。' },
       { label: '保存新 Revision', purpose: '预览 Inventory、Facts、变量或凭据引用的差异。', availability: '环境 Owner 自有环境且当前分区有改动', result: '打开差异与变更原因确认框，尚未写入。' },
       { label: '确认创建 Revision', purpose: '用填写的变更原因提交预览差异。', availability: '差异确认框且变更原因非空', result: '创建不可变 Environment Revision；已提交 Run 仍用旧快照。' },

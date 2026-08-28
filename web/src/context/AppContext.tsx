@@ -157,6 +157,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
       ['scenario.published', () => scheduleRefresh(['scenarios', 'workbench'])],
       ['scenario.deleted', () => scheduleRefresh(['scenarios', 'workbench'])],
+      ['environment.deleted', () => scheduleRefresh(['environments', 'workbench'])],
+      ['environment.archived', () => scheduleRefresh(['environments', 'workbench'])],
+      ['environment.unarchived', () => scheduleRefresh(['environments', 'workbench'])],
     ];
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {

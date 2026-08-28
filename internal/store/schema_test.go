@@ -42,6 +42,7 @@ func TestPreviousContractsAreRejected(t *testing.T) {
 		"first-version-20260826-reuse-workflows",
 		"clusterforge-v1-20260827-modular-readiness",
 		"clusterforge-v1-20260828-modular-readiness",
+		"clusterforge-v1-20260828-publication-guards",
 	} {
 		t.Run(version, func(t *testing.T) {
 			ctx := context.Background()
@@ -82,6 +83,7 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	for table, column := range map[string]string{
 		"component_releases": "publication_generation",
 		"scenario_revisions": "publication_generation",
+		"environments":       "archived_at",
 	} {
 		var count int
 		if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil || count != 1 {

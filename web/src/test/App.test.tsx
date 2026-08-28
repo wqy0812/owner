@@ -43,6 +43,10 @@ function json(data: unknown, status = 200) {
   }));
 }
 
+function isEnvironmentList(url: string) {
+  return url.endsWith('/environments') || url.endsWith('/environments?includeArchived=true');
+}
+
 function installFetch(options: { componentCreateForbidden?: boolean; initialUser?: typeof alice | typeof dave | typeof carol; withScenario?: boolean } = {}) {
   let current = options.initialUser ?? alice;
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -87,7 +91,7 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         edges: [],
       }],
     }] : []);
-    if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
+    if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
     return json({});
@@ -256,7 +260,7 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(dave);
-      if (url.endsWith('/environments')) return json(environments);
+      if (isEnvironmentList(url)) return json(environments);
       if (url.endsWith('/runs') || url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/notifications')) return json([]);
       return json({});
     }));
@@ -365,7 +369,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '一键回滚至干净状态', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准']) {
+    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });
@@ -1103,7 +1107,7 @@ describe('platform shell and RBAC UI', () => {
         submitted = JSON.parse(String(init.body)).variables;
         return json(environment(submitted ?? {}));
       }
-      if (url.endsWith('/environments')) return json([environment({})]);
+      if (isEnvironmentList(url)) return json([environment({})]);
       if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
     });
@@ -1120,6 +1124,83 @@ describe('platform shell and RBAC UI', () => {
 
     await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: '192.168.88.54:5000/' }));
     expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
+  });
+
+  it('permanently deletes an environment that has never been used', async () => {
+    let environments = [{
+      id: 'environment-disposable', name: 'Disposable Environment', ownerId: dave.id,
+      currentRevision: { id: 'environment-disposable-r1', environmentId: 'environment-disposable', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] },
+      revisions: [{ id: 'environment-disposable-r1', environmentId: 'environment-disposable', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] }],
+    }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments/environment-disposable/lifecycle')) return json({ revisionCount: 1, runCount: 0, activeRunCount: 0, imageBuildCount: 0, activeImageBuildCount: 0, installationCount: 0, archived: false, canDelete: true, canArchive: true });
+      if (url.endsWith('/environments/environment-disposable') && init?.method === 'DELETE') {
+        environments = [];
+        return json({ deleted: true });
+      }
+      if (isEnvironmentList(url)) return json(environments);
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '移除环境' }));
+    const dialog = await screen.findByRole('dialog', { name: '永久删除环境' });
+    expect(dialog).toHaveTextContent('从未产生 Run、镜像构建或安装基线');
+    const submit = within(dialog).getByRole('button', { name: '永久删除环境' });
+    expect(submit).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole('textbox', { name: '确认环境名称' }), 'Disposable Environment');
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/environments/environment-disposable') && init?.method === 'DELETE')).toBe(true));
+    expect(await screen.findByText('环境已删除')).toBeInTheDocument();
+    expect(await screen.findByText('没有可见环境')).toBeInTheDocument();
+  });
+
+  it('archives a historical environment and can restore it', async () => {
+    let environment: Record<string, unknown> = {
+      id: 'environment-history', name: 'Historical Environment', ownerId: dave.id,
+      currentRevision: { id: 'environment-history-r2', environmentId: 'environment-history', revision: 2, facts: {}, hosts: [], variables: {}, credentialRefs: [] },
+    };
+    const lifecycle = () => ({ revisionCount: 2, runCount: 3, activeRunCount: 0, imageBuildCount: 1, activeImageBuildCount: 0, installationCount: 0, archived: Boolean(environment.archivedAt), canDelete: false, canArchive: !environment.archivedAt });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments/environment-history/lifecycle')) return json(lifecycle());
+      if (url.endsWith('/environments/environment-history/archive') && init?.method === 'POST') {
+        environment = { ...environment, archivedAt: '2026-08-28T12:00:00Z', status: 'offline' };
+        return json(environment);
+      }
+      if (url.endsWith('/environments/environment-history/unarchive') && init?.method === 'POST') {
+        const { archivedAt: _archivedAt, ...restored } = environment;
+        environment = { ...restored, status: 'ready' };
+        return json(environment);
+      }
+      if (isEnvironmentList(url)) return json([environment]);
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '移除环境' }));
+    let dialog = await screen.findByRole('dialog', { name: '归档环境' });
+    expect(dialog).toHaveTextContent('已有历史证据，只能归档');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: '确认环境名称' }), 'Historical Environment');
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认归档环境' }));
+
+    expect(await screen.findByText('环境已归档')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('已归档').length).toBeGreaterThan(0));
+    await userEvent.click(screen.getByRole('button', { name: '恢复环境' }));
+    dialog = await screen.findByRole('dialog', { name: '恢复归档环境' });
+    await userEvent.type(within(dialog).getByRole('textbox', { name: '确认环境名称' }), 'Historical Environment');
+    await userEvent.click(within(dialog).getByRole('button', { name: '恢复环境' }));
+
+    expect(await screen.findByText('环境已恢复')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。')).not.toBeInTheDocument());
   });
 
   it('previews and submits a whole-cluster clean rollback with exact-name confirmation', async () => {
@@ -1148,7 +1229,7 @@ describe('platform shell and RBAC UI', () => {
         submitted = JSON.parse(String(init.body));
         return json({ id: 'run-cluster-rollback', kind: 'environment_rollback', status: 'awaiting_approval', environmentId: environment.id, scenarioRevisionId: 'scenario-clean-r1', destructive: true });
       }
-      if (url.endsWith('/environments')) return json([environment]);
+      if (isEnvironmentList(url)) return json([environment]);
       if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
     });

@@ -195,6 +195,9 @@ func (p *Platform) PreviewEnvironmentImport(ctx context.Context, user domain.Use
 		if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
 			return plan, err
 		}
+		if err := ensureEnvironmentActive(environment); err != nil {
+			return plan, err
+		}
 		if environment.Revision == nil {
 			return plan, fmt.Errorf("%w: target environment has no revision", domain.ErrConflict)
 		}

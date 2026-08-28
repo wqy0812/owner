@@ -479,6 +479,7 @@ type Environment struct {
 	Description       string                  `json:"description"`
 	OwnerID           string                  `json:"ownerId"`
 	CurrentRevisionID string                  `json:"currentRevisionId,omitempty"`
+	ArchivedAt        *time.Time              `json:"archivedAt,omitempty"`
 	CreatedAt         time.Time               `json:"createdAt"`
 	UpdatedAt         time.Time               `json:"updatedAt"`
 	Revision          *EnvironmentRevision    `json:"revision,omitempty"`

@@ -67,6 +67,9 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 	if err != nil {
 		return RunRetryPlan{}, err
 	}
+	if err := ensureEnvironmentActive(environment); err != nil {
+		return RunRetryPlan{}, err
+	}
 	if environment.CurrentRevisionID != source.EnvironmentRevisionID {
 		return RunRetryPlan{}, fmt.Errorf("%w: environment revision changed; run a full preview", domain.ErrConflict)
 	}
