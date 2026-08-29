@@ -841,6 +841,9 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 	if steps[0].(map[string]any)["componentId"] != fixtures[1].id || steps[1].(map[string]any)["componentId"] != fixtures[0].id || steps[2].(map[string]any)["componentId"] != fixtures[0].id {
 		t.Fatalf("rollback steps are not reverse ordered: %#v", steps)
 	}
+	if requirements, ok := plan["deliveryRequirements"].([]any); !ok || len(requirements) != 0 {
+		t.Fatalf("empty rollback delivery requirements=%#v, want empty array", plan["deliveryRequirements"])
+	}
 	if mismatch := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-runs", map[string]any{
 		"expectedPlanDigest": plan["planDigest"], "confirmEnvironmentName": "wrong environment",
 	}, owner); mismatch.Code != http.StatusBadRequest {

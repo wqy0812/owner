@@ -28,6 +28,7 @@ type EnvironmentRollbackPlan struct {
 	RequiresApproval      bool                        `json:"requiresApproval"`
 	PlanDigest            string                      `json:"planDigest"`
 	Steps                 []ComponentTestPlanStep     `json:"steps"`
+	DeliveryRequirements  []DeliveryRequirement       `json:"deliveryRequirements"`
 }
 
 type EnvironmentRollbackSource struct {
@@ -263,6 +264,7 @@ func (p *Platform) environmentRollbackPlanDTO(ctx context.Context, prepared prep
 		Sources:               environmentRollbackSources(prepared),
 		ComponentCount:        countStepComponents(prepared.steps), NodeCount: len(prepared.steps),
 		Destructive: true, RequiresApproval: true, PlanDigest: base.PlanDigest, Steps: base.Steps,
+		DeliveryRequirements: base.DeliveryRequirements,
 	}
 }
 
