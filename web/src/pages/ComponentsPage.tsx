@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Archive, Beaker, Boxes, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Container, ExternalLink, FileCode2, Filter, GitBranch, PencilLine, Plus, Rocket, Search, Shield, Trash2, Upload, UserRound } from 'lucide-react';
+import { AlertTriangle, Archive, Beaker, Boxes, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Container, ExternalLink, FileCode2, FilePlus2, Filter, GitBranch, PencilLine, Plus, Rocket, Search, Shield, Trash2, Upload, UserRound } from 'lucide-react';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
@@ -143,6 +143,7 @@ export function ComponentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [componentImportOpen, setComponentImportOpen] = useState(false);
   const [versionBase, setVersionBase] = useState<Component>();
+  const [blankVersionBase, setBlankVersionBase] = useState<Component>();
   const [editComponent, setEditComponent] = useState<Component>();
   const [publishRelease, setPublishRelease] = useState<ComponentRelease>();
   const [deprecateRelease, setDeprecateRelease] = useState<ComponentRelease>();
@@ -169,7 +170,9 @@ export function ComponentsPage() {
   const contractRelease = releases.find((release) => release.id === (contractReleaseId ?? selectedReleaseId))
     ?? (pendingContractRelease?.id === contractReleaseId ? pendingContractRelease : undefined)
     ?? defaultContractRelease(releases, selected?.latestRelease);
-  const editableDraft = releases.find((release) => release.state === 'draft');
+  const editableDrafts = releases.filter((release) => release.state === 'draft');
+  const editableDraft = editableDrafts[0];
+  const activeDraft = contractRelease?.state === 'draft' ? contractRelease : undefined;
   const releaseWorkItem = workbench?.items.find((item) => item.subject.type === 'component_release' && item.subject.id === contractRelease?.id);
   const visibleEditRelease = editRelease?.componentId === selected?.id ? editRelease : undefined;
   const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
@@ -185,6 +188,7 @@ export function ComponentsPage() {
     setEditingContract(false);
     setContractFocus(undefined);
     setContractDraftIntent(undefined);
+    setBlankVersionBase(undefined);
     setPendingContractRelease(undefined);
     setEditComponent(undefined);
     setPublishRelease(undefined);
@@ -225,18 +229,22 @@ export function ComponentsPage() {
   }
   function startEditingContract(section?: ContractSection) {
     if (!selected || !mine) return;
-    if (contractRelease?.state === 'draft') {
+    if (activeDraft) {
       setPendingContractRelease(undefined);
       setEditingContract(true);
       setContractFocus(section);
       return;
     }
-    if (editableDraft) {
+    if (editableDrafts.length === 1 && editableDraft) {
       setPendingContractRelease(undefined);
       setContractReleaseId(editableDraft.id);
       setEditingContract(true);
       setContractFocus(section);
       notify('info', '已切换到可编辑 Draft', `${contractRelease?.version ?? '当前版本'} 已不可修改，正在编辑 ${editableDraft.version}。`);
+      return;
+    }
+    if (editableDrafts.length > 1) {
+      notify('info', '请先选择 Draft', '发布历史中有多个可编辑 Draft，请先选择目标版本再编辑合同。');
       return;
     }
     setContractFocus(section);
@@ -429,20 +437,20 @@ export function ComponentsPage() {
                 <span><GitBranch size={15} /> {selected.releaseCount ?? releases.length} 个版本</span>
                 {selected.latestRelease && <StatusPill status={selected.latestRelease.state} />}
               </div>
-              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => startEditingContract()}><PencilLine size={16} /> {editableDraft ? '编辑依赖和参数' : '创建 Draft 编辑合同'}</button>{editableDraft ? <button className="button button--quiet" onClick={() => setEditRelease(editableDraft)}><FileCode2 size={16} /> 编辑版本与 Playbook</button> : null}</div>}
+              {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => setEditComponent(selected)}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" onClick={() => startEditingContract()}><PencilLine size={16} /> {activeDraft ? '编辑依赖和参数' : editableDrafts.length ? '选择 Draft 编辑合同' : '创建 Draft 编辑合同'}</button><button className="button button--quiet" onClick={() => setBlankVersionBase(selected)}><FilePlus2 size={16} /> 新建空白 Draft</button>{activeDraft ? <button className="button button--quiet" onClick={() => setEditRelease(activeDraft)}><FileCode2 size={16} /> 编辑版本与 Playbook</button> : null}</div>}
             </article>
 
             <StatusExplanationPanel item={releaseWorkItem} />
 
-            {mine && editableDraft ? <DraftReadiness
-              release={editableDraft}
+            {mine && activeDraft ? <DraftReadiness
+              release={activeDraft}
               runs={runs ?? []}
-              onContract={() => { selectContractRelease(editableDraft.id); setEditingContract(true); }}
-              onLifecycle={() => setEditRelease(editableDraft)}
-              onImage={() => setImageRelease(editableDraft)}
-              onArtifact={() => setArtifactRelease(editableDraft)}
-              onValidate={() => { selectContractRelease(editableDraft.id); setTestRelease(editableDraft); }}
-              onPublish={() => void previewPublish(editableDraft)}
+              onContract={() => { selectContractRelease(activeDraft.id); setEditingContract(true); }}
+              onLifecycle={() => setEditRelease(activeDraft)}
+              onImage={() => setImageRelease(activeDraft)}
+              onArtifact={() => setArtifactRelease(activeDraft)}
+              onValidate={() => { selectContractRelease(activeDraft.id); setTestRelease(activeDraft); }}
+              onPublish={() => void previewPublish(activeDraft)}
             /> : null}
 
             <article className="panel">
@@ -524,6 +532,16 @@ export function ComponentsPage() {
         } else {
           setEditRelease(release);
         }
+      }} />}
+      {blankVersionBase && <NewVersionModal component={blankVersionBase} blank contractIntent="all" onClose={() => setBlankVersionBase(undefined)} onDone={(release) => {
+        setBlankVersionBase(undefined);
+        signalRefresh('components');
+        if (!release) return;
+        setPendingContractRelease(release);
+        setContractReleaseId(release.id);
+        setSearchParams({ selected: release.componentId, release: release.id });
+        setContractFocus(undefined);
+        setEditingContract(true);
       }} />}
       {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setInspectRelease(undefined); setContractReleaseId(inspectRelease.id); setEditingContract(true); } : undefined} />}
       {visibleEditRelease && <EditReleaseModal key={visibleEditRelease.id} release={visibleEditRelease} releases={releases} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }} />}
@@ -1122,17 +1140,17 @@ function ClassificationFields({ component }: { component?: Component }) {
   </>;
 }
 
-function NewVersionModal({ component, baseRelease, contractIntent, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; contractIntent?: ContractEditIntent; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
+function NewVersionModal({ component, baseRelease, blank = false, contractIntent, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; blank?: boolean; contractIntent?: ContractEditIntent; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
   const { notify } = useApp();
   const [busy, setBusy] = useState(false);
-  const source = baseRelease ?? component.latestRelease;
+  const source = blank ? undefined : baseRelease ?? component.latestRelease;
   const [constraints, setConstraints] = useState(() => parseConstraintSelection(source?.environmentConstraints));
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     const form = new FormData(event.currentTarget);
     const environmentConstraints = serializeConstraintSelection(constraints);
-    const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on', environmentConstraints };
+    const input = { version: String(form.get('version')), releaseNotes: String(form.get('notes')), breaking: form.get('breaking') === 'on', riskLevel: String(form.get('riskLevel')) as NonNullable<ComponentRelease['riskLevel']>, environmentConstraints };
     try {
       const release = source
         ? await (async () => {
@@ -1151,14 +1169,17 @@ function NewVersionModal({ component, baseRelease, contractIntent, onClose, onDo
     }
   }
   const contractLabel = contractIntent === 'dependencies' ? '直接依赖' : contractIntent === 'parameters' ? '参数合同' : '依赖和参数';
-  const title = contractIntent ? `创建 Draft 编辑${contractLabel}` : `更新 ${component.name}`;
-  const description = contractIntent && source
+  const title = blank ? `新建空白 Draft · ${component.name}` : contractIntent ? `创建 Draft 编辑${contractLabel}` : `更新 ${component.name}`;
+  const description = blank
+    ? '创建不继承依赖、参数、Action、Playbook、介质或镜像的新 Draft，创建后将进入合同编辑。'
+    : contractIntent && source
     ? `${source.version} 已发布且不可直接修改。请先克隆为新 Draft，创建后将自动进入${contractLabel}编辑。`
     : source ? `从 ${source.version} 克隆为新 Draft，可继续设置参数可见性和上游映射。` : '创建组件的首个 Draft Release。';
   return <Modal size="wide" title={title} description={description} onClose={onClose}>
     <form onSubmit={(event) => void submit(event)}>
       <div className="form-grid">
         <label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label>
+        <label><span>风险级别</span><select name="riskLevel" defaultValue={source?.riskLevel ?? 'low'}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label>
         <label className="checkbox-field"><input name="breaking" type="checkbox" /><span>包含不兼容变更</span></label>
         <label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label>
         <div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div>
@@ -1330,6 +1351,7 @@ function EditReleaseModal({ release, releases, onClose, onDone }: { release: Com
         version: String(form.get('version')),
         releaseNotes: String(form.get('notes')),
         breaking: form.get('breaking') === 'on',
+        riskLevel: String(form.get('riskLevel')) as NonNullable<ComponentRelease['riskLevel']>,
         environmentConstraints: serializeConstraintSelection(constraints),
         parameters,
         dependencies,
@@ -1343,7 +1365,7 @@ function EditReleaseModal({ release, releases, onClose, onDone }: { release: Com
     finally { setBusy(false); }
   }
   const close = () => { if (!busy) onClose(); };
-  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="维护版本信息、参数合同、依赖映射，以及可上传和在线编辑的 Playbook。" onClose={close}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div><div className="span-2"><PlaybookActionEditor releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onDirtyChange={setPlaybookDirty} /></div><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}</div><footer className="modal-actions">{playbookDirty ? <span className="modal-actions__hint">请先保存 Playbook 内容</span> : actionsDirty ? <span className="modal-actions__hint">动作配置有未保存变更</span> : null}<button type="button" className="button button--quiet" disabled={busy} onClick={close}>取消</button><button className="button button--primary" disabled={busy || playbookDirty}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
+  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="维护版本信息、参数合同、依赖映射，以及可上传和在线编辑的 Playbook。" onClose={close}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>风险级别</span><select name="riskLevel" defaultValue={release.riskLevel ?? 'low'}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label><label className="checkbox-field"><input type="checkbox" name="breaking" defaultChecked={release.breaking} /><span>包含不兼容变更</span></label><label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div><div className="span-2"><PlaybookActionEditor releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onDirtyChange={setPlaybookDirty} /></div><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}</div><footer className="modal-actions">{playbookDirty ? <span className="modal-actions__hint">请先保存 Playbook 内容</span> : actionsDirty ? <span className="modal-actions__hint">动作配置有未保存变更</span> : null}<button type="button" className="button button--quiet" disabled={busy} onClick={close}>取消</button><button className="button button--primary" disabled={busy || playbookDirty}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
 }
 
 function InspectReleaseModal({ release, components, onClose, onEdit }: { release: ComponentRelease; components: Component[]; onClose: () => void; onEdit?: () => void }) {

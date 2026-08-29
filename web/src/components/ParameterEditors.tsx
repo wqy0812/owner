@@ -84,12 +84,12 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
   const lockedComponents = new Set<string>();
   for (const dependency of dependencies) {
     if (!dependency.componentId.trim() || !dependency.releaseId.trim()) {
-      errors.push('每项依赖必须锁定一个已发布的上游版本');
+      errors.push('每项依赖必须锁定一个可用的上游版本');
       continue;
     }
     const upstream = upstreams.find((release) => release.id === dependency.releaseId);
-    if (!upstream || upstream.state !== 'released' || upstream.componentId !== dependency.componentId) {
-      errors.push(`依赖 ${dependency.componentId} 必须锁定该组件的已发布版本`);
+    if (!upstream || (upstream.state !== 'released' && upstream.state !== 'draft') || upstream.componentId !== dependency.componentId) {
+      errors.push(`依赖 ${dependency.componentId} 必须锁定该组件的可用版本`);
       continue;
     }
     if (lockedComponents.has(dependency.componentId)) errors.push(`组件 ${dependency.componentId} 只能添加一项直接依赖`);
@@ -190,7 +190,7 @@ export function DependencyEditor({
 }) {
   const upstreams = useMemo(() => components
     .filter((component) => component.id !== currentComponentId)
-    .map((component) => ({ component, releases: (component.releases ?? []).filter((release) => release.state === 'released') }))
+    .map((component) => ({ component, releases: (component.releases ?? []).filter((release) => release.state === 'released' || release.state === 'draft') }))
     .filter((item) => item.releases.length > 0), [components, currentComponentId]);
   function update(index: number, patch: Partial<ComponentDependency>) {
     onChange(dependencies.map((item, current) => current === index ? { ...item, ...patch } : item));
@@ -210,11 +210,11 @@ export function DependencyEditor({
             <option value="">选择上游组件</option>
             {upstreams.filter(({ component }) => component.id === dependency.componentId || !usedComponents.has(component.id)).map(({ component }) => <option key={component.id} value={component.id}>{component.name}</option>)}
           </select></label>
-          <label><span>已发布版本</span><select aria-label="已发布版本" disabled={disabled || !dependency.componentId} value={dependency.releaseId} onChange={(event) => {
+          <label><span>可用版本</span><select aria-label="已发布版本" disabled={disabled || !dependency.componentId} value={dependency.releaseId} onChange={(event) => {
             update(index, { releaseId: event.target.value, parameterMappings: [] });
           }}>
-            <option value="">{dependency.componentId ? '选择已发布版本' : '先选择上游组件'}</option>
-            {selectedComponent?.releases.map((release) => <option key={release.id} value={release.id}>{release.version}</option>)}
+            <option value="">{dependency.componentId ? '选择可用版本' : '先选择上游组件'}</option>
+            {selectedComponent?.releases.map((release) => <option key={release.id} value={release.id}>{release.version} · {release.state === 'draft' ? 'Draft' : 'Released'}</option>)}
           </select></label>
           <label><span>依赖用途</span><input aria-label="依赖用途" placeholder="例如复用 kubelet 安装目录" disabled={disabled} value={dependency.purpose ?? ''} onChange={(event) => update(index, { purpose: event.target.value })} /></label>
         </div>

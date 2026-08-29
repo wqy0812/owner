@@ -553,8 +553,11 @@ describe('platform shell and RBAC UI', () => {
       }
       if (url.endsWith('/components')) return json([{
         id: 'component-kubelet', name: 'kubelet', slug: 'kubelet', ownerId: alice.id, layer: 'orchestration_core', tags: ['worker'],
-        latestRelease: { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
-        releases: [{ id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] }],
+        latestRelease: { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.34.3', status: 'draft', parameters: [] },
+        releases: [
+          { id: 'release-kubelet-draft', componentId: 'component-kubelet', version: '1.34.3', status: 'draft', parameters: [] },
+          { id: 'release-kubelet', componentId: 'component-kubelet', version: '1.17.5', status: 'released', parameters: [{ name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' }] },
+        ],
       }, {
         id: 'component-kube-proxy', name: 'kube-proxy', slug: 'kube-proxy', ownerId: alice.id, layer: 'orchestration_core', tags: ['network'],
         latestRelease: draft,
@@ -572,6 +575,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
     await userEvent.click(screen.getByRole('button', { name: '新增依赖' }));
     await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
+    expect(within(screen.getByLabelText('已发布版本')).getByRole('option', { name: '1.34.3 · Draft' })).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('已发布版本'), 'release-kubelet');
     await userEvent.click(screen.getByRole('button', { name: '增加映射' }));
     await userEvent.selectOptions(screen.getByLabelText('上游公开参数'), 'kubeInstallRoot');
@@ -615,6 +619,85 @@ describe('platform shell and RBAC UI', () => {
 
     expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('creates an empty Draft without cloning an existing release', async () => {
+    const released = components[0].releases[0];
+    const draft = { ...released, id: 'release-containerd-empty', version: 'v2.2.0', status: 'draft', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components/component-containerd/releases') && init?.method === 'POST') return json(draft);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    expect(screen.getByRole('dialog', { name: '新建空白 Draft · containerd' })).toHaveTextContent('不继承依赖、参数、Action、Playbook、介质或镜像');
+    await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
+    await userEvent.selectOptions(screen.getByLabelText('风险级别'), 'destructive');
+    await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '全新合同');
+    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+
+    expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/clone'))).toBe(false);
+    const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/releases') && init?.method === 'POST');
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ version: 'v2.2.0', releaseNotes: '全新合同', riskLevel: 'destructive', status: 'draft' });
+  });
+
+  it('keeps readiness and lifecycle editing on the selected Draft when several Drafts exist', async () => {
+    const base = components[0].releases[0];
+    const first = { ...base, id: 'release-containerd-draft-a', version: 'v2.2.0-a', status: 'draft', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [] };
+    const second = { ...base, id: 'release-containerd-draft-b', version: 'v2.2.0-b', status: 'draft', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: first, releases: [first, second, base] }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components?selected=component-containerd&release=release-containerd-draft-b');
+    expect(await screen.findByLabelText('Draft v2.2.0-b 发布就绪度')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Draft v2.2.0-a 发布就绪度')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '编辑版本与 Playbook' }));
+    expect(screen.getByRole('dialog', { name: '配置 Draft v2.2.0-b' })).toBeInTheDocument();
+  });
+
+  it('hides empty Draft creation from non component owners', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    expect(await screen.findByRole('heading', { name: 'containerd', level: 2 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建空白 Draft' })).not.toBeInTheDocument();
+  });
+
+  it('shows the backend conflict when an empty Draft version already exists', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components/component-containerd/releases') && init?.method === 'POST') return json({ error: { code: 'CONFLICT', message: '版本 v2.1.1 已存在' } }, 409);
+      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.1');
+    await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '重复版本');
+    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    expect(await screen.findByText('版本 v2.1.1 已存在')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '新建空白 Draft · containerd' })).toBeInTheDocument();
   });
 
   it('scrolls to the matching contract section when editing a draft', async () => {
@@ -969,6 +1052,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
     await userEvent.click(screen.getByRole('checkbox', { name: 'ARM/arm64' }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'IPv4' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: '18.04 / 24.04（混合）' }));
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '增加 ARM 适配');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
@@ -977,7 +1061,7 @@ describe('platform shell and RBAC UI', () => {
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
         version: 'v2.2.0',
         releaseNotes: '增加 ARM 适配',
-        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], ipFamily: ['IPv4'] },
+        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], operatingSystemVersion: ['18.04 / 24.04'], ipFamily: ['IPv4'] },
       });
     });
   });

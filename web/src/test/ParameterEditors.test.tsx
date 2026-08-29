@@ -79,11 +79,11 @@ describe('parameter contract editor', () => {
     expect(parameterContractErrors(parameters, [{
       componentId: '', releaseId: '',
       parameterMappings: [],
-    }], [kubeletRelease])).toContain('每项依赖必须锁定一个已发布的上游版本');
+    }], [kubeletRelease])).toContain('每项依赖必须锁定一个可用的上游版本');
     expect(parameterContractErrors(parameters, [{
       componentId: 'component-kubelet', releaseId: 'draft-kubelet',
       parameterMappings: [],
-    }], [{ ...kubeletRelease, id: 'draft-kubelet', state: 'draft' }])).toContain('依赖 component-kubelet 必须锁定该组件的已发布版本');
+    }], [{ ...kubeletRelease, id: 'draft-kubelet', state: 'draft' }])).toEqual([]);
     expect(parameterContractErrors(parameters, [{
       componentId: 'component-kubelet', releaseId: 'release-kubelet', parameterMappings: [],
     }, {

@@ -14,10 +14,12 @@
 | 平台操作者 | [平台操作手册](operation-manual.md) | 按角色说明页面入口、操作条件、结果与风险 |
 | 查看内置样例资产 | [Demo 资产目录](demo-catalog.md) | Seed 身份、组件、场景、环境和已知样例边界 |
 | 设计或维护组件分类 | [组件分类规则](组件分类规则.md) | L1-L6、分类字段及当前组件映射 |
+| 查看 Kubernetes 双版本组件设计 | [Kubernetes 1.17.5 / 1.34.3 双版本组件方案](kubernetes-dual-version-component-plan.md) | 17 个 Component、30 个 Draft 的版本、约束、网络与依赖合同 |
 | 了解测试环境节点 | [测试环境节点快照](deployment-snapshot-2026-08-20.md) | 2026-08-20 的静态节点记录，不代表实时状态 |
 | 判断版本和兼容策略 | [首版与环境策略](version-policy.md) | V1 数据库、API 和测试环境解释规则 |
 | 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、审批、清理顺序、恢复与验收边界 |
 | 查阅历史验收证据 | [2026-08-24 Kubernetes 细粒度验收](records/2026-08-24-k8s-1.17.5-ubuntu-fine-grained-acceptance.md) | `docs/records/` 下按日期保存的静态验收记录，不代表实时状态 |
+| 查阅双版本组件录入证据 | [2026-08-28 双版本组件前台录入](records/2026-08-28-kubernetes-dual-version-component-entry.md) | 前台路径、计划指纹、生成 ID、审计时间和最终计数 |
 
 仓库根目录的 [README](../README.md) 只承担项目简介、快速启动、测试和部署入口，不重复完整设计或操作步骤。
 
