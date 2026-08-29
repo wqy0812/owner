@@ -211,7 +211,8 @@ func (m *Manager) NeedsSnapshot(ctx context.Context) (bool, int64, error) {
 	}
 	defer database.Close()
 	var generation int64
-	if err := database.QueryRowContext(ctx, `SELECT generation FROM publication_state WHERE id=1`).Scan(&generation); err != nil {
+	var schemaContract string
+	if err := database.QueryRowContext(ctx, `SELECT (SELECT generation FROM publication_state WHERE id=1),(SELECT version FROM schema_contract WHERE id=1)`).Scan(&generation, &schemaContract); err != nil {
 		return false, 0, err
 	}
 	latest, err := m.LatestSuccessful()
@@ -223,9 +224,10 @@ func (m *Manager) NeedsSnapshot(ctx context.Context) (bool, int64, error) {
 	}
 	// Publication generations are monotonic during ordinary operation, but a
 	// guarded database rebuild starts a new database at a lower generation.
-	// Any mismatch therefore needs a fresh recovery point; using only `>` would
-	// incorrectly treat an older database generation as already protected.
-	return generation != latest.PublicationGeneration, generation, nil
+	// Additive schema migrations can also advance the contract without changing
+	// the publication generation. Either mismatch therefore needs a fresh
+	// recovery point before the current database can be restored through the UI.
+	return generation != latest.PublicationGeneration || schemaContract != latest.SchemaContract, generation, nil
 }
 
 func (m *Manager) Verify(ctx context.Context, backupID string, verifyGit bool) (Manifest, error) {

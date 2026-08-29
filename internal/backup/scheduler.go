@@ -13,6 +13,7 @@ import (
 type Scheduler struct {
 	managerMu      sync.RWMutex
 	manager        *Manager
+	snapshotMu     sync.Mutex
 	enabled        bool
 	delay          time.Duration
 	requests       chan string
@@ -156,6 +157,30 @@ func (s *Scheduler) RequestIfBehind(ctx context.Context) error {
 	return nil
 }
 
+// SnapshotNow creates a recovery point immediately and returns its immutable
+// identity to the caller. It shares serialization and health reporting with
+// publication-triggered snapshots so UI requests cannot race the scheduler.
+func (s *Scheduler) SnapshotNow(ctx context.Context, reason string) (Manifest, error) {
+	if !s.Enabled() {
+		return Manifest{}, fmt.Errorf("Catalog backup is not configured")
+	}
+	return s.executeSnapshot(ctx, reason)
+}
+
+func (s *Scheduler) executeSnapshot(ctx context.Context, reason string) (Manifest, error) {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	manifest, err := s.Manager().Snapshot(ctx, reason)
+	if err != nil {
+		s.recordFailure(err)
+		s.onError(err)
+		return manifest, err
+	}
+	s.recordSuccess()
+	s.onDone(manifest)
+	return manifest, nil
+}
+
 func (s *Scheduler) Close() {
 	if s.cancel == nil {
 		return
@@ -190,10 +215,8 @@ func (s *Scheduler) run(ctx context.Context) {
 				ordered = append(ordered, item)
 			}
 			sort.Strings(ordered)
-			manifest, err := s.Manager().Snapshot(ctx, strings.Join(ordered, ","))
+			_, err := s.executeSnapshot(ctx, strings.Join(ordered, ","))
 			if err != nil {
-				s.recordFailure(err)
-				s.onError(err)
 				retry := time.NewTimer(s.delay)
 				select {
 				case <-ctx.Done():
@@ -204,8 +227,6 @@ func (s *Scheduler) run(ctx context.Context) {
 				}
 				continue
 			}
-			s.recordSuccess()
-			s.onDone(manifest)
 		}
 	}
 }

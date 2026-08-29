@@ -26,7 +26,10 @@ func copyRegularTree(source, destination string) error {
 			return err
 		}
 		if entry.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
+			// The source may be an immutable 0500 content-addressed tree. The
+			// Run snapshot is already private and must remain writable while its
+			// children are copied and its input workspace is assembled.
+			return os.MkdirAll(target, 0o700)
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("special files are not allowed in executable job trees: %s", rel)

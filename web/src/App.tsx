@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell';
 
 const ComponentsPage = lazy(() => import('./pages/ComponentsPage').then((module) => ({ default: module.ComponentsPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((module) => ({ default: module.DashboardPage })));
+const DisasterRecoveryPage = lazy(() => import('./pages/DisasterRecoveryPage').then((module) => ({ default: module.DisasterRecoveryPage })));
 const EnvironmentsPage = lazy(() => import('./pages/EnvironmentsPage').then((module) => ({ default: module.EnvironmentsPage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
 const OperationManualPage = lazy(() => import('./pages/OperationManualPage').then((module) => ({ default: module.OperationManualPage })));
@@ -18,6 +19,7 @@ export function App() {
         <Route path="components" element={<ComponentsPage />} />
         <Route path="scenarios" element={<ScenariosPage />} />
         <Route path="environments" element={<EnvironmentsPage />} />
+        <Route path="disaster-recovery" element={<DisasterRecoveryPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="manual" element={<OperationManualPage />} />

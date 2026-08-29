@@ -82,6 +82,12 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 		if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_contract WHERE id=1`).Scan(&version); err != nil {
 			return fmt.Errorf("unsupported database schema: missing schema contract: %w", err)
 		}
+		if version == previousSchemaContract {
+			if err := s.migrateSSHConnectivityChecks(ctx); err != nil {
+				return err
+			}
+			version = schemaContract
+		}
 		if version != schemaContract {
 			return fmt.Errorf("unsupported database schema contract %q: expected %q", version, schemaContract)
 		}
@@ -101,8 +107,47 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 	return tx.Commit()
 }
 
+func (s *Store) migrateSSHConnectivityChecks(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+CREATE TABLE environment_ssh_checks (
+  id TEXT PRIMARY KEY,
+  environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),
+  status TEXT NOT NULL CHECK (status IN ('healthy','degraded')),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+  results_json TEXT NOT NULL CHECK (json_valid(results_json)),
+  checked_at TEXT NOT NULL
+);
+CREATE TRIGGER environment_ssh_checks_active_environment_insert
+BEFORE INSERT ON environment_ssh_checks
+WHEN EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot record SSH checks');
+END;
+CREATE INDEX idx_environment_ssh_checks_latest
+ON environment_ssh_checks(environment_id, checked_at DESC);
+`); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("migrate database schema from %q: %w", previousSchemaContract, err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE schema_contract SET version=? WHERE id=1 AND version=?`, schemaContract, previousSchemaContract)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("advance database schema contract: %w", err)
+	}
+	if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+		_ = tx.Rollback()
+		return fmt.Errorf("advance database schema contract: updated=%d err=%v", updated, err)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_health_checks", "run_input_presets", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
+	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_input_presets", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "components", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

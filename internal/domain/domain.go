@@ -485,6 +485,7 @@ type Environment struct {
 	Revision          *EnvironmentRevision    `json:"revision,omitempty"`
 	Revisions         []EnvironmentRevision   `json:"revisions,omitempty"`
 	HealthCheck       *EnvironmentHealthCheck `json:"healthCheck,omitempty"`
+	SSHCheck          *EnvironmentSSHCheck    `json:"sshCheck,omitempty"`
 }
 
 type EnvironmentRevision struct {
@@ -516,6 +517,31 @@ type EnvironmentHealthCheck struct {
 	Status                string                     `json:"status"`
 	Results               []EnvironmentEndpointCheck `json:"results"`
 	CheckedAt             time.Time                  `json:"checkedAt"`
+}
+
+type EnvironmentSSHHostCheck struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	User      string `json:"user,omitempty"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type EnvironmentSSHCheck struct {
+	ID                    string                    `json:"id"`
+	EnvironmentID         string                    `json:"environmentId"`
+	EnvironmentRevisionID string                    `json:"environmentRevisionId"`
+	Status                string                    `json:"status"`
+	DurationMS            int64                     `json:"durationMs"`
+	Results               []EnvironmentSSHHostCheck `json:"results"`
+	CheckedAt             time.Time                 `json:"checkedAt"`
+}
+
+type EnvironmentConnectivityCheck struct {
+	TCP EnvironmentHealthCheck `json:"tcpCheck"`
+	SSH EnvironmentSSHCheck    `json:"sshCheck"`
 }
 
 // BackupMetadata binds a remote backup to the exact installation that
@@ -793,7 +819,6 @@ type Workbench struct {
 // recovery points. It contains no repository credentials or secret material.
 type CatalogBackupHealth struct {
 	Configured         bool       `json:"configured"`
-	TimerEnabled       bool       `json:"timerEnabled"`
 	CurrentGeneration  int64      `json:"currentGeneration"`
 	BackedUpGeneration int64      `json:"backedUpGeneration"`
 	Behind             bool       `json:"behind"`

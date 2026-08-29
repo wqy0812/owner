@@ -159,6 +159,15 @@ func (h *Handler) checkEnvironmentHealth(w http.ResponseWriter, r *http.Request)
 	writeData(w, http.StatusOK, check)
 }
 
+func (h *Handler) checkEnvironmentConnectivity(w http.ResponseWriter, r *http.Request) {
+	check, err := h.platform.Environments().CheckConnectivity(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, check)
+}
+
 func (h *Handler) previewEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
 	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
@@ -250,9 +259,9 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 		"id": environment.ID, "name": environment.Name, "description": environment.Description,
 		"ownerId": environment.OwnerID, "ownerName": owner.Name, "currentRevisionId": environment.CurrentRevisionID,
 		"currentRevision": revision, "revisions": revisions, "status": status, "schedulingStatus": schedulingStatus, "activeRunId": activeRunID,
-		"healthCheck": environment.HealthCheck,
-		"archivedAt":  environment.ArchivedAt,
-		"createdAt":   environment.CreatedAt, "updatedAt": environment.UpdatedAt,
+		"healthCheck": environment.HealthCheck, "sshCheck": environment.SSHCheck,
+		"archivedAt": environment.ArchivedAt,
+		"createdAt":  environment.CreatedAt, "updatedAt": environment.UpdatedAt,
 	}
 }
 

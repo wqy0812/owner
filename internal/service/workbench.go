@@ -133,7 +133,7 @@ func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) [
 		return []domain.WorkItem{item}
 	}
 	if !health.Configured {
-		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.repository_unconfigured", Message: "尚未通过前台录入私有仓库，六小时定时备份已停止", Cause: ruleCause("定时任务只允许使用 Environment Owner 明确选择的仓库"), NextAction: workAction("录入私有仓库", item.PrimaryAction.Href)}}
+		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.repository_unconfigured", Message: "尚未通过前台录入私有仓库，无法创建发布目录恢复点", Cause: ruleCause("自动备份和立即备份都只使用 Environment Owner 明确选择的仓库"), NextAction: workAction("录入私有仓库", item.PrimaryAction.Href)}}
 		return []domain.WorkItem{item}
 	}
 	if health.LastError != "" {
@@ -141,10 +141,6 @@ func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) [
 		at := valueOrTime(health.LastErrorAt, now)
 		item.UpdatedAt = at
 		item.Reasons = append(item.Reasons, domain.WorkReason{Code: "catalog_backup.failed", Message: "最近一次发布目录备份失败", Cause: &domain.WorkCause{Kind: "backup_failure", Summary: health.LastError, At: &at}, NextAction: workAction("检查恢复点", item.PrimaryAction.Href)})
-	}
-	if !health.TimerEnabled {
-		item.Priority, item.Status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
-		item.Reasons = append(item.Reasons, domain.WorkReason{Code: "catalog_backup.timer_disabled", Message: "已选择私有仓库，但六小时定时备份未启用", Cause: ruleCause("定时任务状态与前台仓库选择不一致"), NextAction: workAction("检查灾备配置", item.PrimaryAction.Href)})
 	}
 	if health.Behind {
 		item.Status = domain.WorkStatusBlocked
@@ -355,14 +351,14 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 			reasons = append(reasons, domain.WorkReason{Code: "environment.file_station_missing", Message: "缺少 FILE_STATION", Cause: ruleCause("组件介质交付需要环境声明 FILE_STATION"), NextAction: workAction("配置 File Station", environmentHref+"&tab=variables&focus=FILE_STATION")})
 		}
 		if environment.HealthCheck == nil {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行连通性检查", Cause: ruleCause("连通性证据必须绑定当前 Environment Revision"), NextAction: workAction("检查连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行 TCP 端点检查", Cause: ruleCause("TCP 连通性证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
 			at := environment.Revision.CreatedAt
 			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
 			if environment.Revision.CreatedBy == user.ID {
 				cause.ActorName = user.Name
 			}
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近 TCP 检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.Status == "degraded" {
 			failed := 0
 			for _, result := range environment.HealthCheck.Results {
@@ -372,6 +368,25 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 			}
 			checkedAt := environment.HealthCheck.CheckedAt
 			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed), Cause: &domain.WorkCause{Kind: "health_check", Summary: "当前 Revision 的只读 TCP 检查未全部通过", At: &checkedAt}, NextAction: workAction("查看异常端点", environmentHref+"&focus=health")})
+		}
+		if environment.SSHCheck == nil {
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_missing", Message: "当前 Revision 尚未执行 SSH / Ansible 检查", Cause: ruleCause("SSH 登录与 Ansible Ping 证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
+		} else if environment.SSHCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
+			at := environment.Revision.CreatedAt
+			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
+			if environment.Revision.CreatedBy == user.ID {
+				cause.ActorName = user.Name
+			}
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_stale", Message: "最近 SSH 检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
+		} else if environment.SSHCheck.Status == "degraded" {
+			failed := 0
+			for _, result := range environment.SSHCheck.Results {
+				if result.Status != "passed" && result.Status != "skipped" {
+					failed++
+				}
+			}
+			checkedAt := environment.SSHCheck.CheckedAt
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_degraded", Message: fmt.Sprintf("当前 SSH / Ansible 检查有 %d 项失败", failed), Cause: &domain.WorkCause{Kind: "ssh_check", Summary: "当前 Revision 的 SSH 登录或 Ansible Ping 未全部通过", At: &checkedAt}, NextAction: workAction("查看 SSH 错误", environmentHref+"&focus=health")})
 		}
 		if len(reasons) == 0 {
 			continue

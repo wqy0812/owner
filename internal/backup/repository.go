@@ -19,18 +19,21 @@ import (
 )
 
 type RepositoryStatus struct {
-	Configured         bool            `json:"configured"`
-	Path               string          `json:"path,omitempty"`
-	Branch             string          `json:"branch"`
-	AllowedRoot        string          `json:"allowedRoot"`
-	RecoveryPoints     []RecoveryPoint `json:"recoveryPoints,omitempty"`
-	TimerEnabled       bool            `json:"timerEnabled"`
-	Behind             bool            `json:"behind"`
-	CurrentGeneration  int64           `json:"currentGeneration"`
-	BackedUpGeneration int64           `json:"backedUpGeneration"`
-	LastSuccessfulAt   *time.Time      `json:"lastSuccessfulAt,omitempty"`
-	LastError          string          `json:"lastError,omitempty"`
-	LastErrorAt        *time.Time      `json:"lastErrorAt,omitempty"`
+	Configured           bool            `json:"configured"`
+	Path                 string          `json:"path,omitempty"`
+	Branch               string          `json:"branch"`
+	AllowedRoot          string          `json:"allowedRoot"`
+	RecoveryPoints       []RecoveryPoint `json:"recoveryPoints,omitempty"`
+	RestoreTargetKnown   bool            `json:"restoreTargetKnown"`
+	TargetCatalogEmpty   bool            `json:"targetCatalogEmpty"`
+	TargetComponentCount int             `json:"targetComponentCount"`
+	TargetScenarioCount  int             `json:"targetScenarioCount"`
+	Behind               bool            `json:"behind"`
+	CurrentGeneration    int64           `json:"currentGeneration"`
+	BackedUpGeneration   int64           `json:"backedUpGeneration"`
+	LastSuccessfulAt     *time.Time      `json:"lastSuccessfulAt,omitempty"`
+	LastError            string          `json:"lastError,omitempty"`
+	LastErrorAt          *time.Time      `json:"lastErrorAt,omitempty"`
 }
 
 type RecoveryPoint struct {
@@ -49,19 +52,19 @@ type repositorySelection struct {
 	ClonePath string `json:"clonePath"`
 }
 
+type repositoryCommandRunner func(context.Context, string, string, ...string) (string, error)
+
 // RepositoryController owns the Environment Owner workflow for local private
 // repositories. All user-provided paths are confined to AllowedRoot.
 type RepositoryController struct {
-	mu           sync.Mutex
-	base         Config
-	allowedRoot  string
-	statePath    string
-	scheduler    *Scheduler
-	database     *sql.DB
-	selection    repositorySelection
-	timer        TimerController
-	timerError   string
-	timerErrorAt *time.Time
+	mu          sync.Mutex
+	base        Config
+	allowedRoot string
+	statePath   string
+	scheduler   *Scheduler
+	database    *sql.DB
+	selection   repositorySelection
+	runCommand  repositoryCommandRunner
 }
 
 func NewRepositoryController(base Config, allowedRoot string, scheduler *Scheduler, databases ...*sql.DB) (*RepositoryController, error) {
@@ -79,7 +82,7 @@ func NewRepositoryController(base Config, allowedRoot string, scheduler *Schedul
 	if err != nil {
 		return nil, err
 	}
-	c := &RepositoryController{base: base, allowedRoot: root, statePath: filepath.Join(base.BackupDir, "repository.json"), scheduler: scheduler}
+	c := &RepositoryController{base: base, allowedRoot: root, statePath: filepath.Join(base.BackupDir, "repository.json"), scheduler: scheduler, runCommand: runCommand}
 	if len(databases) > 0 {
 		c.database = databases[0]
 	}
@@ -125,35 +128,24 @@ func SelectedRepositoryConfig(base Config) (Config, bool, error) {
 	return base, true, nil
 }
 
-func (c *RepositoryController) ConfigureTimer(controller TimerController) {
-	c.mu.Lock()
-	c.timer = controller
-	c.mu.Unlock()
-}
-
 func (c *RepositoryController) Configured() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.selection.Path != ""
 }
 
-func (c *RepositoryController) ReconcileTimer(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.setTimerLocked(ctx, c.selection.Path != "")
-}
-
 func (c *RepositoryController) Status(ctx context.Context) (RepositoryStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	status := RepositoryStatus{Configured: c.selection.Path != "", Path: c.selection.Path, Branch: c.base.CatalogBranch, AllowedRoot: c.allowedRoot}
+	c.applyRestoreTargetStatusLocked(ctx, &status)
 	if !status.Configured {
 		health := c.healthLocked(ctx)
-		status.TimerEnabled, status.LastError, status.LastErrorAt = health.TimerEnabled, health.LastError, health.LastErrorAt
+		status.LastError, status.LastErrorAt = health.LastError, health.LastErrorAt
 		return status, nil
 	}
 	health := c.healthLocked(ctx)
-	status.TimerEnabled, status.Behind = health.TimerEnabled, health.Behind
+	status.Behind = health.Behind
 	status.CurrentGeneration, status.BackedUpGeneration = health.CurrentGeneration, health.BackedUpGeneration
 	status.LastSuccessfulAt, status.LastError, status.LastErrorAt = health.LastSuccessfulAt, health.LastError, health.LastErrorAt
 	if _, err := runCommand(ctx, c.selection.ClonePath, "git", "-C", c.selection.ClonePath, "fetch", "--prune", "--tags", "origin"); err != nil {
@@ -171,6 +163,20 @@ func (c *RepositoryController) Status(ctx context.Context) (RepositoryStatus, er
 	return status, nil
 }
 
+func (c *RepositoryController) applyRestoreTargetStatusLocked(ctx context.Context, status *RepositoryStatus) {
+	if c.database == nil {
+		return
+	}
+	state, err := inspectTargetCatalog(ctx, c.database)
+	if err != nil {
+		return
+	}
+	status.RestoreTargetKnown = true
+	status.TargetCatalogEmpty = state.ComponentCount == 0 && state.ScenarioCount == 0
+	status.TargetComponentCount = state.ComponentCount
+	status.TargetScenarioCount = state.ScenarioCount
+}
+
 func (c *RepositoryController) CatalogBackupHealth(ctx context.Context) (domain.CatalogBackupHealth, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -179,25 +185,7 @@ func (c *RepositoryController) CatalogBackupHealth(ctx context.Context) (domain.
 
 func (c *RepositoryController) healthLocked(ctx context.Context) domain.CatalogBackupHealth {
 	health := domain.CatalogBackupHealth{Configured: c.selection.Path != "", RepositoryPath: c.selection.Path}
-	if c.timer != nil {
-		enabled, err := c.timer.Enabled(ctx)
-		if err != nil {
-			health.LastError = "检查六小时定时备份失败: " + err.Error()
-			now := time.Now().UTC()
-			health.LastErrorAt = &now
-		} else {
-			health.TimerEnabled = enabled
-			if (!health.Configured && !enabled) || (health.Configured && enabled) {
-				c.timerError, c.timerErrorAt = "", nil
-			}
-		}
-	}
 	if !health.Configured {
-		if health.TimerEnabled && health.LastError == "" {
-			health.LastError = "未配置前台私有仓库，但六小时定时备份仍处于启用状态"
-			now := time.Now().UTC()
-			health.LastErrorAt = &now
-		}
 		return health
 	}
 	needed, generation, err := c.scheduler.Manager().NeedsSnapshot(ctx)
@@ -215,23 +203,7 @@ func (c *RepositoryController) healthLocked(ctx context.Context) domain.CatalogB
 	if status.LastError != "" && (health.LastSuccessfulAt == nil || status.LastErrorAt == nil || status.LastErrorAt.After(*health.LastSuccessfulAt)) {
 		health.LastError, health.LastErrorAt = status.LastError, status.LastErrorAt
 	}
-	if c.timerError != "" {
-		health.LastError, health.LastErrorAt = c.timerError, cloneTime(c.timerErrorAt)
-	}
 	return health
-}
-
-func (c *RepositoryController) setTimerLocked(ctx context.Context, enabled bool) error {
-	if c.timer == nil {
-		return nil
-	}
-	if err := c.timer.SetEnabled(ctx, enabled); err != nil {
-		now := time.Now().UTC()
-		c.timerError, c.timerErrorAt = err.Error(), &now
-		return err
-	}
-	c.timerError, c.timerErrorAt = "", nil
-	return nil
 }
 
 func (c *RepositoryController) Create(ctx context.Context, inputPath string) (RepositoryStatus, error) {
@@ -243,22 +215,28 @@ func (c *RepositoryController) Create(ctx context.Context, inputPath string) (Re
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
-			return RepositoryStatus{}, fmt.Errorf("repository path already exists")
+			return RepositoryStatus{}, fmt.Errorf("%w: repository path already exists", domain.ErrConflict)
 		}
+		return RepositoryStatus{}, err
+	}
+	existingParent, err := deepestExistingDirectory(filepath.Dir(path), c.allowedRoot)
+	if err != nil {
 		return RepositoryStatus{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return RepositoryStatus{}, err
 	}
-	if _, err := runCommand(ctx, c.allowedRoot, "git", "init", "--bare", "--shared=false", path); err != nil {
-		return RepositoryStatus{}, err
-	}
 	keepRepository := false
 	defer func() {
 		if !keepRepository {
-			_ = safeRemoveTree(path, c.allowedRoot)
+			if err := safeRemoveTree(path, c.allowedRoot); err == nil {
+				_ = removeEmptyParents(filepath.Dir(path), existingParent, c.allowedRoot)
+			}
 		}
 	}()
+	if _, err := runCommand(ctx, c.allowedRoot, "git", "init", "--bare", "--shared=false", path); err != nil {
+		return RepositoryStatus{}, err
+	}
 	_ = os.Chmod(path, 0o700)
 	if err := c.seedRepository(ctx, path); err != nil {
 		return RepositoryStatus{}, err
@@ -283,6 +261,18 @@ func (c *RepositoryController) Connect(ctx context.Context, inputPath string) (R
 		c.scheduler.Request("private-repository-connected")
 	}
 	return status, err
+}
+
+// Snapshot creates a recovery point in the repository currently selected by
+// the Environment Owner. Holding the controller lock keeps a concurrent
+// repository reconfiguration from changing the target midway through a backup.
+func (c *RepositoryController) Snapshot(ctx context.Context, reason string) (Manifest, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.selection.Path == "" {
+		return Manifest{}, fmt.Errorf("%w: no private Catalog repository is connected", domain.ErrConflict)
+	}
+	return c.scheduler.SnapshotNow(ctx, reason)
 }
 
 func (c *RepositoryController) Plan(ctx context.Context, ref string) (RestorePlan, error) {
@@ -378,14 +368,15 @@ func (c *RepositoryController) connectLocked(ctx context.Context, path string) (
 	c.selection = selection
 	c.scheduler.SetManager(manager)
 	c.scheduler.SetEnabled(true)
-	_ = c.setTimerLocked(ctx, true)
 	health := c.healthLocked(ctx)
-	return RepositoryStatus{
+	status := RepositoryStatus{
 		Configured: true, Path: path, Branch: c.base.CatalogBranch, AllowedRoot: c.allowedRoot, RecoveryPoints: points,
-		TimerEnabled: health.TimerEnabled, Behind: health.Behind, CurrentGeneration: health.CurrentGeneration,
+		Behind: health.Behind, CurrentGeneration: health.CurrentGeneration,
 		BackedUpGeneration: health.BackedUpGeneration, LastSuccessfulAt: health.LastSuccessfulAt,
 		LastError: health.LastError, LastErrorAt: health.LastErrorAt,
-	}, nil
+	}
+	c.applyRestoreTargetStatusLocked(ctx, &status)
+	return status, nil
 }
 
 func (c *RepositoryController) seedRepository(ctx context.Context, path string) error {
@@ -394,22 +385,22 @@ func (c *RepositoryController) seedRepository(ctx context.Context, path string) 
 		return err
 	}
 	defer os.RemoveAll(temp)
-	if _, err := runCommand(ctx, c.base.BackupDir, "git", "clone", path, temp); err != nil {
+	if _, err := c.runCommand(ctx, c.base.BackupDir, "git", "clone", path, temp); err != nil {
 		return err
 	}
-	if _, err := runCommand(ctx, temp, "git", "switch", "--orphan", c.base.CatalogBranch); err != nil {
+	if _, err := c.runCommand(ctx, temp, "git", "checkout", "--orphan", c.base.CatalogBranch); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(temp, ".gitkeep"), nil, 0o600); err != nil {
 		return err
 	}
-	if _, err := runCommand(ctx, temp, "git", "add", ".gitkeep"); err != nil {
+	if _, err := c.runCommand(ctx, temp, "git", "add", ".gitkeep"); err != nil {
 		return err
 	}
-	if _, err := runCommand(ctx, temp, "git", "-c", "user.name=ClusterForge Backup", "-c", "user.email=backup@clusterforge.local", "commit", "-m", "Initialize private Catalog repository"); err != nil {
+	if _, err := c.runCommand(ctx, temp, "git", "-c", "user.name=ClusterForge Backup", "-c", "user.email=backup@clusterforge.local", "commit", "-m", "Initialize private Catalog repository"); err != nil {
 		return err
 	}
-	_, err = runCommand(ctx, temp, "git", "push", "origin", c.base.CatalogBranch)
+	_, err = c.runCommand(ctx, temp, "git", "push", "origin", c.base.CatalogBranch)
 	return err
 }
 
@@ -477,10 +468,10 @@ func (c *RepositoryController) resolveExistingPath(input string) (string, error)
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("repository path does not exist")
+		return "", fmt.Errorf("%w: repository path does not exist", domain.ErrInvalid)
 	}
 	if !withinRoot(c.allowedRoot, resolved) {
-		return "", fmt.Errorf("repository path must be inside %s", c.allowedRoot)
+		return "", fmt.Errorf("%w: repository path must be inside %s", domain.ErrInvalid, c.allowedRoot)
 	}
 	return resolved, nil
 }
@@ -495,7 +486,7 @@ func (c *RepositoryController) resolveCreatePath(input string) (string, error) {
 		resolved, resolveErr := filepath.EvalSymlinks(parent)
 		if resolveErr == nil {
 			if !withinRoot(c.allowedRoot, resolved) {
-				return "", fmt.Errorf("repository path must be inside %s", c.allowedRoot)
+				return "", fmt.Errorf("%w: repository path must be inside %s", domain.ErrInvalid, c.allowedRoot)
 			}
 			break
 		}
@@ -510,14 +501,61 @@ func (c *RepositoryController) resolveCreatePath(input string) (string, error) {
 func (c *RepositoryController) resolvePath(input string) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return "", fmt.Errorf("repository path is required")
+		return "", fmt.Errorf("%w: repository path is required", domain.ErrInvalid)
 	}
 	path := input
 	if !filepath.IsAbs(path) {
+		cleanRelative := filepath.Clean(path)
+		rootWithoutSeparator := strings.TrimPrefix(filepath.Clean(c.allowedRoot), string(filepath.Separator))
+		if cleanRelative == rootWithoutSeparator || strings.HasPrefix(cleanRelative, rootWithoutSeparator+string(filepath.Separator)) {
+			return "", fmt.Errorf("%w: absolute repository paths must start with %s; otherwise enter only the path relative to %s", domain.ErrInvalid, string(filepath.Separator), c.allowedRoot)
+		}
 		path = filepath.Join(c.allowedRoot, path)
 	}
 	path = filepath.Clean(path)
 	return path, nil
+}
+
+func deepestExistingDirectory(path, root string) (string, error) {
+	current := filepath.Clean(path)
+	for {
+		if !withinRoot(root, current) {
+			return "", fmt.Errorf("%w: repository path must be inside %s", domain.ErrInvalid, root)
+		}
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("repository parent path is not a directory")
+			}
+			return current, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if filepath.Clean(current) == filepath.Clean(root) {
+			return "", err
+		}
+		current = filepath.Dir(current)
+	}
+}
+
+func removeEmptyParents(path, stop, root string) error {
+	current := filepath.Clean(path)
+	stop = filepath.Clean(stop)
+	for current != stop {
+		if !withinRoot(root, current) || current == filepath.Clean(root) {
+			return fmt.Errorf("refuse to remove parent outside repository root")
+		}
+		if err := os.Remove(current); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				current = filepath.Dir(current)
+				continue
+			}
+			return err
+		}
+		current = filepath.Dir(current)
+	}
+	return nil
 }
 
 func withinRoot(root, path string) bool {

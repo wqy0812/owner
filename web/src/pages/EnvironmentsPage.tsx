@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitBranch, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CatalogRepositoryStatus, CatalogRestorePlan, CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
+import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, EnvironmentSSHCheck, WorkExplanation } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -31,6 +31,7 @@ function revisionActor(revision: EnvironmentRevision, users: Array<{ id: string;
 
 export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh } = useApp();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal, user.role === 'environment_owner'), [user.id, user.role], 'environments');
@@ -47,6 +48,8 @@ export function EnvironmentsPage() {
   const [busy, setBusy] = useState(false);
   const [healthBusy, setHealthBusy] = useState(false);
   const [health, setHealth] = useState<EnvironmentHealthCheck>();
+  const [sshCheck, setSSHCheck] = useState<EnvironmentSSHCheck>();
+  const [connectivityError, setConnectivityError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -71,7 +74,9 @@ export function EnvironmentsPage() {
     setVariables(Object.entries(selected?.currentRevision?.variables ?? {}).map(([name, value]) => ({ name, value })));
     setCredentials(selected?.currentRevision?.credentialRefs ?? []);
     setHealth(selected?.healthCheck);
-  }, [selected?.currentRevision?.id, selected?.healthCheck?.id, selected?.id]);
+    setSSHCheck(selected?.sshCheck);
+    setConnectivityError(undefined);
+  }, [selected?.currentRevision?.id, selected?.healthCheck?.id, selected?.sshCheck?.id, selected?.id]);
 
   useEffect(() => {
     const requested = searchParams.get('tab');
@@ -167,12 +172,21 @@ export function EnvironmentsPage() {
   async function checkHealth() {
     if (!selected || !editable) return;
     setHealthBusy(true);
+    setConnectivityError(undefined);
     try {
-      const result = await api.checkEnvironmentHealth(selected.id);
-      setHealth(result);
-      notify(result.status === 'healthy' ? 'success' : 'error', result.status === 'healthy' ? '环境检查通过' : '环境检查发现异常', `${result.results.filter((item) => item.reachable).length}/${result.results.length} 个端点可达。`);
+      const result = await api.checkEnvironmentConnectivity(selected.id);
+      setHealth(result.tcpCheck);
+      setSSHCheck(result.sshCheck);
+      const passedTCP = result.tcpCheck.results.filter((item) => item.reachable).length;
+      const passedSSH = result.sshCheck.results.filter((item) => item.status === 'passed' || item.status === 'skipped').length;
+      const healthy = result.tcpCheck.status === 'healthy' && result.sshCheck.status === 'healthy';
+      notify(healthy ? 'success' : 'error', healthy ? '环境检查通过' : '环境检查发现异常', `TCP ${passedTCP}/${result.tcpCheck.results.length}；SSH / Ansible ${passedSSH}/${result.sshCheck.results.length}。`);
       signalRefresh(['environments', 'workbench']);
-    } catch (reason) { notify('error', '环境检查失败', displayError(reason)); } finally { setHealthBusy(false); }
+    } catch (reason) {
+      const message = displayError(reason);
+      setConnectivityError(message);
+      notify('error', '环境检查失败', message);
+    } finally { setHealthBusy(false); }
   }
 
   async function restore(reason: string) {
@@ -290,10 +304,12 @@ export function EnvironmentsPage() {
   const environmentRuns = runs?.filter((run) => run.environmentId === selected?.id).slice(0, 4) ?? [];
   const facts = selected?.currentRevision?.facts ?? {};
   const healthStale = Boolean(health && health.environmentRevisionId !== selected?.currentRevision?.id);
+  const sshCheckStale = Boolean(sshCheck && sshCheck.environmentRevisionId !== selected?.currentRevision?.id);
+
+  if (location.hash === '#catalog-repository') return <Navigate to="/disaster-recovery#catalog-repository" replace />;
 
   return <div className="page">
     <PageHeader eyebrow="Execution environments" title="环境管理" description="分别查看调度占用与真实连通性；配置变更以可追溯 Revision 保存。" actions={user.role === 'environment_owner' ? <><button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入环境</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button></> : undefined} />
-    {user.role === 'environment_owner' && <CatalogRepositoryPanel />}
     <RefreshNotice loading={isRefreshing} error={environments ? error : undefined} onRetry={() => void reload()} />
     {loading && !environments ? <LoadingBlock label="正在读取共享环境…" /> : error && !environments ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="catalog-layout">
       <aside className="catalog-list panel">
@@ -302,8 +318,13 @@ export function EnvironmentsPage() {
       </aside>
       {selected ? <section className="detail-stack">
         <article className="panel environment-hero">
-          <div><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
-          <div className="environment-hero__actions"><div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.archivedAt ? 'offline' : selected.schedulingStatus ?? 'idle'}>{selected.archivedAt ? '已归档' : schedulingLabel(selected)}</StatusPill></div>{ownsSelected && <button className={selected.archivedAt ? 'button button--secondary' : 'button button--danger-soft'} disabled={anyDirty || lifecycleBusy !== undefined} onClick={() => void openLifecycle()}>{selected.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />} {selected.archivedAt ? '恢复环境' : '移除环境'}</button>}{editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button><button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button></>}</div>
+          <div className="environment-hero__summary"><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">Environment revision {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
+          <div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.archivedAt ? 'offline' : selected.schedulingStatus ?? 'idle'}>{selected.archivedAt ? '已归档' : schedulingLabel(selected)}</StatusPill></div>
+          {(ownsSelected || (editable && selected.currentRevision)) && <div className="environment-hero__toolbar" role="group" aria-label="环境操作">
+            {editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button></>}
+            {ownsSelected && <button className={selected.archivedAt ? 'button button--secondary' : 'button button--danger-soft'} disabled={anyDirty || lifecycleBusy !== undefined} onClick={() => void openLifecycle()}>{selected.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />} {selected.archivedAt ? '恢复环境' : '移除环境'}</button>}
+            {editable && selected.currentRevision && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button>}
+          </div>}
         </article>
         {selected.archivedAt && <div className="inline-warning"><Archive size={17} /><span>该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。</span></div>}
         <StatusExplanationPanel item={environmentWorkItem} />
@@ -317,10 +338,26 @@ export function EnvironmentsPage() {
         </section>
 
         <article className="panel health-panel" id="environment-health">
-          <header className="panel__header"><div><span className={`panel__icon ${health?.status === 'degraded' ? 'panel__icon--rose' : 'panel__icon--cyan'}`}><Activity size={18} /></span><div><h2>环境连通性</h2><p>TCP 只读检查主机 SSH、IMAGE_REGISTRY 和 FILE_STATION，不执行安装。</p></div></div>{editable && <button className="button button--secondary" disabled={healthBusy} onClick={() => void checkHealth()}><Wifi size={15} /> {healthBusy ? '检查中…' : '立即检查'}</button>}</header>
-          {!health ? <EmptyState title="尚未检查" description="“调度空闲”不代表主机或依赖端点真实可达。" /> : <div className="health-results">
-            <div className={`health-summary health-summary--${health.status}`}>{health.status === 'healthy' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<div><strong>{health.status === 'healthy' ? '全部端点可达' : '存在不可达端点'}</strong><small>{formatTime(health.checkedAt)} · {health.results.filter((item) => item.reachable).length}/{health.results.length} 通过{healthStale ? ' · 检查基于旧 Revision，请重新检查' : ''}</small></div></div>
-            {health.results.map((item) => <div className="health-result" key={`${item.kind}-${item.name}`}><span className={item.reachable ? 'health-dot health-dot--ok' : 'health-dot health-dot--failed'} /><div><strong>{item.name}</strong><small>{item.address}</small></div><span>{item.reachable ? `${item.latencyMs} ms` : item.error ?? '不可达'}</span></div>)}
+          <header className="panel__header"><div><span className={`panel__icon ${health?.status === 'degraded' || sshCheck?.status === 'degraded' ? 'panel__icon--rose' : 'panel__icon--cyan'}`}><Activity size={18} /></span><div><h2>环境连通性</h2><p>一次完成 TCP 端点探测和 SSH / Ansible Ping；检查只读，不执行安装。</p></div></div>{editable && <button className="button button--secondary" disabled={healthBusy} onClick={() => void checkHealth()}><Wifi size={15} /> {healthBusy ? '正在检查 TCP 与 SSH…' : '立即检查'}</button>}</header>
+          {connectivityError && <ErrorBlock message={connectivityError} onRetry={() => void checkHealth()} />}
+          {!health && !sshCheck ? <EmptyState title="尚未检查" description="“调度空闲”不代表端口可达、SSH 可登录或 Ansible 可执行。" /> : <div className="connectivity-results">
+            <section className="health-results" aria-label="TCP 端点检查结果">
+              <div className="connectivity-section-title"><strong>TCP 端点检查</strong><small>SSH 端口、IMAGE_REGISTRY、FILE_STATION</small></div>
+              {!health ? <EmptyState title="TCP 尚未检查" /> : <>
+                <div className={`health-summary health-summary--${health.status}`}>{health.status === 'healthy' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<div><strong>{health.status === 'healthy' ? '全部 TCP 端点可达' : '存在 TCP 不可达端点'}</strong><small>{formatTime(health.checkedAt)} · {health.results.filter((item) => item.reachable).length}/{health.results.length} 通过{healthStale ? ' · 基于旧 Revision，请重新检查' : ''}</small></div></div>
+                {health.results.map((item) => <div className="health-result" key={`${item.kind}-${item.name}`}><span className={item.reachable ? 'health-dot health-dot--ok' : 'health-dot health-dot--failed'} /><div><strong>{item.name}</strong><small>{item.address}</small></div><span className={item.reachable ? '' : 'health-result__error'}>{item.reachable ? `${item.latencyMs} ms` : item.error ?? 'TCP 不可达'}</span></div>)}
+              </>}
+            </section>
+            <section className="health-results" aria-label="SSH 和 Ansible 检查结果">
+              <div className="connectivity-section-title"><strong>SSH / Ansible 检查</strong><small>认证、主机指纹、远端 Python、Ansible Ping</small></div>
+              {!sshCheck ? <EmptyState title="SSH 尚未检查" /> : <>
+                <div className={`health-summary health-summary--${sshCheck.status}`}>{sshCheck.status === 'healthy' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}<div><strong>{sshCheck.status === 'healthy' ? 'SSH / Ansible 检查通过' : 'SSH / Ansible 检查存在异常'}</strong><small>{formatTime(sshCheck.checkedAt)} · {sshCheck.results.filter((item) => item.status === 'passed' || item.status === 'skipped').length}/{sshCheck.results.length} 通过 · {sshCheck.durationMs} ms{sshCheckStale ? ' · 基于旧 Revision，请重新检查' : ''}</small></div></div>
+                {sshCheck.results.map((item) => {
+                  const passed = item.status === 'passed' || item.status === 'skipped';
+                  return <div className="health-result" key={`${item.kind}-${item.name}`}><span className={passed ? 'health-dot health-dot--ok' : 'health-dot health-dot--failed'} /><div><strong>{item.name}</strong><small>{item.user ? `${item.user}@` : ''}{item.address}</small></div><span className={passed ? '' : 'health-result__error'}>{passed ? item.status === 'skipped' ? item.message : 'Ansible Ping 通过' : <>{item.message ?? 'SSH / Ansible 检查失败'}{item.errorCode && <small>{item.errorCode}</small>}</>}</span></div>;
+                })}
+              </>}
+            </section>
           </div>}
         </article>
 
@@ -349,77 +386,6 @@ export function EnvironmentsPage() {
   </div>;
 }
 
-function CatalogRepositoryPanel() {
-  const { notify, signalRefresh } = useApp();
-  const { data: repository, loading, error, isRefreshing, reload } = useApiData<CatalogRepositoryStatus>((signal) => api.catalogRepository(signal), [], 'catalog-repository');
-  const [repositoryMode, setRepositoryMode] = useState<'create' | 'connect'>();
-  const [restoreOpen, setRestoreOpen] = useState(false);
-
-  function updated(status: CatalogRepositoryStatus, message: string) {
-    notify('success', message, `${status.path} · ${status.branch}`);
-    setRepositoryMode(undefined);
-    signalRefresh(['catalog-repository', 'workbench']);
-    void reload();
-  }
-
-  return <article className="panel" id="catalog-repository">
-    <header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>发布目录灾备</h2><p>发布后自动复制到本地私有 Git 仓库；恢复只允许组件和场景均为空的数据库。</p></div></div><div className="environment-hero__actions"><button className="button button--quiet" disabled={!repository} onClick={() => setRepositoryMode('connect')}>接入已有仓库</button><button className="button button--secondary" disabled={!repository} onClick={() => setRepositoryMode('create')}><Plus size={15} /> 创建私有仓库</button></div></header>
-    <RefreshNotice loading={Boolean(isRefreshing)} error={repository ? error : undefined} onRetry={reload} />
-    {loading && !repository ? <LoadingBlock label="正在读取私有仓库…" /> : error && !repository ? <ErrorBlock message={error} onRetry={reload} /> : repository ? <div className="revision-preview">
-      <div className="revision-diff"><GitBranch size={18} /><div><strong>{repository.configured ? '已接入私有仓库' : '尚未配置私有仓库'}</strong><p>{repository.configured ? repository.path : `允许根目录：${repository.allowedRoot}`}</p>{repository.configured && <p>分支：{repository.branch} · 恢复点：{repository.recoveryPoints.length} 个 · 六小时任务：{repository.timerEnabled ? '已启用' : '已停止'}</p>}</div></div>
-      {!repository.configured && <div className="inline-warning"><AlertTriangle size={16} /><span>未通过前台选择仓库，六小时定时备份保持停止。</span></div>}
-      {repository.configured && repository.behind && <div className="inline-warning"><AlertTriangle size={16} /><span>恢复点落后：当前发布代次 {repository.currentGeneration}，已备份代次 {repository.backedUpGeneration}。</span></div>}
-      {repository.lastError && <div className="inline-warning"><AlertTriangle size={16} /><span>最近备份异常：{repository.lastError}</span></div>}
-      {repository.configured && <div className="modal-actions"><button className="button button--danger" disabled={!repository.recoveryPoints.length} onClick={() => setRestoreOpen(true)}><RotateCcw size={15} /> 从 Git 恢复空库</button></div>}
-    </div> : null}
-    {repositoryMode && repository && <CatalogRepositoryModal mode={repositoryMode} allowedRoot={repository.allowedRoot} onClose={() => setRepositoryMode(undefined)} onDone={updated} />}
-    {restoreOpen && repository && <CatalogRestoreModal repository={repository} onClose={() => setRestoreOpen(false)} onDone={() => { setRestoreOpen(false); notify('success', '发布目录已从 Git 恢复', '组件、场景和 Playbook 已写入空数据库，并已触发恢复后快照。'); signalRefresh(['catalog-repository', 'components', 'scenarios', 'workbench']); void reload(); }} />}
-  </article>;
-}
-
-function CatalogRepositoryModal({ mode, allowedRoot, onClose, onDone }: { mode: 'create' | 'connect'; allowedRoot: string; onClose: () => void; onDone: (status: CatalogRepositoryStatus, message: string) => void }) {
-  const { notify } = useApp();
-  const [path, setPath] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true);
-    try {
-      const status = mode === 'create' ? await api.createCatalogRepository(path.trim()) : await api.connectCatalogRepository(path.trim());
-      onDone(status, mode === 'create' ? '私有仓库已创建' : '已有仓库已接入');
-    } catch (reason) { notify('error', mode === 'create' ? '创建私有仓库失败' : '接入私有仓库失败', displayError(reason)); }
-    finally { setBusy(false); }
-  }
-  return <Modal title={mode === 'create' ? '创建私有 Catalog 仓库' : '接入已有 Catalog 仓库'} description={`路径必须位于 ${allowedRoot} 内；相对路径会基于该目录解析。`} onClose={onClose}>
-    <form onSubmit={(event) => void submit(event)}><div className="modal-body"><label><span>服务器仓库路径</span><input aria-label="服务器仓库路径" value={path} onChange={(event) => setPath(event.target.value)} placeholder={mode === 'create' ? 'catalog-production.git' : '/data/private-catalog-repositories/catalog-production.git'} autoFocus required /><small>{mode === 'create' ? '目标必须不存在；平台将创建权限为 0700 的 bare Git 仓库。' : `已有仓库必须包含 catalog 分支，且路径位于 ${allowedRoot}。`}</small></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" disabled={busy} onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || !path.trim()}>{busy ? '处理中…' : mode === 'create' ? '创建并接入' : '验证并接入'}</button></footer></form>
-  </Modal>;
-}
-
-function CatalogRestoreModal({ repository, onClose, onDone }: { repository: CatalogRepositoryStatus; onClose: () => void; onDone: () => void }) {
-  const { notify } = useApp();
-  const [ref, setRef] = useState(repository.recoveryPoints[0]?.ref ?? '');
-  const [plan, setPlan] = useState<CatalogRestorePlan>();
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState<'preview' | 'restore'>();
-  async function preview() {
-    setBusy('preview'); setPlan(undefined); setConfirmation('');
-    try { setPlan(await api.previewCatalogRestore(ref)); }
-    catch (reason) { notify('error', '恢复预检失败', displayError(reason)); }
-    finally { setBusy(undefined); }
-  }
-  async function restoreCatalog() {
-    if (!plan) return; setBusy('restore');
-    try { await api.restoreCatalog({ ref, expectedPlanDigest: plan.planDigest, confirmation }); onDone(); }
-    catch (reason) { setPlan(undefined); notify('error', 'Git 恢复失败', displayError(reason)); }
-    finally { setBusy(undefined); }
-  }
-  return <Modal size="wide" title="从 Git 恢复发布目录" description="仅在当前数据库没有任何组件和场景时允许恢复；操作不会恢复 Run、环境、审批或审计历史。" onClose={onClose}>
-    <div className="modal-body cluster-rollback-preview"><div className="warning-callout"><AlertTriangle size={19} /><div><strong>冲突时整批失败</strong><p>组件或场景非空、ID/slug 冲突、用户身份属性冲突、Playbook 路径内容不同，都会拒绝恢复且不留下部分数据。</p></div></div>
-      <label><span>Git 恢复点</span><select aria-label="Git 恢复点" value={ref} onChange={(event) => { setRef(event.target.value); setPlan(undefined); setConfirmation(''); }}>{repository.recoveryPoints.map((point) => <option key={point.ref} value={point.ref}>{formatTime(point.createdAt)} · {point.ref}</option>)}</select></label>
-      {plan && <><section className="cluster-rollback-summary"><div><span>组件</span><strong>{plan.counts.components ?? 0}</strong></div><div><span>Release</span><strong>{plan.counts.component_releases ?? 0}</strong></div><div><span>场景</span><strong>{plan.counts.scenarios ?? 0}</strong></div><div><span>Playbook</span><strong>{plan.playbookCount}</strong></div></section><div className="revision-diff"><GitCompare size={18} /><div><strong>恢复计划已锁定</strong><p>Commit：{plan.gitCommit.slice(0, 16)}…</p><p>Catalog：{plan.catalogSha256.slice(0, 16)}… · Schema：{plan.schemaContract}</p></div></div><label><span>输入“恢复发布目录”以确认</span><input aria-label="确认恢复发布目录" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /><small>恢复前会重新核对空库状态和计划摘要。</small></label></>}
-    </div><footer className="modal-actions"><button className="button button--quiet" disabled={Boolean(busy)} onClick={onClose}>取消</button><button className="button button--quiet" disabled={Boolean(busy) || !ref} onClick={() => void preview()}>{busy === 'preview' ? '预检中…' : '预览恢复'}</button><button className="button button--danger" disabled={Boolean(busy) || !plan || confirmation !== '恢复发布目录'} onClick={() => void restoreCatalog()}>{busy === 'restore' ? '恢复中…' : '确认恢复空库'}</button></footer>
-  </Modal>;
-}
-
 function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; lifecycle?: EnvironmentLifecycle; error?: string; explanation?: WorkExplanation; busy?: 'load' | 'delete' | 'archive' | 'unarchive'; onRetry: () => void; onClose: () => void; onConfirm: (action: 'delete' | 'archive' | 'unarchive') => void }) {
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
@@ -427,7 +393,7 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
   const blocked = !lifecycle || (!lifecycle.archived && !lifecycle.canDelete && !lifecycle.canArchive);
   const title = lifecycle?.archived ? '恢复归档环境' : lifecycle?.canDelete ? '永久删除环境' : '归档环境';
   const buttonLabel = action === 'delete' ? '永久删除环境' : action === 'archive' ? '确认归档环境' : '恢复环境';
-  return <Modal title={title} description={`目标环境：${environment.name}`} onClose={onClose}>
+  return <Modal size="wide" title={title} description={`目标环境：${environment.name}`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
       {busy === 'load' ? <LoadingBlock label="正在核对 Run、构建记录和安装基线…" /> : error && !lifecycle ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></> : lifecycle ? <>
         <section className="cluster-rollback-summary"><div><span>Revision</span><strong>{lifecycle.revisionCount}</strong></div><div><span>历史 Run</span><strong>{lifecycle.runCount}</strong></div><div><span>镜像构建</span><strong>{lifecycle.imageBuildCount}</strong></div><div><span>安装基线</span><strong>{lifecycle.installationCount}</strong></div></section>
@@ -443,7 +409,7 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
 function ClusterRollbackModal({ environment, plan, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
-  return <Modal title="一键回滚整个集群" description={`目标环境：${environment.name}。计划只允许恢复为安装前的干净状态。`} onClose={onClose}>
+  return <Modal size="wide" title="一键回滚整个集群" description={`目标环境：${environment.name}。计划只允许恢复为安装前的干净状态。`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
       <div className="warning-callout"><AlertTriangle size={19} /><div><strong>这是整集群破坏性操作</strong><p>平台将依据当前安装清单，按来源 Run 时间倒序、每个来源内部安装步骤逆序执行 rollback。任一基线不完整都会拒绝生成计划。</p></div></div>
       {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : plan ? <>

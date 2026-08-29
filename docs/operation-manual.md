@@ -560,13 +560,16 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 ### 5.6 检查环境连通性
 
-环境 Owner 可以单击“立即检查”，对当前 Revision 执行只读 TCP 探测：
+环境 Owner 可以单击一次“立即检查”，对当前 Revision 依次执行两类只读检查：
 
-- Inventory 主机检查配置的 SSH 端口，未填写时使用 22。
-- `IMAGE_REGISTRY` 和 `FILE_STATION` 存在时检查各自 `host:port`。
-- 检查结果记录来源 Revision、端点、延迟、时间和 `healthy` / `degraded` 状态，并追加审计事件。
+- TCP 端点检查：Inventory 主机检查配置的 SSH 端口，未填写时使用 22；`IMAGE_REGISTRY` 和 `FILE_STATION` 存在时检查各自 `host:port`。
+- SSH / Ansible 检查：仅针对远端 Inventory 主机执行无提权、无 facts、无写操作的 `ansible.builtin.ping`，验证 SSH 认证、主机指纹、远端 Python 和 Ansible 基础执行。
+- 检查 Playbook 内置在平台二进制中，启动时按内容摘要释放到只读运行目录并由独立 Runner 执行，不依赖也不会修改发布目录中的用户 Playbook。若内置文件、权限或摘要异常，服务启动和受保护部署都会失败关闭。
+- 两类检查分别记录来源 Revision、结果和时间，并追加独立审计事件。创建新 Revision 后，旧结果都会被标记为需要重检。
 
-该检查不会登录 SSH、调用 Registry API、下载介质或执行 Ansible。`healthy` 只证明 TCP 端口在本次探测时可连接，不能证明凭据有效、镜像可推送、介质校验和正确或组件能够安装。仓库和文件站若未显式包含端口，会被报告为配置异常。
+页面在同一区域分别展示 TCP 和 SSH / Ansible 结果。TCP `healthy` 只证明端口可连接；SSH / Ansible `healthy` 才证明本次检查完成了 SSH 认证和 Ping 模块执行，但仍不证明 sudo、镜像推送、介质校验或组件安装一定成功。错误会区分凭据未配置、认证失败、主机指纹失败、连接拒绝、网络超时、远端 Python/Ansible 失败等类别。仓库和文件站若未显式包含端口，会被报告为配置异常。
+
+SSH 检查只解析当前 Revision 中的标准连接 CredentialRef：`ansible_ssh_pass`、`ansible_password`、`ansible_private_key_file` 和 `ansible_ssh_private_key_file`；未声明时沿用平台 Runner 用户的 SSH agent/config。平台不会关闭主机指纹校验，也不会把凭据值或 Ansible 原始错误输出写入检查结果。
 
 ### 5.7 查看和恢复历史 Revision
 
@@ -639,9 +642,15 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 ### 5.11 发布目录私有 Git 灾备
 
-Environment Owner 在环境管理页的“发布目录灾备”中输入服务器本地路径，可以在平台允许根目录下创建权限为 `0700` 的私有 bare Git 仓库，也可以接入已经包含 `catalog` 分支的仓库。六小时定时备份只使用这里保存的仓库；尚未录入时平台停止 Timer，创建或接入成功后自动启用。发布后平台异步复制；页面列出 `backup/*` 恢复点，并显示 Timer、发布代次、最近成功和最近错误。相同异常也会出现在 Environment Owner 的“我的工作”。
+Environment Owner 在“灾备目录 → 发布目录灾备”中输入服务器本地路径，可以在平台允许根目录下创建权限为 `0700` 的私有 bare Git 仓库，也可以接入已经包含 `catalog` 分支的仓库。空目录首次恢复使用“从已有 Git 仓库恢复”向导，依次完成仓库验证、恢复点选择、预检和确认；只希望配置备份时可选择“仅接入，暂不恢复”。已有目录只能“接入已有备份仓库”，已经配置后使用“更换备份仓库”。发布后平台异步复制；页面列出 `backup/*` 恢复点，并显示发布代次、最近成功和最近错误。相同异常也会出现在 Environment Owner 的“我的工作”。
 
-从 Git 恢复前必须先预览。当前数据库只要已有任一组件或场景就会失败，不支持合并；执行时还会重新检查 ID/slug、用户身份属性、Playbook 内容摘要和计划摘要。完整输入“恢复发布目录”后才可提交。成功恢复已发布目录和 Playbook，但不会恢复 Run、环境、审批、通知、Session、安装回滚基线或旧审计历史。
+页面同时展示完整备份策略：组件或场景发布、联合发布及已发布对象废弃后，30 秒内合并并异步备份；Environment Owner 可单击“立即备份”同步创建恢复点。立即备份期间不能切换仓库，只有 SQLite 完整性与外键、数据库/Catalog/Playbook SHA-256、`catalog` 分支 push 和不可变 `backup/*` 标签 push 全部成功后，页面才提示完成并刷新最近成功时间。人工备份不再通过 CLI 触发。
+
+Git Catalog 不包含 Draft、Run 日志、CredentialRef 实际值或大型制品；FSS、Registry、Git 远端和 SQLite 备份目录仍须部署在独立故障域。页面的最近成功恢复点代表平台当前可承诺的恢复版本，不能用“发布请求已成功”或“备份任务已开始”替代。
+
+如果服务端未设置 `CLUSTERFORGE_BACKUP_ENABLED=true`，页面会显示“服务端未启用发布目录灾备”，并关闭创建、接入和恢复入口；这与“能力已启用但尚未选择仓库”不同，后者会显示允许根目录并开放首次录入。测试环境受控部署会在重启前检查该能力，避免部署完成后留下不可操作的前台入口。
+
+从 Git 恢复前必须先预览。页面读取目标组件和场景数量，非空时禁用“从恢复点恢复空库”；服务端执行时仍会重新检查空库状态，不支持合并，并再次核对 ID/slug、用户身份属性、Playbook 内容摘要和计划摘要。完整输入“恢复发布目录”后才可提交。成功恢复已发布目录和 Playbook，但不会恢复 Run、环境、审批、通知、Session、安装回滚基线或旧审计历史。
 
 ### 5.12 查看环境运行和审计
 
@@ -695,6 +704,8 @@ Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条�
 - 为什么：缺失或失效的条件，以及关联的证据 Run；
 - 谁或什么导致：只有审计事件、Environment Revision 或 Run 能证明时才展示操作人和时间，否则明确标为平台规则；
 - 下一步：直达对应资源、编辑区、重新预览、审批或失败 Run 的入口。
+
+状态说明默认只展示标题栏；单击“展开 N 项原因”后查看全部原因、证据和处理入口，查看后可再次收起。
 
 当提交时发现环境、版本、输入或 Playbook 已变化，API 返回 `409 Conflict`，并附带与页面相同的 `explanation.reasons`、`cause`、`nextAction` 和主操作。前端会保留原错误提示，同时在当前操作区域显示原因和重新处理入口；旧计划摘要不能继续提交。
 

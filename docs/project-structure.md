@@ -91,7 +91,9 @@ internal/service
 
 开发启动使用 `go run ./cmd/server`；测试环境的单二进制构建使用 `-tags embed` 将前端资源嵌入可执行文件。
 
-`cmd/backup` 构建独立的 `clusterforge-backup` 运维 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 SQLite 一致性快照、Git Catalog、校验、续传和只写新路径的恢复；不通过 HTTP API 修改业务数据。
+平台自己的 SSH / Ansible 连通性检查 Playbook 位于 `internal/ansible/builtin/`，始终通过 `go:embed` 编入二进制，与前端的 `embed` 构建标签无关。服务启动时将它按 SHA-256 释放到 `NEWPLATFORM_RUN_ROOT/builtin-playbooks/<digest>`，独立 Runner 的允许根目录只指向该内容寻址目录；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
+
+`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 `snapshot`。Environment Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
 
 ### 3.2 `cmd/fss` 与 `internal/fss`
 
@@ -165,7 +167,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260828-environment-lifecycle`。当前结构包含模块化发布围栏和环境 `archived_at` 生命周期状态；按 V1 测试环境决策不提供旧库迁移或双写，空库创建当前结构，旧合同和未知合同均失败关闭。测试部署首次切换必须先备份并显式使用守护脚本的 `--rebuild-v1-db`。
+数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260829-ssh-connectivity`。当前结构包含模块化发布围栏、环境 `archived_at` 生命周期状态，以及分离持久化的 TCP 与 SSH / Ansible 连通性证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行经过测试的加法迁移；更旧或未知合同仍失败关闭，不做模糊兼容或双写。
 
 ### 3.7 `internal/ansible`
 
@@ -252,7 +254,7 @@ web/src/
 
 ### 6.1 `deploy`
 
-- `deploy/platform/`：主平台与六小时 Catalog 备份 systemd Unit、Timer 和环境配置示例。
+- `deploy/platform/`：主平台 systemd Unit 和环境配置示例。
 - `deploy/fss/`：文件介质站 systemd Unit。
 - `deploy/docker/`：镜像构建所需的 Docker daemon 配置示例。
 

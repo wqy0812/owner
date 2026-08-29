@@ -280,6 +280,31 @@ export interface EnvironmentHealthCheck {
   checkedAt: string;
 }
 
+export interface EnvironmentSSHHostCheck {
+  kind: 'host' | 'configuration';
+  name: string;
+  address: string;
+  user?: string;
+  status: 'passed' | 'unreachable' | 'failed' | 'skipped';
+  errorCode?: string;
+  message?: string;
+}
+
+export interface EnvironmentSSHCheck {
+  id: string;
+  environmentId: string;
+  environmentRevisionId: string;
+  status: 'healthy' | 'degraded';
+  durationMs: number;
+  results: EnvironmentSSHHostCheck[];
+  checkedAt: string;
+}
+
+export interface EnvironmentConnectivityCheck {
+  tcpCheck: EnvironmentHealthCheck;
+  sshCheck: EnvironmentSSHCheck;
+}
+
 export interface Environment {
   id: string;
   name: string;
@@ -292,6 +317,7 @@ export interface Environment {
   currentRevision?: EnvironmentRevision;
   revisions?: EnvironmentRevision[];
   healthCheck?: EnvironmentHealthCheck;
+  sshCheck?: EnvironmentSSHCheck;
   archivedAt?: string;
   updatedAt?: string;
 }
@@ -600,18 +626,35 @@ export interface CatalogRecoveryPoint {
 }
 
 export interface CatalogRepositoryStatus {
+  enabled: boolean;
   configured: boolean;
+  reasonCode?: string;
+  reason?: string;
   path?: string;
   branch: string;
   allowedRoot: string;
   recoveryPoints: CatalogRecoveryPoint[];
-  timerEnabled: boolean;
+  restoreTargetKnown: boolean;
+  targetCatalogEmpty: boolean;
+  targetComponentCount: number;
+  targetScenarioCount: number;
   behind: boolean;
   currentGeneration: number;
   backedUpGeneration: number;
   lastSuccessfulAt?: string;
   lastError?: string;
   lastErrorAt?: string;
+}
+
+export interface CatalogBackupResult {
+  backupId: string;
+  status: 'success';
+  reason: string;
+  createdAt: string;
+  completedAt: string;
+  publicationGeneration: number;
+  gitCommit: string;
+  gitTag: string;
 }
 
 export interface CatalogRestorePlan {

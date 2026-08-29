@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -155,6 +157,10 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='environment_health_checks'`).Scan(&healthTable); err != nil || healthTable != 1 {
 		t.Fatalf("environment health checks table count=%d err=%v", healthTable, err)
 	}
+	var sshTable int
+	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='environment_ssh_checks'`).Scan(&sshTable); err != nil || sshTable != 1 {
+		t.Fatalf("environment SSH checks table count=%d err=%v", sshTable, err)
+	}
 	var activeDraftIndex int
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_scenario_revisions_one_active'`).Scan(&activeDraftIndex); err != nil || activeDraftIndex != 1 {
 		t.Fatalf("active scenario draft index count=%d err=%v", activeDraftIndex, err)
@@ -194,5 +200,55 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	got, err := reopened.GetComponentRelease(ctx, release.ID)
 	if err != nil || len(got.Parameters) != 1 || got.Parameters[0].Name != "region" {
 		t.Fatalf("fresh release parameters=%+v err=%v", got.Parameters, err)
+	}
+}
+
+func TestExactEnvironmentLifecycleContractMigratesSSHChecksAdditively(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "previous.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	owner := domain.User{ID: "owner", Name: "Owner", Role: domain.RoleEnvironmentOwner, CreatedAt: now}
+	if err := database.UpsertUser(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
+	revision := domain.EnvironmentRevision{ID: "env-r1", EnvironmentID: "env", Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedBy: owner.ID, CreatedAt: now}
+	environment := domain.Environment{ID: "env", Name: "Environment", OwnerID: owner.ID, CurrentRevisionID: revision.ID, Revision: &revision, CreatedAt: now, UpdatedAt: now}
+	if err := database.CreateEnvironment(ctx, environment, revision); err != nil {
+		t.Fatal(err)
+	}
+	health := domain.EnvironmentHealthCheck{ID: "health-1", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Status: "healthy", Results: []domain.EnvironmentEndpointCheck{}, CheckedAt: now}
+	if err := database.SaveEnvironmentHealthCheck(ctx, health); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB().ExecContext(ctx, `DROP TRIGGER environment_ssh_checks_active_environment_insert; DROP INDEX idx_environment_ssh_checks_latest; DROP TABLE environment_ssh_checks;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB().ExecContext(ctx, `UPDATE schema_contract SET version=? WHERE id=1`, previousSchemaContract); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open exact predecessor: %v", err)
+	}
+	defer migrated.Close()
+	if stored, err := migrated.LatestEnvironmentHealthCheck(ctx, environment.ID); err != nil || stored.ID != health.ID {
+		t.Fatalf("preserved health=%+v err=%v", stored, err)
+	}
+	var contract string
+	if err := migrated.DB().QueryRowContext(ctx, `SELECT version FROM schema_contract WHERE id=1`).Scan(&contract); err != nil || contract != schemaContract {
+		t.Fatalf("migrated contract=%q err=%v", contract, err)
+	}
+	var sshTable int
+	if err := migrated.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='environment_ssh_checks'`).Scan(&sshTable); err != nil || sshTable != 1 {
+		t.Fatalf("migrated SSH table count=%d err=%v", sshTable, err)
 	}
 }

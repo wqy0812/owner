@@ -211,7 +211,7 @@ V1 固定每个环境一个活跃 Run、FIFO 串行，不保存可配置并发�
 
 环境移除受生命周期约束：只有从未产生 Run、镜像构建且没有安装基线的环境可以由实际 Environment Owner 永久删除；删除会在同一事务内级联清理 Revision 与健康检查并写入 `environment.deleted` 审计。已有 Run 或构建历史的环境必须保留快照，只能在没有活动 Run、没有活动镜像构建、没有安装基线时归档。归档环境默认不出现在新构建、新验证和新场景运行的环境列表中，也不能创建 Revision、健康检查、Run 或镜像构建；Owner 可以从环境页查看并恢复。数据库触发器为归档与新写入之间的竞态提供最终围栏。
 
-环境 Owner 可以对当前 Revision 发起只读健康检查。检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION` 的 TCP 连通性，结果锁定来源 Revision 并写入审计；它不执行 SSH 登录、Registry API、文件下载或 Ansible，因此不能替代组件预检和真实环境验收。
+环境 Owner 可以从一个入口对当前 Revision 发起两类只读健康检查。TCP 检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION`；SSH 检查使用平台内置 Runner 和标准 SSH CredentialRef 对远端 Inventory 执行无提权的 `ansible.builtin.ping`。检查 Playbook 通过 `go:embed` 随二进制交付，启动时按 SHA-256 原子释放到 `NEWPLATFORM_RUN_ROOT/builtin-playbooks/<digest>` 的只读目录，并由只允许该文件的独立 Runner 执行；它不属于、也不读取 Environment Owner 可编辑的 Catalog Playbook 树。两类结果分开持久化、锁定同一个来源 Revision 并写入审计；它们不调用 Registry API、不下载文件、不验证 sudo，也不能替代组件预检和真实环境验收。
 
 ### 4.5 Run、Step、Approval 与 Log
 
@@ -269,6 +269,7 @@ SQLite 主要表如下：
 | `component_release_artifacts` / `component_release_images` | Release 内容身份与可变来源 | alias/logicalName 唯一；SHA-256/OCI digest 进入规格摘要，sourceUrl/sourceRef 不进入 |
 | `component_artifact_mirrors` / `component_image_mirrors` | 跨仓平移记录 | 以目标与内容指纹复用 |
 | `environment_health_checks` | 环境 TCP 连通性检查 | 记录来源 Environment Revision |
+| `environment_ssh_checks` | 环境 SSH / Ansible Ping 检查 | 与 TCP 证据独立，记录来源 Environment Revision |
 
 时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同；Environment Revision 不再包含普通参数。
 
@@ -432,7 +433,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - Revision 导入从实际非空 CredentialRef `reference` 推导敏感确认要求，不信任文件中的摘要布尔值；预览摘要和正式落库共用同一份规范化快照。
 - 环境存在 `running`、`queued` 或 `awaiting_approval` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
 - 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
-- `healthy` 仅表示本次列出的 TCP 端点全部可达；身份认证、协议语义、介质完整性、镜像推送和 Playbook 可执行性仍需各自验证。
+- TCP `healthy` 仅表示本次列出的端点全部可达；SSH `healthy` 表示 SSH 认证与 Ansible Ping 成功。两者都不证明提权、介质完整性、镜像推送或组件 Playbook 一定可执行。
 
 ### 7.10 整集群回滚
 
@@ -578,6 +579,7 @@ bootstrap、common、addon、master、nodes 六个组件和三个独立场景：
 | PUT | `/environments/{id}/variables` | 新建包含非敏感环境变量变更的 Revision |
 | PUT | `/environments/{id}/credential-refs` | 新建包含凭据引用变更的 Revision |
 | POST | `/environments/{id}/health-checks` | 对当前 Revision 执行只读 TCP 连通性检查 |
+| POST | `/environments/{id}/connectivity-checks` | 从一个入口执行 TCP 与 SSH / Ansible 两类只读检查 |
 | POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
 | POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
@@ -631,7 +633,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_ADDR` | `127.0.0.1:8080` | HTTP 地址 |
 | `NEWPLATFORM_DB_PATH` | `./data/newplatform.db` | SQLite 文件 |
 | `NEWPLATFORM_ANSIBLE_BIN` | `ansible-playbook` | Ansible 命令 |
-| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | 临时工作区根目录 |
+| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | 临时工作区根目录；同时包含内容寻址的只读内置 Playbook 与隔离的连通性检查工作区 |
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许目录；当前 Runner 使用第一个配置项 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后的进程组终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单步骤日志上限 |
@@ -640,13 +642,11 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | Docker CLI 路径 |
 | `CLUSTERFORGE_BACKUP_ENABLED` | `false` | 发布目录变更后异步生成 SQLite 与 Git Catalog 恢复点 |
 | `CLUSTERFORGE_BACKUP_DIR` | `./data/catalog-backups` | 数据库快照与备份清单目录 |
-| `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线异步任务与六小时 Timer 使用前台选择 |
+| `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线异步任务使用前台选择 |
 | `CLUSTERFORGE_CATALOG_REMOTE` | `origin` | Catalog Git 远端 |
 | `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 分支 |
 | `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | Environment Owner 可创建或接入私有仓库的受控根目录 |
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
-| `CLUSTERFORGE_SYSTEMCTL_BIN` | `systemctl` | 平台对齐六小时 Timer 状态使用的 systemctl 路径 |
-| `CLUSTERFORGE_BACKUP_TIMER_UNIT` | `clusterforge-backup.timer` | 六小时 Timer 单元名 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
 OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后端进程环境变量；它们不是平台启动参数，也没有默认值：
@@ -665,7 +665,9 @@ OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后�
 
 独立私有仓库的受保护 `catalog` 分支只表示最新完整 Catalog，每个成功恢复点另有不可变的 `backup/<backupId>` 标签。Git 不保存 Draft、Session、CredentialRef 实际值、Run 日志或大型介质；FSS 与 Registry 仍需独立保留。备份任一步失败都不会回滚发布，也不会替换 `latest-successful`。
 
-`clusterforge-backup snapshot --selected-repository --reason before-deploy` 可按前台选择主动创建恢复点。前台没有仓库选择时平台停止 systemd timer；创建或接入成功后启用，服务启动时再次对齐。Timer 每六小时重新读取选择文件，不接受 `CLUSTERFORGE_CATALOG_REPO` 作为在线兜底。异步失败会记录健康状态并重试，Environment Owner 工作台展示未配置、Timer 停止、备份失败或发布代次落后告警。`restore-db` 优先恢复完整 SQLite，`restore-catalog` 只在数据库快照不可用时恢复发布目录；两个命令都只写不存在的新数据库和 Playbook 根目录，不覆盖在线数据。
+Environment Owner 通过 `POST /api/v1/catalog-repository/backups` 主动创建恢复点；接口同步返回成功 Manifest，并与异步调度器共用串行化和健康状态，避免同一服务内的人工与发布后备份互相竞争。人工备份不再开放 CLI `snapshot`。在线任务不接受 `CLUSTERFORGE_CATALOG_REPO` 作为兜底，只使用前台选择的仓库；受保护部署通过只接受固定 `source` 的 `automation-snapshot` 执行部署前或重建后备份。异步失败会记录健康状态并重试，Environment Owner 工作台展示未配置、备份失败或发布代次落后告警。`restore-db` 优先恢复完整 SQLite，`restore-catalog` 只在数据库快照不可用时恢复发布目录；两个命令都只写不存在的新数据库和 Playbook 根目录，不覆盖在线数据。
+
+`GET /api/v1/catalog-repository` 将能力状态建模为 `enabled`、`configured` 和可选的 `reasonCode/reason`。服务端未启用时仍向 Environment Owner 返回 `200` 的只读状态，前端据此解释管理员配置动作；创建、接入和恢复等写接口仍以稳定错误码 `catalog_backup_disabled` 拒绝。启用但未选择仓库时 `enabled=true, configured=false`，前端开放首次创建或接入入口。
 
 ## 12. 故障恢复与一致性
 

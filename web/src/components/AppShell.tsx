@@ -3,14 +3,17 @@ import {
   BookOpenText,
   Boxes,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleGauge,
   CloudCog,
+  GitBranch,
   Network,
   PlayCircle,
   Radio,
   ShieldCheck,
 } from 'lucide-react';
-import { Suspense } from 'react';
+import { Suspense, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ROLE_LABELS } from '../types/domain';
@@ -21,16 +24,17 @@ const links = [
   { to: '/components', label: '组件', icon: Boxes },
   { to: '/scenarios', label: '场景', icon: Network },
   { to: '/environments', label: '环境', icon: CloudCog },
+  { to: '/disaster-recovery', label: '灾备目录', icon: GitBranch, environmentOwnerOnly: true },
   { to: '/runs', label: '运行', icon: PlayCircle },
-  { to: '/notifications', label: '通知', icon: Bell },
   { to: '/manual', label: '操作说明书', icon: BookOpenText },
 ];
 
 export function AppShell() {
   const { user, users, switchUser, switching, connected } = useApp();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? ' app-shell--sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand__mark"><Boxes size={21} /></span>
@@ -40,10 +44,22 @@ export function AppShell() {
           </div>
         </div>
 
-        <nav className="nav" aria-label="主导航">
+        <button
+          type="button"
+          className="sidebar-collapse"
+          aria-controls="primary-navigation"
+          aria-expanded={!sidebarCollapsed}
+          aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        >
+          {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
+
+        <nav className="nav" id="primary-navigation" aria-label="主导航">
           <div className="nav__caption">工作台</div>
-          {links.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} className={({ isActive }) => `nav__link${isActive ? ' active' : ''}`}>
+          {links.filter((link) => !link.environmentOwnerOnly || user.role === 'environment_owner').map(({ to, label, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end} aria-label={label} title={label} className={({ isActive }) => `nav__link${isActive ? ' active' : ''}`}>
               <Icon size={18} />
               <span>{label}</span>
             </NavLink>
@@ -69,26 +85,31 @@ export function AppShell() {
             <span>DEMO</span>
             无密码身份模式，仅用于本地演示
           </div>
-          <label className="identity-switcher">
-            <span className="identity-avatar">{user.name.slice(0, 1)}</span>
-            <span className="identity-copy">
-              <small>{ROLE_LABELS[user.role]}</small>
-              <strong>{user.name}</strong>
-            </span>
-            <select
-              aria-label="切换演示身份"
-              value={user.id}
-              disabled={switching}
-              onChange={(event) => void switchUser(event.target.value)}
-            >
-              {users.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.title} · {candidate.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={15} />
-          </label>
+          <div className="topbar__actions">
+            <NavLink className={({ isActive }) => `topbar__notification${isActive ? ' active' : ''}`} to="/notifications" aria-label="通知中心" title="通知中心">
+              <Bell size={18} />
+            </NavLink>
+            <label className="identity-switcher">
+              <span className="identity-avatar">{user.name.slice(0, 1)}</span>
+              <span className="identity-copy">
+                <small>{ROLE_LABELS[user.role]}</small>
+                <strong>{user.name}</strong>
+              </span>
+              <select
+                aria-label="切换演示身份"
+                value={user.id}
+                disabled={switching}
+                onChange={(event) => void switchUser(event.target.value)}
+              >
+                {users.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.title} · {candidate.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} />
+            </label>
+          </div>
         </header>
         <main className="main-content">
           <Suspense fallback={<LoadingBlock label="正在加载页面…" />}>

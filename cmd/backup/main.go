@@ -25,30 +25,27 @@ func run(ctx context.Context, args []string) error {
 		return usageError()
 	}
 	baseConfig := configFromEnvironment()
-	if args[0] == "snapshot" {
-		set := flag.NewFlagSet("snapshot", flag.ContinueOnError)
-		reason := set.String("reason", "manual", "human-readable trigger reason")
-		selected := set.Bool("selected-repository", false, "use the repository selected through the Environment Owner UI")
+	if args[0] == "automation-snapshot" {
+		set := flag.NewFlagSet("automation-snapshot", flag.ContinueOnError)
+		source := set.String("source", "", "automation source: before-deploy, after-v1-rebuild, or after-schema-migration")
 		if err := set.Parse(args[1:]); err != nil {
 			return err
 		}
-		config := baseConfig
-		if *selected {
-			var found bool
-			var err error
-			config, found, err = backup.SelectedRepositoryConfig(baseConfig)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return errors.New("no Catalog repository has been selected through the Environment Owner UI")
-			}
+		if !validAutomationSource(*source) {
+			return errors.New("--source must be before-deploy, after-v1-rebuild, or after-schema-migration")
+		}
+		config, found, err := backup.SelectedRepositoryConfig(baseConfig)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("no Catalog repository has been selected through the Environment Owner UI")
 		}
 		manager, err := backup.NewManager(config)
 		if err != nil {
 			return err
 		}
-		manifest, err := manager.Snapshot(ctx, *reason)
+		manifest, err := manager.Snapshot(ctx, *source)
 		return printResult(manifest, err)
 	}
 	manager, err := backup.NewManager(baseConfig)
@@ -128,6 +125,10 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
+func validAutomationSource(source string) bool {
+	return source == "before-deploy" || source == "after-v1-rebuild" || source == "after-schema-migration"
+}
+
 func configFromEnvironment() backup.Config {
 	playbookRoot := envOr("NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS", "./examples/ansible")
 	if first, _, found := strings.Cut(playbookRoot, ","); found {
@@ -162,5 +163,5 @@ func printResult(value any, err error) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: %s <snapshot|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
+	return fmt.Errorf("usage: %s <automation-snapshot|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
 }

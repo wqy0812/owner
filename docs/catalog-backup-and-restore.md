@@ -4,7 +4,11 @@ ClusterForge 使用两级恢复来源：SQLite 快照用于完整平台恢复，
 
 ## 初始化
 
-Environment Owner 可在“环境管理 → 发布目录灾备”输入允许根目录下的服务器路径。选择“创建私有仓库”时平台创建权限为 `0700` 的 bare Git 仓库及独立工作副本；选择“接入已有仓库”时路径必须已存在并包含 `catalog` 分支。允许根目录由 `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` 配置，平台拒绝 `..` 和符号链接越界。
+平台服务必须先设置 `CLUSTERFORGE_BACKUP_ENABLED=true`；否则状态页会明确显示服务端能力未启用，创建、接入和备份入口均保持关闭。启用能力不等于已经选择仓库。
+
+Environment Owner 可在“灾备目录 → 发布目录灾备”输入允许根目录下的服务器路径。选择“创建私有仓库”时平台创建权限为 `0700` 的 bare Git 仓库及独立工作副本；当前发布目录非空且尚未选择仓库时可“接入已有备份仓库”，已配置后入口改为“更换备份仓库”。已有仓库必须包含 `catalog` 分支。允许根目录由 `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` 配置，平台拒绝 `..` 和符号链接越界。
+
+当组件和场景均为空且尚未选择仓库时，页面把接入与灾难恢复合并为“从已有 Git 仓库恢复”向导：先验证并保存仓库，再选择远端恢复点、预检并确认。向导仍允许“仅接入，暂不恢复”；仓库接入与数据恢复在服务端保持为两个独立操作和审计事件。
 
 也可以由运维人员预先初始化仓库：
 
@@ -15,9 +19,9 @@ install -d -m 0700 /var/lib/clusterforge/catalog-repo
 git clone <private-catalog-url> /var/lib/clusterforge/catalog-repo
 cd /var/lib/clusterforge/catalog-repo
 if git show-ref --verify --quiet refs/remotes/origin/catalog; then
-  git switch --track origin/catalog
+  git checkout --track origin/catalog
 else
-  git switch --orphan catalog
+  git checkout --orphan catalog
   printf 'ClusterForge Catalog\n' > .gitkeep
   git add .gitkeep
   git -c user.name='ClusterForge Backup' -c user.email=backup@clusterforge.local \
@@ -28,31 +32,34 @@ fi
 
 远端必须禁止 force-push 和删除 `backup/*` 标签。SSH 凭据由运行 `clusterforge-platform` 与 `clusterforge-backup` 的服务账号管理，不写入 `platform.env`。
 
-配置 `/etc/clusterforge/platform.env` 后重启平台。六小时 Timer 不从
-`CLUSTERFORGE_CATALOG_REPO` 猜测目标，而只读取 Environment Owner 通过前台保存的仓库选择；
-前台尚未录入仓库时，平台会主动停止 Timer：
+配置 `/etc/clusterforge/platform.env` 后重启平台。在线备份不从
+`CLUSTERFORGE_CATALOG_REPO` 猜测目标，而只读取 Environment Owner 通过前台保存的仓库选择：
 
 ```bash
 systemctl daemon-reload
 systemctl restart clusterforge-platform
 ```
 
-创建或接入仓库成功后，平台启用 `clusterforge-backup.timer`；服务重启时也会把 Timer
-状态与前台选择重新对齐。健康检查同时要求 Timer 已启用且正在运行，单独执行
-`systemctl stop` 后即使 Unit 仍为 enabled 也会产生告警。若启停失败、最近一次异步备份失败或发布代次与最近恢复点不一致，
+创建或接入仓库成功后，平台启用发布后异步备份和前台立即备份。若最近一次异步备份失败或发布代次与最近恢复点不一致，
 Environment Owner 的“我的工作”和“发布目录灾备”面板都会显示告警与处置入口。
 
 ## 创建与检查恢复点
 
-发布、联合发布和已发布对象废弃会在 30 秒窗口后异步触发快照。失败任务会保留错误并延迟重试，
-不会回滚已经完成的发布。Timer 每六小时从前台选择文件重新解析仓库并兜底；没有有效选择时命令失败且
-Timer 保持停止。部署或数据清理前应主动执行：
+平台采用两种备份入口：发布、联合发布和已发布对象废弃会在 30 秒窗口后异步触发快照；
+Environment Owner 也可在“灾备目录 → 发布目录灾备”单击“立即备份”。
+失败任务会保留错误并延迟重试，不会回滚已经完成的发布。没有有效仓库选择时，立即备份
+按钮也不可用。部署或数据清理前，应由 Environment Owner 在前台创建恢复点，并等待页面显示新的
+`backup/*` 标签与 Git commit 后再继续。
+
+人工创建恢复点不再提供 CLI `snapshot` 命令。CLI 仅保留恢复点检查、失败 push 续传和离线恢复：
 
 ```bash
-/opt/clusterforge/platform/clusterforge-backup snapshot --selected-repository --reason before-deploy
 /opt/clusterforge/platform/clusterforge-backup list
 /opt/clusterforge/platform/clusterforge-backup verify --backup-id <id>
 ```
+
+受保护部署仍使用受限的 `automation-snapshot --source <固定来源>` 入口；它不接受人工 reason，
+不作为日常手动备份界面。
 
 `verify --verify-external` 还会完整下载 HTTP(S) 介质核对大小和 SHA-256，并用 `docker manifest inspect` 验证精确 OCI digest。该检查可能耗时且依赖 FSS、Registry 网络与认证，不属于本地备份成功门禁。
 
@@ -62,11 +69,11 @@ Timer 保持停止。部署或数据清理前应主动执行：
 /opt/clusterforge/platform/clusterforge-backup resume --backup-id <id>
 ```
 
-受保护部署使用 `--rebuild-v1-db` 重建数据库时，会在新数据库通过 Schema contract 与外键检查后强制创建并确认新的恢复点；失败则部署回滚。应用内 Reset 保持发布代次单调递增，避免旧仓库清单掩盖重置后的待备份状态。
+受保护部署使用 `--rebuild-v1-db` 重建数据库时，会在新数据库通过 Schema contract 与外键检查后通过自动化入口强制创建并确认新的恢复点；加法 Schema contract 迁移也必须已经选择私有仓库，并在迁移后同步创建当前合同恢复点。任一恢复点失败都会触发部署回滚。应用内 Reset 保持发布代次单调递增；启动补偿还会同时比较发布代次与 Schema contract，避免旧合同仓库清单掩盖待备份状态。
 
 ## 恢复
 
-Environment Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。前台恢复采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
+Environment Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。页面会先显示组件和场景数量，目录非空时直接关闭恢复按钮。前台恢复仍采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
 
 空库恢复在单一 SQLite 事务中写入已发布/废弃的组件、Release、依赖、Action、场景 Revision、制品和镜像元数据。既有用户 ID 仅在名称与角色完全一致时复用；Playbook 仅在目标不存在或内容 SHA-256 完全一致时允许。ID/slug、用户属性或 Playbook 内容冲突都会整批失败，未提交的新文件会清理。成功后记录审计并异步触发新快照；Run、环境、审批、通知、Session 和既有审计历史不会从 Git 恢复。
 

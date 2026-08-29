@@ -73,6 +73,13 @@ func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
 	if denied := f.request(http.MethodPost, "/api/v1/environments/environment-test/health-checks", nil, alice); denied.Code != http.StatusForbidden {
 		t.Fatalf("non-owner health check status=%d body=%s", denied.Code, denied.Body.String())
 	}
+	connectivity := f.request(http.MethodPost, "/api/v1/environments/environment-test/connectivity-checks", nil, owner)
+	if connectivity.Code != http.StatusOK || !strings.Contains(connectivity.Body.String(), `"tcpCheck"`) || !strings.Contains(connectivity.Body.String(), `"sshCheck"`) || !strings.Contains(connectivity.Body.String(), `"local_connection"`) {
+		t.Fatalf("connectivity check status=%d body=%s", connectivity.Code, connectivity.Body.String())
+	}
+	if denied := f.request(http.MethodPost, "/api/v1/environments/environment-test/connectivity-checks", nil, alice); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner connectivity check status=%d body=%s", denied.Code, denied.Body.String())
+	}
 }
 
 func TestCatalogRepositoryEndpointsRequireEnvironmentOwner(t *testing.T) {
@@ -82,8 +89,32 @@ func TestCatalogRepositoryEndpointsRequireEnvironmentOwner(t *testing.T) {
 	if denied := f.request(http.MethodGet, "/api/v1/catalog-repository", nil, nonOwner); denied.Code != http.StatusForbidden {
 		t.Fatalf("non-owner Catalog repository status=%d body=%s", denied.Code, denied.Body.String())
 	}
-	if disabled := f.request(http.MethodGet, "/api/v1/catalog-repository", nil, owner); disabled.Code != http.StatusConflict {
+	if denied := f.request(http.MethodPost, "/api/v1/catalog-repository/backups", nil, nonOwner); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner Catalog backup status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	disabled := f.request(http.MethodGet, "/api/v1/catalog-repository", nil, owner)
+	if disabled.Code != http.StatusOK {
 		t.Fatalf("disabled Catalog repository status=%d body=%s", disabled.Code, disabled.Body.String())
+	}
+	status := decodeEnvelope(t, disabled)["data"].(map[string]any)
+	if status["enabled"] != false || status["configured"] != false || status["reasonCode"] != catalogBackupDisabledCode {
+		t.Fatalf("disabled Catalog repository body=%#v", status)
+	}
+	create := f.request(http.MethodPost, "/api/v1/catalog-repository/create", map[string]any{"path": "catalog.git"}, owner)
+	if create.Code != http.StatusConflict {
+		t.Fatalf("disabled Catalog repository create status=%d body=%s", create.Code, create.Body.String())
+	}
+	createError := decodeEnvelope(t, create)["error"].(map[string]any)
+	if createError["code"] != catalogBackupDisabledCode {
+		t.Fatalf("disabled Catalog repository create error=%#v", createError)
+	}
+	backupNow := f.request(http.MethodPost, "/api/v1/catalog-repository/backups", nil, owner)
+	if backupNow.Code != http.StatusConflict {
+		t.Fatalf("disabled Catalog backup status=%d body=%s", backupNow.Code, backupNow.Body.String())
+	}
+	backupError := decodeEnvelope(t, backupNow)["error"].(map[string]any)
+	if backupError["code"] != catalogBackupDisabledCode {
+		t.Fatalf("disabled Catalog backup error=%#v", backupError)
 	}
 }
 
@@ -96,6 +127,35 @@ func TestCodedConflictErrorPreservesAPIErrorCodeAndDetails(t *testing.T) {
 	body := decodeEnvelope(t, response)["error"].(map[string]any)
 	if body["code"] != "target_catalog_not_empty" || body["details"].(map[string]any)["componentCount"] != float64(1) {
 		t.Fatalf("coded error body=%#v", body)
+	}
+}
+
+func TestCatalogRepositoryErrorsDistinguishInvalidPathsFromOperationalFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "invalid path", err: fmt.Errorf("%w: absolute repository paths must start with /", domain.ErrInvalid), wantStatus: http.StatusBadRequest, wantCode: "invalid_request"},
+		{name: "existing target", err: fmt.Errorf("%w: repository path already exists", domain.ErrConflict), wantStatus: http.StatusConflict, wantCode: "conflict"},
+		{name: "git failure", err: errors.New("git checkout --orphan catalog: exit status 1"), wantStatus: http.StatusConflict, wantCode: "conflict"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			writeError(response, catalogRepositoryError(test.err, domain.ErrConflict))
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			body := decodeEnvelope(t, response)["error"].(map[string]any)
+			if body["code"] != test.wantCode {
+				t.Fatalf("error=%#v", body)
+			}
+			if test.name == "git failure" && strings.HasPrefix(body["message"].(string), "invalid") {
+				t.Fatalf("operational failure was presented as invalid input: %#v", body)
+			}
+		})
 	}
 }
 
@@ -176,6 +236,12 @@ func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
 		Status: "healthy", Results: []domain.EnvironmentEndpointCheck{}, CheckedAt: time.Now().UTC(),
 	}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("archived environment health-check fence error=%v", err)
+	}
+	if err := f.database.SaveEnvironmentSSHCheck(ctx, domain.EnvironmentSSHCheck{
+		ID: "ssh-rejected-for-archived-environment", EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
+		Status: "healthy", Results: []domain.EnvironmentSSHHostCheck{}, CheckedAt: time.Now().UTC(),
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("archived environment SSH-check fence error=%v", err)
 	}
 	restored := f.request(http.MethodPost, "/api/v1/environments/"+historyID+"/unarchive", nil, owner)
 	if restored.Code != http.StatusOK || decodeEnvelope(t, restored)["data"].(map[string]any)["archivedAt"] != nil {
@@ -2859,6 +2925,46 @@ func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
 	}
 	if afterStale != before {
 		t.Fatalf("stale plan persisted a Run: before=%d after=%d", before, afterStale)
+	}
+}
+
+func TestComponentTestPlanReturnsActionableMissingCredentialDiagnosis(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	release, err := f.database.GetComponentRelease(ctx, "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range release.Actions {
+		if release.Actions[index].Kind == domain.ActionUpgrade || release.Actions[index].Kind == domain.ActionVerify {
+			release.Actions[index].RequiredCredentials = []string{"K8S_ENCRYPTION_KEY"}
+		}
+	}
+	owner, err := f.database.GetUser(ctx, seed.ComponentOwnerRuntimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.platform.UpdateRelease(ctx, owner, release.ID, release); err != nil {
+		t.Fatal(err)
+	}
+
+	response := f.request(http.MethodPost, "/api/v1/component-releases/"+release.ID+"/test-plan", map[string]any{
+		"environmentId": "environment-test",
+		"mode":          "install_verify",
+	}, alice)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("missing credential preview status=%d body=%s", response.Code, response.Body.String())
+	}
+	errorBody := decodeEnvelope(t, response)["error"].(map[string]any)
+	if !strings.Contains(errorBody["message"].(string), "K8S_ENCRYPTION_KEY") {
+		t.Fatalf("missing credential name was not preserved: %#v", errorBody)
+	}
+	explanation := errorBody["explanation"].(map[string]any)
+	reason := explanation["reasons"].([]any)[0].(map[string]any)
+	action := explanation["primaryAction"].(map[string]any)
+	if reason["code"] != "environment.credentials_missing" || action["href"] != "/environments?selected=environment-test&tab=credentials" {
+		t.Fatalf("missing credential error is not actionable: %#v", explanation)
 	}
 }
 

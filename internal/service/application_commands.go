@@ -178,6 +178,9 @@ func (s *EnvironmentService) UpdateCredentialRefs(ctx context.Context, user doma
 func (s *EnvironmentService) CheckHealth(ctx context.Context, user domain.User, id string) (domain.EnvironmentHealthCheck, error) {
 	return s.platform.CheckEnvironmentHealth(ctx, user, id)
 }
+func (s *EnvironmentService) CheckConnectivity(ctx context.Context, user domain.User, id string) (domain.EnvironmentConnectivityCheck, error) {
+	return s.platform.CheckEnvironmentConnectivity(ctx, user, id)
+}
 func (s *EnvironmentService) RestoreRevision(ctx context.Context, user domain.User, id, revisionID, reason string) (domain.Environment, error) {
 	return s.platform.RestoreEnvironmentRevision(ctx, user, id, revisionID, reason)
 }

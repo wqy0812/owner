@@ -16,21 +16,6 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-type fakeTimerController struct {
-	enabled bool
-	calls   []bool
-}
-
-func (f *fakeTimerController) SetEnabled(_ context.Context, enabled bool) error {
-	f.enabled = enabled
-	f.calls = append(f.calls, enabled)
-	return nil
-}
-
-func (f *fakeTimerController) Enabled(context.Context) (bool, error) {
-	return f.enabled, nil
-}
-
 func TestSnapshotAndBothRestorePaths(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -305,14 +290,6 @@ func TestPrivateRepositoryControllerConfinesPathsAndCreatesBareRepository(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	timer := &fakeTimerController{enabled: true}
-	controller.ConfigureTimer(timer)
-	if err := controller.ReconcileTimer(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if timer.enabled || len(timer.calls) != 1 || timer.calls[0] {
-		t.Fatalf("timer was not stopped before repository selection: %+v", timer)
-	}
 	status, err := controller.Create(ctx, "private/catalog.git")
 	if err != nil {
 		t.Fatal(err)
@@ -324,9 +301,6 @@ func TestPrivateRepositoryControllerConfinesPathsAndCreatesBareRepository(t *tes
 	expectedPath = filepath.Join(expectedPath, "catalog.git")
 	if !status.Configured || status.Path != expectedPath {
 		t.Fatalf("status=%+v", status)
-	}
-	if !timer.enabled {
-		t.Fatal("timer was not enabled after repository selection")
 	}
 	selected, found, err := SelectedRepositoryConfig(base)
 	if err != nil || !found || selected.CatalogRepo == base.CatalogRepo {
@@ -409,6 +383,172 @@ func TestPrivateRepositoryControllerConfinesPathsAndCreatesBareRepository(t *tes
 	}
 }
 
+func TestPrivateRepositoryControllerCreatesImmediateRecoveryPoint(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	base := Config{
+		DatabasePath: filepath.Join(root, "platform.db"), PlaybookRoot: filepath.Join(root, "jobs"),
+		BackupDir: filepath.Join(root, "backups"), CatalogRepo: filepath.Join(root, "unused-clone"),
+		CatalogRemote: "origin", CatalogBranch: "catalog",
+	}
+	database, err := store.Open(ctx, base.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := os.MkdirAll(base.PlaybookRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewScheduler(manager, time.Second)
+	controller, err := NewRepositoryController(base, filepath.Join(root, "allowed"), scheduler, database.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := controller.Create(ctx, "catalog.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestoreTargetKnown || !status.TargetCatalogEmpty || status.TargetComponentCount != 0 || status.TargetScenarioCount != 0 {
+		t.Fatalf("empty restore target status=%+v", status)
+	}
+	manifest, err := controller.Snapshot(ctx, "manual-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Status != StatusSuccess || manifest.Reason != "manual-ui" || manifest.GitCommit == "" || !strings.HasPrefix(manifest.GitTag, "backup/") {
+		t.Fatalf("immediate backup manifest=%+v", manifest)
+	}
+	if status := scheduler.Status(); status.LastSuccessAt == nil || status.LastError != "" {
+		t.Fatalf("scheduler status after immediate backup=%+v", status)
+	}
+	if _, err := controller.Snapshot(ctx, ""); err != nil {
+		t.Fatalf("second immediate backup should create a new recovery point: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := database.DB().ExecContext(ctx, `INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)`, "component-owner", "Component Owner", "component_owner", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB().ExecContext(ctx, `INSERT INTO components(id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json) VALUES(?,?,?,?,?,?,?,?,?)`, "component-test", "test", "Test", "", "component-owner", now, now, "runtime_state", `[]`); err != nil {
+		t.Fatal(err)
+	}
+	status, err = controller.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestoreTargetKnown || status.TargetCatalogEmpty || status.TargetComponentCount != 1 || status.TargetScenarioCount != 0 {
+		t.Fatalf("non-empty restore target status=%+v", status)
+	}
+}
+
+func TestPrivateRepositoryControllerUsesCompatibleOrphanCheckoutAndClassifiesExistingTarget(t *testing.T) {
+	ctx := context.Background()
+	controller, _, _ := newPrivateRepositoryController(t)
+	originalRunner := controller.runCommand
+	var usedCompatibleCheckout bool
+	controller.runCommand = func(ctx context.Context, directory, command string, args ...string) (string, error) {
+		if command == "git" && len(args) > 0 && args[0] == "switch" {
+			t.Fatalf("repository initialization used incompatible git switch: %v", args)
+		}
+		if command == "git" && len(args) >= 2 && args[0] == "checkout" && args[1] == "--orphan" {
+			usedCompatibleCheckout = true
+		}
+		return originalRunner(ctx, directory, command, args...)
+	}
+
+	status, err := controller.Create(ctx, "catalog.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usedCompatibleCheckout {
+		t.Fatal("repository initialization did not use git checkout --orphan")
+	}
+	if _, err := runCommand(ctx, status.Path, "git", "-C", status.Path, "rev-parse", "--verify", "refs/heads/catalog"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Create(ctx, "catalog.git"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("existing repository error=%v", err)
+	}
+}
+
+func TestPrivateRepositoryControllerRejectsRootLikeRelativePath(t *testing.T) {
+	controller, _, allowed := newPrivateRepositoryController(t)
+
+	shortRelative, err := controller.resolveCreatePath("nested/catalog.git")
+	if err != nil || shortRelative != filepath.Join(allowed, "nested", "catalog.git") {
+		t.Fatalf("short relative path=%q err=%v", shortRelative, err)
+	}
+	absolute := filepath.Join(allowed, "absolute.git")
+	resolvedAbsolute, err := controller.resolveCreatePath(absolute)
+	if err != nil || resolvedAbsolute != absolute {
+		t.Fatalf("absolute path=%q err=%v", resolvedAbsolute, err)
+	}
+	rootLikeRelative := strings.TrimPrefix(allowed, string(filepath.Separator)) + string(filepath.Separator) + "catalog.git"
+	if _, err := controller.resolveCreatePath(rootLikeRelative); !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "must start with") {
+		t.Fatalf("root-like relative path error=%v", err)
+	}
+}
+
+func TestPrivateRepositoryControllerCleansOnlyParentsCreatedByFailedAttempt(t *testing.T) {
+	ctx := context.Background()
+	controller, _, allowed := newPrivateRepositoryController(t)
+	preexisting := filepath.Join(allowed, "preexisting")
+	if err := os.MkdirAll(preexisting, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(preexisting, "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalRunner := controller.runCommand
+	controller.runCommand = func(ctx context.Context, directory, command string, args ...string) (string, error) {
+		if command == "git" && len(args) >= 2 && args[0] == "checkout" && args[1] == "--orphan" {
+			return "", errors.New("simulated orphan checkout failure")
+		}
+		return originalRunner(ctx, directory, command, args...)
+	}
+
+	target := filepath.Join(preexisting, "created", "nested", "catalog.git")
+	if _, err := controller.Create(ctx, target); err == nil || !strings.Contains(err.Error(), "simulated orphan checkout failure") {
+		t.Fatalf("create error=%v", err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed repository target remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(preexisting, "created")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created parent directories remain: %v", err)
+	}
+	if contents, err := os.ReadFile(marker); err != nil || string(contents) != "keep" {
+		t.Fatalf("pre-existing content changed: contents=%q err=%v", contents, err)
+	}
+}
+
+func newPrivateRepositoryController(t *testing.T) (*RepositoryController, Config, string) {
+	t.Helper()
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	base := Config{
+		DatabasePath:  filepath.Join(root, "platform.db"),
+		PlaybookRoot:  filepath.Join(root, "jobs"),
+		BackupDir:     filepath.Join(root, "backups"),
+		CatalogRepo:   filepath.Join(root, "unused-clone"),
+		CatalogRemote: "origin",
+		CatalogBranch: "catalog",
+	}
+	manager, err := NewManager(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewRepositoryController(base, allowed, NewScheduler(manager, time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return controller, base, controller.allowedRoot
+}
+
 func TestLatestSuccessfulIsScopedToCatalogRepository(t *testing.T) {
 	root := t.TempDir()
 	base := Config{DatabasePath: filepath.Join(root, "platform.db"), PlaybookRoot: filepath.Join(root, "jobs"), BackupDir: filepath.Join(root, "backups"), CatalogRemote: "origin", CatalogBranch: "catalog"}
@@ -462,6 +602,41 @@ func TestNeedsSnapshotWhenPublicationGenerationMovesBackward(t *testing.T) {
 	}
 }
 
+func TestNeedsSnapshotWhenSchemaContractChangesWithoutGenerationChange(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "platform.db")
+	database, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	manager, err := NewManager(Config{
+		DatabasePath: databasePath, PlaybookRoot: filepath.Join(root, "jobs"),
+		BackupDir: filepath.Join(root, "backups"), CatalogRepo: filepath.Join(root, "repo"),
+		CatalogRemote: "origin", CatalogBranch: "catalog",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generation int64
+	if err := database.DB().QueryRowContext(ctx, `SELECT generation FROM publication_state WHERE id=1`).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	completed := time.Now().UTC()
+	if err := manager.writeLatestSuccessful(Manifest{
+		FormatVersion: CatalogFormatVersion, BackupID: "pre-migration", Status: StatusSuccess,
+		CreatedAt: completed, CompletedAt: &completed, DatabaseFile: "platform.db",
+		PublicationGeneration: generation, SchemaContract: "clusterforge-v1-20260828-environment-lifecycle",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	needed, currentGeneration, err := manager.NeedsSnapshot(ctx)
+	if err != nil || !needed || currentGeneration != generation {
+		t.Fatalf("needed=%t generation=%d want=%d err=%v", needed, currentGeneration, generation, err)
+	}
+}
+
 func TestSchedulerNotifiesWhenBackupHealthChanges(t *testing.T) {
 	manager, err := NewManager(Config{DatabasePath: "platform.db", PlaybookRoot: "jobs", BackupDir: "backups", CatalogRepo: "repo", CatalogRemote: "origin", CatalogBranch: "catalog"})
 	if err != nil {
@@ -477,30 +652,6 @@ func TestSchedulerNotifiesWhenBackupHealthChanges(t *testing.T) {
 	scheduler.recordSuccess()
 	if status := scheduler.Status(); status.LastError != "" || status.LastSuccessAt == nil || notifications.Load() != 2 {
 		t.Fatalf("success status=%+v notifications=%d", status, notifications.Load())
-	}
-}
-
-func TestSystemdTimerMustBeEnabledAndActive(t *testing.T) {
-	root := t.TempDir()
-	binary := filepath.Join(root, "systemctl")
-	script := []byte("#!/bin/sh\ncase \"$1\" in\n  is-enabled) exit \"${TEST_TIMER_ENABLED_EXIT:-0}\" ;;\n  is-active) exit \"${TEST_TIMER_ACTIVE_EXIT:-0}\" ;;\n  *) exit 0 ;;\nesac\n")
-	if err := os.WriteFile(binary, script, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	controller := NewSystemdTimerController(binary, "clusterforge-backup.timer")
-	t.Setenv("TEST_TIMER_ENABLED_EXIT", "0")
-	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "0")
-	if enabled, err := controller.Enabled(context.Background()); err != nil || !enabled {
-		t.Fatalf("active enabled timer=%t err=%v", enabled, err)
-	}
-	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "3")
-	if enabled, err := controller.Enabled(context.Background()); err != nil || enabled {
-		t.Fatalf("stopped enabled timer=%t err=%v", enabled, err)
-	}
-	t.Setenv("TEST_TIMER_ENABLED_EXIT", "1")
-	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "0")
-	if enabled, err := controller.Enabled(context.Background()); err != nil || enabled {
-		t.Fatalf("disabled timer=%t err=%v", enabled, err)
 	}
 }
 

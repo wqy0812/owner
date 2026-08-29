@@ -89,6 +89,12 @@ fi
 
 cd "$PROJECT_ROOT"
 
+echo "==> Building embedded frontend"
+make build-web
+ui_index_checksum="$(checksum_file web/dist/index.html)"
+ui_version_checksum="$(checksum_file web/dist/version.json)"
+builtin_playbook_checksum="$(checksum_file internal/ansible/builtin/ssh-connectivity-check.yml)"
+
 if [[ "$SKIP_TESTS" == false ]]; then
   echo "==> Running deployment gates"
   go test ./...
@@ -107,8 +113,7 @@ trap cleanup_local EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-echo "==> Building embedded frontend and Linux amd64 binary"
-make build-web
+echo "==> Building Linux amd64 binaries"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -tags embed -trimpath -o "$artifact" ./cmd/server
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -117,15 +122,13 @@ checksum="$(checksum_file "$artifact")"
 backup_checksum="$(checksum_file "$backup_artifact")"
 remote_artifact="/opt/clusterforge/platform/.clusterforge-platform.deploy-${checksum:0:12}-$$"
 remote_backup_artifact="/opt/clusterforge/platform/.clusterforge-backup.deploy-${backup_checksum:0:12}-$$"
-remote_backup_service="/opt/clusterforge/platform/.clusterforge-backup.service.deploy-$$"
-remote_backup_timer="/opt/clusterforge/platform/.clusterforge-backup.timer.deploy-$$"
 
 ssh_options=(-o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT")
 scp_options=(-o BatchMode=yes -o ConnectTimeout=8 -P "$SSH_PORT")
 
 echo "==> Checking remote deployment prerequisites on $TARGET"
 ssh "${ssh_options[@]}" "$TARGET" 'set -eu
-for command_name in awk curl flock git install python3 sha256sum systemctl; do
+for command_name in awk curl flock git grep install python3 sha256sum systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing remote command: $command_name" >&2
     exit 1
@@ -133,14 +136,26 @@ for command_name in awk curl flock git install python3 sha256sum systemctl; do
 done
 test -x /opt/clusterforge/platform/clusterforge-platform
 test -f /var/lib/clusterforge/platform.db
+test -f /etc/clusterforge/platform.env
 systemctl is-active --quiet clusterforge-platform
+backup_enabled="$(awk -F= '\''$1=="CLUSTERFORGE_BACKUP_ENABLED" {enabled=tolower($2)} END {print enabled}'\'' /etc/clusterforge/platform.env)"
+if [ "$backup_enabled" != "true" ]; then
+  echo "Catalog backup capability is disabled; set CLUSTERFORGE_BACKUP_ENABLED=true before deployment so the Environment Owner UI can configure a repository" >&2
+  exit 1
+fi
+ansible_binary="$(awk -F= '\''$1=="NEWPLATFORM_ANSIBLE_BIN" {sub(/^[^=]*=/,""); value=$0} END {print value}'\'' /etc/clusterforge/platform.env)"
+if [ -z "$ansible_binary" ]; then
+  ansible_binary="ansible-playbook"
+fi
+command -v "$ansible_binary" >/dev/null 2>&1 || {
+  echo "configured Ansible executable is unavailable: $ansible_binary" >&2
+  exit 1
+}
 '
 
 echo "==> Uploading artifact $checksum"
 scp "${scp_options[@]}" "$artifact" "$TARGET:$remote_artifact"
 scp "${scp_options[@]}" "$backup_artifact" "$TARGET:$remote_backup_artifact"
-scp "${scp_options[@]}" deploy/platform/clusterforge-backup.service "$TARGET:$remote_backup_service"
-scp "${scp_options[@]}" deploy/platform/clusterforge-backup.timer "$TARGET:$remote_backup_timer"
 
 allow_active_runs=0
 if [[ "$ALLOW_ACTIVE_RUNS" == true ]]; then
@@ -153,17 +168,18 @@ fi
 
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_backup_service" "$remote_backup_timer" "$allow_active_runs" "$rebuild_v1_db" <<'REMOTE_SCRIPT'
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$builtin_playbook_checksum" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
 expected_checksum="$2"
 staged_backup_artifact="$3"
 expected_backup_checksum="$4"
-staged_backup_service="$5"
-staged_backup_timer="$6"
-allow_active_runs="$7"
-rebuild_v1_db="$8"
+allow_active_runs="$5"
+rebuild_v1_db="$6"
+expected_ui_index_checksum="$7"
+expected_ui_version_checksum="$8"
+expected_builtin_playbook_checksum="$9"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
@@ -179,7 +195,7 @@ if systemctl is-enabled --quiet clusterforge-backup.timer 2>/dev/null; then
 fi
 
 cleanup_staged() {
-  rm -f "$staged_artifact" "$staged_backup_artifact" "$staged_backup_service" "$staged_backup_timer"
+  rm -f "$staged_artifact" "$staged_backup_artifact"
 }
 
 finish_failure() {
@@ -266,6 +282,19 @@ for row in rows:
 PY
 )"
 
+predeploy_schema_contract="$(python3 - "$database" <<'PY'
+import sqlite3
+import sys
+
+database = sys.argv[1]
+connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+row = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
+if row is None:
+    raise SystemExit("schema contract is missing")
+print(row[0])
+PY
+)"
+
 if [[ -n "$active_runs" && "$allow_active_runs" -ne 1 ]]; then
   echo "active runs block deployment:" >&2
   echo "$active_runs" >&2
@@ -273,11 +302,70 @@ if [[ -n "$active_runs" && "$allow_active_runs" -ne 1 ]]; then
   exit 1
 fi
 
+platform_env_value() {
+  awk -F= -v key="$1" '$1==key {sub(/^[^=]*=/,""); value=$0} END {print value}' /etc/clusterforge/platform.env
+}
+
+snapshot_environment=()
+for key in \
+  NEWPLATFORM_DB_PATH \
+  NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS \
+  NEWPLATFORM_RUN_ROOT \
+  NEWPLATFORM_ANSIBLE_BIN \
+  NEWPLATFORM_KILL_GRACE \
+  NEWPLATFORM_MAX_LOG_BYTES \
+  CLUSTERFORGE_BACKUP_DIR \
+  CLUSTERFORGE_CATALOG_REPO \
+  CLUSTERFORGE_CATALOG_REMOTE \
+  CLUSTERFORGE_CATALOG_BRANCH; do
+  value="$(platform_env_value "$key")"
+  if [[ "$key" == "NEWPLATFORM_DB_PATH" && -z "$value" ]]; then
+    value="$database"
+  fi
+  if [[ -n "$value" ]]; then
+    snapshot_environment+=("$key=$value")
+  fi
+done
+
+run_automation_snapshot() {
+  local source="$1"
+  local output=""
+  local attempt=1
+  while [[ "$attempt" -le 31 ]]; do
+    if output="$(env "${snapshot_environment[@]}" "$live_backup_binary" automation-snapshot --source "$source" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [[ "$output" != *"another ClusterForge backup is already running"* || "$attempt" -eq 31 ]]; then
+      printf '%s\n' "$output" >&2
+      return 1
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
 predeploy_backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_selection_file="${predeploy_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
+schema_migration_required=0
+if [[ "$rebuild_v1_db" -eq 0 && "$predeploy_schema_contract" == "clusterforge-v1-20260828-environment-lifecycle" ]]; then
+  schema_migration_required=1
+  if [[ ! -f "$predeploy_selection_file" ]]; then
+    echo "the additive schema migration requires a selected Catalog repository so a current-contract recovery point can be created" >&2
+    exit 1
+  fi
+fi
 if [[ "$predeploy_backup_enabled" == "true" && -x "$live_backup_binary" && -f "$predeploy_selection_file" ]]; then
-  "$live_backup_binary" snapshot --selected-repository --reason before-deploy
+  backup_usage="$("$live_backup_binary" 2>&1 || true)"
+  if grep -q 'automation-snapshot' <<<"$backup_usage"; then
+    run_automation_snapshot before-deploy
+  else
+    # Upgrade compatibility only: the currently installed pre-change binary
+    # may still expose the former snapshot command. The newly installed binary
+    # no longer accepts this manual entry point.
+    env "${snapshot_environment[@]}" "$live_backup_binary" snapshot --selected-repository --reason before-deploy
+  fi
 fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -303,9 +391,38 @@ backup_ready=1
 
 install -m 0755 "$staged_artifact" "$live_binary"
 install -m 0755 "$staged_backup_artifact" "$live_backup_binary"
-install -m 0644 "$staged_backup_service" /etc/systemd/system/clusterforge-backup.service
-install -m 0644 "$staged_backup_timer" /etc/systemd/system/clusterforge-backup.timer
+systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
+systemctl stop clusterforge-backup.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/clusterforge-backup.timer /etc/systemd/system/clusterforge-backup.service
 systemctl daemon-reload
+builtin_asset_json="$(
+  cd /opt/clusterforge/platform
+  env "${snapshot_environment[@]}" "$live_binary" --prepare-builtin-playbooks
+)"
+python3 - "$expected_builtin_playbook_checksum" "$builtin_asset_json" <<'PY'
+import hashlib
+import json
+import os
+import stat
+import sys
+
+expected = sys.argv[1]
+asset = json.loads(sys.argv[2])
+if asset.get("playbook") != "ssh-connectivity-check.yml":
+    raise SystemExit(f"unexpected built-in Playbook name: {asset!r}")
+if asset.get("playbookSha256") != expected or not asset.get("treeSha256"):
+    raise SystemExit(f"unexpected built-in Playbook identity: {asset!r}")
+root = asset.get("root", "")
+if os.path.basename(root) != expected:
+    raise SystemExit(f"built-in Playbook root is not content-addressed: {root!r}")
+playbook = os.path.join(root, asset["playbook"])
+if stat.S_IMODE(os.lstat(root).st_mode) != 0o500 or stat.S_IMODE(os.lstat(playbook).st_mode) != 0o400:
+    raise SystemExit("built-in Playbook permissions are not read-only")
+with open(playbook, "rb") as stream:
+    actual = hashlib.sha256(stream.read()).hexdigest()
+if actual != expected:
+    raise SystemExit(f"materialized built-in Playbook checksum mismatch: {actual}")
+PY
 if [[ "$rebuild_v1_db" -eq 1 ]]; then
   echo "rebuilding V1 test database after backup: $backup_dir/platform.db"
   rm -f "$database" "${database}-wal" "${database}-shm"
@@ -330,15 +447,17 @@ installed_checksum="$(sha256sum "$live_binary" | awk '{print $1}')"
 [[ "$installed_checksum" == "$expected_checksum" ]]
 installed_backup_checksum="$(sha256sum "$live_backup_binary" | awk '{print $1}')"
 [[ "$installed_backup_checksum" == "$expected_backup_checksum" ]]
+served_ui_index_checksum="$(curl -fsS --max-time 3 "$health_url" | sha256sum | awk '{print $1}')"
+[[ "$served_ui_index_checksum" == "$expected_ui_index_checksum" ]]
+served_ui_version_checksum="$(curl -fsS --max-time 3 "${health_url}version.json" | sha256sum | awk '{print $1}')"
+[[ "$served_ui_version_checksum" == "$expected_ui_version_checksum" ]]
 
 backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 catalog_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 catalog_selection_file="${catalog_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
-if [[ "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
-  systemctl enable --now clusterforge-backup.timer
-else
-  systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
-  echo "Catalog backup timer stopped; select a private repository through the Environment Owner UI first"
+if [[ "$backup_enabled" != "true" ]]; then
+  echo "Catalog backup capability became disabled during deployment; refusing to leave an unusable Environment Owner repository workflow" >&2
+  finish_failure 1
 fi
 
 python3 - "$database" <<'PY'
@@ -348,7 +467,7 @@ import sys
 database = sys.argv[1]
 connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
 contract = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
-if contract != ("clusterforge-v1-20260828-environment-lifecycle",):
+if contract != ("clusterforge-v1-20260829-ssh-connectivity",):
     raise SystemExit(f"unexpected schema contract: {contract!r}")
 violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 if violations:
@@ -357,7 +476,11 @@ PY
 
 if [[ "$rebuild_v1_db" -eq 1 && "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
   echo "creating recovery point for rebuilt V1 database"
-  "$live_backup_binary" snapshot --selected-repository --reason after-v1-rebuild
+  run_automation_snapshot after-v1-rebuild
+fi
+if [[ "$schema_migration_required" -eq 1 ]]; then
+  echo "creating recovery point for additive schema migration"
+  run_automation_snapshot after-schema-migration
 fi
 
 service_touched=0
@@ -369,6 +492,9 @@ echo "deployment succeeded"
 echo "backup=$backup_dir"
 echo "sha256=$installed_checksum"
 echo "backup_sha256=$installed_backup_checksum"
+echo "ui_index_sha256=$served_ui_index_checksum"
+echo "ui_version_sha256=$served_ui_version_checksum"
+echo "builtin_playbook_sha256=$expected_builtin_playbook_checksum"
 systemctl show "$service_name" \
   -p ActiveState -p SubState -p MainPID -p ActiveEnterTimestamp --no-pager
 curl -fsS --max-time 3 -o /dev/null -w 'http=%{http_code}\n' "$health_url"

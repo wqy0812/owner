@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260828-environment-lifecycle');
+VALUES(1, 'clusterforge-v1-20260829-ssh-connectivity');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -467,6 +467,26 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_environment_health_checks_latest
 ON environment_health_checks(environment_id, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS environment_ssh_checks (
+  id TEXT PRIMARY KEY,
+  environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),
+  status TEXT NOT NULL CHECK (status IN ('healthy','degraded')),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+  results_json TEXT NOT NULL CHECK (json_valid(results_json)),
+  checked_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS environment_ssh_checks_active_environment_insert
+BEFORE INSERT ON environment_ssh_checks
+WHEN EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'archived environment cannot record SSH checks');
+END;
+
+CREATE INDEX IF NOT EXISTS idx_environment_ssh_checks_latest
+ON environment_ssh_checks(environment_id, checked_at DESC);
 
 -- Publication generations are optimistic-concurrency fences. They advance for
 -- every definition or candidate-intent change, but deliberately ignore mutable

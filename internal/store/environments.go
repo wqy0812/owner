@@ -251,6 +251,17 @@ func (s *Store) GetEnvironment(ctx context.Context, id string, includeRevisions 
 	return e, err
 }
 
+// EnvironmentArchived reads only lifecycle state. Long-running checks use it
+// to translate a final-write trigger conflict without loading a second
+// Environment Revision and accidentally changing the checked snapshot.
+func (s *Store) EnvironmentArchived(ctx context.Context, environmentID string) (bool, error) {
+	var archivedAt sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT archived_at FROM environments WHERE id=?`, environmentID).Scan(&archivedAt); err != nil {
+		return false, mapSQLError(err)
+	}
+	return archivedAt.Valid, nil
+}
+
 func (s *Store) ListEnvironments(ctx context.Context, includeArchived ...bool) ([]domain.Environment, error) {
 	query := `SELECT id,name,description,owner_id,current_revision_id,archived_at,created_at,updated_at FROM environments`
 	if len(includeArchived) == 0 || !includeArchived[0] {
@@ -303,6 +314,12 @@ func (s *Store) ListEnvironments(ctx context.Context, includeArchived ...bool) (
 		} else if healthErr != domain.ErrNotFound {
 			return nil, healthErr
 		}
+		ssh, sshErr := s.LatestEnvironmentSSHCheck(ctx, out[i].ID)
+		if sshErr == nil {
+			out[i].SSHCheck = &ssh
+		} else if sshErr != domain.ErrNotFound {
+			return nil, sshErr
+		}
 	}
 	return out, nil
 }
@@ -354,6 +371,23 @@ func (s *Store) LatestEnvironmentHealthCheck(ctx context.Context, environmentID 
 		return check, mapSQLError(err)
 	}
 	check.Results = decodeJSON(results, []domain.EnvironmentEndpointCheck{})
+	check.CheckedAt = parseTime(checkedAt)
+	return check, nil
+}
+
+func (s *Store) SaveEnvironmentSSHCheck(ctx context.Context, check domain.EnvironmentSSHCheck) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO environment_ssh_checks(id,environment_id,environment_revision_id,status,duration_ms,results_json,checked_at) VALUES(?,?,?,?,?,?,?)`, check.ID, check.EnvironmentID, check.EnvironmentRevisionID, check.Status, check.DurationMS, jsonText(check.Results), timeText(check.CheckedAt))
+	return mapSQLError(err)
+}
+
+func (s *Store) LatestEnvironmentSSHCheck(ctx context.Context, environmentID string) (domain.EnvironmentSSHCheck, error) {
+	var check domain.EnvironmentSSHCheck
+	var results, checkedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT id,environment_id,environment_revision_id,status,duration_ms,results_json,checked_at FROM environment_ssh_checks WHERE environment_id=? ORDER BY checked_at DESC LIMIT 1`, environmentID).Scan(&check.ID, &check.EnvironmentID, &check.EnvironmentRevisionID, &check.Status, &check.DurationMS, &results, &checkedAt)
+	if err != nil {
+		return check, mapSQLError(err)
+	}
+	check.Results = decodeJSON(results, []domain.EnvironmentSSHHostCheck{})
 	check.CheckedAt = parseTime(checkedAt)
 	return check, nil
 }

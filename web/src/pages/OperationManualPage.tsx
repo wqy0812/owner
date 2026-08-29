@@ -189,7 +189,7 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '添加主机 / 删除主机', purpose: '维护 Inventory 主机和主机组。', availability: '环境 Owner 自有环境', result: '改变未保存 Inventory。' },
       { label: '添加变量 / 删除环境变量', purpose: '维护非敏感作业环境变量、IMAGE_REGISTRY 和 FILE_STATION。', availability: '环境 Owner 自有环境', result: '改变未保存变量；Secret 不得填入此处。' },
       { label: '添加引用 / 删除凭据引用', purpose: '维护 CredentialRef 类型与引用位置。', availability: '环境 Owner 自有环境', result: '只保存引用，不把实际凭据返回前台。' },
-      { label: '立即检查', purpose: '对当前 Revision 的主机 SSH 端口、Registry 和介质站执行只读 TCP 连通性检查。', availability: '环境 Owner 自有环境', result: '保存带 Revision 来源的健康结果和审计记录；不会创建 Run 或执行安装。' },
+      { label: '立即检查', purpose: '一次执行 TCP 端点探测和 Inventory 主机的 SSH / Ansible Ping。', availability: '环境 Owner 自有环境', result: '分别保存带 Revision 来源的 TCP、SSH 结果和审计记录；不会创建 Run 或执行安装。' },
       { label: '一键回滚至干净状态 / 创建回滚 Run（待审批）', purpose: '从当前安装清单自动生成分层逆序 rollback 计划。', availability: '环境 Owner 自有且调度空闲的环境', result: '逐项校验来源 Run、备份和 Playbook 指纹；按来源时间倒序、来源内步骤逆序，输入环境名称后创建待审批 Run。' },
       { label: '移除环境 / 永久删除环境 / 确认归档环境', purpose: '先统计 Revision、Run、镜像构建和安装基线，再选择永久删除或保留历史的归档。', availability: '环境 Owner 自有环境；删除仅限从未使用，归档要求无活动 Run、无活动构建且无安装基线', result: '删除不可恢复但保留审计；归档保留全部历史并退出新任务选择。' },
       { label: '恢复环境', purpose: '让归档环境重新参与组件构建、验证和场景运行。', availability: '环境 Owner 自有归档环境', result: '清除归档状态，不修改 Revision、Run、构建或审计历史。' },

@@ -3,6 +3,7 @@ import type {
   Approval,
   AuditEvent,
   CandidateReleaseSet,
+  CatalogBackupResult,
   CatalogRecoveryResult,
   CatalogRepositoryStatus,
   CatalogRestorePlan,
@@ -21,6 +22,8 @@ import type {
   Environment,
   EnvironmentExportDocument,
   EnvironmentHealthCheck,
+  EnvironmentConnectivityCheck,
+  EnvironmentSSHCheck,
   EnvironmentHost,
   EnvironmentImportPlan,
   EnvironmentLifecycle,
@@ -573,10 +576,38 @@ function normalizeEnvironmentHealthCheck(raw: LooseRecord): EnvironmentHealthChe
   };
 }
 
+function normalizeEnvironmentSSHCheck(raw: LooseRecord): EnvironmentSSHCheck {
+  return {
+    id: requireString(raw, 'id'),
+    environmentId: requireString(raw, 'environmentId'),
+    environmentRevisionId: requireString(raw, 'environmentRevisionId'),
+    status: requireEnum(raw, ['healthy', 'degraded'] as const, 'status'),
+    durationMs: requireNumber(raw, 'durationMs'),
+    results: requireRecords(raw, 'results').map((item) => ({
+      kind: requireEnum(item, ['host', 'configuration'] as const, 'kind'),
+      name: requireString(item, 'name'),
+      address: requireString(item, 'address'),
+      user: optionalString(item, 'user'),
+      status: requireEnum(item, ['passed', 'unreachable', 'failed', 'skipped'] as const, 'status'),
+      errorCode: optionalString(item, 'errorCode'),
+      message: optionalString(item, 'message'),
+    })),
+    checkedAt: requireString(raw, 'checkedAt'),
+  };
+}
+
+function normalizeEnvironmentConnectivityCheck(raw: LooseRecord): EnvironmentConnectivityCheck {
+  return {
+    tcpCheck: normalizeEnvironmentHealthCheck(requireRecord(raw.tcpCheck, 'TCP connectivity check')),
+    sshCheck: normalizeEnvironmentSSHCheck(requireRecord(raw.sshCheck, 'SSH connectivity check')),
+  };
+}
+
 function normalizeEnvironment(raw: LooseRecord): Environment {
   const revision = optionalRecord(raw, 'currentRevision');
   const revisions = optionalRecords(raw, 'revisions')?.map(normalizeEnvironmentRevision);
   const healthCheck = optionalRecord(raw, 'healthCheck');
+  const sshCheck = optionalRecord(raw, 'sshCheck');
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
@@ -589,6 +620,7 @@ function normalizeEnvironment(raw: LooseRecord): Environment {
     currentRevision: revision ? normalizeEnvironmentRevision(revision) : undefined,
     revisions,
     healthCheck: healthCheck ? normalizeEnvironmentHealthCheck(healthCheck) : undefined,
+    sshCheck: sshCheck ? normalizeEnvironmentSSHCheck(sshCheck) : undefined,
     archivedAt: optionalString(raw, 'archivedAt'),
     updatedAt: optionalString(raw, 'updatedAt'),
   };
@@ -977,14 +1009,30 @@ const patch = <T>(path: string, body: unknown) =>
 function normalizeCatalogRepository(value: unknown): CatalogRepositoryStatus {
   const raw = requireRecord(value, 'Catalog repository');
   return {
-    configured: requireBoolean(raw, 'configured'), path: optionalString(raw, 'path'),
+    enabled: requireBoolean(raw, 'enabled'), configured: requireBoolean(raw, 'configured'),
+    reasonCode: optionalString(raw, 'reasonCode'), reason: optionalString(raw, 'reason'), path: optionalString(raw, 'path'),
     branch: requireString(raw, 'branch'), allowedRoot: requireString(raw, 'allowedRoot'),
     recoveryPoints: (optionalRecords(raw, 'recoveryPoints') ?? []).map((item) => ({ ref: requireString(item, 'ref'), commit: requireString(item, 'commit'), createdAt: requireString(item, 'createdAt') })),
-    timerEnabled: optionalBoolean(raw, 'timerEnabled') ?? false,
+    restoreTargetKnown: optionalBoolean(raw, 'restoreTargetKnown') ?? false,
+    targetCatalogEmpty: optionalBoolean(raw, 'targetCatalogEmpty') ?? false,
+    targetComponentCount: optionalNumber(raw, 'targetComponentCount') ?? 0,
+    targetScenarioCount: optionalNumber(raw, 'targetScenarioCount') ?? 0,
     behind: optionalBoolean(raw, 'behind') ?? false,
     currentGeneration: optionalNumber(raw, 'currentGeneration') ?? 0,
     backedUpGeneration: optionalNumber(raw, 'backedUpGeneration') ?? 0,
     lastSuccessfulAt: optionalString(raw, 'lastSuccessfulAt'), lastError: optionalString(raw, 'lastError'), lastErrorAt: optionalString(raw, 'lastErrorAt'),
+  };
+}
+
+function normalizeCatalogBackupResult(value: unknown): CatalogBackupResult {
+  const raw = requireRecord(value, 'Catalog backup result');
+  const status = requireString(raw, 'status');
+  if (status !== 'success') throw invalidResponse(200, '平台 API 的备份状态必须是 success。');
+  return {
+    backupId: requireString(raw, 'backupId'), status, reason: requireString(raw, 'reason'),
+    createdAt: requireString(raw, 'createdAt'), completedAt: requireString(raw, 'completedAt'),
+    publicationGeneration: requireNumber(raw, 'publicationGeneration'),
+    gitCommit: requireString(raw, 'gitCommit'), gitTag: requireString(raw, 'gitTag'),
   };
 }
 
@@ -1217,6 +1265,9 @@ export const api = {
   async connectCatalogRepository(path: string): Promise<CatalogRepositoryStatus> {
     return normalizeCatalogRepository(unwrap(await post<unknown>('/catalog-repository/connect', { path })));
   },
+  async createCatalogBackup(): Promise<CatalogBackupResult> {
+    return normalizeCatalogBackupResult(unwrap(await post<unknown>('/catalog-repository/backups')));
+  },
   async previewCatalogRestore(ref: string): Promise<CatalogRestorePlan> {
     return normalizeCatalogRestorePlan(unwrap(await post<unknown>('/catalog-repository/restore-plan', { ref })));
   },
@@ -1263,6 +1314,9 @@ export const api = {
   },
   async checkEnvironmentHealth(environmentId: string) {
     return normalizeEnvironmentHealthCheck(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/health-checks`)), 'environment health check'));
+  },
+  async checkEnvironmentConnectivity(environmentId: string) {
+    return normalizeEnvironmentConnectivityCheck(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/connectivity-checks`)), 'environment connectivity check'));
   },
   async previewEnvironmentRollback(environmentId: string) {
     return normalizeEnvironmentRollbackPlan(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-plan`)), 'environment rollback plan'));

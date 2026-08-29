@@ -158,6 +158,7 @@ func (d *HTTPArtifactDelivery) Transfer(ctx context.Context, transfer ArtifactTr
 type DockerImageDelivery struct{ binary string }
 
 var _ ActionRunner = (*ansiblerunner.Runner)(nil)
+var _ ActionRunner = (*ansiblerunner.BuiltinRunner)(nil)
 var _ ArtifactDelivery = (*HTTPArtifactDelivery)(nil)
 var _ ImageDelivery = (*DockerImageDelivery)(nil)
 

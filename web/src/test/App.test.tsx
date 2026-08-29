@@ -93,8 +93,9 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
     }] : []);
     if (url.endsWith('/catalog-repository/restore-plan')) return json({ gitCommit: 'a'.repeat(40), schemaContract: 'clusterforge-v1', catalogSha256: 'b'.repeat(64), counts: { components: 2, component_releases: 3, scenarios: 1 }, playbookCount: 4, targetComponentCount: 0, targetScenarioCount: 0, planDigest: 'c'.repeat(64) });
     if (url.endsWith('/catalog-repository/restore')) return json({ restored: true, gitCommit: 'a'.repeat(40), schemaContract: 'clusterforge-v1', catalogSha256: 'b'.repeat(64), counts: { components: 2, component_releases: 3, scenarios: 1 }, playbookCount: 4, targetComponentCount: 0, targetScenarioCount: 0, planDigest: 'c'.repeat(64) }, 201);
-    if (url.endsWith('/catalog-repository/create') || url.endsWith('/catalog-repository/connect')) return json({ configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }] }, url.endsWith('/catalog-repository/create') ? 201 : 200);
-    if (url.endsWith('/catalog-repository')) return json({ configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }] });
+    if (url.endsWith('/catalog-repository/backups')) return json({ backupId: '20260829T080000Z-test', status: 'success', reason: 'manual-ui', createdAt: '2026-08-29T08:00:00Z', completedAt: '2026-08-29T08:00:01Z', publicationGeneration: 7, gitCommit: 'd'.repeat(40), gitTag: 'backup/20260829T080000Z-test' }, 201);
+    if (url.endsWith('/catalog-repository/create') || url.endsWith('/catalog-repository/connect')) return json({ enabled: true, configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }], restoreTargetKnown: true, targetCatalogEmpty: true, targetComponentCount: 0, targetScenarioCount: 0 }, url.endsWith('/catalog-repository/create') ? 201 : 200);
+    if (url.endsWith('/catalog-repository')) return json({ enabled: true, configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }], restoreTargetKnown: true, targetCatalogEmpty: true, targetComponentCount: 0, targetScenarioCount: 0 });
     if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
@@ -143,13 +144,28 @@ describe('platform shell and RBAC UI', () => {
   it('shows the dashboard summary and all primary navigation entries', async () => {
     renderApp();
     expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
-    for (const label of ['我的工作', '组件', '场景', '环境', '运行', '通知', '操作说明书']) {
+    for (const label of ['我的工作', '组件', '场景', '环境', '运行', '操作说明书', '通知中心']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
+    expect(within(screen.getByRole('navigation', { name: '主导航' })).queryByRole('link', { name: '通知中心' })).not.toBeInTheDocument();
     expect(screen.getByText(/无密码身份模式/)).toBeInTheDocument();
     expect(screen.getByText('当前没有待办')).toBeInTheDocument();
     expect(screen.getByText(/首页主任务仍是处理交付待办/)).toBeInTheDocument();
     expect(screen.queryByText(/允许以“未验证”状态发布/)).not.toBeInTheDocument();
+  });
+
+  it('lets the user collapse and expand the desktop sidebar', async () => {
+    renderApp();
+    const collapse = await screen.findByRole('button', { name: '收起侧边栏' });
+    expect(collapse).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.click(collapse);
+    const expand = screen.getByRole('button', { name: '展开侧边栏' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(expand.closest('.app-shell')).toHaveClass('app-shell--sidebar-collapsed');
+
+    await userEvent.click(expand);
+    expect(screen.getByRole('button', { name: '收起侧边栏' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('shows catalog backup warnings on the Environment Owner workbench', async () => {
@@ -186,10 +202,12 @@ describe('platform shell and RBAC UI', () => {
 
   it('lets an Environment Owner preview and confirm an empty-database Git restore', async () => {
     const fetchMock = installFetch({ initialUser: dave });
-    renderApp('/environments');
+    renderApp('/disaster-recovery');
+    expect(await screen.findByRole('link', { name: '灾备目录' })).toHaveAttribute('href', '/disaster-recovery');
+    expect(await screen.findByRole('heading', { name: '灾备目录' })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: '发布目录灾备' })).toBeInTheDocument();
     expect(await screen.findByText('/data/private/catalog.git')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /从 Git 恢复空库/ }));
+    await userEvent.click(screen.getByRole('button', { name: /从恢复点恢复空库/ }));
     expect(screen.getByRole('heading', { name: '从 Git 恢复发布目录' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '预览恢复' }));
     expect(await screen.findByText('恢复计划已锁定')).toBeInTheDocument();
@@ -199,17 +217,227 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText('发布目录已从 Git 恢复')).toBeInTheDocument();
   });
 
+  it('explains the backup strategy and lets an Environment Owner create an immediate recovery point', async () => {
+    const fetchMock = installFetch({ initialUser: dave });
+    renderApp('/disaster-recovery');
+
+    expect(await screen.findByRole('heading', { name: '备份策略' })).toBeInTheDocument();
+    expect(screen.getByText('发布后自动备份')).toBeInTheDocument();
+    expect(screen.getByText('前台立即备份')).toBeInTheDocument();
+    expect(screen.getByText('完整性与范围')).toBeInTheDocument();
+    const disasterRecoveryActions = screen.getByRole('group', { name: '灾备操作' });
+    expect(within(disasterRecoveryActions).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      '更换备份仓库', '创建私有仓库', '立即备份',
+    ]);
+
+    await userEvent.click(screen.getByRole('button', { name: '立即备份' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/catalog-repository/backups'), expect.objectContaining({ method: 'POST' })));
+    expect(await screen.findByText('Git 恢复点已创建')).toBeInTheDocument();
+    expect(screen.getByText(/backup\/20260829T080000Z-test/)).toBeInTheDocument();
+  });
+
+  it('explains when Catalog backup is disabled and keeps mutation entry points closed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/catalog-repository')) return json({
+        enabled: false,
+        configured: false,
+        branch: 'catalog',
+        allowedRoot: '',
+        recoveryPoints: [],
+        reasonCode: 'catalog_backup_disabled',
+        reason: '发布目录灾备未在服务端启用，请由平台管理员设置 CLUSTERFORGE_BACKUP_ENABLED=true 并重启服务。',
+      });
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 0 }, items: [],
+      });
+      if (isEnvironmentList(url) || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/disaster-recovery');
+
+    expect(await screen.findByText('服务端未启用发布目录灾备')).toBeInTheDocument();
+    expect(screen.getByText(/CLUSTERFORGE_BACKUP_ENABLED=true/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '接入已有备份仓库' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建私有仓库' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '立即备份' })).toBeDisabled();
+    expect(screen.queryByText('暂时无法读取数据')).not.toBeInTheDocument();
+  });
+
+  it('allows first-time repository setup when Catalog backup is enabled but unconfigured', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/catalog-repository/create')) return json({
+        enabled: true,
+        configured: true,
+        path: '/data/private/catalogGit',
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: true,
+      }, 201);
+      if (url.endsWith('/catalog-repository')) return json({
+        enabled: true,
+        configured: false,
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: true,
+      });
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 0 }, items: [],
+      });
+      if (isEnvironmentList(url) || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/disaster-recovery');
+
+    expect(await screen.findByText('允许根目录：/data/private')).toBeInTheDocument();
+    const create = screen.getByRole('button', { name: '创建私有仓库' });
+    expect(create).toBeEnabled();
+    expect(screen.getByRole('button', { name: '从已有 Git 仓库恢复' })).toBeEnabled();
+    await userEvent.click(create);
+    expect(screen.getByRole('heading', { name: '创建私有 Catalog 仓库' })).toBeInTheDocument();
+    expect(screen.getByText(/路径必须位于 \/data\/private 内/)).toBeInTheDocument();
+    const pathInput = screen.getByRole('textbox', { name: '服务器仓库路径' });
+    const submit = screen.getByRole('button', { name: '创建并接入' });
+
+    await userEvent.type(pathInput, 'data/private/catalogGit');
+    expect(screen.getByRole('alert')).toHaveTextContent('缺少开头“/”');
+    expect(pathInput).toHaveAttribute('aria-invalid', 'true');
+    expect(submit).toBeDisabled();
+
+    await userEvent.clear(pathInput);
+    await userEvent.type(pathInput, 'catalogGit');
+    expect(screen.getByText('最终路径：')).toHaveTextContent('/data/private/catalogGit');
+    expect(pathInput).toHaveAttribute('aria-invalid', 'false');
+    expect(submit).toBeEnabled();
+
+    await userEvent.clear(pathInput);
+    await userEvent.type(pathInput, '/data/private/catalogGit');
+    expect(screen.getByText('最终路径：')).toHaveTextContent('/data/private/catalogGit');
+    expect(submit).toBeEnabled();
+
+    await userEvent.clear(pathInput);
+    await userEvent.type(pathInput, 'catalogGit');
+    await userEvent.click(submit);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/catalog-repository/create'), expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ path: 'catalogGit' }),
+    })));
+  });
+
+  it('guides an empty Catalog from an existing Git repository into restore-point selection', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/catalog-repository/connect')) return json({
+        enabled: true,
+        configured: true,
+        path: '/data/private/catalog.git',
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: true,
+        targetComponentCount: 0,
+        targetScenarioCount: 0,
+      });
+      if (url.endsWith('/catalog-repository')) return json({
+        enabled: true,
+        configured: false,
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: true,
+        targetComponentCount: 0,
+        targetScenarioCount: 0,
+      });
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 0 }, items: [],
+      });
+      if (isEnvironmentList(url) || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/disaster-recovery');
+
+    await userEvent.click(await screen.findByRole('button', { name: '从已有 Git 仓库恢复' }));
+    expect(screen.getByRole('heading', { name: '从已有 Git 仓库恢复' })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: '服务器仓库路径' }), 'catalog.git');
+    await userEvent.click(screen.getByRole('button', { name: '验证并继续恢复' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/catalog-repository/connect'), expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ path: 'catalog.git' }),
+    })));
+    expect(await screen.findByRole('heading', { name: '从 Git 恢复发布目录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '预览恢复' })).toBeEnabled();
+  });
+
+  it('offers repository connection without restore when the current Catalog is not empty', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/catalog-repository')) return json({
+        enabled: true,
+        configured: false,
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: false,
+        targetComponentCount: 2,
+        targetScenarioCount: 1,
+      });
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 2, scenarios: 1, environments: 0 }, items: [],
+      });
+      if (isEnvironmentList(url) || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/disaster-recovery');
+
+    const connect = await screen.findByRole('button', { name: '接入已有备份仓库' });
+    expect(screen.queryByRole('button', { name: '从已有 Git 仓库恢复' })).not.toBeInTheDocument();
+    await userEvent.click(connect);
+    expect(screen.getByRole('heading', { name: '接入已有 Catalog 仓库' })).toBeInTheDocument();
+  });
+
   it('keeps repository reconfiguration available when the selected repository is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(dave);
       if (url.endsWith('/catalog-repository')) return json({
+        enabled: true,
         configured: true,
         path: '/data/private/catalog.git',
         branch: 'catalog',
         allowedRoot: '/data/private',
-        recoveryPoints: [],
-        timerEnabled: true,
+        recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }],
+        restoreTargetKnown: true,
+        targetCatalogEmpty: false,
+        targetComponentCount: 2,
+        targetScenarioCount: 1,
         behind: true,
         currentGeneration: 4,
         backedUpGeneration: 3,
@@ -224,14 +452,24 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     }));
 
-    renderApp('/environments');
+    renderApp('/disaster-recovery');
 
     expect(await screen.findByText(/同步所选私有仓库失败/)).toBeInTheDocument();
-    const reconnect = screen.getByRole('button', { name: '接入已有仓库' });
+    expect(screen.getByText(/当前发布目录非空：组件 2 个、场景 1 个/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '从恢复点恢复空库' })).toBeDisabled();
+    const reconnect = screen.getByRole('button', { name: '更换备份仓库' });
     expect(reconnect).toBeEnabled();
     await userEvent.click(reconnect);
     expect(screen.getByRole('heading', { name: '接入已有 Catalog 仓库' })).toBeInTheDocument();
     expect(screen.getByText(/路径必须位于 \/data\/private 内/)).toBeInTheDocument();
+  });
+
+  it('keeps the legacy Environment disaster-recovery link working', async () => {
+    installFetch({ initialUser: dave });
+    renderApp('/environments#catalog-repository');
+
+    expect(await screen.findByRole('heading', { name: '灾备目录' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '发布目录灾备' })).toBeInTheDocument();
   });
 
   it('explains a blocking work item and links to its exact resource', async () => {
@@ -291,8 +529,57 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components?selected=component-containerd&release=release-containerd-2&action=validate');
     expect(await screen.findByRole('dialog', { name: '环境验证 v2.1.1' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '取消' }));
+    await userEvent.click(screen.getByRole('button', { name: '展开 1 项原因' }));
     await userEvent.click(screen.getByRole('link', { name: /再次环境验证/ }));
     expect(await screen.findByRole('dialog', { name: '环境验证 v2.1.1' })).toBeInTheDocument();
+  });
+
+  it('hides current-run links in run details while keeping workbench and external actions available', async () => {
+    const run = {
+      id: 'run-self', status: 'failed', environmentId: 'environment-test', environmentName: 'Test Environment',
+      name: 'Failed Run', error: 'credential is not configured', createdAt: '2026-08-25T09:00:00Z', finishedAt: '2026-08-25T09:01:00Z',
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/runs/run-self')) return json(run);
+      if (url.endsWith('/runs')) return json([run]);
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-25T10:00:00Z', role: dave.role,
+        summary: { critical: 1, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 1 },
+        items: [{
+          id: 'run:run-self', kind: 'run', priority: 'critical', status: 'blocked', title: 'Failed Run 运行失败',
+          subject: { type: 'run', id: 'run-self', parentId: 'environment-test', name: 'Failed Run', environment: 'Test Environment' },
+          reasons: [
+            { code: 'run.failed', message: 'credential is not configured', evidenceRunId: 'run-self', nextAction: { label: '查看失败运行', href: '/runs?selected=run-self' } },
+            { code: 'run.repair', message: '环境配置需要修复', nextAction: { label: '检查环境', href: '/environments?selected=environment-test' } },
+          ],
+          primaryAction: { label: '查看失败诊断', href: '/runs?selected=run-self' },
+          secondaryActions: [{ label: '查看环境', href: '/environments?selected=environment-test' }],
+          updatedAt: '2026-08-25T09:00:00Z',
+        }],
+      });
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || isEnvironmentList(url) || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    const workbench = renderApp();
+    expect(await screen.findByRole('link', { name: /查看失败诊断/ })).toHaveAttribute('href', '/runs?selected=run-self');
+    expect(screen.getByRole('link', { name: /查看失败运行/ })).toHaveAttribute('href', '/runs?selected=run-self');
+    workbench.unmount();
+
+    renderApp('/runs');
+    expect(await screen.findByRole('heading', { name: 'Failed Run' })).toBeInTheDocument();
+    expect(screen.getByText('credential is not configured')).not.toBeVisible();
+    expect(screen.queryByRole('link', { name: /查看失败诊断/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /查看失败运行/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /检查环境/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /查看环境/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '展开 2 项原因' }));
+    expect(screen.getByText('credential is not configured')).toBeVisible();
+    expect(screen.getByRole('link', { name: /检查环境/ })).toHaveAttribute('href', '/environments?selected=environment-test');
+    expect(screen.getByRole('link', { name: /查看环境/ })).toHaveAttribute('href', '/environments?selected=environment-test');
   });
 
   it('clears a run action explanation when another run is selected', async () => {
@@ -1284,6 +1571,10 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderApp('/environments');
+    const environmentActions = await screen.findByRole('group', { name: '环境操作' });
+    expect(within(environmentActions).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      '安全导出', '导出含引用', '移除环境', '一键回滚至干净状态',
+    ]);
     await userEvent.click(await screen.findByRole('tab', { name: '环境变量' }));
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
     await userEvent.type(screen.getByRole('textbox', { name: '环境变量名' }), 'image_registry');
@@ -1294,6 +1585,50 @@ describe('platform shell and RBAC UI', () => {
 
     await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: '192.168.88.54:5000/' }));
     expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
+  });
+
+  it('runs TCP and SSH checks from one button and displays classified errors', async () => {
+    const environment = {
+      id: 'environment-test', name: 'Test Environment', ownerId: dave.id,
+      currentRevision: {
+        id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {},
+        hosts: [{ name: 'node-1', address: '192.0.2.10', port: 22, user: 'root', groups: ['all'] }],
+        variables: { IMAGE_REGISTRY: '192.0.2.20:5000' }, credentialRefs: [],
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/environments/environment-test/connectivity-checks') && init?.method === 'POST') return json({
+        tcpCheck: {
+          id: 'tcp-1', environmentId: environment.id, environmentRevisionId: 'environment-test-r1', status: 'degraded', checkedAt: '2026-08-29T10:00:00Z',
+          results: [
+            { kind: 'host', name: 'node-1', address: '192.0.2.10:22', reachable: true, latencyMs: 8 },
+            { kind: 'dependency', name: 'IMAGE_REGISTRY', address: '192.0.2.20:5000', reachable: false, latencyMs: 2001, error: 'TCP 连接失败' },
+          ],
+        },
+        sshCheck: {
+          id: 'ssh-1', environmentId: environment.id, environmentRevisionId: 'environment-test-r1', status: 'degraded', durationMs: 1234, checkedAt: '2026-08-29T10:00:01Z',
+          results: [{ kind: 'host', name: 'node-1', address: '192.0.2.10:22', user: 'root', status: 'unreachable', errorCode: 'ssh_authentication_failed', message: 'SSH 用户或凭据认证失败' }],
+        },
+      });
+      if (isEnvironmentList(url)) return json([environment]);
+      if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/environments');
+    const checkButton = await screen.findByRole('button', { name: '立即检查' });
+    expect(screen.getAllByRole('button', { name: '立即检查' })).toHaveLength(1);
+    await userEvent.click(checkButton);
+
+    const tcpResults = await screen.findByRole('region', { name: 'TCP 端点检查结果' });
+    const sshResults = screen.getByRole('region', { name: 'SSH 和 Ansible 检查结果' });
+    expect(within(tcpResults).getByText('TCP 连接失败')).toBeInTheDocument();
+    expect(within(sshResults).getByText('SSH 用户或凭据认证失败')).toBeInTheDocument();
+    expect(within(sshResults).getByText('ssh_authentication_failed')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/connectivity-checks'), expect.objectContaining({ method: 'POST' }));
   });
 
   it('permanently deletes an environment that has never been used', async () => {
@@ -1407,7 +1742,9 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/environments');
     await userEvent.click(await screen.findByRole('button', { name: '一键回滚至干净状态' }));
-    expect(await screen.findByRole('region', { name: '整集群回滚计划' })).toHaveTextContent('CoreDNS · rollback');
+    const rollbackDialog = await screen.findByRole('dialog', { name: '一键回滚整个集群' });
+    expect(rollbackDialog).toHaveClass('modal--wide');
+    expect(await within(rollbackDialog).findByRole('region', { name: '整集群回滚计划' })).toHaveTextContent('CoreDNS · rollback');
     const confirm = screen.getByRole('textbox', { name: '确认回滚环境名称' });
     const submit = screen.getByRole('button', { name: '创建回滚 Run（待审批）' });
     expect(submit).toBeDisabled();
@@ -1817,6 +2154,64 @@ describe('platform shell and RBAC UI', () => {
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 450)); });
 
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components'))).toHaveLength(componentCallsBefore);
+  });
+
+  it('renders actionable missing-CredentialRef details in the component validation modal', async () => {
+    const baseFetch = installFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/component-releases/release-containerd-2/test-plan') && init?.method === 'POST') {
+        return json({ error: {
+          code: 'invalid_request',
+          message: 'environment is missing required CredentialRefs: K8S_ENCRYPTION_KEY',
+          explanation: {
+            reasons: [{
+              code: 'environment.credentials_missing',
+              message: 'environment is missing required CredentialRefs: K8S_ENCRYPTION_KEY',
+              cause: { kind: 'platform_rule', summary: '目标 Environment Revision 缺少执行计划要求的 CredentialRef' },
+              nextAction: { label: '查看目标环境凭据', href: '/environments?selected=environment-test&tab=credentials' },
+            }],
+            primaryAction: { label: '查看目标环境凭据', href: '/environments?selected=environment-test&tab=credentials' },
+            secondaryActions: [],
+          },
+        } }, 400);
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/components?selected=component-containerd&release=release-containerd-2');
+    await userEvent.click(await screen.findByRole('button', { name: '环境验证' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '目标环境' }), 'environment-test');
+    await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
+
+    expect(await screen.findByRole('heading', { name: '验证操作被阻断' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /查看目标环境凭据/ })).toHaveAttribute('href', '/environments?selected=environment-test&tab=credentials');
+    await userEvent.click(screen.getByRole('button', { name: '展开 1 项原因' }));
+    expect(screen.getAllByText(/K8S_ENCRYPTION_KEY/)).toHaveLength(2);
+  });
+
+  it('blocks a full scenario test while the current draft DAG is empty', async () => {
+    const baseFetch = installFetch({ initialUser: carol });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/scenarios')) return json([{
+        id: 'scenario-empty', name: 'Empty Scenario', ownerId: carol.id, slug: 'empty-scenario',
+        currentRevisionId: 'scenario-empty-r1',
+        currentRevision: { id: 'scenario-empty-r1', scenarioId: 'scenario-empty', revision: 1, state: 'draft', nodes: [], edges: [] },
+        revisions: [{ id: 'scenario-empty-r1', scenarioId: 'scenario-empty', revision: 1, state: 'draft', nodes: [], edges: [] }],
+      }]);
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderApp('/scenarios?selected=scenario-empty');
+    await userEvent.click(await screen.findByRole('button', { name: '环境测试' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-test');
+
+    expect(screen.getByRole('alert')).toHaveTextContent('当前 DAG 为空');
+    expect(screen.getByRole('button', { name: '开始完整测试' })).toBeDisabled();
+    expect(fetchMock.mock.calls.some(([request, requestInit]) => String(request).endsWith('/scenario-revisions/scenario-empty-r1/test-runs') && requestInit?.method === 'POST')).toBe(false);
   });
 
   it('submits only declared scenario run inputs with a test run', async () => {

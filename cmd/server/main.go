@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,8 +35,30 @@ func main() {
 func run() error {
 	seedOnly := flag.Bool("seed-only", false, "seed the configured database and exit")
 	resetDemo := flag.Bool("reset-demo", false, "remove demo data, reseed, and exit")
+	prepareBuiltinPlaybooks := flag.Bool("prepare-builtin-playbooks", false, "materialize and verify platform-owned Playbooks, then exit")
 	flag.Parse()
 	_ = loadDotEnv(".env")
+	workRoot := envOr("NEWPLATFORM_RUN_ROOT", "./data/runs")
+	runnerTemplate := ansible.Runner{
+		Binary: envOr("NEWPLATFORM_ANSIBLE_BIN", "ansible-playbook"), WorkRoot: workRoot,
+		KillGrace: envDuration("NEWPLATFORM_KILL_GRACE", 3*time.Second), MaxLogBytes: envInt("NEWPLATFORM_MAX_LOG_BYTES", 2<<20),
+	}
+	if *prepareBuiltinPlaybooks {
+		_, asset, err := ansible.NewBuiltinConnectivityRunner(workRoot, runnerTemplate)
+		if err != nil {
+			return fmt.Errorf("prepare built-in connectivity Playbook: %w", err)
+		}
+		return json.NewEncoder(os.Stdout).Encode(asset)
+	}
+	var connectivityRunner *ansible.BuiltinRunner
+	var builtinAsset ansible.BuiltinPlaybookAsset
+	if !*seedOnly && !*resetDemo {
+		var err error
+		connectivityRunner, builtinAsset, err = ansible.NewBuiltinConnectivityRunner(workRoot, runnerTemplate)
+		if err != nil {
+			return fmt.Errorf("configure built-in connectivity runner: %w", err)
+		}
+	}
 
 	ctx := context.Background()
 	databasePath := envOr("NEWPLATFORM_DB_PATH", "./data/newplatform.db")
@@ -73,12 +96,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure Ansible runner: %w", err)
 	}
-	runner.Binary = envOr("NEWPLATFORM_ANSIBLE_BIN", "ansible-playbook")
-	runner.WorkRoot = envOr("NEWPLATFORM_RUN_ROOT", "./data/runs")
-	runner.KillGrace = envDuration("NEWPLATFORM_KILL_GRACE", 3*time.Second)
-	runner.MaxLogBytes = envInt("NEWPLATFORM_MAX_LOG_BYTES", 2<<20)
+	runner.Binary = runnerTemplate.Binary
+	runner.WorkRoot = runnerTemplate.WorkRoot
+	runner.KillGrace = runnerTemplate.KillGrace
+	runner.MaxLogBytes = runnerTemplate.MaxLogBytes
 
 	platform := service.NewPlatform(database, runner, service.NewEventHub())
+	platform.ConfigureConnectivityRunner(connectivityRunner)
 	platform.ConfigurePlaybookRoot(allowedRoot)
 	platform.ConfigureImageBuilder(
 		envOr("NEWPLATFORM_IMAGE_BUILD_ROOT", "./data/image-builds"),
@@ -107,13 +131,6 @@ func run() error {
 		)
 		if managerErr != nil {
 			return fmt.Errorf("configure private Catalog repositories: %w", managerErr)
-		}
-		catalogRepositories.ConfigureTimer(backup.NewSystemdTimerController(
-			envOr("CLUSTERFORGE_SYSTEMCTL_BIN", "systemctl"),
-			envOr("CLUSTERFORGE_BACKUP_TIMER_UNIT", "clusterforge-backup.timer"),
-		))
-		if managerErr = catalogRepositories.ReconcileTimer(ctx); managerErr != nil {
-			log.Printf("reconcile six-hour Catalog backup timer: %v", managerErr)
 		}
 		platform.ConfigurePublicationBackup(backupScheduler)
 		platform.ConfigurePublicationBackupHealth(catalogRepositories)
@@ -146,6 +163,7 @@ func run() error {
 	}()
 
 	log.Printf("NewPlatform Demo listening on http://%s", address)
+	log.Printf("Built-in connectivity Playbook ready: sha256=%s", builtinAsset.PlaybookSHA256)
 	err = server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

@@ -79,7 +79,7 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260828-environment-lifecycle`，包含模块化发布围栏以及环境删除/归档状态，按 V1 决策不提供旧字段迁移。首次把该合同部署到已有测试库时必须显式使用 `--rebuild-v1-db`：脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，停服务后才删除工作库并由新版本重建/Seed；启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
+当前合同为 `clusterforge-v1-20260829-ssh-connectivity`，包含模块化发布围栏、环境删除/归档状态，以及分离保存的 TCP 与 SSH / Ansible 检查证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行加法迁移并保留业务数据；更早或未知合同仍失败关闭。只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`，脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 
@@ -129,7 +129,7 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 | `NEWPLATFORM_ADDR` | `127.0.0.1:8080` | HTTP 监听地址 |
 | `NEWPLATFORM_DB_PATH` | `./data/newplatform.db` | SQLite 文件 |
 | `NEWPLATFORM_ANSIBLE_BIN` | `ansible-playbook` | Ansible 可执行文件 |
-| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | 每次运行的临时工作区根目录 |
+| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | Run 临时工作区，以及内容寻址的只读平台内置 Playbook 根目录 |
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许执行的作业根目录；Demo 使用首个配置项 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后进程组强制终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单个 Ansible step 保留的脱敏日志上限 |
@@ -143,8 +143,6 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 | `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 所在的 fast-forward-only 分支 |
 | `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | Environment Owner 可创建或接入本地私有仓库的受控根目录 |
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布合并为一次异步快照的等待窗口 |
-| `CLUSTERFORGE_SYSTEMCTL_BIN` | `systemctl` | 对齐六小时备份 Timer 状态使用的 systemctl 路径 |
-| `CLUSTERFORGE_BACKUP_TIMER_UNIT` | `clusterforge-backup.timer` | 六小时备份 Timer 单元名 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | 批准执行 Kubernetes 1.17.5 作业时必需；32 字节密钥的 base64 值，仅以 CredentialRef 注入 |
 
 Environment Owner 在环境页面维护非敏感大写环境变量；每次保存都会生成新的
@@ -161,7 +159,7 @@ daemon 执行，因此只应上传可信内容。
 
 ## 灾备
 
-发布目录与 SQLite 的异步快照、人工 CLI、Git 分支/标签语义和两级恢复步骤见 [Catalog 与数据库备份恢复](docs/catalog-backup-and-restore.md)。
+发布目录与 SQLite 的异步快照、前台立即备份、Git 分支/标签语义和两级恢复步骤见 [Catalog 与数据库备份恢复](docs/catalog-backup-and-restore.md)。
 
 ## 示例来源
 

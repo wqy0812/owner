@@ -507,7 +507,13 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		}
 	}
 	if err := validateRequiredCredentials(environment.Revision.CredentialRefs, plan.Steps); err != nil {
-		return lockedPlan{}, "", false, err
+		return lockedPlan{}, "", false, actionableExistingError(
+			err,
+			"environment.credentials_missing",
+			"目标 Environment Revision 缺少执行计划要求的 CredentialRef",
+			"查看目标环境凭据",
+			fmt.Sprintf("/environments?selected=%s&tab=credentials", environment.ID),
+		)
 	}
 	if err := validatePlanHostGroups(environment.Revision.Inventory, plan.Steps); err != nil {
 		return lockedPlan{}, "", false, err

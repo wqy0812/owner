@@ -5,22 +5,53 @@ import (
 	"fmt"
 	"net/http"
 
+	"codex/platform-demo/internal/backup"
 	"codex/platform-demo/internal/domain"
 )
+
+const catalogBackupDisabledCode = "catalog_backup_disabled"
+
+type catalogRepositoryStatusResponse struct {
+	backup.RepositoryStatus
+	Enabled    bool   `json:"enabled"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+func enabledCatalogRepositoryStatus(status backup.RepositoryStatus) catalogRepositoryStatusResponse {
+	return catalogRepositoryStatusResponse{RepositoryStatus: status, Enabled: true}
+}
+
+func catalogBackupDisabledError() error {
+	return &domain.CodedError{
+		Code:    catalogBackupDisabledCode,
+		Message: "发布目录灾备未在服务端启用",
+		Details: map[string]any{"configuration": "CLUSTERFORGE_BACKUP_ENABLED=true"},
+		Cause:   domain.ErrConflict,
+	}
+}
 
 func (h *Handler) requireCatalogRepository(r *http.Request) error {
 	if err := domain.ValidateRole(currentUser(r), domain.RoleEnvironmentOwner); err != nil {
 		return err
 	}
 	if h.catalogRepos == nil {
-		return fmt.Errorf("%w: Catalog backup is not enabled", domain.ErrConflict)
+		return catalogBackupDisabledError()
 	}
 	return nil
 }
 
 func (h *Handler) getCatalogRepository(w http.ResponseWriter, r *http.Request) {
-	if err := h.requireCatalogRepository(r); err != nil {
+	if err := domain.ValidateRole(currentUser(r), domain.RoleEnvironmentOwner); err != nil {
 		writeError(w, err)
+		return
+	}
+	if h.catalogRepos == nil {
+		writeData(w, http.StatusOK, catalogRepositoryStatusResponse{
+			RepositoryStatus: backup.RepositoryStatus{Branch: "catalog", RecoveryPoints: []backup.RecoveryPoint{}},
+			ReasonCode:       catalogBackupDisabledCode,
+			Reason:           "发布目录灾备未在服务端启用，请由平台管理员设置 CLUSTERFORGE_BACKUP_ENABLED=true 并重启服务。",
+		})
 		return
 	}
 	status, err := h.catalogRepos.Status(r.Context())
@@ -28,7 +59,7 @@ func (h *Handler) getCatalogRepository(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: inspect Catalog repository: %v", domain.ErrConflict, err))
 		return
 	}
-	writeData(w, http.StatusOK, status)
+	writeData(w, http.StatusOK, enabledCatalogRepositoryStatus(status))
 }
 
 func (h *Handler) createCatalogRepository(w http.ResponseWriter, r *http.Request) {
@@ -45,11 +76,11 @@ func (h *Handler) createCatalogRepository(w http.ResponseWriter, r *http.Request
 	}
 	status, err := h.catalogRepos.Create(r.Context(), input.Path)
 	if err != nil {
-		writeError(w, catalogRepositoryError(err, domain.ErrInvalid))
+		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
 	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_repository.created", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
-	writeData(w, http.StatusCreated, status)
+	writeData(w, http.StatusCreated, enabledCatalogRepositoryStatus(status))
 }
 
 func (h *Handler) connectCatalogRepository(w http.ResponseWriter, r *http.Request) {
@@ -66,11 +97,27 @@ func (h *Handler) connectCatalogRepository(w http.ResponseWriter, r *http.Reques
 	}
 	status, err := h.catalogRepos.Connect(r.Context(), input.Path)
 	if err != nil {
-		writeError(w, catalogRepositoryError(err, domain.ErrInvalid))
+		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
 	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_repository.connected", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
-	writeData(w, http.StatusOK, status)
+	writeData(w, http.StatusOK, enabledCatalogRepositoryStatus(status))
+}
+
+func (h *Handler) createCatalogBackup(w http.ResponseWriter, r *http.Request) {
+	if err := h.requireCatalogRepository(r); err != nil {
+		writeError(w, err)
+		return
+	}
+	manifest, err := h.catalogRepos.Snapshot(r.Context(), "manual-ui")
+	if err != nil {
+		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
+		return
+	}
+	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_backup.created", "catalog_backup", manifest.BackupID, map[string]any{
+		"gitCommit": manifest.GitCommit, "gitTag": manifest.GitTag, "publicationGeneration": manifest.PublicationGeneration,
+	})
+	writeData(w, http.StatusCreated, manifest)
 }
 
 func (h *Handler) planCatalogRestore(w http.ResponseWriter, r *http.Request) {

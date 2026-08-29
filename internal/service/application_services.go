@@ -38,6 +38,7 @@ type environmentStore interface {
 	GetActiveEnvironmentRun(context.Context, string) (store.ActiveEnvironmentRun, error)
 	ListAudit(context.Context, int) ([]domain.AuditEvent, error)
 	LatestEnvironmentHealthCheck(context.Context, string) (domain.EnvironmentHealthCheck, error)
+	LatestEnvironmentSSHCheck(context.Context, string) (domain.EnvironmentSSHCheck, error)
 }
 
 type executionStore interface {
@@ -153,6 +154,9 @@ func (s *EnvironmentService) ListAudit(ctx context.Context, limit int) ([]domain
 }
 func (s *EnvironmentService) LatestHealthCheck(ctx context.Context, environmentID string) (domain.EnvironmentHealthCheck, error) {
 	return s.store.LatestEnvironmentHealthCheck(ctx, environmentID)
+}
+func (s *EnvironmentService) LatestSSHCheck(ctx context.Context, environmentID string) (domain.EnvironmentSSHCheck, error) {
+	return s.store.LatestEnvironmentSSHCheck(ctx, environmentID)
 }
 
 func (s *ExecutionService) ListRuns(ctx context.Context, user domain.User) ([]domain.Run, error) {

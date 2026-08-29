@@ -82,4 +82,4 @@ ClusterForge 环境名称：`Kubernetes 测试集群 2`。2026-08-24 初次前�
 1. `环境管理` → 选择目标环境 → `Inventory`：维护主机地址、分组、SSH 用户和端口。
 2. `环境管理` → 选择目标环境 → `环境变量`：维护 `IMAGE_REGISTRY` 和 `FILE_STATION`。
 3. 保存时填写变更原因并创建新的 Environment Revision，不覆盖历史 Revision。
-4. 点击 `立即检查` 只验证 TCP 连通性；安装前仍需确认 SSH 凭据、Ansible 依赖、介质完整性和活动 Run。
+4. 点击 `立即检查` 会分别验证 TCP 端点和 SSH / Ansible Ping；安装前仍需确认提权权限、组件所需凭据、介质完整性和活动 Run。
