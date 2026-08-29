@@ -221,7 +221,11 @@ func (m *Manager) NeedsSnapshot(ctx context.Context) (bool, int64, error) {
 	if err != nil {
 		return false, generation, err
 	}
-	return generation > latest.PublicationGeneration, generation, nil
+	// Publication generations are monotonic during ordinary operation, but a
+	// guarded database rebuild starts a new database at a lower generation.
+	// Any mismatch therefore needs a fresh recovery point; using only `>` would
+	// incorrectly treat an older database generation as already protected.
+	return generation != latest.PublicationGeneration, generation, nil
 }
 
 func (m *Manager) Verify(ctx context.Context, backupID string, verifyGit bool) (Manifest, error) {

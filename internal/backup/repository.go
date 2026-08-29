@@ -152,18 +152,22 @@ func (c *RepositoryController) Status(ctx context.Context) (RepositoryStatus, er
 		status.TimerEnabled, status.LastError, status.LastErrorAt = health.TimerEnabled, health.LastError, health.LastErrorAt
 		return status, nil
 	}
-	if _, err := runCommand(ctx, c.selection.ClonePath, "git", "-C", c.selection.ClonePath, "fetch", "--prune", "--tags", "origin"); err != nil {
-		return status, err
-	}
-	points, err := c.recoveryPoints(ctx, c.selection.ClonePath)
-	if err != nil {
-		return status, err
-	}
-	status.RecoveryPoints = points
 	health := c.healthLocked(ctx)
 	status.TimerEnabled, status.Behind = health.TimerEnabled, health.Behind
 	status.CurrentGeneration, status.BackedUpGeneration = health.CurrentGeneration, health.BackedUpGeneration
 	status.LastSuccessfulAt, status.LastError, status.LastErrorAt = health.LastSuccessfulAt, health.LastError, health.LastErrorAt
+	if _, err := runCommand(ctx, c.selection.ClonePath, "git", "-C", c.selection.ClonePath, "fetch", "--prune", "--tags", "origin"); err != nil {
+		now := time.Now().UTC()
+		status.LastError, status.LastErrorAt = "同步所选私有仓库失败: "+err.Error(), &now
+		return status, nil
+	}
+	points, err := c.recoveryPoints(ctx, c.selection.ClonePath)
+	if err != nil {
+		now := time.Now().UTC()
+		status.LastError, status.LastErrorAt = "读取远端恢复点失败: "+err.Error(), &now
+		return status, nil
+	}
+	status.RecoveryPoints = points
 	return status, nil
 }
 
@@ -416,6 +420,14 @@ func (c *RepositoryController) managerFor(clonePath string) (*Manager, error) {
 }
 
 func (c *RepositoryController) recoveryPoints(ctx context.Context, clonePath string) ([]RecoveryPoint, error) {
+	// Fetch --prune --tags does not delete tags removed from the remote. Treat
+	// ls-remote as the authority instead of trusting the clone's tag namespace;
+	// this also avoids prune-tags deleting a concurrently created local tag
+	// before the snapshot worker has pushed it.
+	remoteRefs, err := remoteRecoveryPointRefs(ctx, clonePath)
+	if err != nil {
+		return nil, err
+	}
 	output, err := runCommand(ctx, clonePath, "git", "-C", clonePath, "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)|%(objectname)|%(creatordate:iso-strict)", "refs/tags/backup")
 	if err != nil {
 		return nil, err
@@ -429,6 +441,9 @@ func (c *RepositoryController) recoveryPoints(ctx context.Context, clonePath str
 		if len(parts) != 3 {
 			continue
 		}
+		if !remoteRefs[parts[0]] {
+			continue
+		}
 		createdAt, err := time.Parse(time.RFC3339, parts[2])
 		if err != nil {
 			continue
@@ -437,6 +452,22 @@ func (c *RepositoryController) recoveryPoints(ctx context.Context, clonePath str
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].CreatedAt.After(points[j].CreatedAt) })
 	return points, nil
+}
+
+func remoteRecoveryPointRefs(ctx context.Context, clonePath string) (map[string]bool, error) {
+	output, err := runCommand(ctx, clonePath, "git", "-C", clonePath, "ls-remote", "--refs", "--tags", "origin", "refs/tags/backup/*")
+	if err != nil {
+		return nil, err
+	}
+	refs := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || !strings.HasPrefix(fields[1], "refs/tags/backup/") {
+			continue
+		}
+		refs[strings.TrimPrefix(fields[1], "refs/tags/")] = true
+	}
+	return refs, nil
 }
 
 func (c *RepositoryController) resolveExistingPath(input string) (string, error) {

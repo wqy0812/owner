@@ -42,11 +42,21 @@ func (c *SystemdTimerController) SetEnabled(ctx context.Context, enabled bool) e
 
 func (c *SystemdTimerController) Enabled(ctx context.Context) (bool, error) {
 	err := exec.CommandContext(ctx, c.Binary, "is-enabled", "--quiet", c.Unit).Run()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return false, nil
+		}
+		return false, err
+	}
+	// An enabled timer can still be stopped or failed. Treat it as healthy only
+	// while the unit is active, otherwise the six-hour schedule will not fire.
+	err = exec.CommandContext(ctx, c.Binary, "is-active", "--quiet", c.Unit).Run()
 	if err == nil {
 		return true, nil
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	if errors.As(err, &exit) {
 		return false, nil
 	}
 	return false, err

@@ -199,6 +199,41 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText('发布目录已从 Git 恢复')).toBeInTheDocument();
   });
 
+  it('keeps repository reconfiguration available when the selected repository is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/catalog-repository')) return json({
+        configured: true,
+        path: '/data/private/catalog.git',
+        branch: 'catalog',
+        allowedRoot: '/data/private',
+        recoveryPoints: [],
+        timerEnabled: true,
+        behind: true,
+        currentGeneration: 4,
+        backedUpGeneration: 3,
+        lastError: '同步所选私有仓库失败: repository unavailable',
+      });
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 0, actionRequired: 0, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 0 }, items: [],
+      });
+      if (isEnvironmentList(url) || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/environments');
+
+    expect(await screen.findByText(/同步所选私有仓库失败/)).toBeInTheDocument();
+    const reconnect = screen.getByRole('button', { name: '接入已有仓库' });
+    expect(reconnect).toBeEnabled();
+    await userEvent.click(reconnect);
+    expect(screen.getByRole('heading', { name: '接入已有 Catalog 仓库' })).toBeInTheDocument();
+    expect(screen.getByText(/路径必须位于 \/data\/private 内/)).toBeInTheDocument();
+  });
+
   it('explains a blocking work item and links to its exact resource', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

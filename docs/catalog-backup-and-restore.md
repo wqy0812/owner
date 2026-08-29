@@ -38,7 +38,8 @@ systemctl restart clusterforge-platform
 ```
 
 创建或接入仓库成功后，平台启用 `clusterforge-backup.timer`；服务重启时也会把 Timer
-状态与前台选择重新对齐。若启停失败、最近一次异步备份失败或发布代次落后于最近恢复点，
+状态与前台选择重新对齐。健康检查同时要求 Timer 已启用且正在运行，单独执行
+`systemctl stop` 后即使 Unit 仍为 enabled 也会产生告警。若启停失败、最近一次异步备份失败或发布代次与最近恢复点不一致，
 Environment Owner 的“我的工作”和“发布目录灾备”面板都会显示告警与处置入口。
 
 ## 创建与检查恢复点
@@ -61,9 +62,11 @@ Timer 保持停止。部署或数据清理前应主动执行：
 /opt/clusterforge/platform/clusterforge-backup resume --backup-id <id>
 ```
 
+受保护部署使用 `--rebuild-v1-db` 重建数据库时，会在新数据库通过 Schema contract 与外键检查后强制创建并确认新的恢复点；失败则部署回滚。应用内 Reset 保持发布代次单调递增，避免旧仓库清单掩盖重置后的待备份状态。
+
 ## 恢复
 
-Environment Owner 可在“发布目录灾备”选择 `backup/*` 恢复点并先执行预检。前台恢复采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
+Environment Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。前台恢复采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
 
 空库恢复在单一 SQLite 事务中写入已发布/废弃的组件、Release、依赖、Action、场景 Revision、制品和镜像元数据。既有用户 ID 仅在名称与角色完全一致时复用；Playbook 仅在目标不存在或内容 SHA-256 完全一致时允许。ID/slug、用户属性或 Playbook 内容冲突都会整批失败，未提交的新文件会清理。成功后记录审计并异步触发新快照；Run、环境、审批、通知、Session 和既有审计历史不会从 Git 恢复。
 

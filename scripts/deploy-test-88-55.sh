@@ -355,6 +355,11 @@ if violations:
     raise SystemExit(f"foreign key violations: {violations!r}")
 PY
 
+if [[ "$rebuild_v1_db" -eq 1 && "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
+  echo "creating recovery point for rebuilt V1 database"
+  "$live_backup_binary" snapshot --selected-repository --reason after-v1-rebuild
+fi
+
 service_touched=0
 trap - ERR INT TERM
 cleanup_staged

@@ -117,7 +117,11 @@ func (s *Store) Reset(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=1 WHERE id=1`); err != nil {
+	// Keep the publication fence monotonic across an in-place Demo reset so the
+	// backup scheduler cannot mistake a reset Catalog for an older protected
+	// generation. A physical database rebuild is reconciled by the guarded
+	// deployment workflow after the new service has passed its health gates.
+	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=generation+1 WHERE id=1`); err != nil {
 		tx.Rollback()
 		return err
 	}

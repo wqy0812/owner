@@ -363,12 +363,49 @@ func TestPrivateRepositoryControllerConfinesPathsAndCreatesBareRepository(t *tes
 		t.Fatal("symlink escape was accepted")
 	}
 
+	const recoveryTag = "backup/repository-test"
+	if _, err := runCommand(ctx, selected.CatalogRepo, "git", "-C", selected.CatalogRepo,
+		"-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+		"tag", "-a", recoveryTag, "-m", "test recovery point", "refs/remotes/origin/catalog"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, selected.CatalogRepo, "git", "-C", selected.CatalogRepo, "push", "origin", "refs/tags/"+recoveryTag); err != nil {
+		t.Fatal(err)
+	}
+	withRecoveryPoint, err := controller.Status(ctx)
+	if err != nil || len(withRecoveryPoint.RecoveryPoints) != 1 || withRecoveryPoint.RecoveryPoints[0].Ref != recoveryTag {
+		t.Fatalf("remote recovery points=%+v err=%v", withRecoveryPoint.RecoveryPoints, err)
+	}
+	if _, err := runCommand(ctx, selected.CatalogRepo, "git", "-C", selected.CatalogRepo, "push", "origin", ":refs/tags/"+recoveryTag); err != nil {
+		t.Fatal(err)
+	}
+	withoutDeletedRemoteTag, err := controller.Status(ctx)
+	if err != nil || len(withoutDeletedRemoteTag.RecoveryPoints) != 0 {
+		t.Fatalf("deleted remote tag remained available: points=%+v err=%v", withoutDeletedRemoteTag.RecoveryPoints, err)
+	}
+
 	missingBranch := filepath.Join(allowed, "missing.git")
 	if _, err := runCommand(ctx, allowed, "git", "init", "--bare", missingBranch); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controller.Connect(ctx, missingBranch); err == nil || !strings.Contains(err.Error(), "no catalog branch") {
 		t.Fatalf("missing branch error=%v", err)
+	}
+
+	unavailablePath := status.Path + ".unavailable"
+	if err := os.Rename(status.Path, unavailablePath); err != nil {
+		t.Fatal(err)
+	}
+	degraded, err := controller.Status(ctx)
+	if err != nil {
+		t.Fatalf("repository failure must remain a readable status: %v", err)
+	}
+	expectedAllowedRoot, err := filepath.EvalSymlinks(allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !degraded.Configured || degraded.AllowedRoot != expectedAllowedRoot || !strings.Contains(degraded.LastError, "同步所选私有仓库失败") {
+		t.Fatalf("degraded repository status=%+v", degraded)
 	}
 }
 
@@ -395,6 +432,36 @@ func TestLatestSuccessfulIsScopedToCatalogRepository(t *testing.T) {
 	}
 }
 
+func TestNeedsSnapshotWhenPublicationGenerationMovesBackward(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "platform.db")
+	database, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	manager, err := NewManager(Config{
+		DatabasePath: databasePath, PlaybookRoot: filepath.Join(root, "jobs"),
+		BackupDir: filepath.Join(root, "backups"), CatalogRepo: filepath.Join(root, "repo"),
+		CatalogRemote: "origin", CatalogBranch: "catalog",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := time.Now().UTC()
+	if err := manager.writeLatestSuccessful(Manifest{
+		FormatVersion: CatalogFormatVersion, BackupID: "older-database", Status: StatusSuccess,
+		CreatedAt: completed, CompletedAt: &completed, DatabaseFile: "platform.db", PublicationGeneration: 9,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	needed, generation, err := manager.NeedsSnapshot(ctx)
+	if err != nil || !needed || generation != 1 {
+		t.Fatalf("needed=%t generation=%d err=%v", needed, generation, err)
+	}
+}
+
 func TestSchedulerNotifiesWhenBackupHealthChanges(t *testing.T) {
 	manager, err := NewManager(Config{DatabasePath: "platform.db", PlaybookRoot: "jobs", BackupDir: "backups", CatalogRepo: "repo", CatalogRemote: "origin", CatalogBranch: "catalog"})
 	if err != nil {
@@ -410,6 +477,30 @@ func TestSchedulerNotifiesWhenBackupHealthChanges(t *testing.T) {
 	scheduler.recordSuccess()
 	if status := scheduler.Status(); status.LastError != "" || status.LastSuccessAt == nil || notifications.Load() != 2 {
 		t.Fatalf("success status=%+v notifications=%d", status, notifications.Load())
+	}
+}
+
+func TestSystemdTimerMustBeEnabledAndActive(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "systemctl")
+	script := []byte("#!/bin/sh\ncase \"$1\" in\n  is-enabled) exit \"${TEST_TIMER_ENABLED_EXIT:-0}\" ;;\n  is-active) exit \"${TEST_TIMER_ACTIVE_EXIT:-0}\" ;;\n  *) exit 0 ;;\nesac\n")
+	if err := os.WriteFile(binary, script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	controller := NewSystemdTimerController(binary, "clusterforge-backup.timer")
+	t.Setenv("TEST_TIMER_ENABLED_EXIT", "0")
+	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "0")
+	if enabled, err := controller.Enabled(context.Background()); err != nil || !enabled {
+		t.Fatalf("active enabled timer=%t err=%v", enabled, err)
+	}
+	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "3")
+	if enabled, err := controller.Enabled(context.Background()); err != nil || enabled {
+		t.Fatalf("stopped enabled timer=%t err=%v", enabled, err)
+	}
+	t.Setenv("TEST_TIMER_ENABLED_EXIT", "1")
+	t.Setenv("TEST_TIMER_ACTIVE_EXIT", "0")
+	if enabled, err := controller.Enabled(context.Background()); err != nil || enabled {
+		t.Fatalf("disabled timer=%t err=%v", enabled, err)
 	}
 }
 
