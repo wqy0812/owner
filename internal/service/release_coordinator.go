@@ -69,6 +69,7 @@ func (c *ReleaseCoordinator) PublishRelease(ctx context.Context, user domain.Use
 	if err := c.store.PublishComponentRelease(ctx, id, publicationEpoch, publicationGuards, now); err != nil {
 		return release, report, err
 	}
+	p.requestPublicationBackup("component-release:" + id)
 	release.Status, release.ReleasedAt = domain.ReleaseReleased, &now
 	notifications := make([]domain.Notification, 0, len(report.Recipients))
 	for _, recipient := range report.Recipients {
@@ -177,6 +178,7 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 	if err := c.store.PublishCandidateReleaseSet(ctx, revisionGuard, releaseIDs, publicationGuards, evidence.ID, publicationEpoch, now); err != nil {
 		return revision, err
 	}
+	p.requestPublicationBackup("scenario-revision:" + revisionID)
 	revision.Status, revision.ReleasedAt = domain.RevisionReleased, &now
 	for _, item := range set.Releases {
 		p.audit(ctx, user, "component_release.published_with_scenario", "component_release", item.ReleaseID, map[string]any{"scenarioRevisionId": revisionID, "componentId": item.ComponentID, "version": item.Version})

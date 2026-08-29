@@ -12,6 +12,15 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
+type fixedCatalogBackupHealth struct {
+	health domain.CatalogBackupHealth
+	err    error
+}
+
+func (f *fixedCatalogBackupHealth) CatalogBackupHealth(context.Context) (domain.CatalogBackupHealth, error) {
+	return f.health, f.err
+}
+
 func maintenanceTestPlatform(t *testing.T) (*Platform, domain.User, domain.Environment) {
 	t.Helper()
 	ctx := context.Background()
@@ -54,6 +63,39 @@ func TestEnvironmentHealthCheckPersistsReachability(t *testing.T) {
 	if err != nil || stored.ID != check.ID || stored.EnvironmentRevisionID != environment.CurrentRevisionID {
 		t.Fatalf("stored health=%+v err=%v", stored, err)
 	}
+}
+
+func TestEnvironmentOwnerWorkbenchShowsCatalogBackupWarnings(t *testing.T) {
+	platform, owner, _ := maintenanceTestPlatform(t)
+	provider := &fixedCatalogBackupHealth{}
+	platform.ConfigurePublicationBackupHealth(provider)
+	workbench, err := platform.Workbench(context.Background(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := workItemByID(workbench.Items, "catalog_backup:health")
+	if item == nil || item.Status != domain.WorkStatusActionRequired || len(item.Reasons) != 1 || item.Reasons[0].Code != "catalog_backup.repository_unconfigured" {
+		t.Fatalf("unconfigured backup work item=%+v", item)
+	}
+	now := time.Now().UTC()
+	provider.health = domain.CatalogBackupHealth{Configured: true, TimerEnabled: false, Behind: true, CurrentGeneration: 8, BackedUpGeneration: 6, LastError: "git push failed", LastErrorAt: &now}
+	workbench, err = platform.Workbench(context.Background(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = workItemByID(workbench.Items, "catalog_backup:health")
+	if item == nil || item.Priority != domain.WorkPriorityCritical || len(item.Reasons) != 3 {
+		t.Fatalf("failed backup work item=%+v", item)
+	}
+}
+
+func workItemByID(items []domain.WorkItem, id string) *domain.WorkItem {
+	for index := range items {
+		if items[index].ID == id {
+			return &items[index]
+		}
+	}
+	return nil
 }
 
 func TestRestoreEnvironmentRevisionCreatesNewRevisionWithReason(t *testing.T) {

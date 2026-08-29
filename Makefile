@@ -3,6 +3,7 @@ SHELL := /bin/sh
 GO ?= go
 PNPM ?= pnpm
 APP := bin/newplatform
+BACKUP_APP := bin/clusterforge-backup
 EMBED_DIR := internal/ui/dist
 
 .PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-ansible test-e2e build build-web
@@ -48,3 +49,4 @@ build-web:
 build: build-web
 	mkdir -p bin
 	$(GO) build -tags embed -o $(APP) ./cmd/server
+	$(GO) build -o $(BACKUP_APP) ./cmd/backup

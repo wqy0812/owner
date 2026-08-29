@@ -34,20 +34,33 @@ type Platform struct {
 	nextWorkerToken uint64
 	active          map[string]context.CancelFunc
 
-	identity           *IdentityService
-	catalog            *CatalogService
-	scenarios          *ScenarioService
-	environments       *EnvironmentService
-	execution          *ExecutionService
-	readModel          *ReadModelService
-	releaseCoordinator *ReleaseCoordinator
-	planBuilder        *PlanBuilder
-	runCreator         *RunCreator
-	runScheduler       *RunScheduler
-	runExecutor        *RunExecutor
-	lifecycleRecorder  *LifecycleRecorder
-	rollbackPlanner    *RollbackPlanner
-	approvals          *ApprovalService
+	identity                *IdentityService
+	catalog                 *CatalogService
+	scenarios               *ScenarioService
+	environments            *EnvironmentService
+	execution               *ExecutionService
+	readModel               *ReadModelService
+	releaseCoordinator      *ReleaseCoordinator
+	planBuilder             *PlanBuilder
+	runCreator              *RunCreator
+	runScheduler            *RunScheduler
+	runExecutor             *RunExecutor
+	lifecycleRecorder       *LifecycleRecorder
+	rollbackPlanner         *RollbackPlanner
+	approvals               *ApprovalService
+	publicationBackup       PublicationBackupRequester
+	publicationBackupHealth PublicationBackupHealthProvider
+}
+
+// PublicationBackupRequester is deliberately best-effort. Publication remains
+// authoritative in SQLite and never waits for or rolls back because an
+// asynchronous disaster-recovery snapshot cannot be started.
+type PublicationBackupRequester interface {
+	Request(reason string)
+}
+
+type PublicationBackupHealthProvider interface {
+	CatalogBackupHealth(context.Context) (domain.CatalogBackupHealth, error)
 }
 
 type environmentWorkerState struct {
@@ -117,6 +130,24 @@ func (p *Platform) ConfigureDeliveryAdapters(artifact ArtifactDelivery, image Im
 	}
 }
 
+func (p *Platform) ConfigurePublicationBackup(requester PublicationBackupRequester) {
+	p.publicationBackup = requester
+}
+
+func (p *Platform) ConfigurePublicationBackupHealth(provider PublicationBackupHealthProvider) {
+	p.publicationBackupHealth = provider
+}
+
+func (p *Platform) NotifyPublicationBackupStatus() {
+	p.hub.Publish("catalog_backup.updated", map[string]any{"status": "changed"})
+}
+
+func (p *Platform) requestPublicationBackup(reason string) {
+	if p.publicationBackup != nil {
+		p.publicationBackup.Request(reason)
+	}
+}
+
 func (p *Platform) Start(ctx context.Context) error {
 	if err := p.RecoverComponentImportFiles(ctx); err != nil {
 		return fmt.Errorf("recover component import files: %w", err)
@@ -180,6 +211,10 @@ func requireOwner(user domain.User, role domain.Role, ownerID string) error {
 func (p *Platform) audit(ctx context.Context, actor domain.User, action, resourceType, resourceID string, metadata map[string]any) {
 	event := newAuditEvent(actor, action, resourceType, resourceID, metadata)
 	_ = p.store.AppendAudit(ctx, event)
+}
+
+func (p *Platform) RecordAudit(ctx context.Context, actor domain.User, action, resourceType, resourceID string, metadata map[string]any) {
+	p.audit(ctx, actor, action, resourceType, resourceID, metadata)
 }
 
 func newAuditEvent(actor domain.User, action, resourceType, resourceID string, metadata map[string]any) domain.AuditEvent {

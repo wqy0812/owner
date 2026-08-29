@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitBranch, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
+import type { CatalogRepositoryStatus, CatalogRestorePlan, CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, WorkExplanation } from '../types/domain';
 
 type Tab = 'inventory' | 'facts' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -293,6 +293,7 @@ export function EnvironmentsPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Execution environments" title="环境管理" description="分别查看调度占用与真实连通性；配置变更以可追溯 Revision 保存。" actions={user.role === 'environment_owner' ? <><button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入环境</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button></> : undefined} />
+    {user.role === 'environment_owner' && <CatalogRepositoryPanel />}
     <RefreshNotice loading={isRefreshing} error={environments ? error : undefined} onRetry={() => void reload()} />
     {loading && !environments ? <LoadingBlock label="正在读取共享环境…" /> : error && !environments ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="catalog-layout">
       <aside className="catalog-list panel">
@@ -346,6 +347,77 @@ export function EnvironmentsPage() {
     {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
     {lifecycleOpen && selected && <EnvironmentLifecycleModal environment={selected} lifecycle={lifecycle} error={lifecycleError} explanation={lifecycleExplanation} busy={lifecycleBusy} onRetry={() => void openLifecycle()} onClose={() => { if (!lifecycleBusy) setLifecycleOpen(false); }} onConfirm={(action) => void applyLifecycle(action)} />}
   </div>;
+}
+
+function CatalogRepositoryPanel() {
+  const { notify, signalRefresh } = useApp();
+  const { data: repository, loading, error, isRefreshing, reload } = useApiData<CatalogRepositoryStatus>((signal) => api.catalogRepository(signal), [], 'catalog-repository');
+  const [repositoryMode, setRepositoryMode] = useState<'create' | 'connect'>();
+  const [restoreOpen, setRestoreOpen] = useState(false);
+
+  function updated(status: CatalogRepositoryStatus, message: string) {
+    notify('success', message, `${status.path} · ${status.branch}`);
+    setRepositoryMode(undefined);
+    signalRefresh(['catalog-repository', 'workbench']);
+    void reload();
+  }
+
+  return <article className="panel" id="catalog-repository">
+    <header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>发布目录灾备</h2><p>发布后自动复制到本地私有 Git 仓库；恢复只允许组件和场景均为空的数据库。</p></div></div><div className="environment-hero__actions"><button className="button button--quiet" disabled={!repository} onClick={() => setRepositoryMode('connect')}>接入已有仓库</button><button className="button button--secondary" disabled={!repository} onClick={() => setRepositoryMode('create')}><Plus size={15} /> 创建私有仓库</button></div></header>
+    <RefreshNotice loading={Boolean(isRefreshing)} error={repository ? error : undefined} onRetry={reload} />
+    {loading && !repository ? <LoadingBlock label="正在读取私有仓库…" /> : error && !repository ? <ErrorBlock message={error} onRetry={reload} /> : repository ? <div className="revision-preview">
+      <div className="revision-diff"><GitBranch size={18} /><div><strong>{repository.configured ? '已接入私有仓库' : '尚未配置私有仓库'}</strong><p>{repository.configured ? repository.path : `允许根目录：${repository.allowedRoot}`}</p>{repository.configured && <p>分支：{repository.branch} · 恢复点：{repository.recoveryPoints.length} 个 · 六小时任务：{repository.timerEnabled ? '已启用' : '已停止'}</p>}</div></div>
+      {!repository.configured && <div className="inline-warning"><AlertTriangle size={16} /><span>未通过前台选择仓库，六小时定时备份保持停止。</span></div>}
+      {repository.configured && repository.behind && <div className="inline-warning"><AlertTriangle size={16} /><span>恢复点落后：当前发布代次 {repository.currentGeneration}，已备份代次 {repository.backedUpGeneration}。</span></div>}
+      {repository.lastError && <div className="inline-warning"><AlertTriangle size={16} /><span>最近备份异常：{repository.lastError}</span></div>}
+      {repository.configured && <div className="modal-actions"><button className="button button--danger" disabled={!repository.recoveryPoints.length} onClick={() => setRestoreOpen(true)}><RotateCcw size={15} /> 从 Git 恢复空库</button></div>}
+    </div> : null}
+    {repositoryMode && repository && <CatalogRepositoryModal mode={repositoryMode} allowedRoot={repository.allowedRoot} onClose={() => setRepositoryMode(undefined)} onDone={updated} />}
+    {restoreOpen && repository && <CatalogRestoreModal repository={repository} onClose={() => setRestoreOpen(false)} onDone={() => { setRestoreOpen(false); notify('success', '发布目录已从 Git 恢复', '组件、场景和 Playbook 已写入空数据库，并已触发恢复后快照。'); signalRefresh(['catalog-repository', 'components', 'scenarios', 'workbench']); void reload(); }} />}
+  </article>;
+}
+
+function CatalogRepositoryModal({ mode, allowedRoot, onClose, onDone }: { mode: 'create' | 'connect'; allowedRoot: string; onClose: () => void; onDone: (status: CatalogRepositoryStatus, message: string) => void }) {
+  const { notify } = useApp();
+  const [path, setPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true);
+    try {
+      const status = mode === 'create' ? await api.createCatalogRepository(path.trim()) : await api.connectCatalogRepository(path.trim());
+      onDone(status, mode === 'create' ? '私有仓库已创建' : '已有仓库已接入');
+    } catch (reason) { notify('error', mode === 'create' ? '创建私有仓库失败' : '接入私有仓库失败', displayError(reason)); }
+    finally { setBusy(false); }
+  }
+  return <Modal title={mode === 'create' ? '创建私有 Catalog 仓库' : '接入已有 Catalog 仓库'} description={`路径必须位于 ${allowedRoot} 内；相对路径会基于该目录解析。`} onClose={onClose}>
+    <form onSubmit={(event) => void submit(event)}><div className="modal-body"><label><span>服务器仓库路径</span><input aria-label="服务器仓库路径" value={path} onChange={(event) => setPath(event.target.value)} placeholder={mode === 'create' ? 'catalog-production.git' : '/data/private-catalog-repositories/catalog-production.git'} autoFocus required /><small>{mode === 'create' ? '目标必须不存在；平台将创建权限为 0700 的 bare Git 仓库。' : `已有仓库必须包含 catalog 分支，且路径位于 ${allowedRoot}。`}</small></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" disabled={busy} onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || !path.trim()}>{busy ? '处理中…' : mode === 'create' ? '创建并接入' : '验证并接入'}</button></footer></form>
+  </Modal>;
+}
+
+function CatalogRestoreModal({ repository, onClose, onDone }: { repository: CatalogRepositoryStatus; onClose: () => void; onDone: () => void }) {
+  const { notify } = useApp();
+  const [ref, setRef] = useState(repository.recoveryPoints[0]?.ref ?? '');
+  const [plan, setPlan] = useState<CatalogRestorePlan>();
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState<'preview' | 'restore'>();
+  async function preview() {
+    setBusy('preview'); setPlan(undefined); setConfirmation('');
+    try { setPlan(await api.previewCatalogRestore(ref)); }
+    catch (reason) { notify('error', '恢复预检失败', displayError(reason)); }
+    finally { setBusy(undefined); }
+  }
+  async function restoreCatalog() {
+    if (!plan) return; setBusy('restore');
+    try { await api.restoreCatalog({ ref, expectedPlanDigest: plan.planDigest, confirmation }); onDone(); }
+    catch (reason) { setPlan(undefined); notify('error', 'Git 恢复失败', displayError(reason)); }
+    finally { setBusy(undefined); }
+  }
+  return <Modal size="wide" title="从 Git 恢复发布目录" description="仅在当前数据库没有任何组件和场景时允许恢复；操作不会恢复 Run、环境、审批或审计历史。" onClose={onClose}>
+    <div className="modal-body cluster-rollback-preview"><div className="warning-callout"><AlertTriangle size={19} /><div><strong>冲突时整批失败</strong><p>组件或场景非空、ID/slug 冲突、用户身份属性冲突、Playbook 路径内容不同，都会拒绝恢复且不留下部分数据。</p></div></div>
+      <label><span>Git 恢复点</span><select aria-label="Git 恢复点" value={ref} onChange={(event) => { setRef(event.target.value); setPlan(undefined); setConfirmation(''); }}>{repository.recoveryPoints.map((point) => <option key={point.ref} value={point.ref}>{formatTime(point.createdAt)} · {point.ref}</option>)}</select></label>
+      {plan && <><section className="cluster-rollback-summary"><div><span>组件</span><strong>{plan.counts.components ?? 0}</strong></div><div><span>Release</span><strong>{plan.counts.component_releases ?? 0}</strong></div><div><span>场景</span><strong>{plan.counts.scenarios ?? 0}</strong></div><div><span>Playbook</span><strong>{plan.playbookCount}</strong></div></section><div className="revision-diff"><GitCompare size={18} /><div><strong>恢复计划已锁定</strong><p>Commit：{plan.gitCommit.slice(0, 16)}…</p><p>Catalog：{plan.catalogSha256.slice(0, 16)}… · Schema：{plan.schemaContract}</p></div></div><label><span>输入“恢复发布目录”以确认</span><input aria-label="确认恢复发布目录" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" /><small>恢复前会重新核对空库状态和计划摘要。</small></label></>}
+    </div><footer className="modal-actions"><button className="button button--quiet" disabled={Boolean(busy)} onClick={onClose}>取消</button><button className="button button--quiet" disabled={Boolean(busy) || !ref} onClick={() => void preview()}>{busy === 'preview' ? '预检中…' : '预览恢复'}</button><button className="button button--danger" disabled={Boolean(busy) || !plan || confirmation !== '恢复发布目录'} onClick={() => void restoreCatalog()}>{busy === 'restore' ? '恢复中…' : '确认恢复空库'}</button></footer>
+  </Modal>;
 }
 
 function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; lifecycle?: EnvironmentLifecycle; error?: string; explanation?: WorkExplanation; busy?: 'load' | 'delete' | 'archive' | 'unarchive'; onRetry: () => void; onClose: () => void; onConfirm: (action: 'delete' | 'archive' | 'unarchive') => void }) {

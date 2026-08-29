@@ -88,6 +88,10 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 		mergeRunSet(embeddedRuns, embedded)
 	case domain.RoleEnvironmentOwner:
 		workbench.Items = append(workbench.Items, environmentOwnerWork(user, environments)...)
+		if p.publicationBackupHealth != nil {
+			health, healthErr := p.publicationBackupHealth.CatalogBackupHealth(ctx)
+			workbench.Items = append(workbench.Items, catalogBackupWorkItem(health, healthErr)...)
+		}
 	}
 
 	workbench.Items = append(workbench.Items, impactWork(user, notifications, scenarioByID)...)
@@ -112,6 +116,51 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 		}
 	}
 	return workbench, nil
+}
+
+func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) []domain.WorkItem {
+	now := time.Now().UTC()
+	item := domain.WorkItem{
+		ID: "catalog_backup:health", Kind: "catalog_backup", Priority: domain.WorkPriorityHigh,
+		Status: domain.WorkStatusActionRequired, Title: "发布目录灾备需要处理",
+		Subject:          domain.WorkSubject{Type: "catalog_repository", ID: "selected", Name: "发布目录灾备"},
+		PrimaryAction:    domain.WorkAction{Label: "检查灾备配置", Href: "/environments#catalog-repository"},
+		SecondaryActions: []domain.WorkAction{}, UpdatedAt: now,
+	}
+	if healthErr != nil {
+		item.Priority, item.Status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
+		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.health_failed", Message: "无法检查发布目录灾备状态", Cause: &domain.WorkCause{Kind: "backup_health", Summary: healthErr.Error(), At: &now}, NextAction: workAction("检查灾备配置", item.PrimaryAction.Href)}}
+		return []domain.WorkItem{item}
+	}
+	if !health.Configured {
+		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.repository_unconfigured", Message: "尚未通过前台录入私有仓库，六小时定时备份已停止", Cause: ruleCause("定时任务只允许使用 Environment Owner 明确选择的仓库"), NextAction: workAction("录入私有仓库", item.PrimaryAction.Href)}}
+		return []domain.WorkItem{item}
+	}
+	if health.LastError != "" {
+		item.Priority, item.Status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
+		at := valueOrTime(health.LastErrorAt, now)
+		item.UpdatedAt = at
+		item.Reasons = append(item.Reasons, domain.WorkReason{Code: "catalog_backup.failed", Message: "最近一次发布目录备份失败", Cause: &domain.WorkCause{Kind: "backup_failure", Summary: health.LastError, At: &at}, NextAction: workAction("检查恢复点", item.PrimaryAction.Href)})
+	}
+	if !health.TimerEnabled {
+		item.Priority, item.Status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
+		item.Reasons = append(item.Reasons, domain.WorkReason{Code: "catalog_backup.timer_disabled", Message: "已选择私有仓库，但六小时定时备份未启用", Cause: ruleCause("定时任务状态与前台仓库选择不一致"), NextAction: workAction("检查灾备配置", item.PrimaryAction.Href)})
+	}
+	if health.Behind {
+		item.Status = domain.WorkStatusBlocked
+		item.Reasons = append(item.Reasons, domain.WorkReason{Code: "catalog_backup.behind", Message: fmt.Sprintf("最近恢复点落后：当前发布代次 %d，已备份代次 %d", health.CurrentGeneration, health.BackedUpGeneration), Cause: ruleCause("发布目录发生变化后尚未形成成功恢复点"), NextAction: workAction("检查恢复点", item.PrimaryAction.Href)})
+	}
+	if len(item.Reasons) == 0 {
+		return nil
+	}
+	return []domain.WorkItem{item}
+}
+
+func valueOrTime(value *time.Time, fallback time.Time) time.Time {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, components []domain.Component, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {

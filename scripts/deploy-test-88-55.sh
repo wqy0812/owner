@@ -99,8 +99,9 @@ else
 fi
 
 artifact="$(mktemp "${TMPDIR:-/tmp}/clusterforge-platform-linux-amd64.XXXXXX")"
+backup_artifact="$(mktemp "${TMPDIR:-/tmp}/clusterforge-backup-linux-amd64.XXXXXX")"
 cleanup_local() {
-  rm -f "$artifact"
+  rm -f "$artifact" "$backup_artifact"
 }
 trap cleanup_local EXIT
 trap 'exit 130' INT
@@ -110,15 +111,21 @@ echo "==> Building embedded frontend and Linux amd64 binary"
 make build-web
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -tags embed -trimpath -o "$artifact" ./cmd/server
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -o "$backup_artifact" ./cmd/backup
 checksum="$(checksum_file "$artifact")"
+backup_checksum="$(checksum_file "$backup_artifact")"
 remote_artifact="/opt/clusterforge/platform/.clusterforge-platform.deploy-${checksum:0:12}-$$"
+remote_backup_artifact="/opt/clusterforge/platform/.clusterforge-backup.deploy-${backup_checksum:0:12}-$$"
+remote_backup_service="/opt/clusterforge/platform/.clusterforge-backup.service.deploy-$$"
+remote_backup_timer="/opt/clusterforge/platform/.clusterforge-backup.timer.deploy-$$"
 
 ssh_options=(-o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT")
 scp_options=(-o BatchMode=yes -o ConnectTimeout=8 -P "$SSH_PORT")
 
 echo "==> Checking remote deployment prerequisites on $TARGET"
 ssh "${ssh_options[@]}" "$TARGET" 'set -eu
-for command_name in awk curl flock install python3 sha256sum systemctl; do
+for command_name in awk curl flock git install python3 sha256sum systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing remote command: $command_name" >&2
     exit 1
@@ -131,6 +138,9 @@ systemctl is-active --quiet clusterforge-platform
 
 echo "==> Uploading artifact $checksum"
 scp "${scp_options[@]}" "$artifact" "$TARGET:$remote_artifact"
+scp "${scp_options[@]}" "$backup_artifact" "$TARGET:$remote_backup_artifact"
+scp "${scp_options[@]}" deploy/platform/clusterforge-backup.service "$TARGET:$remote_backup_service"
+scp "${scp_options[@]}" deploy/platform/clusterforge-backup.timer "$TARGET:$remote_backup_timer"
 
 allow_active_runs=0
 if [[ "$ALLOW_ACTIVE_RUNS" == true ]]; then
@@ -143,24 +153,33 @@ fi
 
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$allow_active_runs" "$rebuild_v1_db" <<'REMOTE_SCRIPT'
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_backup_service" "$remote_backup_timer" "$allow_active_runs" "$rebuild_v1_db" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
 expected_checksum="$2"
-allow_active_runs="$3"
-rebuild_v1_db="$4"
+staged_backup_artifact="$3"
+expected_backup_checksum="$4"
+staged_backup_service="$5"
+staged_backup_timer="$6"
+allow_active_runs="$7"
+rebuild_v1_db="$8"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
+live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
 database="/var/lib/clusterforge/platform.db"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
 backup_ready=0
 backup_dir=""
+backup_timer_was_enabled=0
+if systemctl is-enabled --quiet clusterforge-backup.timer 2>/dev/null; then
+  backup_timer_was_enabled=1
+fi
 
 cleanup_staged() {
-  rm -f "$staged_artifact"
+  rm -f "$staged_artifact" "$staged_backup_artifact" "$staged_backup_service" "$staged_backup_timer"
 }
 
 finish_failure() {
@@ -171,6 +190,24 @@ finish_failure() {
     systemctl stop "$service_name"
     if [[ "$backup_ready" -eq 1 ]]; then
       install -m 0755 "$backup_dir/clusterforge-platform" "$live_binary"
+      if [[ -f "$backup_dir/clusterforge-backup" ]]; then
+        install -m 0755 "$backup_dir/clusterforge-backup" "$live_backup_binary"
+      else
+        rm -f "$live_backup_binary"
+      fi
+      for unit in clusterforge-backup.service clusterforge-backup.timer; do
+        if [[ -f "$backup_dir/$unit" ]]; then
+          install -m 0644 "$backup_dir/$unit" "/etc/systemd/system/$unit"
+        else
+          rm -f "/etc/systemd/system/$unit"
+        fi
+      done
+      systemctl daemon-reload
+      if [[ "$backup_timer_was_enabled" -eq 1 ]]; then
+        systemctl enable --now clusterforge-backup.timer
+      else
+        systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
+      fi
       rm -f "${database}-wal" "${database}-shm"
       cp -a "$backup_dir/platform.db" "$database"
     fi
@@ -204,6 +241,11 @@ actual_checksum="$(sha256sum "$staged_artifact" | awk '{print $1}')"
   echo "artifact checksum mismatch" >&2
   exit 1
 }
+actual_backup_checksum="$(sha256sum "$staged_backup_artifact" | awk '{print $1}')"
+[[ "$actual_backup_checksum" == "$expected_backup_checksum" ]] || {
+  echo "backup artifact checksum mismatch" >&2
+  exit 1
+}
 
 active_runs="$(python3 - "$database" <<'PY'
 import sqlite3
@@ -231,10 +273,25 @@ if [[ -n "$active_runs" && "$allow_active_runs" -ne 1 ]]; then
   exit 1
 fi
 
+predeploy_backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
+predeploy_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
+predeploy_selection_file="${predeploy_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
+if [[ "$predeploy_backup_enabled" == "true" && -x "$live_backup_binary" && -f "$predeploy_selection_file" ]]; then
+  "$live_backup_binary" snapshot --selected-repository --reason before-deploy
+fi
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 backup_dir="$backup_root/$stamp"
 mkdir -p "$backup_dir"
 install -m 0755 "$live_binary" "$backup_dir/clusterforge-platform"
+if [[ -x "$live_backup_binary" ]]; then
+  install -m 0755 "$live_backup_binary" "$backup_dir/clusterforge-backup"
+fi
+for unit in clusterforge-backup.service clusterforge-backup.timer; do
+  if [[ -f "/etc/systemd/system/$unit" ]]; then
+    cp -a "/etc/systemd/system/$unit" "$backup_dir/$unit"
+  fi
+done
 
 service_touched=1
 systemctl stop "$service_name"
@@ -245,6 +302,10 @@ fi
 backup_ready=1
 
 install -m 0755 "$staged_artifact" "$live_binary"
+install -m 0755 "$staged_backup_artifact" "$live_backup_binary"
+install -m 0644 "$staged_backup_service" /etc/systemd/system/clusterforge-backup.service
+install -m 0644 "$staged_backup_timer" /etc/systemd/system/clusterforge-backup.timer
+systemctl daemon-reload
 if [[ "$rebuild_v1_db" -eq 1 ]]; then
   echo "rebuilding V1 test database after backup: $backup_dir/platform.db"
   rm -f "$database" "${database}-wal" "${database}-shm"
@@ -267,6 +328,18 @@ done
 
 installed_checksum="$(sha256sum "$live_binary" | awk '{print $1}')"
 [[ "$installed_checksum" == "$expected_checksum" ]]
+installed_backup_checksum="$(sha256sum "$live_backup_binary" | awk '{print $1}')"
+[[ "$installed_backup_checksum" == "$expected_backup_checksum" ]]
+
+backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
+catalog_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
+catalog_selection_file="${catalog_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
+if [[ "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
+  systemctl enable --now clusterforge-backup.timer
+else
+  systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
+  echo "Catalog backup timer stopped; select a private repository through the Environment Owner UI first"
+fi
 
 python3 - "$database" <<'PY'
 import sqlite3
@@ -290,6 +363,7 @@ trap - EXIT
 echo "deployment succeeded"
 echo "backup=$backup_dir"
 echo "sha256=$installed_checksum"
+echo "backup_sha256=$installed_backup_checksum"
 systemctl show "$service_name" \
   -p ActiveState -p SubState -p MainPID -p ActiveEnterTimestamp --no-pager
 curl -fsS --max-time 3 -o /dev/null -w 'http=%{http_code}\n' "$health_url"

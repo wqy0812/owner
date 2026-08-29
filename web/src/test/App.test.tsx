@@ -91,6 +91,10 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
         edges: [],
       }],
     }] : []);
+    if (url.endsWith('/catalog-repository/restore-plan')) return json({ gitCommit: 'a'.repeat(40), schemaContract: 'clusterforge-v1', catalogSha256: 'b'.repeat(64), counts: { components: 2, component_releases: 3, scenarios: 1 }, playbookCount: 4, targetComponentCount: 0, targetScenarioCount: 0, planDigest: 'c'.repeat(64) });
+    if (url.endsWith('/catalog-repository/restore')) return json({ restored: true, gitCommit: 'a'.repeat(40), schemaContract: 'clusterforge-v1', catalogSha256: 'b'.repeat(64), counts: { components: 2, component_releases: 3, scenarios: 1 }, playbookCount: 4, targetComponentCount: 0, targetScenarioCount: 0, planDigest: 'c'.repeat(64) }, 201);
+    if (url.endsWith('/catalog-repository/create') || url.endsWith('/catalog-repository/connect')) return json({ configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }] }, url.endsWith('/catalog-repository/create') ? 201 : 200);
+    if (url.endsWith('/catalog-repository')) return json({ configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }] });
     if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
     if (url.endsWith('/notifications')) return json([]);
@@ -146,6 +150,53 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('当前没有待办')).toBeInTheDocument();
     expect(screen.getByText(/首页主任务仍是处理交付待办/)).toBeInTheDocument();
     expect(screen.queryByText(/允许以“未验证”状态发布/)).not.toBeInTheDocument();
+  });
+
+  it('shows catalog backup warnings on the Environment Owner workbench', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(dave);
+      if (url.endsWith('/workbench')) return json({
+        generatedAt: '2026-08-29T10:00:00Z', role: dave.role,
+        summary: { critical: 1, actionRequired: 1, inProgress: 0, informational: 0 },
+        assets: { components: 0, scenarios: 0, environments: 1 },
+        items: [{
+          id: 'catalog_backup:health', kind: 'catalog_backup', priority: 'critical', status: 'blocked',
+          title: '发布目录灾备需要处理',
+          subject: { type: 'catalog_repository', id: 'selected', name: '发布目录灾备' },
+          reasons: [{
+            code: 'catalog_backup.failed', message: '最近一次发布目录备份失败',
+            cause: { kind: 'backup_failure', summary: 'git push failed' },
+            nextAction: { label: '检查恢复点', href: '/environments#catalog-repository' },
+          }],
+          primaryAction: { label: '检查发布目录灾备', href: '/environments#catalog-repository' }, secondaryActions: [],
+          updatedAt: '2026-08-29T09:00:00Z',
+        }],
+      });
+      return json([]);
+    }));
+
+    renderApp();
+
+    expect(await screen.findByRole('heading', { name: '发布目录灾备需要处理' })).toBeInTheDocument();
+    expect(screen.getByText('最近一次发布目录备份失败')).toBeInTheDocument();
+    expect(screen.getByText('git push failed')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /检查发布目录灾备/ })).toHaveAttribute('href', '/environments#catalog-repository');
+  });
+
+  it('lets an Environment Owner preview and confirm an empty-database Git restore', async () => {
+    const fetchMock = installFetch({ initialUser: dave });
+    renderApp('/environments');
+    expect(await screen.findByRole('heading', { name: '发布目录灾备' })).toBeInTheDocument();
+    expect(await screen.findByText('/data/private/catalog.git')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /从 Git 恢复空库/ }));
+    expect(screen.getByRole('heading', { name: '从 Git 恢复发布目录' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '预览恢复' }));
+    expect(await screen.findByText('恢复计划已锁定')).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('确认恢复发布目录'), '恢复发布目录');
+    await userEvent.click(screen.getByRole('button', { name: '确认恢复空库' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/catalog-repository/restore') && String(init?.body).includes('expectedPlanDigest'))).toBe(true));
+    expect(await screen.findByText('发布目录已从 Git 恢复')).toBeInTheDocument();
   });
 
   it('explains a blocking work item and links to its exact resource', async () => {

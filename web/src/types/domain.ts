@@ -391,7 +391,7 @@ export interface WorkExplanation {
 
 export interface WorkItem {
   id: string;
-  kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact';
+  kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact' | 'catalog_backup';
   priority: WorkPriority;
   status: WorkStatus;
   title: string;
@@ -591,6 +591,42 @@ export interface EnvironmentRollbackPlan extends ComponentTestPlan {
   sources: Array<{ runId: string; kind: NonNullable<Run['kind']>; scenarioRevisionId?: string; componentCount: number }>;
   componentCount: number;
   nodeCount: number;
+}
+
+export interface CatalogRecoveryPoint {
+  ref: string;
+  commit: string;
+  createdAt: string;
+}
+
+export interface CatalogRepositoryStatus {
+  configured: boolean;
+  path?: string;
+  branch: string;
+  allowedRoot: string;
+  recoveryPoints: CatalogRecoveryPoint[];
+  timerEnabled: boolean;
+  behind: boolean;
+  currentGeneration: number;
+  backedUpGeneration: number;
+  lastSuccessfulAt?: string;
+  lastError?: string;
+  lastErrorAt?: string;
+}
+
+export interface CatalogRestorePlan {
+  gitCommit: string;
+  schemaContract: string;
+  catalogSha256: string;
+  counts: Record<string, number>;
+  playbookCount: number;
+  targetComponentCount: number;
+  targetScenarioCount: number;
+  planDigest: string;
+}
+
+export interface CatalogRecoveryResult extends CatalogRestorePlan {
+  restored: boolean;
 }
 
 export interface Notification {

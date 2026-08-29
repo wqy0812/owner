@@ -342,7 +342,12 @@ func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from [
 }
 
 func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET status='deprecated',deprecated_at=? WHERE id=? AND status='released'`, timeText(at), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='deprecated',deprecated_at=?,publication_generation=publication_generation+1 WHERE id=? AND status='released'`, timeText(at), id)
 	if err != nil {
 		return err
 	}
@@ -350,7 +355,10 @@ func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at tim
 	if n == 0 {
 		return fmt.Errorf("%w: only released scenario revisions can be deprecated", domain.ErrConflict)
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AbandonScenarioRevision(ctx context.Context, id string, at time.Time) (string, error) {

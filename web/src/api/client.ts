@@ -3,6 +3,9 @@ import type {
   Approval,
   AuditEvent,
   CandidateReleaseSet,
+  CatalogRecoveryResult,
+  CatalogRepositoryStatus,
+  CatalogRestorePlan,
   Component,
   ComponentDependency,
   ComponentArtifact,
@@ -853,7 +856,7 @@ function normalizeWorkbench(value: unknown): Workbench {
       const subject = requireRecord(field(item, 'subject'), 'work item subject');
       return {
         id: requireString(item, 'id'),
-        kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact'] as const, 'kind'),
+        kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact', 'catalog_backup'] as const, 'kind'),
         priority: requireEnum(item, ['critical', 'high', 'normal', 'info'] as const, 'priority'),
         status: requireEnum(item, ['blocked', 'action_required', 'in_progress', 'attention'] as const, 'status'),
         title: requireString(item, 'title'),
@@ -970,6 +973,36 @@ const put = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+
+function normalizeCatalogRepository(value: unknown): CatalogRepositoryStatus {
+  const raw = requireRecord(value, 'Catalog repository');
+  return {
+    configured: requireBoolean(raw, 'configured'), path: optionalString(raw, 'path'),
+    branch: requireString(raw, 'branch'), allowedRoot: requireString(raw, 'allowedRoot'),
+    recoveryPoints: (optionalRecords(raw, 'recoveryPoints') ?? []).map((item) => ({ ref: requireString(item, 'ref'), commit: requireString(item, 'commit'), createdAt: requireString(item, 'createdAt') })),
+    timerEnabled: optionalBoolean(raw, 'timerEnabled') ?? false,
+    behind: optionalBoolean(raw, 'behind') ?? false,
+    currentGeneration: optionalNumber(raw, 'currentGeneration') ?? 0,
+    backedUpGeneration: optionalNumber(raw, 'backedUpGeneration') ?? 0,
+    lastSuccessfulAt: optionalString(raw, 'lastSuccessfulAt'), lastError: optionalString(raw, 'lastError'), lastErrorAt: optionalString(raw, 'lastErrorAt'),
+  };
+}
+
+function normalizeCatalogRestorePlan(value: unknown): CatalogRestorePlan {
+  const raw = requireRecord(value, 'Catalog restore plan');
+  const counts = requireRecord(raw.counts, 'counts');
+  const normalizedCounts: Record<string, number> = {};
+  for (const [name, count] of Object.entries(counts)) {
+    if (typeof count !== 'number' || !Number.isFinite(count)) throw invalidResponse(200, `平台 API 的 counts.${name} 必须是数字。`);
+    normalizedCounts[name] = count;
+  }
+  return {
+    gitCommit: requireString(raw, 'gitCommit'), schemaContract: requireString(raw, 'schemaContract'),
+    catalogSha256: requireString(raw, 'catalogSha256'), counts: normalizedCounts,
+    playbookCount: requireNumber(raw, 'playbookCount'), targetComponentCount: optionalNumber(raw, 'targetComponentCount') ?? 0,
+    targetScenarioCount: optionalNumber(raw, 'targetScenarioCount') ?? 0, planDigest: requireString(raw, 'planDigest'),
+  };
+}
 
 export const api = {
   async sessionUsers() {
@@ -1174,6 +1207,22 @@ export const api = {
   },
   async environments(signal?: AbortSignal, includeArchived = false) {
     return unwrapList(await get<unknown>(includeArchived ? '/environments?includeArchived=true' : '/environments', signal)).map((item) => normalizeEnvironment(requireRecord(item, 'environment')));
+  },
+  async catalogRepository(signal?: AbortSignal): Promise<CatalogRepositoryStatus> {
+    return normalizeCatalogRepository(unwrap(await get<unknown>('/catalog-repository', signal)));
+  },
+  async createCatalogRepository(path: string): Promise<CatalogRepositoryStatus> {
+    return normalizeCatalogRepository(unwrap(await post<unknown>('/catalog-repository/create', { path })));
+  },
+  async connectCatalogRepository(path: string): Promise<CatalogRepositoryStatus> {
+    return normalizeCatalogRepository(unwrap(await post<unknown>('/catalog-repository/connect', { path })));
+  },
+  async previewCatalogRestore(ref: string): Promise<CatalogRestorePlan> {
+    return normalizeCatalogRestorePlan(unwrap(await post<unknown>('/catalog-repository/restore-plan', { ref })));
+  },
+  async restoreCatalog(input: { ref: string; expectedPlanDigest: string; confirmation: string }): Promise<CatalogRecoveryResult> {
+    const raw = requireRecord(unwrap(await post<unknown>('/catalog-repository/restore', input)), 'Catalog recovery result');
+    return { ...normalizeCatalogRestorePlan(raw), restored: requireBoolean(raw, 'restored') };
   },
   async createEnvironment(input: Partial<Environment> & { facts?: Record<string, unknown> }) {
     return normalizeEnvironment(requireRecord(unwrap(await post<unknown>('/environments', input)), 'environment'));

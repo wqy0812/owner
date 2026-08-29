@@ -18,6 +18,7 @@ import (
 
 	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/api"
+	"codex/platform-demo/internal/backup"
 	"codex/platform-demo/internal/seed"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
@@ -83,14 +84,56 @@ func run() error {
 		envOr("NEWPLATFORM_IMAGE_BUILD_ROOT", "./data/image-builds"),
 		envOr("NEWPLATFORM_DOCKER_BIN", "docker"),
 	)
+	var backupScheduler *backup.Scheduler
+	var catalogRepositories *backup.RepositoryController
+	if strings.EqualFold(envOr("CLUSTERFORGE_BACKUP_ENABLED", "false"), "true") {
+		backupConfig := backup.Config{
+			DatabasePath: databasePath, PlaybookRoot: allowedRoot,
+			BackupDir:     envOr("CLUSTERFORGE_BACKUP_DIR", "./data/catalog-backups"),
+			CatalogRepo:   envOr("CLUSTERFORGE_CATALOG_REPO", "./data/catalog-repo"),
+			CatalogRemote: envOr("CLUSTERFORGE_CATALOG_REMOTE", "origin"),
+			CatalogBranch: envOr("CLUSTERFORGE_CATALOG_BRANCH", "catalog"),
+		}
+		manager, managerErr := backup.NewManager(backupConfig)
+		if managerErr != nil {
+			return fmt.Errorf("configure Catalog backup: %w", managerErr)
+		}
+		backupScheduler = backup.NewScheduler(manager, envDuration("CLUSTERFORGE_BACKUP_DEBOUNCE", 30*time.Second))
+		catalogRepositories, managerErr = backup.NewRepositoryController(
+			backupConfig,
+			envOr("CLUSTERFORGE_CATALOG_ALLOWED_ROOT", "./data/private-catalog-repositories"),
+			backupScheduler,
+			database.DB(),
+		)
+		if managerErr != nil {
+			return fmt.Errorf("configure private Catalog repositories: %w", managerErr)
+		}
+		catalogRepositories.ConfigureTimer(backup.NewSystemdTimerController(
+			envOr("CLUSTERFORGE_SYSTEMCTL_BIN", "systemctl"),
+			envOr("CLUSTERFORGE_BACKUP_TIMER_UNIT", "clusterforge-backup.timer"),
+		))
+		if managerErr = catalogRepositories.ReconcileTimer(ctx); managerErr != nil {
+			log.Printf("reconcile six-hour Catalog backup timer: %v", managerErr)
+		}
+		platform.ConfigurePublicationBackup(backupScheduler)
+		platform.ConfigurePublicationBackupHealth(catalogRepositories)
+		backupScheduler.SetStatusChangeHandler(platform.NotifyPublicationBackupStatus)
+		backupScheduler.Start(context.Background())
+		defer backupScheduler.Close()
+	}
 	defer platform.Close()
 	if err := platform.Start(ctx); err != nil {
 		return err
 	}
+	if backupScheduler != nil && catalogRepositories != nil && catalogRepositories.Configured() {
+		if err := backupScheduler.RequestIfBehind(ctx); err != nil {
+			log.Printf("Catalog backup startup reconciliation failed: %v", err)
+		}
+	}
 
 	address := envOr("NEWPLATFORM_ADDR", "127.0.0.1:8080")
 	server := &http.Server{
-		Addr: address, Handler: api.NewHandler(platform, ui.Handler()),
+		Addr: address, Handler: api.NewHandler(platform, ui.Handler(), catalogRepositories),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second,
 	}
 	shutdownContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

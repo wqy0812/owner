@@ -75,6 +75,30 @@ func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
 	}
 }
 
+func TestCatalogRepositoryEndpointsRequireEnvironmentOwner(t *testing.T) {
+	f := newAPIFixture(t)
+	owner := f.session(seed.EnvironmentOwnerID)
+	nonOwner := f.session(seed.ComponentOwnerRuntimeID)
+	if denied := f.request(http.MethodGet, "/api/v1/catalog-repository", nil, nonOwner); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-owner Catalog repository status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	if disabled := f.request(http.MethodGet, "/api/v1/catalog-repository", nil, owner); disabled.Code != http.StatusConflict {
+		t.Fatalf("disabled Catalog repository status=%d body=%s", disabled.Code, disabled.Body.String())
+	}
+}
+
+func TestCodedConflictErrorPreservesAPIErrorCodeAndDetails(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeError(response, &domain.CodedError{Code: "target_catalog_not_empty", Message: "target database already contains components or scenarios", Cause: domain.ErrConflict, Details: map[string]any{"componentCount": 1, "scenarioCount": 0}})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("coded error status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := decodeEnvelope(t, response)["error"].(map[string]any)
+	if body["code"] != "target_catalog_not_empty" || body["details"].(map[string]any)["componentCount"] != float64(1) {
+		t.Fatalf("coded error body=%#v", body)
+	}
+}
+
 func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()

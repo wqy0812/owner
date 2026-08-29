@@ -365,6 +365,7 @@ func (p *Platform) DeprecateScenario(ctx context.Context, user domain.User, revi
 		return revision, err
 	}
 	revision.Status, revision.DeprecatedAt = domain.RevisionDeprecated, &now
+	p.requestPublicationBackup("scenario-revision-deprecated:" + revisionID)
 	p.audit(ctx, user, "scenario_revision.deprecated", "scenario_revision", revisionID, map[string]any{"scenarioId": scenario.ID, "revision": revision.Revision})
 	return revision, nil
 }

@@ -638,6 +638,15 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 时仅保留角色身份，不导入 Demo 目录数据 |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | Dockerfile 临时构建上下文根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | Docker CLI 路径 |
+| `CLUSTERFORGE_BACKUP_ENABLED` | `false` | 发布目录变更后异步生成 SQLite 与 Git Catalog 恢复点 |
+| `CLUSTERFORGE_BACKUP_DIR` | `./data/catalog-backups` | 数据库快照与备份清单目录 |
+| `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线异步任务与六小时 Timer 使用前台选择 |
+| `CLUSTERFORGE_CATALOG_REMOTE` | `origin` | Catalog Git 远端 |
+| `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 分支 |
+| `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | Environment Owner 可创建或接入私有仓库的受控根目录 |
+| `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
+| `CLUSTERFORGE_SYSTEMCTL_BIN` | `systemctl` | 平台对齐六小时 Timer 状态使用的 systemctl 路径 |
+| `CLUSTERFORGE_BACKUP_TIMER_UNIT` | `clusterforge-backup.timer` | 六小时 Timer 单元名 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
 OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后端进程环境变量；它们不是平台启动参数，也没有默认值：
@@ -649,6 +658,14 @@ OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后�
 - `NEWPLATFORM_OPENFUYAO_CHART_PASSWORD`
 
 启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验当前合同 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。本批旧合同与未知结构均失败关闭，不执行兼容迁移。
+
+### 11.1 发布目录灾备
+
+组件 Release、场景 Revision 发布或已发布对象废弃后，平台只提交一个非阻塞备份请求；SQLite 发布事务不等待 Git。请求在 30 秒窗口内合并，然后使用 `VACUUM INTO` 创建一致性数据库快照，并从该快照导出已发布及曾发布的组件、依赖、动作、Playbook、场景 DAG、介质 SHA-256 和镜像 OCI digest。
+
+独立私有仓库的受保护 `catalog` 分支只表示最新完整 Catalog，每个成功恢复点另有不可变的 `backup/<backupId>` 标签。Git 不保存 Draft、Session、CredentialRef 实际值、Run 日志或大型介质；FSS 与 Registry 仍需独立保留。备份任一步失败都不会回滚发布，也不会替换 `latest-successful`。
+
+`clusterforge-backup snapshot --selected-repository --reason before-deploy` 可按前台选择主动创建恢复点。前台没有仓库选择时平台停止 systemd timer；创建或接入成功后启用，服务启动时再次对齐。Timer 每六小时重新读取选择文件，不接受 `CLUSTERFORGE_CATALOG_REPO` 作为在线兜底。异步失败会记录健康状态并重试，Environment Owner 工作台展示未配置、Timer 停止、备份失败或发布代次落后告警。`restore-db` 优先恢复完整 SQLite，`restore-catalog` 只在数据库快照不可用时恢复发布目录；两个命令都只写不存在的新数据库和 Playbook 根目录，不覆盖在线数据。
 
 ## 12. 故障恢复与一致性
 

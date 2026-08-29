@@ -29,6 +29,7 @@ make build 2>&1 | tail -4
 # ---------- 2. 二进制文件 ----------
 mkdir -p "$DIST/bin"
 cp bin/newplatform "$DIST/bin/newplatform-darwin-arm64"
+cp bin/clusterforge-backup "$DIST/bin/clusterforge-backup-darwin-arm64"
 
 if $CROSS; then
   echo "==> 交叉编译其他平台 …"
@@ -40,6 +41,8 @@ if $CROSS; then
     echo "    $os/$arch"
     CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
       go build -tags embed -o "$DIST/bin/newplatform-${os}-${arch}${ext}" ./cmd/server
+    CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+      go build -o "$DIST/bin/clusterforge-backup-${os}-${arch}${ext}" ./cmd/backup
   done
 fi
 
@@ -59,6 +62,7 @@ NEWPLATFORM_RUN_ROOT=./data/runs
 NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS=./examples/ansible
 NEWPLATFORM_KILL_GRACE=3s
 NEWPLATFORM_MAX_LOG_BYTES=2097152
+CLUSTERFORGE_BACKUP_ENABLED=false
 # NEWPLATFORM_K8S1175_ENCRYPTION_KEY=
 EOF
 

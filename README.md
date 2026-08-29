@@ -136,6 +136,15 @@ Host Preflight 是只读动作；其余写主机或集群状态的动作均为 d
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 仅创建角色切换账号，目录保持为空供人工录入 |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | 单 Dockerfile 隔离构建上下文的临时根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | 构建和推送镜像所用的 Docker CLI |
+| `CLUSTERFORGE_BACKUP_ENABLED` | `false` | 启用发布/废弃后的异步 SQLite 与 Git Catalog 快照；部署环境显式设为 `true` |
+| `CLUSTERFORGE_BACKUP_DIR` | `./data/catalog-backups` | SQLite 快照、校验清单和最近成功恢复点目录 |
+| `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线备份使用前台选择 |
+| `CLUSTERFORGE_CATALOG_REMOTE` | `origin` | Catalog 推送远端 |
+| `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 所在的 fast-forward-only 分支 |
+| `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | Environment Owner 可创建或接入本地私有仓库的受控根目录 |
+| `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布合并为一次异步快照的等待窗口 |
+| `CLUSTERFORGE_SYSTEMCTL_BIN` | `systemctl` | 对齐六小时备份 Timer 状态使用的 systemctl 路径 |
+| `CLUSTERFORGE_BACKUP_TIMER_UNIT` | `clusterforge-backup.timer` | 六小时备份 Timer 单元名 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | 批准执行 Kubernetes 1.17.5 作业时必需；32 字节密钥的 base64 值，仅以 CredentialRef 注入 |
 
 Environment Owner 在环境页面维护非敏感大写环境变量；每次保存都会生成新的
@@ -149,6 +158,10 @@ Environment Revision，并推送到 `IMAGE_REGISTRY/components/<slug>:<tag>`；�
 环境变量变化不会改写已提交构建。平台不会接收本地构建目录或主机路径；构建、
 推送日志和最终 RepoDigest 会记录在数据库中。Dockerfile 会由平台主机 Docker
 daemon 执行，因此只应上传可信内容。
+
+## 灾备
+
+发布目录与 SQLite 的异步快照、人工 CLI、Git 分支/标签语义和两级恢复步骤见 [Catalog 与数据库备份恢复](docs/catalog-backup-and-restore.md)。
 
 ## 示例来源
 

@@ -91,6 +91,8 @@ internal/service
 
 开发启动使用 `go run ./cmd/server`；测试环境的单二进制构建使用 `-tags embed` 将前端资源嵌入可执行文件。
 
+`cmd/backup` 构建独立的 `clusterforge-backup` 运维 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 SQLite 一致性快照、Git Catalog、校验、续传和只写新路径的恢复；不通过 HTTP API 修改业务数据。
+
 ### 3.2 `cmd/fss` 与 `internal/fss`
 
 `cmd/fss/main.go` 启动独立文件介质站，`internal/fss/server.go` 实现具体 HTTP 行为：
@@ -250,7 +252,7 @@ web/src/
 
 ### 6.1 `deploy`
 
-- `deploy/platform/`：主平台 systemd Unit 和环境配置示例。
+- `deploy/platform/`：主平台与六小时 Catalog 备份 systemd Unit、Timer 和环境配置示例。
 - `deploy/fss/`：文件介质站 systemd Unit。
 - `deploy/docker/`：镜像构建所需的 Docker daemon 配置示例。
 

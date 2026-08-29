@@ -789,6 +789,20 @@ type Workbench struct {
 	Items       []WorkItem       `json:"items"`
 }
 
+// CatalogBackupHealth is the role-facing health projection for publication
+// recovery points. It contains no repository credentials or secret material.
+type CatalogBackupHealth struct {
+	Configured         bool       `json:"configured"`
+	TimerEnabled       bool       `json:"timerEnabled"`
+	CurrentGeneration  int64      `json:"currentGeneration"`
+	BackedUpGeneration int64      `json:"backedUpGeneration"`
+	Behind             bool       `json:"behind"`
+	LastSuccessfulAt   *time.Time `json:"lastSuccessfulAt,omitempty"`
+	LastError          string     `json:"lastError,omitempty"`
+	LastErrorAt        *time.Time `json:"lastErrorAt,omitempty"`
+	RepositoryPath     string     `json:"repositoryPath,omitempty"`
+}
+
 type ImpactPath struct {
 	ComponentIDs   []string `json:"componentIds"`
 	ComponentNames []string `json:"componentNames"`
@@ -822,6 +836,18 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return e.Message }
 func (e *ValidationError) Unwrap() error { return ErrInvalid }
+
+// CodedError preserves a stable API error code and structured details while
+// still participating in the existing sentinel-error status mapping.
+type CodedError struct {
+	Code    string
+	Message string
+	Details any
+	Cause   error
+}
+
+func (e *CodedError) Error() string { return e.Message }
+func (e *CodedError) Unwrap() error { return e.Cause }
 
 func ValidateRole(user User, role Role) error {
 	if user.Role != role {

@@ -1,0 +1,12 @@
+[Unit]
+Description=Create a ClusterForge SQLite and Git Catalog recovery point
+After=network-online.target clusterforge-platform.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/clusterforge/platform
+EnvironmentFile=/etc/clusterforge/platform.env
+ExecStart=/opt/clusterforge/platform/clusterforge-backup snapshot --selected-repository --reason scheduled

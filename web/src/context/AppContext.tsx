@@ -16,9 +16,9 @@ interface Toast {
   message?: string;
 }
 
-export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench';
+export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench' | 'catalog-repository';
 
-export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench'];
+export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench', 'catalog-repository'];
 
 type RefreshTokens = Record<RefreshTarget, number>;
 
@@ -57,6 +57,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     runs: 0,
     notifications: 0,
     workbench: 0,
+    'catalog-repository': 0,
   });
   const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
   const refreshTimer = useRef<number>();
@@ -156,6 +157,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['approval.updated', () => scheduleRefresh(['runs', 'workbench'])],
       ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
       ['scenario.published', () => scheduleRefresh(['scenarios', 'workbench'])],
+      ['catalog_backup.updated', () => scheduleRefresh(['catalog-repository', 'workbench'])],
       ['scenario.deleted', () => scheduleRefresh(['scenarios', 'workbench'])],
       ['environment.deleted', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.archived', () => scheduleRefresh(['environments', 'workbench'])],

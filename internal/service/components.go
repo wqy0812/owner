@@ -418,6 +418,9 @@ func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id st
 		return release, err
 	}
 	release.Status, release.Candidate, release.DeprecatedAt = domain.ReleaseDeprecated, false, &now
+	if previousStatus == domain.ReleaseReleased {
+		p.requestPublicationBackup("component-release-deprecated:" + id)
+	}
 	p.audit(ctx, user, "component_release.deprecated", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "previousStatus": previousStatus})
 	return release, nil
 }

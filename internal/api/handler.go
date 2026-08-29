@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"codex/platform-demo/internal/backup"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
 )
@@ -27,6 +28,7 @@ type Handler struct {
 	platform        *service.Platform
 	router          *http.ServeMux
 	static          http.Handler
+	catalogRepos    *backup.RepositoryController
 	visibilityMu    sync.Mutex
 	visibilityCache map[string]runVisibility
 }
@@ -36,8 +38,11 @@ type runVisibility struct {
 	expiresAt time.Time
 }
 
-func NewHandler(platform *service.Platform, static http.Handler) *Handler {
+func NewHandler(platform *service.Platform, static http.Handler, catalogRepos ...*backup.RepositoryController) *Handler {
 	h := &Handler{platform: platform, router: http.NewServeMux(), static: static, visibilityCache: make(map[string]runVisibility)}
+	if len(catalogRepos) > 0 {
+		h.catalogRepos = catalogRepos[0]
+	}
 	h.routes()
 	return h
 }
@@ -121,6 +126,11 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/scenario-revisions/{id}/abandon", h.abandonScenarioRevision)
 
 	h.router.HandleFunc("GET /api/v1/environments", h.listEnvironments)
+	h.router.HandleFunc("GET /api/v1/catalog-repository", h.getCatalogRepository)
+	h.router.HandleFunc("POST /api/v1/catalog-repository/create", h.createCatalogRepository)
+	h.router.HandleFunc("POST /api/v1/catalog-repository/connect", h.connectCatalogRepository)
+	h.router.HandleFunc("POST /api/v1/catalog-repository/restore-plan", h.planCatalogRestore)
+	h.router.HandleFunc("POST /api/v1/catalog-repository/restore", h.restoreCatalogRepository)
 	h.router.HandleFunc("POST /api/v1/environments", h.createEnvironment)
 	h.router.HandleFunc("GET /api/v1/environments/{id}/lifecycle", h.getEnvironmentLifecycle)
 	h.router.HandleFunc("DELETE /api/v1/environments/{id}", h.deleteEnvironment)
@@ -270,6 +280,15 @@ func writeError(w http.ResponseWriter, err error) {
 	var details any
 	if errors.As(err, &validation) {
 		details = validation.Details
+	}
+	var coded *domain.CodedError
+	if errors.As(err, &coded) {
+		if coded.Code != "" {
+			code = coded.Code
+		}
+		if coded.Details != nil {
+			details = coded.Details
+		}
 	}
 	var actionable *domain.ActionableError
 	var explanation any
