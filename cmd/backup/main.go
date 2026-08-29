@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"codex/platform-demo/internal/backup"
+	"codex/platform-demo/internal/store"
 )
 
 func main() {
@@ -47,6 +48,24 @@ func run(ctx context.Context, args []string) error {
 		}
 		manifest, err := manager.Snapshot(ctx, *source)
 		return printResult(manifest, err)
+	}
+	if args[0] == "convert-legacy-k8s1175" {
+		set := flag.NewFlagSet("convert-legacy-k8s1175", flag.ContinueOnError)
+		sourceDatabase := set.String("source-db", "", "legacy SQLite database path")
+		sourcePlaybooks := set.String("source-playbook-root", "", "legacy Playbook root")
+		scenarioRevision := set.String("scenario-revision-id", "", "exact legacy Released scenario revision")
+		destination := set.String("destination", "", "new current-format Catalog directory")
+		if err := set.Parse(args[1:]); err != nil {
+			return err
+		}
+		result, err := backup.ConvertLegacyK8S1175Catalog(ctx, backup.ConvertLegacyK8S1175Options{
+			SourceDatabase:     *sourceDatabase,
+			SourcePlaybookRoot: *sourcePlaybooks,
+			ScenarioRevisionID: *scenarioRevision,
+			Destination:        *destination,
+			TargetSchema:       store.CurrentSchemaContract,
+		})
+		return printResult(result, err)
 	}
 	manager, err := backup.NewManager(baseConfig)
 	if err != nil {
@@ -163,5 +182,5 @@ func printResult(value any, err error) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: %s <automation-snapshot|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
+	return fmt.Errorf("usage: %s <automation-snapshot|convert-legacy-k8s1175|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
 }

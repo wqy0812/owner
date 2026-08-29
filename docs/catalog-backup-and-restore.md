@@ -105,6 +105,21 @@ clusterforge-backup restore-catalog \
 
 Catalog-only 恢复保留用户身份、组件/Release ID、依赖、动作、已发布/废弃状态、场景 Revision/DAG、Playbook 和内容身份；不会伪造 Draft、Run、审批、审计、环境 Revision 或安装回滚基线。完成校验后，仍须通过受保护部署流程停服、备份当前状态、切换数据库和 Playbook 根目录，再验证 HTTP、Schema contract、外键、资源数量和外部介质。
 
+### 受限的 Kubernetes 1.17.5 历史目录转换
+
+仅针对已审计的旧合同 `first-version-20260826-reuse-workflows` 和 Released Revision
+`scenario-revision-00ca404dda3a898409437be7`，可以把旧 SQLite 与对应 Playbook 根目录转换为当前 Catalog 格式：
+
+```bash
+clusterforge-backup convert-legacy-k8s1175 \
+  --source-db /path/to/legacy.db \
+  --source-playbook-root /path/to/legacy/jobs \
+  --scenario-revision-id scenario-revision-00ca404dda3a898409437be7 \
+  --destination /path/to/new/catalog
+```
+
+转换器使用只读数据库快照，严格核对 Revision 状态、DAG、对象数量、空介质边界和每个 Playbook 内容，并拒绝已经存在的目标目录。它不会修改旧库、当前数据库或 Git 仓库，也不是通用 Schema 迁移工具。生成的 `catalog.json` 与 `playbooks/` 仍须作为新的受保护 Git Catalog 恢复点提交，并通过空库恢复预检后才能使用。
+
 ## 保留与失败边界
 
 本地默认保留最近 24 小时内的全部成功快照、最近 14 个日恢复点、最近 8 个周恢复点，以及七天内的 partial 任务。Git commit 与 `backup/*` 标签不由平台自动删除。
