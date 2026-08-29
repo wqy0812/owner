@@ -535,6 +535,7 @@ input:disabled, select:disabled, textarea:disabled { color: #69738a; background:
 .scenario-revision { display: flex; align-items: center; gap: 7px; height: 34px; color: #6f7890; font-size: 9px; }
 .scenario-toolbar__actions { display: flex; flex: 1 1 520px; justify-content: flex-end; flex-wrap: wrap; gap: 7px; margin-left: auto; }
 .scenario-toolbar__actions .button { flex: 0 0 auto; white-space: nowrap; }
+.page--scenario > .status-explanation { margin-bottom: 13px; }
 .scenario-editor { display: grid; grid-template-columns: 190px minmax(480px, 1fr) 215px; gap: 12px; height: calc(100vh - 225px); min-height: 570px; }
 .scenario-palette, .node-inspector { overflow: auto; }
 .scenario-palette > header, .node-inspector > header { padding: 15px; border-bottom: 1px solid #edf0f5; }
