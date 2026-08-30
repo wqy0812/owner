@@ -707,6 +707,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText(/实际数量以当前 Revision 为准/)).toBeInTheDocument();
     const commonButtons = screen.getByRole('region', { name: '全员公共按钮操作目录' });
     expect(commonButtons).toHaveTextContent('切换演示身份');
+    expect(commonButtons).toHaveTextContent('灾备目录');
     expect(commonButtons).toHaveTextContent('刷新使用新版本');
     expect(commonButtons).toHaveTextContent('全部已读 / 标为已读');
     expect(commonButtons).toHaveTextContent('搜索运行日志 / 日志流筛选');
@@ -721,7 +722,7 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
     let buttonDirectory = screen.getByRole('region', { name: '组件 Owner 按钮操作目录' });
-    for (const label of ['新建组件', '批量导入 / 预检并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
+    for (const label of ['新建组件', '新建空白 Draft', '批量导入 / 预检并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
     expect(buttonDirectory).not.toHaveTextContent('允许以未验证状态发布');
@@ -742,7 +743,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '场景 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准']) {
+    for (const label of ['新建环境 / 创建环境', '添加主机 / 删除主机', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准', '创建私有仓库 / 创建并接入', '立即备份', '从恢复点恢复空库 / 预览恢复 / 确认恢复空库']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });

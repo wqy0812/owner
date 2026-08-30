@@ -110,7 +110,6 @@
 在收到“仍通过前台操作并记录过程”的要求后，对仓库现有交付物做了只读盘点，结果没有改变上述停止点：
 
 - `examples/ansible/k8s-1.17.5-cluster` 是可追溯的旧快照，但合同锁定 SUSE、Docker 18.09.7、etcd 3.3.10、CoreDNS 1.3.1，并明确要求外部介质路径、SHA-256 和镜像 digest。它与本次 Ubuntu 18.04、Docker 20.10.21、etcd 3.4.3、CoreDNS 1.6.5 Draft 不一致，不能直接复用。
-- `examples/ansible/openfuyao` 包含 1.34.3 相关变量、资源和较粗粒度适配器，但来源说明明确其仍依赖私有介质、Registry、BKE 工具和适配主机；它不是本次 17 个 Component 的完整拆分生命周期交付物。
 - 当前仓库没有可证明与这 30 个 Draft 一一匹配、并具备可信介质摘要或镜像 digest 的完整 Action/Playbook 集合。
 
 因此未通过前台给新 Draft 套用旧版本 Playbook，也未填写虚假的介质摘要、镜像 digest 或环境证据。要继续到组件验证、共享候选、场景测试和环境部署，需先取得与目标版本和目标操作系统一致的交付物，并使两个测试环境满足对应 Release 合同。

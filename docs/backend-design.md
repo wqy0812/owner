@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭，旧 API 字段不兼容。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-25 当前工作区代码
+> 文档基线：2026-08-29 当前工作区代码
 > 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
 > 实现状态说明：本文描述当前代码已经实现的行为；“演进建议”不属于现有能力。
 
@@ -22,7 +22,7 @@
 
 ### 2.1 当前目标
 
-- 将 Kubernetes、OpenFuyao 等安装作业拆分为可独立维护的组件。
+- 将 Kubernetes 等安装作业拆分为可独立维护的组件。
 - 用精确 Release ID 表达组件依赖，避免“自动漂移到最新版本”。
 - 用 DAG 表达组件执行顺序，并在运行前校验依赖和拓扑。
 - 用环境 Revision 固化 Inventory、环境事实和参数。
@@ -41,7 +41,7 @@
 - 没有密钥管理系统；只保存环境变量名或 SSH 私钥绝对路径。
 - 没有租户、项目、组织、细粒度授权策略和审批流配置。
 - 没有定时任务、自动重试或自动回滚；仅支持指纹未变且首个未完成动作明确安全时的人工续跑。
-- OpenFuyao 和 Kubernetes 1.17.5 模板仍需真实主机、介质、网络和安全验收。
+- Kubernetes 目录资产仍需真实主机、介质、网络和安全验收。
 
 ## 3. 总体架构
 
@@ -485,20 +485,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 
 注意：`sshKeyPath` 的路径本身会保存到数据库，私钥内容不会保存。当前 Runner 将该路径作为同名 Ansible 变量传入，是否由 Playbook 用作连接私钥取决于作业定义。
 
-### 8.4 OpenFuyao adapter 边界
-
-平台纳管 105 文件的作业快照。平台自有 adapter 负责合同校验、动态
-`target_host_group`、统一使用 `ansible_user`，以及在
-`bke-master` 前重建跨 Playbook 丢失的 registry facts。Seed 提供 cert、
-bootstrap、common、addon、master、nodes 六个组件和三个独立场景：管理集群
-构建、业务集群控制面构建、业务节点纳管。节点纳管先执行只读 master verify。
-
-管理与业务场景分别固定 `cluster_role=manager|work` 及目标主机组，不开放运行
-输入覆盖。环境使用 `operation`、`network`、`versions`、`artifact_sources`、
-`certificates`、`addon_params` 分组，再由点路径 Bindings 映射到 Ansible 实际
-变量名。callback URL/token、task ID 和外部 wrapper 字段不属于 Release 参数合同。
-
-### 8.5 日志
+### 8.4 日志
 
 - stdout、stderr 和 system 日志进入统一采集器。
 - 日志在进入 SQLite 和 SSE 前脱敏。
@@ -649,14 +636,6 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-OpenFuyao Demo 环境中的 CredentialRef 还会在运行阶段解析以下后端进程环境变量；它们不是平台启动参数，也没有默认值：
-
-- `NEWPLATFORM_OPENFUYAO_SSH_PASSWORD`
-- `NEWPLATFORM_OPENFUYAO_REGISTRY_USERNAME`
-- `NEWPLATFORM_OPENFUYAO_REGISTRY_PASSWORD`
-- `NEWPLATFORM_OPENFUYAO_CHART_USERNAME`
-- `NEWPLATFORM_OPENFUYAO_CHART_PASSWORD`
-
 启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验当前合同 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。本批旧合同与未知结构均失败关闭，不执行兼容迁移。
 
 ### 11.1 发布目录灾备
@@ -690,7 +669,7 @@ Environment Owner 通过 `POST /api/v1/catalog-repository/backups` 主动创建�
 | `go test -race ./...` | Go 数据竞争检查（独立执行） |
 | `go vet ./...` | Go 静态检查（独立执行） |
 
-包级测试通过不等同于 OpenFuyao 或 Kubernetes 真实环境验收。真实交付还必须验证 Inventory、介质版本和校验和、仓库可达性、主机前置条件、凭据、网络和回退方案。
+包级测试通过不等同于 Kubernetes 真实环境验收。真实交付还必须验证 Inventory、介质版本和校验和、仓库可达性、主机前置条件、凭据、网络和回退方案。
 
 ## 14. 当前限制与演进建议
 

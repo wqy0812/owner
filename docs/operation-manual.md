@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；所有操作目标均为测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-25 当前工作区代码
+> 文档基线：2026-08-29 当前工作区代码与测试环境只读快照
 > 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员
 > 重要提示：这是本地 Demo。身份可无密码切换，不应直接作为生产权限系统使用。
 
@@ -34,12 +34,11 @@ make build
 
 ### 1.2 演示身份
 
-右上角身份选择器可切换四个内置身份：
+右上角身份选择器读取当前数据库中的可用身份。2026-08-29 测试环境共有三个：
 
 | 显示身份 | 角色 | 主要职责 |
 | --- | --- | --- |
-| 林晓 · Runtime | 组件 Owner A | Runtime、主机基础等组件 |
-| 周工 · Kubernetes | 组件 Owner B | Kubernetes 相关组件 |
+| 林晓 · Runtime | 组件 Owner | 当前 15 个组件及其 Release |
 | 陈晨 · 集群交付 | 场景 Owner | 场景 DAG、完整测试和发布 |
 | 王维 · 基础设施 | 环境 Owner | 环境、Inventory、凭据引用和危险作业审批 |
 
@@ -53,8 +52,10 @@ make build
 | 组件 | 维护组件和 Release，发起组件测试 |
 | 场景 | 编排 DAG，校验、测试、发布和运行场景 |
 | 环境 | 管理 Inventory、Facts、Variables、CredentialRefs、历史 Revision 和连通性检查 |
+| 灾备目录 | 仅环境 Owner 可见；创建或接入私有 Catalog 仓库、立即备份、预览恢复和确认恢复空库 |
 | 运行 | 查看队列、审批、步骤和实时脱敏日志 |
-| 通知 | 查看上游组件发布影响并标记已读 |
+| 通知 | 从右上角通知入口查看上游组件发布影响并标记已读 |
+| 操作说明书 | 查看按角色整理的前台按钮、条件、结果和风险说明 |
 
 左下角“实时通道在线”表示 SSE 已连接。SSE 只负责提示刷新，实际状态以页面重新读取的后端数据为准。
 
@@ -162,7 +163,7 @@ make build
 
 ### 3.1 新建组件
 
-1. 切换到“组件 Owner A”或“组件 Owner B”。
+1. 切换到组件 Owner（当前测试环境为“林晓 · Runtime”）。
 2. 进入“组件”。
 3. 单击“新建组件”。
 4. 填写组件名称、标识、说明，选择 L1-L6 层级，并按需填写少量检索标签。
@@ -493,7 +494,7 @@ Inventory、环境事实、环境变量和凭据引用分区采用同一保存�
 - `localhost`、`127.0.0.1`、`::1` 会使用 Ansible local connection。
 - 其他主机使用 `ansible_host`、`ansible_user` 和 `ansible_port`。
 
-正式使用前应核对环境是否为脱敏模板。内置 OpenFuyao 和 Kubernetes 模板包含占位地址，不能直接当作真实 Inventory。
+正式执行前必须逐台核对 Inventory 地址、SSH 用户、端口和主机组。文档快照只能用于复录，不能代替当次环境确认。
 
 ### 5.3 配置环境事实
 
@@ -729,54 +730,13 @@ Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条�
 
 通知会显示版本变化、Breaking 标记、影响路径和关联场景。可单条标记已读或“全部已读”；当前 Demo 不支持恢复未读。
 
-## 8. 内置示例使用建议
+## 8. 当前测试环境样例
 
-### 8.1 OpenFuyao Preflight Template
+2026-08-29 测试环境有 15 个已发布组件 Release、1 个已发布场景 Revision 和 2 个环境。场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，画布包含 21 个节点和 50 条依赖边；控制节点和工作节点通过节点 `hostGroup` 区分。
 
-用途：承载三个相互独立的 OpenFuyao 场景：管理集群构建、业务集群控制面
-构建、业务节点纳管。节点纳管不会重建控制面，而是先用 master verify 只读
-确认 BKECluster，再直接执行 nodes install，不重复执行 common 或 addon。
+精确组件 ID、Release ID、版本、动作、Playbook、场景节点与边、Environment Revision、Inventory、Variables、CredentialRef 和 Catalog 恢复点见 [测试环境资产目录](demo-catalog.md)。复现当前发布目录应优先从该文档记录的不可变恢复点恢复空库；手工复录适合重建业务结构，但不能还原原 ID、审计、Run 或验证证据。
 
-模板包含四个 TEST-NET 主机组：`bootstrap_host`、
-`management_cluster_k8smaster`、`work_cluster_k8smaster`、
-`work_cluster_k8snode`。管理与业务场景已分别固定
-`cluster_role=manager|work`、组件参数 `strategy` 和目标主机组，界面不提供危险 Run Input
-覆盖。普通参数按 `operation`、`network`、`versions`、`artifact_sources`、
-`certificates`、`addon_params` 分组，通过点路径 Bindings 映射到 Ansible
-实际变量名。
-
-环境 Owner 必须声明动作所需的以下 CredentialRef；缺少任一项时运行会在排队
-前失败：`ansible_ssh_pass`、`ENV_DOCKER_SECRET_USERNAME`、
-`ENV_DOCKER_SECRET_PASSWORD`、`ENV_CHART_PULL_USERNAME`、
-`ENV_CHART_PULL_PASSWORD`。Release 和运行快照只保存必需凭据名称，不保存值。
-
-该环境使用脱敏 TEST-NET 地址，Playbook 依赖内部介质、仓库和合格主机。
-包含 `rcv` 的 build 动作会被视为 destructive。不要在没有替换 Inventory、
-普通参数、CredentialRef 并完成安全评审时批准。callback URL/token、task ID 和
-外部 wrapper 的 `management_cluster_id` 不属于本平台 Release 参数合同。
-
-### 8.2 Kubernetes 1.17.5 SUSE Template
-
-用途：展示最小逻辑组件编排。核心和 Extended 两条场景均保持 Draft；Host Preflight 只读，其余写主机或集群状态的动作均为 destructive。同一 Release 可重复加入，并通过节点 `hostGroup` 分别部署控制节点和工作节点。
-
-正式测试前必须：
-
-- 替换 Inventory 占位地址并核对主机组。
-- 核对 Docker 等前置条件。
-- 为每个外部压缩包/二进制填写 SHA256，为每个容器镜像填写 digest；未知值不得伪造。
-- 设置并复核加密密钥环境变量。
-- 检查网络、仓库和介质服务地址。
-- 明确备份、变更窗口和回退流程。
-
-当前 Kubernetes 1.17.5 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为强制 `requiredCredentials`。因此删除环境中的同名 CredentialRef 不会被通用 Planner 在排队前阻断；在合同补齐前，环境 Owner 必须在审批时人工确认 CredentialRef 和 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` 都已配置，并依赖 Playbook 预检失败关闭。
-
-安装 Run 的运行详情会显示备份基线目录、来源 Run、捕获时间和 Playbook 哈希。
-回滚只能使用环境当前安装组件记录中的这条引用；看到“backup metadata does not
-match”时应重新执行安装验证并捕获新基线，不要手工指向旧版本目录或复制旧
-`.captured`。测试回滚成功后应确认远端测试备份已按
-`clusterforge_backup_cleanup_on_success` 清理。
-
-核心场景只含 PKI、Docker、etcd、Kubernetes 核心进程、Flannel 和 CoreDNS；Extended 场景再加入日志、监控、HAProxy、AMC、GlusterFS、pprof 和 RBAC 附加能力。恢复、清理、卸载、Housekeeping 不属于任何安装 Action。该快照尚未在真实 Kubernetes 1.17.5 SUSE 三控制节点加工作节点环境完成安装和收敛验收。
+正式运行前仍须重新验证 Inventory、SSH/Ansible、介质摘要、镜像 digest、仓库、凭据、网络、备份和回退方案。页面显示 TCP 或 SSH/Ansible 连通，只证明对应检查当时成功，不代表 Kubernetes 已安装或收敛。
 
 ## 9. 常见问题排查
 
@@ -833,19 +793,21 @@ match”时应重新执行安装验证并捕获新基线，不要手工指向旧
 
 ## 10. 数据重置与验证
 
-重新幂等写入示例数据：
+重新幂等写入代码内置 Seed：
 
 ```bash
 make seed
 ```
 
-重置 Demo 数据并重新 seed：
+删除本地 Demo 数据并重新 Seed：
 
 ```bash
 make reset-demo
 ```
 
-`reset-demo` 会删除当前 Demo 数据，执行前应确认数据库中没有需要保留的手工配置或运行记录。
+`make seed` 和 `make reset-demo` 复现的是代码内置 Seed，不是 2026-08-29 测试环境发布目录。精确恢复当前测试目录应按 [测试环境资产目录](demo-catalog.md) 使用记录的 Catalog 恢复点。
+
+`reset-demo` 会删除当前 Demo 数据；只有明确允许清空、确认没有活动 Run，并已保存所需数据库、发布目录和运行证据后才能执行。
 
 项目验证命令：
 

@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，但允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-28 当前工作区代码
+> 文档基线：2026-08-29 当前工作区代码
 >
 > 适用对象：首次接触本仓库的前端、后端、测试和运维开发人员
 >
@@ -189,7 +189,6 @@ Seed 以幂等方式创建演示身份、组件、场景和环境：
 
 - `seed.go`：通用身份和目录初始化。
 - `kubernetes1175.go`：Kubernetes 1.17.5 组件和场景。
-- `openfuyao.go`：OpenFuyao 组件和场景。
 
 `NEWPLATFORM_SEED_PROFILE=demo` 写入完整演示数据；`identities` 只在空的首版数据库中写入可切换身份，供人工维护目录。
 
@@ -230,6 +229,7 @@ web/src/
 | `/components` | `ComponentsPage` | 组件、Release、Playbook、介质和镜像 |
 | `/scenarios` | `ScenariosPage` | DAG 编排、校验、测试和发布 |
 | `/environments` | `EnvironmentsPage` | Inventory、Facts、变量和凭据引用 |
+| `/disaster-recovery` | `DisasterRecoveryPage` | Catalog 仓库接入、备份状态和空库恢复 |
 | `/runs` | `RunsPage` | 队列、审批、步骤和实时日志 |
 | `/notifications` | `NotificationsPage` | 发布影响通知 |
 | `/manual` | `OperationManualPage` | 内置操作手册 |
@@ -245,7 +245,6 @@ web/src/
 | --- | --- |
 | `k8s-1.17.5-cluster` | 细粒度 Kubernetes 1.17.5 组件、验证入口和来源 Role |
 | `k8s-1.17.5-kubeadm` | 较小的 kubeadm 示例 |
-| `openfuyao` | 仓库外 OpenFuyao 作业的脱敏快照 |
 | `managed` | 前台上传或在线编辑的 Draft Playbook，运行时按配置产生 |
 
 组件 Action 保存相对于允许根目录的 Playbook 路径。Released Release 不可修改；Draft Playbook 内容变化会使已有测试验证失效。
@@ -265,7 +264,6 @@ web/src/
 | `deploy-test-88-55.sh` | 构建并部署主平台测试环境，包含备份、就绪检查和失败回退 |
 | `deploy-fss-88-57.sh` | 构建并部署文件介质站 |
 | `test-k8s1175-components.sh` | Kubernetes 1.17.5 组件作业门禁 |
-| `test-openfuyao-components.sh` | OpenFuyao 作业门禁 |
 | `pack-usb.sh` | 生成离线 USB 分发包 |
 
 部署脚本中的主机地址和路径属于具体环境配置，复用前必须重新确认目标、活动 Run、备份位置和服务状态。

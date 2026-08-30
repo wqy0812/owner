@@ -52,7 +52,8 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
     path: '所有页面',
     description: '首次进入先确认右上角身份，再从左侧主导航进入工作中心。',
     entries: [
-      { label: '概览 / 组件 / 场景 / 环境 / 运行 / 通知 / 操作说明书', purpose: '切换平台工作中心。', availability: '所有已登录用户', result: '只切换页面，不创建业务记录。' },
+      { label: '我的工作 / 组件 / 场景 / 环境 / 运行 / 通知 / 操作说明书', purpose: '通过左侧主导航或顶部通知入口切换工作中心。', availability: '所有已登录用户', result: '只切换页面，不创建业务记录。' },
+      { label: '灾备目录', purpose: '进入发布目录的 Git 仓库接入、备份和空库恢复页面。', availability: 'Environment Owner', result: '只进入页面；创建、接入、备份或恢复仍需单独提交。' },
       { label: '切换演示身份', purpose: '在 Demo 中切换组件、场景或环境 Owner。', availability: 'Demo 身份模式', result: '服务端切换身份并按新角色重新读取可见数据；真实环境以登录身份为准。' },
       { label: '刷新使用新版本', purpose: '检测到前端构建已更新后加载新 SPA。', availability: '页面版本与服务端版本不一致时', result: '丢弃未保存的前台状态并整页刷新；刷新前先记录尚未提交的输入。' },
     ],
@@ -106,6 +107,7 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '组件条目', purpose: '选择组件并读取 Release 列表。', availability: '所有用户', result: '切换详情；编辑 Draft 时其他条目会禁用。' },
       { label: '编辑组件 / 保存组件', purpose: '修改名称、标识、分类和说明。', availability: '组件 Owner 且拥有该组件', result: '保存组件元数据，不修改已发布 Release。' },
       { label: '创建 Draft 编辑合同 / 创建 Draft', purpose: '从现有版本克隆或创建可编辑版本。', availability: '组件 Owner 且没有可编辑 Draft 时', result: '创建新 Draft；Released Release 保持不可变。' },
+      { label: '新建空白 Draft', purpose: '为已有组件创建不继承任何合同或文件的新版本。', availability: '组件 Owner 且拥有该组件', result: '创建独立 Draft，不复制依赖、参数、Action、Playbook、介质或镜像。' },
       { label: '批量导入 / 预检并导入', purpose: '从 JSON 模板批量录入细粒度组件、Draft、依赖和独立 Playbook；Action 按文件名严格绑定模板内文件。', availability: '组件 Owner；全部条目、依赖 DAG 和文件引用必须先通过校验', result: '组件、Draft、托管文件和审计记录整批生效或整批失败；不会自动验证、加入候选集或发布。' },
     ],
   },
@@ -206,6 +208,15 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '拒绝', purpose: '拒绝等待审批的破坏性 Run。', availability: '环境 Owner 且 Run 为 Awaiting Approval', result: 'Run 不会执行并进入拒绝状态。' },
       { label: '批准执行', purpose: '允许破坏性 Run 进入执行队列。', availability: '环境 Owner 且 Run 为 Awaiting Approval', result: '写入审批决定并继续执行；不替代线下变更授权。' },
       { label: '批量审批 / 确认批量批准', purpose: '使用必填的统一理由一次审批当前可见的多个危险 Run。', availability: '环境 Owner 且存在等待审批的 Run', result: '后端拒绝空白理由并原子消费整批审批；任何一项失效都会整批失败，成功后仍按各环境 FIFO 串行执行。' },
+    ],
+  },
+  {
+    page: '发布目录灾备', path: '/disaster-recovery', description: '只备份已发布或曾发布的目录与 Playbook；环境、Run、Secret 和大型介质不在其中。', entries: [
+      { label: '创建私有仓库 / 创建并接入', purpose: '在服务端允许根目录下创建私有 bare Git 仓库。', availability: '环境 Owner 且服务端已启用发布目录灾备', result: '创建权限为 0700 的仓库并设为在线备份目标。' },
+      { label: '接入已有备份仓库 / 更换备份仓库 / 验证并接入', purpose: '验证已有仓库的 catalog 分支并切换在线目标。', availability: '环境 Owner；路径必须位于允许根目录', result: '只接入仓库，不自动覆盖当前数据。' },
+      { label: '从已有 Git 仓库恢复 / 仅接入，暂不恢复', purpose: '给空目录选择恢复向导，或只先完成仓库接入。', availability: '组件和场景均为空时可继续恢复', result: '接入后进入恢复点选择；非空目录只允许接入。' },
+      { label: '立即备份', purpose: '同步创建当前已发布目录的不可变恢复点。', availability: '已接入私有仓库', result: '只有 SQLite、外键、Catalog/Playbook 摘要、catalog 分支和 backup/* 标签全部成功才返回成功。' },
+      { label: '从恢复点恢复空库 / 预览恢复 / 确认恢复空库', purpose: '按锁定 Git 标签恢复已发布组件、场景和 Playbook。', availability: '当前组件与场景均为空且预检未漂移', result: '输入“恢复发布目录”后整批恢复；冲突时不留下部分数据。' },
     ],
   },
 ];
@@ -312,7 +323,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
     tone: 'amber',
     primaryPath: '/environments',
     primaryLabel: '进入环境中心',
-    checkpoints: ['Inventory 主机与主机组完整', 'IMAGE_REGISTRY 与 FILE_STATION 可达', '危险运行审批前核对平移目标与动作', '版本更新后重新读取 Run 状态'],
+    checkpoints: ['Inventory 主机与主机组完整', 'IMAGE_REGISTRY 与 FILE_STATION 可达', '危险运行审批前核对平移目标与动作', '发布代次已有最新成功恢复点', '版本更新后重新读取 Run 状态'],
     buttonGroups: ENVIRONMENT_BUTTON_GROUPS,
     markdown: `## 环境 Owner 操作路径
 
@@ -345,7 +356,14 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 4. 预览不会创建 Run；完整输入环境名称后只创建 Awaiting Approval Run，仍需在运行中心批准。
 5. 批准只表示允许平台执行，不替代真实环境变更评审。
 
-### 5. 前台版本更新时
+### 5. 保护已发布目录
+
+1. 进入 **灾备目录**，在服务端允许根目录下创建或接入私有 Git 仓库。
+2. 发布或废弃已发布对象后，确认已备份代次追上当前发布代次；需要明确交接点时使用 **立即备份**。
+3. 只有组件和场景均为空的目标库才允许恢复；恢复不包含环境、Run、审批、通知、Secret 或大型介质。
+4. 先选恢复点并预览组件、Release、场景和 Playbook 计数，再输入“恢复发布目录”提交；冲突或计划漂移会整批失败。
+
+### 6. 前台版本更新时
 
 1. 看到版本提示后不要在旧运行详情中批准、拒绝或取消 Run；先刷新页面。
 2. 刷新后重新读取 Run 状态、目标环境、Environment Revision、步骤版本和审批要求，避免依据部署前缓存状态决策。
