@@ -6,7 +6,7 @@ APP := bin/newplatform
 BACKUP_APP := bin/clusterforge-backup
 EMBED_DIR := internal/ui/dist
 
-.PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-ansible test-e2e build build-web
+.PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-ansible test-e2e test-e2e-live build build-web
 
 bootstrap:
 	$(GO) mod download
@@ -39,6 +39,9 @@ test-ansible:
 
 test-e2e:
 	$(PNPM) --dir web test:e2e
+
+test-e2e-live:
+	./scripts/test-live-api-e2e.sh
 
 build-web:
 	$(PNPM) --dir web build

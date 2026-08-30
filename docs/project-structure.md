@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，但允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-29 当前工作区代码
+> 文档基线：2026-08-30 当前工作区代码
 >
 > 适用对象：首次接触本仓库的前端、后端、测试和运维开发人员
 >
@@ -18,13 +18,16 @@
 owner/
 ├── cmd/
 │   ├── server/                       # 主平台可执行程序入口
+│   ├── backup/                       # 自动备份与恢复 CLI 入口
 │   └── fss/                          # 文件介质站可执行程序入口
 ├── internal/
 │   ├── ansible/                      # Ansible 安全执行与日志处理
 │   ├── api/                          # HTTP API、会话和 SSE
+│   ├── backup/                       # SQLite/Git Catalog 快照、恢复与调度
 │   ├── domain/                       # 领域对象、枚举和领域校验
 │   ├── fss/                          # 文件介质站服务实现
 │   ├── seed/                         # 演示数据初始化
+│   ├── sshcheck/                     # 原生 Go SSH 环境检查
 │   ├── service/                      # 模块应用服务、发布协调、规划、调度与静态适配端口
 │   ├── store/                        # SQLite 首版结构合同与持久化
 │   └── ui/                           # React 静态资源服务与嵌入
@@ -86,12 +89,12 @@ internal/service
 1. 读取 `.env` 和 `NEWPLATFORM_*` 配置。
 2. 打开 SQLite；空库初始化当前结构，已有库必须精确匹配当前合同，否则拒绝启动。
 3. 按 Seed Profile 初始化身份或演示数据。
-4. 创建 Ansible Runner、Platform Service 和 EventHub。
+4. 创建 Ansible Runner、Go SSH 环境检查器、Platform Service 和 EventHub。
 5. 启动队列恢复、HTTP 服务和优雅退出流程。
 
 开发启动使用 `go run ./cmd/server`；测试环境的单二进制构建使用 `-tags embed` 将前端资源嵌入可执行文件。
 
-平台自己的 SSH / Ansible 连通性检查 Playbook 位于 `internal/ansible/builtin/`，始终通过 `go:embed` 编入二进制，与前端的 `embed` 构建标签无关。服务启动时将它按 SHA-256 释放到 `NEWPLATFORM_RUN_ROOT/builtin-playbooks/<digest>`，独立 Runner 的允许根目录只指向该内容寻址目录；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
+环境连通性检查直接使用 Go SSH 客户端：严格读取 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指向的主机指纹文件，并使用 Environment Revision 中显式声明的 SSH CredentialRef 完成认证和 `true` 执行。该检查不调用 Ansible；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
 
 `cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 `snapshot`。Environment Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
 
@@ -129,13 +132,18 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | 文件 | 职责 |
 | --- | --- |
 | `handler.go` | 路由注册、Cookie 会话、统一响应和错误映射 |
+| `workbench.go` | 按角色派生“我的工作”和阻断入口 |
 | `components.go` | 组件与 Release 接口 |
+| `component_import.go` | 组件批量导入预检与提交 |
 | `playbooks.go` | Draft Playbook 上传、读取和编辑 |
-| `artifacts.go` | 组件介质上传、登记和移除 |
+| `artifacts.go` | 组件介质与镜像登记、来源修复和移除 |
 | `image_builds.go` | 组件镜像构建与查询 |
 | `scenarios.go` | 场景、Revision、DAG 校验、测试和运行 |
 | `environments.go` | Inventory、Facts、变量和 CredentialRef |
+| `environment_transfer.go` | 环境 Revision 导入、导出和差异预检 |
+| `catalog_repository.go` | 私有 Catalog 仓库接入、备份和空库恢复 |
 | `runs.go` | Run 查询、审批、取消和日志 |
+| `run_input_presets.go` | 个人运行参数预设 |
 | `events.go` | SSE 事件通道 |
 | `notifications.go` | 站内通知和审计查询 |
 
@@ -167,7 +175,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260829-ssh-connectivity`。当前结构包含模块化发布围栏、环境 `archived_at` 生命周期状态，以及分离持久化的 TCP 与 SSH / Ansible 连通性证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行经过测试的加法迁移；更旧或未知合同仍失败关闭，不做模糊兼容或双写。
+数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260829-ssh-connectivity`。当前结构包含模块化发布围栏、环境 `archived_at` 生命周期状态，以及分离持久化的 TCP 与 Go SSH 连通性证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行经过测试的加法迁移；更旧或未知合同仍失败关闭，不做模糊兼容或双写。
 
 ### 3.7 `internal/ansible`
 
@@ -189,8 +197,9 @@ Seed 以幂等方式创建演示身份、组件、场景和环境：
 
 - `seed.go`：通用身份和目录初始化。
 - `kubernetes1175.go`：Kubernetes 1.17.5 组件和场景。
+- `openfuyao.go`：保留的 OpenFuyao/BKE 脱敏 Demo 组件、场景和 TEST-NET 环境模板。
 
-`NEWPLATFORM_SEED_PROFILE=demo` 写入完整演示数据；`identities` 只在空的首版数据库中写入可切换身份，供人工维护目录。
+`NEWPLATFORM_SEED_PROFILE=demo` 写入上述完整演示数据，包括 OpenFuyao/BKE 脱敏模板和 Kubernetes 样例；`identities` 只在空的首版数据库中写入可切换身份，供人工维护目录。`docs/demo-catalog.md` 记录的是测试平台当前业务数据，不等同于内置 Demo Seed。
 
 ### 3.9 `internal/ui`
 
@@ -245,6 +254,7 @@ web/src/
 | --- | --- |
 | `k8s-1.17.5-cluster` | 细粒度 Kubernetes 1.17.5 组件、验证入口和来源 Role |
 | `k8s-1.17.5-kubeadm` | 较小的 kubeadm 示例 |
+| `openfuyao` | OpenFuyao/BKE 作业的脱敏快照、适配合同和只读预检样例；不代表当前测试目录或真实环境验收 |
 | `managed` | 前台上传或在线编辑的 Draft Playbook，运行时按配置产生 |
 
 组件 Action 保存相对于允许根目录的 Playbook 路径。Released Release 不可修改；Draft Playbook 内容变化会使已有测试验证失效。
@@ -264,6 +274,7 @@ web/src/
 | `deploy-test-88-55.sh` | 构建并部署主平台测试环境，包含备份、就绪检查和失败回退 |
 | `deploy-fss-88-57.sh` | 构建并部署文件介质站 |
 | `test-k8s1175-components.sh` | Kubernetes 1.17.5 组件作业门禁 |
+| `test-openfuyao-components.sh` | OpenFuyao/BKE 脱敏快照的语法、任务清单和失败关闭合同门禁 |
 | `pack-usb.sh` | 生成离线 USB 分发包 |
 
 部署脚本中的主机地址和路径属于具体环境配置，复用前必须重新确认目标、活动 Run、备份位置和服务状态。

@@ -10,11 +10,12 @@ import (
 )
 
 type ReleaseCloneRequest struct {
-	Version                string         `json:"version"`
-	ReleaseNotes           string         `json:"releaseNotes"`
-	Breaking               bool           `json:"breaking"`
-	EnvironmentConstraints map[string]any `json:"environmentConstraints"`
-	ExpectedPlanDigest     string         `json:"expectedPlanDigest,omitempty"`
+	Version                string           `json:"version"`
+	ReleaseNotes           string           `json:"releaseNotes"`
+	Breaking               bool             `json:"breaking"`
+	RiskLevel              domain.RiskLevel `json:"riskLevel,omitempty"`
+	EnvironmentConstraints map[string]any   `json:"environmentConstraints"`
+	ExpectedPlanDigest     string           `json:"expectedPlanDigest,omitempty"`
 }
 
 type ReleaseClonePlan struct {
@@ -65,7 +66,7 @@ func (p *Platform) PreviewReleaseClone(ctx context.Context, user domain.User, so
 		SourceDigest      string
 		ExecutableDigests map[string]string
 		Input             ReleaseCloneRequest
-	}{componentReleaseSpecDigest(source), executableDigests, ReleaseCloneRequest{Version: input.Version, ReleaseNotes: input.ReleaseNotes, Breaking: input.Breaking, EnvironmentConstraints: input.EnvironmentConstraints}})
+	}{componentReleaseSpecDigest(source), executableDigests, ReleaseCloneRequest{Version: input.Version, ReleaseNotes: input.ReleaseNotes, Breaking: input.Breaking, RiskLevel: input.RiskLevel, EnvironmentConstraints: input.EnvironmentConstraints}})
 	return plan, nil
 }
 

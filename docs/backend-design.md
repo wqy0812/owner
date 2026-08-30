@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭，旧 API 字段不兼容。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-29 当前工作区代码
+> 文档基线：2026-08-30 当前工作区代码
 > 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
 > 实现状态说明：本文描述当前代码已经实现的行为；“演进建议”不属于现有能力。
 
@@ -211,7 +211,7 @@ V1 固定每个环境一个活跃 Run、FIFO 串行，不保存可配置并发�
 
 环境移除受生命周期约束：只有从未产生 Run、镜像构建且没有安装基线的环境可以由实际 Environment Owner 永久删除；删除会在同一事务内级联清理 Revision 与健康检查并写入 `environment.deleted` 审计。已有 Run 或构建历史的环境必须保留快照，只能在没有活动 Run、没有活动镜像构建、没有安装基线时归档。归档环境默认不出现在新构建、新验证和新场景运行的环境列表中，也不能创建 Revision、健康检查、Run 或镜像构建；Owner 可以从环境页查看并恢复。数据库触发器为归档与新写入之间的竞态提供最终围栏。
 
-环境 Owner 可以从一个入口对当前 Revision 发起两类只读健康检查。TCP 检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION`；SSH 检查使用平台内置 Runner 和标准 SSH CredentialRef 对远端 Inventory 执行无提权的 `ansible.builtin.ping`。检查 Playbook 通过 `go:embed` 随二进制交付，启动时按 SHA-256 原子释放到 `NEWPLATFORM_RUN_ROOT/builtin-playbooks/<digest>` 的只读目录，并由只允许该文件的独立 Runner 执行；它不属于、也不读取 Environment Owner 可编辑的 Catalog Playbook 树。两类结果分开持久化、锁定同一个来源 Revision 并写入审计；它们不调用 Registry API、不下载文件、不验证 sudo，也不能替代组件预检和真实环境验收。
+环境 Owner 可以从一个入口对当前 Revision 发起两类只读健康检查。TCP 检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION`；SSH 检查使用 Go SSH 客户端严格校验 `known_hosts`、完成显式凭据认证、创建 Session 并执行 `true`。检查不读取 SSH agent、默认私钥或 `~/.ssh/config`，也不依赖 Ansible Runner。两类结果分开持久化、锁定同一个来源 Revision 并写入审计；它们不调用 Registry API、不下载文件、不验证 sudo，也不能替代组件预检和真实环境验收。
 
 ### 4.5 Run、Step、Approval 与 Log
 
@@ -269,7 +269,7 @@ SQLite 主要表如下：
 | `component_release_artifacts` / `component_release_images` | Release 内容身份与可变来源 | alias/logicalName 唯一；SHA-256/OCI digest 进入规格摘要，sourceUrl/sourceRef 不进入 |
 | `component_artifact_mirrors` / `component_image_mirrors` | 跨仓平移记录 | 以目标与内容指纹复用 |
 | `environment_health_checks` | 环境 TCP 连通性检查 | 记录来源 Environment Revision |
-| `environment_ssh_checks` | 环境 SSH / Ansible Ping 检查 | 与 TCP 证据独立，记录来源 Environment Revision |
+| `environment_ssh_checks` | 环境 Go SSH 认证与 `true` 检查 | 与 TCP 证据独立，记录来源 Environment Revision |
 
 时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同；Environment Revision 不再包含普通参数。
 
@@ -433,7 +433,8 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - Revision 导入从实际非空 CredentialRef `reference` 推导敏感确认要求，不信任文件中的摘要布尔值；预览摘要和正式落库共用同一份规范化快照。
 - 环境存在 `running`、`queued` 或 `awaiting_approval` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
 - 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
-- TCP `healthy` 仅表示本次列出的端点全部可达；SSH `healthy` 表示 SSH 认证与 Ansible Ping 成功。两者都不证明提权、介质完整性、镜像推送或组件 Playbook 一定可执行。
+- Go SSH 检查最多并发连接 8 台主机，单机超时 10 秒、整体超时 30 秒；远端主机必须显式填写用户和 SSH CredentialRef。
+- TCP `healthy` 仅表示本次列出的端点全部可达；SSH `healthy` 表示主机指纹、SSH 认证、Session 创建与 `true` 执行成功。两者都不证明提权、介质完整性、镜像推送或组件 Playbook 一定可执行。
 
 ### 7.10 整集群回滚
 
@@ -504,6 +505,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | GET | `/session/users` | 列出演示身份供前台切换 |
 | GET | `/session/me` | 查询当前身份 |
 | GET | `/events` | SSE 事件流 |
+| GET | `/workbench` | 按当前角色派生“我的工作”、阻断原因和下一步入口 |
 
 ### 9.2 组件
 
@@ -528,7 +530,11 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | GET / POST | `/component-releases/{id}/image-builds` | 查询或创建 Dockerfile 镜像构建 |
 | POST | `/component-releases/{id}/artifacts/upload` | 上传并登记组件介质 |
 | POST | `/component-releases/{id}/artifacts/register` | 登记文件站已有组件介质 |
+| PATCH | `/component-releases/{id}/artifacts/{alias}/source` | 在内容身份不变时修复介质来源地址 |
 | DELETE | `/component-releases/{id}/artifacts/{alias}` | 从 Draft 移除介质引用 |
+| POST | `/component-releases/{id}/images/register` | 登记已有 OCI 镜像及不可变 Digest |
+| PATCH | `/component-releases/{id}/images/{name}/source` | 在 Digest 不变时修复镜像来源地址 |
+| DELETE | `/component-releases/{id}/images/{name}` | 从 Draft 移除镜像引用 |
 | GET | `/image-builds/{id}` | 查询镜像构建详情与日志 |
 
 ### 9.3 场景
@@ -549,7 +555,20 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | POST | `/scenario-revisions/{id}/deprecate` | 废弃 Revision |
 | POST | `/scenario-revisions/{id}/abandon` | 放弃当前 Draft 并恢复最近的不可变 Revision 指针 |
 
-### 9.4 环境、运行和治理
+### 9.4 发布目录灾备
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/catalog-repository` | 查询灾备能力、已接入仓库和可用恢复点 |
+| POST | `/catalog-repository/create` | 在允许根目录创建并接入私有 bare Git 仓库 |
+| POST | `/catalog-repository/connect` | 验证并接入已有私有 Catalog 仓库 |
+| POST | `/catalog-repository/backups` | 同步创建 SQLite 与 Git Catalog 恢复点 |
+| POST | `/catalog-repository/restore-plan` | 对锁定的远端恢复点执行空库恢复预检 |
+| POST | `/catalog-repository/restore` | 按预检指纹原子恢复已发布目录和 Playbook |
+
+完整的分支、标签、空库和失败关闭语义见 [Catalog 与数据库备份恢复](catalog-backup-and-restore.md)。
+
+### 9.5 环境、运行和治理
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
@@ -566,7 +585,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | PUT | `/environments/{id}/variables` | 新建包含非敏感环境变量变更的 Revision |
 | PUT | `/environments/{id}/credential-refs` | 新建包含凭据引用变更的 Revision |
 | POST | `/environments/{id}/health-checks` | 对当前 Revision 执行只读 TCP 连通性检查 |
-| POST | `/environments/{id}/connectivity-checks` | 从一个入口执行 TCP 与 SSH / Ansible 两类只读检查 |
+| POST | `/environments/{id}/connectivity-checks` | 从一个入口执行 TCP 与 Go SSH 两类只读检查 |
 | POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
 | POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
@@ -620,8 +639,9 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `NEWPLATFORM_ADDR` | `127.0.0.1:8080` | HTTP 地址 |
 | `NEWPLATFORM_DB_PATH` | `./data/newplatform.db` | SQLite 文件 |
 | `NEWPLATFORM_ANSIBLE_BIN` | `ansible-playbook` | Ansible 命令 |
-| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | 临时工作区根目录；同时包含内容寻址的只读内置 Playbook 与隔离的连通性检查工作区 |
+| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | Ansible Run 临时工作区根目录 |
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许目录；当前 Runner 使用第一个配置项 |
+| `NEWPLATFORM_SSH_KNOWN_HOSTS` | 服务账号的 `~/.ssh/known_hosts` | Go SSH 环境检查使用的严格主机指纹文件 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后的进程组终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单步骤日志上限 |
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 时仅保留角色身份，不导入 Demo 目录数据 |

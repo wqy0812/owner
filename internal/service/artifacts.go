@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -202,6 +203,9 @@ func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.Us
 	}
 	size := int64(0)
 	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL, ObservedSize: &size}, ArtifactIdentity{SHA256: expectedSHA}); err != nil {
+		if errors.Is(err, ErrArtifactIdentityMismatch) {
+			return domain.ComponentArtifact{}, fmt.Errorf("%w: probe artifact source: %v", domain.ErrConflict, err)
+		}
 		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)
 	}
 	return p.saveComponentArtifact(ctx, user, release, alias, sourceURL, fssFileMetadata{Filename: filename, SHA256: expectedSHA, SizeBytes: size})
@@ -254,6 +258,9 @@ func (p *Platform) UpdateComponentArtifactSource(ctx context.Context, user domai
 		return domain.ComponentArtifact{}, domain.ErrNotFound
 	}
 	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL}, ArtifactIdentity{SHA256: current.SHA256, SizeBytes: current.SizeBytes}); err != nil {
+		if errors.Is(err, ErrArtifactIdentityMismatch) {
+			return domain.ComponentArtifact{}, fmt.Errorf("%w: probe artifact source: %v", domain.ErrConflict, err)
+		}
 		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)
 	}
 	updated, err := p.store.UpdateComponentArtifactSource(ctx, release.ID, alias, sourceURL, user.ID, time.Now().UTC())

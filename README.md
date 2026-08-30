@@ -79,7 +79,7 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260829-ssh-connectivity`，包含模块化发布围栏、环境删除/归档状态，以及分离保存的 TCP 与 SSH / Ansible 检查证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行加法迁移并保留业务数据；更早或未知合同仍失败关闭。只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`，脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
+当前合同为 `clusterforge-v1-20260829-ssh-connectivity`，包含模块化发布围栏、环境删除/归档状态，以及分离保存的 TCP 与 Go SSH 检查证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行加法迁移并保留业务数据；更早或未知合同仍失败关闭。只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`，脚本会先检查活动 Run 并备份二进制、SQLite 和环境配置，启动、HTTP、结构合同或外键检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 
@@ -93,7 +93,7 @@ make build
 
 当前测试环境保存 15 个细粒度已发布组件，覆盖主机预检与初始化、PKI、加密配置、Docker、etcd、Kubernetes 控制面与节点进程、Flannel 和 CoreDNS。已发布场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，包含 21 个节点和 50 条依赖边；同一 Release 通过不同 `hostGroup` 分发到控制节点或工作节点。
 
-两套环境均为 Ubuntu 测试节点，使用 `IMAGE_REGISTRY`、`FILE_STATION` 和 `K8S_ENCRYPTION_KEY` CredentialRef。组件、Release、动作、场景 DAG、Environment Revision、Inventory 和恢复点的精确值见 [测试环境资产目录](docs/demo-catalog.md)。文档中的 TCP 或 SSH/Ansible 连通性证据不等于 Kubernetes 安装和收敛验收。
+两套环境均为 Ubuntu 测试节点，使用 `IMAGE_REGISTRY`、`FILE_STATION` 和 `K8S_ENCRYPTION_KEY` CredentialRef。组件、Release、动作、场景 DAG、Environment Revision、Inventory 和恢复点的精确值见 [测试环境资产目录](docs/demo-catalog.md)。文档中的 TCP 或 SSH 连通性证据不等于 Kubernetes 安装和收敛验收。
 
 ## Ansible 安全边界
 
@@ -113,8 +113,9 @@ make build
 | `NEWPLATFORM_ADDR` | `127.0.0.1:8080` | HTTP 监听地址 |
 | `NEWPLATFORM_DB_PATH` | `./data/newplatform.db` | SQLite 文件 |
 | `NEWPLATFORM_ANSIBLE_BIN` | `ansible-playbook` | Ansible 可执行文件 |
-| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | Run 临时工作区，以及内容寻址的只读平台内置 Playbook 根目录 |
+| `NEWPLATFORM_RUN_ROOT` | `./data/runs` | Run 临时工作区 |
 | `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` | `./examples/ansible` | 允许执行的作业根目录；Demo 使用首个配置项 |
+| `NEWPLATFORM_SSH_KNOWN_HOSTS` | 服务账号的 `~/.ssh/known_hosts` | Go SSH 环境检查使用的严格主机指纹文件 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后进程组强制终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单个 Ansible step 保留的脱敏日志上限 |
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 仅创建角色切换账号，目录保持为空供人工录入 |

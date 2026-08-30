@@ -1,10 +1,12 @@
 # ClusterForge 测试环境资产目录
 
-> 数据基线：2026-08-29 21:38（Asia/Shanghai）对 `http://192.168.88.55:8080` 的只读核对。
+> 数据基线：2026-08-30 09:07（Asia/Shanghai）对 `http://192.168.88.55:8080` 的只读核对。
 >
-> 代码基线：2026-08-29 当前工作区。本文记录测试平台当前业务数据，不等于 `NEWPLATFORM_SEED_PROFILE=demo` 内置 Seed。
+> 代码基线：2026-08-30 当前工作区。本文记录测试平台当前业务数据，不等于 `NEWPLATFORM_SEED_PROFILE=demo` 内置 Seed。
 >
 > 这是可复现快照，不是生产兼容矩阵。版本和环境规则见[首版与环境策略](version-policy.md)。
+>
+> 连通性证据边界：09:06/09:07 的 SSH 结果来自当时已部署的 Ansible Ping 检查器。当前工作区的 Go SSH 检查器尚未在真实环境重新执行，部署后必须补充显式 SSH CredentialRef 并重新检查，不能沿用下文旧结果。
 
 ## 1. 当前快照
 
@@ -52,7 +54,7 @@
 - 所有 Action 的 `tags=[]`、`limit=""`、`allowedParameters=[]`、`requiredCredentials=[]`、`idempotent=false`。
 - verify 均为 `timeout=900`、`risk=low`、`destructive=false`；rollback 也均为 `timeout=900`，除 kubelet 和 Flannel 外均为 `risk=low`、`destructive=false`。
 
-这些约束字段与环境2 r4 匹配。`operatingSystem`、`operatingSystemVersion` 和 `dockerVersion` 由托管 Playbook 自身的预检失败关闭，未写入当前 Release 约束。
+这些约束字段与环境2 r5 匹配。`operatingSystem`、`operatingSystemVersion` 和 `dockerVersion` 由托管 Playbook 自身的预检失败关闭，未写入当前 Release 约束。
 
 ### 3.2 组件清单
 
@@ -208,7 +210,7 @@ N19→N21, N20→N21
 
 两个环境均归属 `environment-dave`，使用：
 
-- Variables：`IMAGE_REGISTRY=192.168.88.54:5000`、`FILE_STATION=192.168.88.57:8080`。
+- Variables：`IMAGE_REGISTRY=192.168.88.116:5000`、`FILE_STATION=192.168.88.57:8080`。旧 Registry `192.168.88.54:5000` 保留为回退源，不是当前 Environment Revision 的主端点。
 - CredentialRef：名称 `K8S_ENCRYPTION_KEY`，类型 `envVarRef`，引用 `NEWPLATFORM_K8S1175_ENCRYPTION_KEY`。
 - 主机 SSH 均为 `root:22`。
 
@@ -217,23 +219,25 @@ CredentialRef 只保存引用字符串，不包含加密密钥实际值。
 ### 5.2 Kubernetes 测试集群 1
 
 - Environment ID：`environment-39570277a72a9747f0e1f289`
-- 当前 Revision：r1，`environment-revision-09b9dd60fbb7a5cb16a27bc2`
+- 当前 Revision：r3，`environment-revision-a7163582d88aba120e4d9cef`
 - 用途：备案及后续 Kubernetes 1.34 测试；不是当前 1.17.5 场景目标。
 - Facts：`architecture=amd64`、`operatingSystem=Ubuntu`、`operatingSystemVersion=18.04 / 24.04`、`ipFamily=IPv4`。
 
 | 主机 | 地址 | 主机组 |
 | --- | --- | --- |
 | `master-1` | `192.168.88.78` | `k8s_cert_controller,k8setcd,k8smaster,k8s_F5` |
-| `master-2` | `192.168.88.79` | `k8setcd,k8smaster` |
-| `master-3` | `192.168.88.80` | `k8setcd,k8smaster` |
+| `master-2` | `192.168.88.80` | `k8setcd,k8smaster` |
+| `master-3` | `192.168.88.117` | `k8setcd,k8smaster` |
 | `node-1` | `192.168.88.75` | `k8snode` |
 | `node-2` | `192.168.88.81` | `k8snode` |
 | `node-3` | `192.168.88.82` | `k8snode` |
 
+2026-08-30 09:07 已部署旧版平台前台读回：TCP 端点 `8/8` 通过，包含新 Registry、File Station 和 6 台 Inventory 主机。SSH / Ansible 为 `0/6`：三台重装 master 已完成新主机指纹登记和平台公钥授权，从 `192.168.88.55` 严格校验后免密 SSH 正常；但当时的平台 Ansible 2.8.8 与 Ubuntu 24.04 的 Python 3.12 不兼容。三台 worker 仍保留原有 `ansible_ping_failed`，不得把 TCP `8/8` 解释为该环境可执行交付。
+
 ### 5.3 Kubernetes 测试集群 2
 
 - Environment ID：`environment-932f756b4bf4ecc3dcabecf5`
-- 当前 Revision：r4，`environment-revision-21121480c9156da450b2b469`
+- 当前 Revision：r5，`environment-revision-a814305ba59dbdeaef44cf8a`
 - 用途：当前 Kubernetes 1.17.5 Ubuntu 六节点场景的配套环境。
 - Facts：`architecture=amd64`、`deploymentMode=standard`、`dockerVersion=20.10.21`、`hardwareProfile=general`、`ipFamily=IPv4`、`isolationRuntime=runc`、`operatingSystem=Ubuntu`、`operatingSystemVersion=18.04`。
 
@@ -245,6 +249,8 @@ CredentialRef 只保存引用字符串，不包含加密密钥实际值。
 | `node-4` | `192.168.88.67` | `k8snode,k8s_cluster,worker_nodes` |
 | `node-5` | `192.168.88.68` | `k8snode,k8s_cluster,worker_nodes` |
 | `node-6` | `192.168.88.69` | `k8snode,k8s_cluster,worker_nodes` |
+
+2026-08-30 09:06 已部署旧版平台前台读回：TCP 端点 `8/8` 通过，SSH / Ansible `6/6` 通过。六台 Docker 节点已同时保留 `.54:5000` 回退源并信任新 `.116:5000` 内部 HTTP Registry。
 
 ## 6. 复现步骤
 
@@ -271,7 +277,7 @@ Git Catalog 不包含 Environment。使用“环境 → 新建环境”和各配
 4. 在“环境变量”中录入 `IMAGE_REGISTRY` 和 `FILE_STATION`，值只写 `host:port`。
 5. 在“凭据引用”中录入 `K8S_ENCRYPTION_KEY` 的 `envVarRef`；不把真实密钥写入页面。
 6. 每个分区修改都单击“保存新 Revision”，填写非空变更原因，并读回 Revision 编号、主机数、变量和脱敏引用。
-7. 环境2最终应为 6 台主机、r4 结构等价快照；新建库中 Revision 编号可因保存次数不同，但当前内容必须一致。
+7. 环境2最终应为 6 台主机、r5 结构等价快照；新建库中 Revision 编号可因保存次数不同，但当前内容必须一致。
 
 ### 6.3 通过前台手工重建业务结构
 
@@ -289,5 +295,5 @@ Git Catalog 不包含 Environment。使用“环境 → 新建环境”和各配
 
 - 本文的数量、ID、DAG、Environment Revision 和 Git 恢复点来自当前测试平台只读 API；后续业务操作可以使这个快照过时。
 - 发布目录恢复可证明目录、DAG 和 Playbook 内容身份一致，不恢复环境或 Run 证据。
-- Released 只表示不可变生命周期状态；真实集群当前是否安装成功，必须另外核对 Run、Environment Revision、Inventory、SSH / Ansible 连通性和目标主机状态。
+- Released 只表示不可变生命周期状态；真实集群当前是否安装成功，必须另外核对 Run、Environment Revision、Inventory、当前版本的 SSH 连通性和目标主机状态。上文带时间的 SSH / Ansible 结果是当时版本留下的历史证据。
 - 不能把 TCP 端点可达、页面计数或本地构建成功单独当成真实 Kubernetes 收敛验收。

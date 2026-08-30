@@ -253,6 +253,9 @@ func (p *Platform) CloneRelease(ctx context.Context, user domain.User, sourceID 
 	source.Version = input.Version
 	source.ReleaseNotes = input.ReleaseNotes
 	source.Breaking = input.Breaking
+	if input.RiskLevel != "" {
+		source.RiskLevel = input.RiskLevel
+	}
 	if input.EnvironmentConstraints != nil {
 		source.EnvironmentConstraints = input.EnvironmentConstraints
 	}

@@ -2,7 +2,8 @@
 
 > 方案日期：2026-08-27
 > 适用范围：ClusterForge V1 测试环境
-> 文档性质：正式实施建议，不代表代码已经完成；实施前仍需按本文“决策门”确认少量使用场景。
+> 当前状态：2026-08-30 复核时，本文提出的模块化、模型简化、Delivery 与 Readiness 主体设计已经进入当前代码。本文保留原始决策依据和实施顺序，不再作为未完成事项清单。
+> 权威边界：当前行为以代码、数据库合同和 [正式文档中心](docs/README.md) 为准；真实环境结果只以带日期的验收记录为准。
 > 核心目标：保留交付安全所需的复杂度，删除没有业务价值的模型和实现复杂度，用模块化单体承载内部交付平台。
 
 ## 1. 结论
@@ -11,7 +12,7 @@ ClusterForge 不应拆成微服务，也不应建设通用工作流引擎或动�
 
 **模块化单体主平台 + 独立 FSS + 外部 Ansible/Registry 执行能力。**
 
-当前领域边界基本正确，但代码层的职责收口不足：`Platform` 聚合过多能力，`internal/service/runs.go` 同时承担规划、快照、调度、执行、交付介质、证据记录和回滚绑定；组件分类、Release 类型、执行策略和环境并发字段又提供了当前场景并不需要的自由度。
+本文编写时，领域边界基本正确，但代码层的职责尚未收口：`Platform` 聚合过多能力，原 Run 实现同时承担规划、快照、调度、执行、交付介质、证据记录和回滚绑定；组件分类、Release 类型、执行策略和环境并发字段也提供了当前场景并不需要的自由度。当前代码已经按本文方向拆分模块并收口模型，现状说明见 [项目结构说明](docs/project-structure.md)。
 
 本方案不削弱以下业务不变量：
 
@@ -57,13 +58,13 @@ Playbook 内的普通技术步骤不拆成组件；只有具备独立生命周�
 
 | 模块 | 高内聚职责 | 不再承担的职责 | 主要代码落点 |
 | --- | --- | --- | --- |
-| Catalog | Component、Release、Action、Dependency、内容身份、候选意图 | 场景联合发布、Run 调度、FSS/Docker 细节 | `internal/service/catalog*`、`internal/store/components*` |
+| Catalog | Component、Release、Action、Dependency、内容身份、候选意图 | 场景联合发布、Run 调度、FSS/Docker 细节 | `internal/service/components.go`、`playbooks.go`、`artifacts.go`、`images.go` 及 `internal/store/components*` |
 | Scenario | Scenario、Revision、静态 DAG、参数映射校验 | 直接修改 Component Release 状态 | `internal/service/scenario*`、`internal/store/scenarios*` |
-| ReleaseCoordinator | 候选闭包检查、Readiness 复核、场景与组件联合发布事务 | 组件日常编辑、Run 执行 | 新增 `internal/service/release_coordinator.go` |
+| ReleaseCoordinator | 候选闭包检查、Readiness 复核、场景与组件联合发布事务 | 组件日常编辑、Run 执行 | `internal/service/release_coordinator.go` |
 | Environment | Environment Revision、Inventory、变量、CredentialRef、健康检查 | Run Worker、组件发布 | `internal/service/environment*` |
-| Execution | Plan、Run 快照、审批、FIFO 调度、执行、取消、重试、证据记录 | 组件编辑、HTTP/Registry 工具细节 | 拆分现有 `runs.go` |
-| Delivery | 介质/镜像目标解析、来源探测、直用/平移要求 | Run 生命周期、组件发布状态 | 新增 `internal/service/delivery*` |
-| Adapters | Ansible、FSS、镜像构建、Registry 查询/平移 | 业务审批与发布规则 | `internal/ansible`、`internal/fss`、新增静态接口实现 |
+| Execution | Plan、Run 快照、审批、FIFO 调度、执行、取消、重试、证据记录 | 组件编辑、HTTP/Registry 工具细节 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` |
+| Delivery | 介质/镜像目标解析、来源探测、直用/平移要求 | Run 生命周期、组件发布状态 | `internal/service/delivery_binding.go`、`delivery_planner.go`、`delivery_adapters.go` |
+| Adapters | Ansible、FSS、镜像构建、Registry 查询/平移 | 业务审批与发布规则 | `internal/ansible`、`internal/fss` 和 `internal/service` 中的静态 Adapter 实现 |
 | Read Model | 我的工作、Readiness、阻断原因、通知视图 | 写入业务状态 | `internal/service/workbench.go` 及查询服务 |
 
 依赖方向固定为：
@@ -349,7 +350,9 @@ Run 计划新增：
 | Run 详情 | 显示锁定来源、目标、决策和传输结果 | 可追溯增强 |
 | 我的工作 | 使用统一 Readiness/阻断原因，引导正确 Owner 处理 | 派生视图优化 |
 
-## 5. 实施批次
+## 5. 原实施批次（历史顺序）
+
+本节保留 2026-08-27 制定的实施与验收顺序，用于解释变更为什么按这些边界拆分；其中的命令式表述不代表当前仍未完成。当前能力和限制应查阅正式设计、操作手册及带日期的验收记录。
 
 ### 第 0 批：冻结合同与补充测试
 
@@ -447,33 +450,33 @@ Run 计划新增：
 - 环境整集群回滚；
 - Run 查询、审批、通知和审计。
 
-## 7. 实施前决策门
+## 7. 历史决策门
 
-以下问题会改变用户行为，应由使用方确认后再进入对应批次；其余后台职责拆分无需等待这些决定。
+以下问题记录实施前用于收敛用户行为的决策门。它们不再是阻塞当前代码的待确认项；当前语义以正式设计文档和服务测试为准。后续若要改变这些策略，应作为新需求重新评审，而不是直接修改本历史方案。
 
 ### 决策 1：环境未配置目标地址时如何处理
 
 建议：如果 `FILE_STATION` 或 `IMAGE_REGISTRY` 未配置，但来源可读，则允许直接使用来源，并在预览中提示“环境未定义本地目标，不能平移”；不额外阻断 Run。
 
-需要确认：部分离线环境是否必须强制配置本地目标并禁止直连来源？若需要，应增加一个明确的环境策略 `deliveryMode=local_only`，而不是隐含推断。
+当时待确认：部分离线环境是否必须强制配置本地目标并禁止直连来源？若需要，应增加一个明确的环境策略 `deliveryMode=local_only`，而不是隐含推断。
 
 ### 决策 2：上传介质默认写入哪个 FSS
 
 建议：继续由 Component Owner 在上传页选择一个已配置 `FILE_STATION` 的环境作为初始来源，上传完成后登记来源 URL；避免建设全局仓库管理模块。
 
-需要确认：是否存在独立于环境的“公共来源 FSS”？只有答案为是，才增加平台级默认来源配置。
+当时待确认：是否存在独立于环境的“公共来源 FSS”？只有答案为是，才增加平台级默认来源配置。
 
 ### 决策 3：标签是否限制词表
 
 建议：V1 使用最多 8 个、每个不超过 32 字符的小写标签，不建设标签治理后台；搜索和展示即可。
 
-需要确认：是否有必须用于报表或权限的固定标签？如果没有，保持自由标签。
+当时待确认：是否有必须用于报表或权限的固定标签？如果没有，保持自由标签。
 
 ### 决策 4：是否允许所有环境直接使用外部来源
 
 建议：默认由 Environment Owner 在每次审批中决定，不增加永久白名单和复杂策略。
 
-需要确认：是否存在明确的安全域要求，规定某些环境只能使用本地 FSS/Registry？若存在，再增加简单的环境级 `local_only` 固定策略。
+当时待确认：是否存在明确的安全域要求，规定某些环境只能使用本地 FSS/Registry？若存在，再增加简单的环境级 `local_only` 固定策略。
 
 ## 8. 不实施的设计
 

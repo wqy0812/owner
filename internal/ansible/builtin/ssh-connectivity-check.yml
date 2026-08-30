@@ -1,8 +1,0 @@
----
-- name: Verify SSH and Ansible connectivity
-  hosts: all
-  gather_facts: false
-  tasks:
-    - name: Verify remote Python through Ansible ping
-      ansible.builtin.ping:
-      changed_when: false

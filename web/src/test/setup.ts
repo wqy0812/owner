@@ -54,6 +54,7 @@ export class EventSourceMock {
 
 Object.defineProperty(globalThis, 'ResizeObserver', { value: ResizeObserverMock, writable: true });
 Object.defineProperty(globalThis, 'EventSource', { value: EventSourceMock, writable: true });
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: vi.fn(), writable: true });
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({

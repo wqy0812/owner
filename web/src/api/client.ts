@@ -1077,10 +1077,10 @@ export const api = {
   async updateComponent(id: string, input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
-  async previewReleaseClone(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown> }) {
+  async previewReleaseClone(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown> }) {
     return unwrap(await post<unknown>(`/component-releases/${releaseId}/clone-plan`, input)) as { sourceReleaseId: string; sourceVersion: string; targetVersion: string; planDigest: string; actions: string[]; playbooks: string[]; artifactCount: number };
   },
-  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; environmentConstraints?: Record<string, unknown>; expectedPlanDigest: string }) {
+  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown>; expectedPlanDigest: string }) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
   },
   async previewComponentImport(entries: unknown[]) {

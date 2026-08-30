@@ -93,12 +93,12 @@ echo "==> Building embedded frontend"
 make build-web
 ui_index_checksum="$(checksum_file web/dist/index.html)"
 ui_version_checksum="$(checksum_file web/dist/version.json)"
-builtin_playbook_checksum="$(checksum_file internal/ansible/builtin/ssh-connectivity-check.yml)"
 
 if [[ "$SKIP_TESTS" == false ]]; then
   echo "==> Running deployment gates"
   go test ./...
-  pnpm --dir web test -- --run
+  pnpm --dir web test:coverage
+  ./scripts/test-live-api-e2e.sh
   git diff --check
 else
   echo "==> Skipping deployment gates"
@@ -168,7 +168,7 @@ fi
 
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$builtin_playbook_checksum" <<'REMOTE_SCRIPT'
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
@@ -179,7 +179,6 @@ allow_active_runs="$5"
 rebuild_v1_db="$6"
 expected_ui_index_checksum="$7"
 expected_ui_version_checksum="$8"
-expected_builtin_playbook_checksum="$9"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
@@ -395,34 +394,6 @@ systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
 systemctl stop clusterforge-backup.service >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/clusterforge-backup.timer /etc/systemd/system/clusterforge-backup.service
 systemctl daemon-reload
-builtin_asset_json="$(
-  cd /opt/clusterforge/platform
-  env "${snapshot_environment[@]}" "$live_binary" --prepare-builtin-playbooks
-)"
-python3 - "$expected_builtin_playbook_checksum" "$builtin_asset_json" <<'PY'
-import hashlib
-import json
-import os
-import stat
-import sys
-
-expected = sys.argv[1]
-asset = json.loads(sys.argv[2])
-if asset.get("playbook") != "ssh-connectivity-check.yml":
-    raise SystemExit(f"unexpected built-in Playbook name: {asset!r}")
-if asset.get("playbookSha256") != expected or not asset.get("treeSha256"):
-    raise SystemExit(f"unexpected built-in Playbook identity: {asset!r}")
-root = asset.get("root", "")
-if os.path.basename(root) != expected:
-    raise SystemExit(f"built-in Playbook root is not content-addressed: {root!r}")
-playbook = os.path.join(root, asset["playbook"])
-if stat.S_IMODE(os.lstat(root).st_mode) != 0o500 or stat.S_IMODE(os.lstat(playbook).st_mode) != 0o400:
-    raise SystemExit("built-in Playbook permissions are not read-only")
-with open(playbook, "rb") as stream:
-    actual = hashlib.sha256(stream.read()).hexdigest()
-if actual != expected:
-    raise SystemExit(f"materialized built-in Playbook checksum mismatch: {actual}")
-PY
 if [[ "$rebuild_v1_db" -eq 1 ]]; then
   echo "rebuilding V1 test database after backup: $backup_dir/platform.db"
   rm -f "$database" "${database}-wal" "${database}-shm"
@@ -494,7 +465,6 @@ echo "sha256=$installed_checksum"
 echo "backup_sha256=$installed_backup_checksum"
 echo "ui_index_sha256=$served_ui_index_checksum"
 echo "ui_version_sha256=$served_ui_version_checksum"
-echo "builtin_playbook_sha256=$expected_builtin_playbook_checksum"
 systemctl show "$service_name" \
   -p ActiveState -p SubState -p MainPID -p ActiveEnterTimestamp --no-pager
 curl -fsS --max-time 3 -o /dev/null -w 'http=%{http_code}\n' "$health_url"

@@ -1134,6 +1134,49 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	}
 }
 
+func TestComponentArtifactRegisterRejectsDigestMismatchAsConflict(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	contents := []byte("artifact-content")
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(contents)
+	}))
+	defer source.Close()
+
+	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/artifacts/register", map[string]any{
+		"alias": "mismatch", "filename": "artifact.bin", "sourceUrl": source.URL,
+		"sha256": strings.Repeat("0", 64),
+	}, alice)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "artifact source SHA-256 does not match content identity") {
+		t.Fatalf("digest mismatch status=%d body=%s", response.Code, response.Body.String())
+	}
+	release, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range release.Artifacts {
+		if artifact.Alias == "mismatch" {
+			t.Fatalf("digest mismatch persisted artifact=%+v", artifact)
+		}
+	}
+}
+
+func TestComponentArtifactRegisterKeepsSourceOutageAsInternalError(t *testing.T) {
+	f := newAPIFixture(t)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	source := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	sourceURL := source.URL
+	source.Close()
+
+	response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/artifacts/register", map[string]any{
+		"alias": "offline", "filename": "artifact.bin", "sourceUrl": sourceURL,
+		"sha256": strings.Repeat("0", 64),
+	}, alice)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"internal_error"`) {
+		t.Fatalf("source outage status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestWorkbenchIsRoleScopedAndActionable(t *testing.T) {
 	f := newAPIFixture(t)
 	if response := f.request(http.MethodGet, "/api/v1/workbench", nil, nil); response.Code != http.StatusUnauthorized {
@@ -2473,7 +2516,7 @@ func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	cloneInput := map[string]any{
-		"version": "1.1.0", "releaseNotes": "add arm64",
+		"version": "1.1.0", "releaseNotes": "add arm64", "riskLevel": "high",
 		"environmentConstraints": map[string]any{"architecture": []any{"amd64", "arm64"}, "operatingSystem": []any{"SUSE", "Kylin"}, "ipFamily": []any{"IPv4"}},
 	}
 	clonePlan := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/clone-plan", cloneInput, alice)
@@ -2483,6 +2526,9 @@ func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
 		t.Fatalf("clone status=%d body=%s", cloned.Code, cloned.Body.String())
 	}
 	clonedData := decodeEnvelope(t, cloned)["data"].(map[string]any)
+	if clonedData["riskLevel"] != "high" {
+		t.Fatalf("cloned riskLevel=%#v", clonedData["riskLevel"])
+	}
 	constraints := clonedData["environmentConstraints"].(map[string]any)
 	if !reflect.DeepEqual(constraints["architecture"], []any{"amd64", "arm64"}) {
 		t.Fatalf("cloned architecture=%#v", constraints["architecture"])

@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/sshcheck"
 	"codex/platform-demo/internal/store"
 )
 
@@ -20,15 +20,40 @@ type fixedCatalogBackupHealth struct {
 	err    error
 }
 
-type fixedConnectivityRunner struct {
-	result   ansiblerunner.Result
+type fixedSSHChecker struct {
 	err      error
-	requests []ActionRequest
+	requests []sshcheck.Request
 }
 
-func (r *fixedConnectivityRunner) Run(_ context.Context, request ActionRequest) (ActionResult, error) {
+type blockingSSHChecker struct {
+	mu       sync.Mutex
+	current  int
+	maximum  int
+	reached  chan struct{}
+	release  chan struct{}
+	reachOne sync.Once
+}
+
+func (c *blockingSSHChecker) Check(context.Context, sshcheck.Request) error {
+	c.mu.Lock()
+	c.current++
+	if c.current > c.maximum {
+		c.maximum = c.current
+	}
+	if c.current == 8 {
+		c.reachOne.Do(func() { close(c.reached) })
+	}
+	c.mu.Unlock()
+	<-c.release
+	c.mu.Lock()
+	c.current--
+	c.mu.Unlock()
+	return nil
+}
+
+func (r *fixedSSHChecker) Check(_ context.Context, request sshcheck.Request) error {
 	r.requests = append(r.requests, request)
-	return r.result, r.err
+	return r.err
 }
 
 func (f *fixedCatalogBackupHealth) CatalogBackupHealth(context.Context) (domain.CatalogBackupHealth, error) {
@@ -54,6 +79,16 @@ func maintenanceTestPlatform(t *testing.T) (*Platform, domain.User, domain.Envir
 		t.Fatal(err)
 	}
 	return NewPlatform(database, nil, nil), owner, environment
+}
+
+func configureTestSSHPassword(t *testing.T, platform *Platform, owner domain.User, environmentID string) domain.Environment {
+	t.Helper()
+	t.Setenv("CLUSTERFORGE_TEST_SSH_PASSWORD", "secret")
+	updated, err := platform.UpdateCredentialRefs(context.Background(), owner, environmentID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_SSH_PASSWORD"}}, "配置 SSH 检查凭据")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return updated
 }
 
 func TestEnvironmentHealthCheckPersistsReachability(t *testing.T) {
@@ -90,8 +125,9 @@ func TestEnvironmentConnectivityCombinesTCPAndSSHChecks(t *testing.T) {
 		_ = right.Close()
 		return left, nil
 	})
-	runner := &fixedConnectivityRunner{result: ansiblerunner.Result{Recap: map[string]ansiblerunner.HostRecap{"node-1": {OK: 1}}}}
-	platform.ConfigureConnectivityRunner(runner)
+	updated = configureTestSSHPassword(t, platform, owner, environment.ID)
+	checker := &fixedSSHChecker{}
+	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 
 	check, err := platform.CheckEnvironmentConnectivity(context.Background(), owner, environment.ID)
 	if err != nil {
@@ -103,8 +139,8 @@ func TestEnvironmentConnectivityCombinesTCPAndSSHChecks(t *testing.T) {
 	if check.TCP.EnvironmentRevisionID != updated.CurrentRevisionID || check.SSH.EnvironmentRevisionID != updated.CurrentRevisionID {
 		t.Fatalf("revision tcp=%s ssh=%s want=%s", check.TCP.EnvironmentRevisionID, check.SSH.EnvironmentRevisionID, updated.CurrentRevisionID)
 	}
-	if len(runner.requests) != 1 || runner.requests[0].Playbook != environmentSSHCheckPlaybook || !strings.Contains(string(runner.requests[0].Inventory), "ansible_port=2222") {
-		t.Fatalf("runner requests=%+v", runner.requests)
+	if len(checker.requests) != 1 || checker.requests[0].Address != "192.0.2.10:2222" || checker.requests[0].User != "root" || checker.requests[0].Password != "secret" {
+		t.Fatalf("SSH requests=%+v", checker.requests)
 	}
 	stored, err := platform.Environments().LatestSSHCheck(context.Background(), environment.ID)
 	if err != nil || stored.ID != check.SSH.ID {
@@ -128,8 +164,9 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 		_ = right.Close()
 		return left, nil
 	})
-	runner := &fixedConnectivityRunner{result: ansiblerunner.Result{Recap: map[string]ansiblerunner.HostRecap{"node-1": {OK: 1}}}}
-	platform.ConfigureConnectivityRunner(runner)
+	checkedRevision = configureTestSSHPassword(t, platform, owner, environment.ID)
+	checker := &fixedSSHChecker{}
+	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 
 	check, err := platform.CheckEnvironmentConnectivity(context.Background(), owner, environment.ID)
 	if err != nil {
@@ -148,8 +185,8 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 	if check.TCP.EnvironmentRevisionID != checkedRevision.CurrentRevisionID || check.SSH.EnvironmentRevisionID != checkedRevision.CurrentRevisionID {
 		t.Fatalf("revision tcp=%s ssh=%s want=%s current=%s", check.TCP.EnvironmentRevisionID, check.SSH.EnvironmentRevisionID, checkedRevision.CurrentRevisionID, current.CurrentRevisionID)
 	}
-	if len(runner.requests) != 1 || !strings.Contains(string(runner.requests[0].Inventory), "node-1") || strings.Contains(string(runner.requests[0].Inventory), "node-2") {
-		t.Fatalf("SSH check did not retain the initially loaded inventory: requests=%+v", runner.requests)
+	if len(checker.requests) != 1 || checker.requests[0].Address != "192.0.2.10:2222" {
+		t.Fatalf("SSH check did not retain the initially loaded inventory: requests=%+v", checker.requests)
 	}
 }
 
@@ -158,10 +195,8 @@ func TestEnvironmentSSHCheckClassifiesAuthenticationFailure(t *testing.T) {
 	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
-	platform.ConfigureConnectivityRunner(&fixedConnectivityRunner{result: ansiblerunner.Result{
-		Recap: map[string]ansiblerunner.HostRecap{"node-1": {Unreachable: 1}},
-		Logs:  []ansiblerunner.LogEvent{{Line: `fatal: [node-1]: UNREACHABLE! => {"msg":"Permission denied (publickey,password)"}`}},
-	}, err: errors.New("ansible execute failed")})
+	configureTestSSHPassword(t, platform, owner, environment.ID)
+	platform.ConfigureEnvironmentSSHChecker(&fixedSSHChecker{err: &sshcheck.CheckError{Kind: sshcheck.ErrorAuthentication, Err: errors.New("rejected")}}, "/tmp/test-known-hosts")
 
 	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil {
@@ -172,34 +207,61 @@ func TestEnvironmentSSHCheckClassifiesAuthenticationFailure(t *testing.T) {
 	}
 }
 
-func TestEnvironmentSSHCheckClassifiesBuiltinAssetTampering(t *testing.T) {
+func TestEnvironmentSSHCheckClassifiesInvalidPrivateKey(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
 	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
-	platform.ConfigureConnectivityRunner(&fixedConnectivityRunner{err: ansiblerunner.ErrArtifactChanged})
+	configureTestSSHPassword(t, platform, owner, environment.ID)
+	platform.ConfigureEnvironmentSSHChecker(&fixedSSHChecker{err: &sshcheck.CheckError{Kind: sshcheck.ErrorPrivateKey, Err: errors.New("invalid key")}}, "/tmp/test-known-hosts")
 	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.Status != "degraded" || len(check.Results) != 1 || check.Results[0].ErrorCode != "ansible_unavailable" || !strings.Contains(check.Results[0].Message, "完整性") {
-		t.Fatalf("tampered built-in asset check=%+v", check)
+	if check.Status != "degraded" || len(check.Results) != 1 || check.Results[0].ErrorCode != "ssh_private_key_invalid" {
+		t.Fatalf("private key check=%+v", check)
+	}
+}
+
+func TestClassifyGoSSHFailureCoversStablePublicErrorCodes(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		status    string
+		errorCode string
+	}{
+		{name: "known hosts", err: &sshcheck.CheckError{Kind: sshcheck.ErrorKnownHosts, Err: errors.New("missing")}, status: "failed", errorCode: "ssh_known_hosts_unconfigured"},
+		{name: "host key", err: &sshcheck.CheckError{Kind: sshcheck.ErrorHostKey, Err: errors.New("changed")}, status: "unreachable", errorCode: "ssh_host_key_failed"},
+		{name: "connection refused", err: &sshcheck.CheckError{Kind: sshcheck.ErrorNetwork, Err: errors.New("connection refused")}, status: "unreachable", errorCode: "ssh_connection_refused"},
+		{name: "network", err: &sshcheck.CheckError{Kind: sshcheck.ErrorNetwork, Err: errors.New("no route")}, status: "unreachable", errorCode: "ssh_network_unreachable"},
+		{name: "timeout", err: &sshcheck.CheckError{Kind: sshcheck.ErrorTimeout, Err: context.DeadlineExceeded}, status: "unreachable", errorCode: "ssh_check_timeout"},
+		{name: "command", err: &sshcheck.CheckError{Kind: sshcheck.ErrorCommand, Err: errors.New("exit 1")}, status: "failed", errorCode: "ssh_command_failed"},
+		{name: "handshake", err: &sshcheck.CheckError{Kind: sshcheck.ErrorHandshake, Err: errors.New("protocol")}, status: "failed", errorCode: "ssh_handshake_failed"},
+		{name: "untyped", err: errors.New("unknown"), status: "failed", errorCode: "ssh_handshake_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, code, message := classifyGoSSHFailure(test.err)
+			if status != test.status || code != test.errorCode || message == "" {
+				t.Fatalf("classification=(%q,%q,%q), want status=%q code=%q", status, code, message, test.status, test.errorCode)
+			}
+		})
 	}
 }
 
 func TestEnvironmentSSHCheckReportsMissingCredentialWithoutResolvingUnrelatedRefs(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
-	runner := &fixedConnectivityRunner{result: ansiblerunner.Result{Recap: map[string]ansiblerunner.HostRecap{"node-1": {OK: 1}}}}
-	platform.ConfigureConnectivityRunner(runner)
+	checker := &fixedSSHChecker{}
+	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_UNRELATED"}}, "配置无关凭据"); err != nil {
 		t.Fatal(err)
 	}
 	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
-	if err != nil || check.Status != "healthy" || len(runner.requests) != 1 {
-		t.Fatalf("unrelated credential check=%+v requests=%d err=%v", check, len(runner.requests), err)
+	if err != nil || check.Status != "degraded" || check.Results[0].ErrorCode != "ssh_credential_missing" || len(checker.requests) != 0 {
+		t.Fatalf("unrelated credential check=%+v requests=%d err=%v", check, len(checker.requests), err)
 	}
 
 	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_SSH"}}, "配置 SSH 凭据"); err != nil {
@@ -209,8 +271,89 @@ func TestEnvironmentSSHCheckReportsMissingCredentialWithoutResolvingUnrelatedRef
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.Status != "degraded" || len(check.Results) != 1 || check.Results[0].ErrorCode != "ssh_credential_unconfigured" || len(runner.requests) != 1 {
-		t.Fatalf("missing SSH credential check=%+v requests=%d", check, len(runner.requests))
+	if check.Status != "degraded" || len(check.Results) != 1 || check.Results[0].ErrorCode != "ssh_credential_unconfigured" || len(checker.requests) != 0 {
+		t.Fatalf("missing SSH credential check=%+v requests=%d", check, len(checker.requests))
+	}
+
+	t.Setenv("CLUSTERFORGE_TEST_LEGACY_SSH_PASSWORD", "legacy-secret")
+	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_LEGACY_SSH_PASSWORD"}}, "配置旧名称 SSH 凭据"); err != nil {
+		t.Fatal(err)
+	}
+	check, err = platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	if err != nil || check.Status != "healthy" || len(checker.requests) != 1 || checker.requests[0].Password != "legacy-secret" {
+		t.Fatalf("legacy SSH credential check=%+v requests=%+v err=%v", check, checker.requests, err)
+	}
+}
+
+func TestEnvironmentSSHCredentialNeutralNameTakesPrecedence(t *testing.T) {
+	t.Setenv("CLUSTERFORGE_TEST_NEUTRAL_SSH_PASSWORD", "neutral-secret")
+	credentials, code, message := resolveEnvironmentSSHCredentials([]domain.CredentialRef{
+		{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_LEGACY"},
+		{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_NEUTRAL_SSH_PASSWORD"},
+		{Name: "ansible_private_key_file", Kind: "sshKeyPath", Reference: "/legacy/key"},
+		{Name: "ssh_private_key", Kind: "sshKeyPath", Reference: "/neutral/key"},
+	})
+	if code != "" || message != "" || credentials.password != "neutral-secret" || credentials.privateKeyPath != "/neutral/key" {
+		t.Fatalf("credentials=%+v code=%s message=%s", credentials, code, message)
+	}
+}
+
+func TestEnvironmentSSHCredentialAcceptsLegacyPrivateKeyEnvReference(t *testing.T) {
+	t.Setenv("CLUSTERFORGE_TEST_LEGACY_SSH_KEY_PATH", "/legacy/key")
+	credentials, code, message := resolveEnvironmentSSHCredentials([]domain.CredentialRef{{
+		Name: "ansible_private_key_file", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_LEGACY_SSH_KEY_PATH",
+	}})
+	if code != "" || message != "" || credentials.privateKeyPath != "/legacy/key" {
+		t.Fatalf("credentials=%+v code=%s message=%s", credentials, code, message)
+	}
+}
+
+func TestEnvironmentSSHCheckRequiresInventoryUser(t *testing.T) {
+	platform, owner, environment := maintenanceTestPlatform(t)
+	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+		t.Fatal(err)
+	}
+	configureTestSSHPassword(t, platform, owner, environment.ID)
+	checker := &fixedSSHChecker{}
+	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
+	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	if err != nil || check.Status != "degraded" || check.Results[0].ErrorCode != "ssh_user_missing" || len(checker.requests) != 0 {
+		t.Fatalf("SSH user check=%+v requests=%+v err=%v", check, checker.requests, err)
+	}
+}
+
+func TestEnvironmentSSHCheckLimitsConcurrencyToEightHosts(t *testing.T) {
+	platform, owner, environment := maintenanceTestPlatform(t)
+	hosts := make([]InventoryHost, 9)
+	for index := range hosts {
+		hosts[index] = InventoryHost{Name: fmt.Sprintf("node-%d", index+1), Address: fmt.Sprintf("192.0.2.%d", index+1), User: "root", Groups: []string{"all"}}
+	}
+	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, hosts, "配置并发检查节点"); err != nil {
+		t.Fatal(err)
+	}
+	configureTestSSHPassword(t, platform, owner, environment.ID)
+	checker := &blockingSSHChecker{reached: make(chan struct{}), release: make(chan struct{})}
+	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
+	result := make(chan error, 1)
+	go func() {
+		_, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+		result <- err
+	}()
+	select {
+	case <-checker.reached:
+	case <-time.After(time.Second):
+		close(checker.release)
+		t.Fatal("eight concurrent SSH checks did not start")
+	}
+	checker.mu.Lock()
+	maximum := checker.maximum
+	checker.mu.Unlock()
+	if maximum != 8 {
+		t.Fatalf("maximum concurrency=%d want=8", maximum)
+	}
+	close(checker.release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }
 

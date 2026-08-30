@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -75,7 +77,7 @@ func TestHTTPArtifactDeliveryProbeVerifiesSourceIdentityAndSize(t *testing.T) {
 	if err != nil || observed != int64(len(contents)) {
 		t.Fatalf("probe observed=%d err=%v", observed, err)
 	}
-	if err := delivery.Probe(context.Background(), ArtifactLocation{URL: "https://source.test/runtime.tgz"}, ArtifactIdentity{SHA256: strings.Repeat("0", 64)}); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if err := delivery.Probe(context.Background(), ArtifactLocation{URL: "https://source.test/runtime.tgz"}, ArtifactIdentity{SHA256: strings.Repeat("0", 64)}); !errors.Is(err, ErrArtifactIdentityMismatch) {
 		t.Fatalf("hash mismatch error=%v", err)
 	}
 }
@@ -103,5 +105,67 @@ func TestHTTPArtifactDeliveryTransferRejectsMismatchedTargetMetadata(t *testing.
 	})
 	if err == nil || !strings.Contains(err.Error(), "mismatched metadata") {
 		t.Fatalf("metadata mismatch error=%v", err)
+	}
+}
+
+func TestDockerImageDeliveryProbesAndTransfersImmutableImage(t *testing.T) {
+	root := t.TempDir()
+	logPath := filepath.Join(root, "docker.log")
+	binary := filepath.Join(root, "docker")
+	script := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf 'registry.test/runtime@sha256:%064d\n' 0
+  exit 0
+fi
+if [ "${FAKE_DOCKER_FAIL:-}" = "$1" ]; then
+  printf 'forced %s failure\n' "$1"
+  exit 9
+fi
+printf 'completed %s\n' "$1"
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_DOCKER_LOG", logPath)
+	delivery := NewDockerImageDelivery(binary)
+	digest := "sha256:" + strings.Repeat("0", 64)
+	observed := ""
+	if err := delivery.Probe(context.Background(), ImageLocation{Ref: "registry.test/runtime:latest", ObservedDigest: &observed}, ImageDigest{}); err != nil {
+		t.Fatal(err)
+	}
+	if observed != "registry.test/runtime@"+digest {
+		t.Fatalf("observed digest=%q", observed)
+	}
+	var logs []string
+	if err := delivery.Transfer(context.Background(), ImageTransfer{
+		Source: ImageLocation{Ref: "source.test/runtime:latest"}, Target: ImageLocation{Ref: "target.test/runtime:latest"},
+		Digest: ImageDigest{Value: "target.test/runtime@" + digest}, Log: func(line string) { logs = append(logs, line) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"pull registry.test/runtime:latest", "image inspect --format={{index .RepoDigests 0}} registry.test/runtime:latest",
+		"pull source.test/runtime:latest", "tag source.test/runtime:latest target.test/runtime:latest",
+		"push target.test/runtime:latest", "pull target.test/runtime@" + digest,
+	} {
+		if !strings.Contains(string(contents), command) {
+			t.Fatalf("missing command %q in %q", command, contents)
+		}
+	}
+	if len(logs) != 4 {
+		t.Fatalf("transfer logs=%q", logs)
+	}
+
+	t.Setenv("FAKE_DOCKER_FAIL", "push")
+	if err := delivery.Transfer(context.Background(), ImageTransfer{
+		Source: ImageLocation{Ref: "source.test/runtime:latest"}, Target: ImageLocation{Ref: "target.test/runtime:latest"}, Digest: ImageDigest{Value: "target.test/runtime@" + digest},
+	}); err == nil || !strings.Contains(err.Error(), "docker push failed") {
+		t.Fatalf("push failure error=%v", err)
 	}
 }

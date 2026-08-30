@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/sshcheck"
 	"codex/platform-demo/internal/store"
 )
 
@@ -543,13 +544,17 @@ func (p *Platform) checkEnvironmentHealth(ctx context.Context, user domain.User,
 	return check, nil
 }
 
-const environmentSSHCheckPlaybook = ansiblerunner.BuiltinConnectivityPlaybookName
+var environmentSSHCredentialNames = struct {
+	password   []string
+	privateKey []string
+}{
+	password:   []string{"ssh_password", "ansible_ssh_pass", "ansible_password"},
+	privateKey: []string{"ssh_private_key", "ansible_private_key_file", "ansible_ssh_private_key_file"},
+}
 
-var environmentSSHCredentialNames = map[string]bool{
-	"ansible_ssh_pass":             true,
-	"ansible_password":             true,
-	"ansible_private_key_file":     true,
-	"ansible_ssh_private_key_file": true,
+type environmentSSHCredentials struct {
+	password       string
+	privateKeyPath string
 }
 
 func (p *Platform) CheckEnvironmentConnectivity(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentConnectivityCheck, error) {
@@ -603,51 +608,50 @@ func (p *Platform) checkEnvironmentSSH(ctx context.Context, user domain.User, en
 		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, results)
 	}
 
-	sshRefs := make([]domain.CredentialRef, 0, len(environment.Revision.CredentialRefs))
-	for _, ref := range environment.Revision.CredentialRefs {
-		if environmentSSHCredentialNames[ref.Name] {
-			sshRefs = append(sshRefs, ref)
-		}
+	credentials, credentialCode, credentialMessage := resolveEnvironmentSSHCredentials(environment.Revision.CredentialRefs)
+	if credentialCode != "" {
+		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, []domain.EnvironmentSSHHostCheck{{Kind: "configuration", Name: "SSH CredentialRef", Address: "—", Status: "failed", ErrorCode: credentialCode, Message: credentialMessage}})
 	}
-	credentialVariables, secrets, credentialErr := resolveCredentialRefs(sshRefs)
-	if credentialErr != nil {
-		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, []domain.EnvironmentSSHHostCheck{{Kind: "configuration", Name: "SSH CredentialRef", Address: "—", Status: "failed", ErrorCode: "ssh_credential_unconfigured", Message: "SSH CredentialRef 的后端环境变量或密钥文件未配置"}})
+	if p.sshChecker == nil {
+		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, []domain.EnvironmentSSHHostCheck{{Kind: "configuration", Name: "Go SSH Checker", Address: "—", Status: "failed", ErrorCode: "ssh_checker_unavailable", Message: "平台未配置 Go SSH 检查器"}})
 	}
-	if p.connectivityRunner == nil {
-		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, []domain.EnvironmentSSHHostCheck{{Kind: "configuration", Name: "Ansible Runner", Address: "—", Status: "failed", ErrorCode: "ansible_unavailable", Message: "平台未配置 Ansible 执行器"}})
-	}
-	remoteInventory, renderErr := json.Marshal(InventoryDocument{Hosts: remoteHosts})
-	if renderErr != nil {
-		return domain.EnvironmentSSHCheck{}, renderErr
-	}
-	renderedInventory, renderErr := renderInventory(remoteInventory)
-	if renderErr != nil {
-		return domain.EnvironmentSSHCheck{}, renderErr
-	}
-	runnerResult, runErr := p.connectivityRunner.Run(checkContext, ActionRequest{
-		Playbook: environmentSSHCheckPlaybook, Inventory: renderedInventory, Variables: credentialVariables,
-		SecretValues: secrets, Timeout: 30 * time.Second,
-	})
-	results := make([]domain.EnvironmentSSHHostCheck, 0, len(inventory.Hosts))
-	for _, host := range inventory.Hosts {
+
+	results := make([]domain.EnvironmentSSHHostCheck, len(inventory.Hosts))
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 8)
+	for index, host := range inventory.Hosts {
 		if localInventoryAddress(host.Address) {
-			results = append(results, sshCheckTarget(host, "skipped", "local_connection", "本地主机使用 local connection，不需要 SSH"))
+			results[index] = sshCheckTarget(host, "skipped", "local_connection", "本地主机使用 local connection，不需要 SSH")
 			continue
 		}
-		recap, found := runnerResult.Recap[host.Name]
-		switch {
-		case found && recap.Unreachable > 0:
-			code, message := classifySSHUnreachable(host.Name, runnerResult.Logs)
-			results = append(results, sshCheckTarget(host, "unreachable", code, message))
-		case found && recap.Failed > 0:
-			results = append(results, sshCheckTarget(host, "failed", "ansible_ping_failed", "SSH 已连接，但远端 Python 或 Ansible Ping 执行失败"))
-		case found && recap.OK > 0:
-			results = append(results, sshCheckTarget(host, "passed", "", ""))
-		default:
-			code, message := classifySSHRunnerFailure(runErr, runnerResult.Logs)
-			results = append(results, sshCheckTarget(host, "failed", code, message))
+		if strings.TrimSpace(host.User) == "" {
+			results[index] = sshCheckTarget(host, "failed", "ssh_user_missing", "Inventory 主机必须明确配置 SSH 用户")
+			continue
 		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			hostContext, hostCancel := context.WithTimeout(checkContext, 10*time.Second)
+			defer hostCancel()
+			port := host.Port
+			if port == 0 {
+				port = 22
+			}
+			err := p.sshChecker.Check(hostContext, sshcheck.Request{
+				Address: net.JoinHostPort(host.Address, fmt.Sprint(port)), User: host.User,
+				KnownHostsPath: p.sshKnownHostsPath, PrivateKeyPath: credentials.privateKeyPath, Password: credentials.password,
+			})
+			if err == nil {
+				results[index] = sshCheckTarget(host, "passed", "", "")
+				return
+			}
+			status, code, message := classifyGoSSHFailure(err)
+			results[index] = sshCheckTarget(host, status, code, message)
+		}()
 	}
+	wg.Wait()
 	return p.saveEnvironmentSSHCheck(ctx, user, environment, started, results)
 }
 
@@ -663,50 +667,78 @@ func sshCheckTarget(host InventoryHost, status, code, message string) domain.Env
 	return domain.EnvironmentSSHHostCheck{Kind: "host", Name: host.Name, Address: net.JoinHostPort(host.Address, fmt.Sprint(port)), User: host.User, Status: status, ErrorCode: code, Message: message}
 }
 
-func classifySSHUnreachable(host string, logs []ansiblerunner.LogEvent) (string, string) {
-	message := relevantSSHLogText(host, logs)
-	switch {
-	case strings.Contains(message, "permission denied"), strings.Contains(message, "authentication failed"):
-		return "ssh_authentication_failed", "SSH 用户或凭据认证失败"
-	case strings.Contains(message, "host key verification failed"), strings.Contains(message, "remote host identification has changed"):
-		return "ssh_host_key_failed", "SSH 主机指纹校验失败"
-	case strings.Contains(message, "connection refused"):
-		return "ssh_connection_refused", "SSH 端口拒绝连接，请检查 sshd 和端口配置"
-	case strings.Contains(message, "no route to host"), strings.Contains(message, "network is unreachable"), strings.Contains(message, "connection timed out"):
-		return "ssh_network_unreachable", "SSH 网络不可达或连接超时"
-	default:
-		return "ssh_unreachable", "SSH 网络、主机指纹或认证检查失败"
+func resolveEnvironmentSSHCredentials(refs []domain.CredentialRef) (environmentSSHCredentials, string, string) {
+	var credentials environmentSSHCredentials
+	privateKeyRef := preferredCredentialRef(refs, environmentSSHCredentialNames.privateKey)
+	passwordRef := preferredCredentialRef(refs, environmentSSHCredentialNames.password)
+	if privateKeyRef == nil && passwordRef == nil {
+		return credentials, "ssh_credential_missing", "必须显式配置 ssh_private_key 或 ssh_password CredentialRef"
 	}
-}
-
-func classifySSHRunnerFailure(runErr error, logs []ansiblerunner.LogEvent) (string, string) {
-	message := relevantSSHLogText("", logs)
-	if runErr != nil {
-		message += " " + strings.ToLower(runErr.Error())
-	}
-	switch {
-	case errors.Is(runErr, ansiblerunner.ErrArtifactChanged):
-		return "ansible_unavailable", "平台内置 Ansible 检查 Playbook 完整性校验失败"
-	case errors.Is(runErr, context.DeadlineExceeded), strings.Contains(message, "deadline exceeded"), strings.Contains(message, "timed out"):
-		return "ssh_check_timeout", "SSH / Ansible 检查超过 30 秒"
-	case strings.Contains(message, "sshpass"):
-		return "ssh_password_helper_missing", "平台缺少 SSH 密码认证依赖 sshpass"
-	case strings.Contains(message, "executable file not found"), strings.Contains(message, "no such file or directory"), strings.Contains(message, "invalid playbook path"):
-		return "ansible_unavailable", "平台未安装或未正确配置 Ansible 执行器或检查 Playbook"
-	default:
-		return "ansible_runner_failed", "Ansible 检查未返回该主机的有效结果"
-	}
-}
-
-func relevantSSHLogText(host string, logs []ansiblerunner.LogEvent) string {
-	var lines []string
-	for _, event := range logs {
-		line := strings.ToLower(event.Line)
-		if host == "" || strings.Contains(line, strings.ToLower(host)) {
-			lines = append(lines, line)
+	if privateKeyRef != nil {
+		switch {
+		case privateKeyRef.Kind == "sshKeyPath" && strings.TrimSpace(privateKeyRef.Reference) != "":
+			credentials.privateKeyPath = privateKeyRef.Reference
+		case privateKeyRef.Name != "ssh_private_key" && privateKeyRef.Kind == "envVarRef" && strings.TrimSpace(privateKeyRef.Reference) != "":
+			path, ok := os.LookupEnv(privateKeyRef.Reference)
+			if !ok || strings.TrimSpace(path) == "" {
+				return credentials, "ssh_credential_unconfigured", "旧名称 SSH 私钥 CredentialRef 的后端环境变量未配置"
+			}
+			credentials.privateKeyPath = path
+		default:
+			return credentials, "ssh_credential_unconfigured", "ssh_private_key 必须使用 sshKeyPath 并引用绝对路径"
 		}
 	}
-	return strings.Join(lines, "\n")
+	if passwordRef != nil {
+		if passwordRef.Kind != "envVarRef" || strings.TrimSpace(passwordRef.Reference) == "" {
+			return credentials, "ssh_credential_unconfigured", "SSH 密码 CredentialRef 必须使用 envVarRef"
+		}
+		password, ok := os.LookupEnv(passwordRef.Reference)
+		if !ok || password == "" {
+			return credentials, "ssh_credential_unconfigured", "SSH 密码 CredentialRef 的后端环境变量未配置"
+		}
+		credentials.password = password
+	}
+	return credentials, "", ""
+}
+
+func preferredCredentialRef(refs []domain.CredentialRef, names []string) *domain.CredentialRef {
+	for _, name := range names {
+		for index := range refs {
+			if refs[index].Name == name {
+				return &refs[index]
+			}
+		}
+	}
+	return nil
+}
+
+func classifyGoSSHFailure(err error) (string, string, string) {
+	var checkErr *sshcheck.CheckError
+	if !errors.As(err, &checkErr) {
+		return "failed", "ssh_handshake_failed", "Go SSH 检查失败"
+	}
+	switch checkErr.Kind {
+	case sshcheck.ErrorPrivateKey:
+		return "failed", "ssh_private_key_invalid", "SSH 私钥不存在、不可读、已加密或格式无效"
+	case sshcheck.ErrorKnownHosts:
+		return "failed", "ssh_known_hosts_unconfigured", "平台 known_hosts 文件未配置或不可读"
+	case sshcheck.ErrorHostKey:
+		return "unreachable", "ssh_host_key_failed", "SSH 主机指纹未知或与 known_hosts 不一致"
+	case sshcheck.ErrorAuthentication:
+		return "unreachable", "ssh_authentication_failed", "SSH 用户或凭据认证失败"
+	case sshcheck.ErrorNetwork:
+		message := strings.ToLower(checkErr.Error())
+		if strings.Contains(message, "connection refused") {
+			return "unreachable", "ssh_connection_refused", "SSH 端口拒绝连接，请检查 sshd 和端口配置"
+		}
+		return "unreachable", "ssh_network_unreachable", "SSH 网络不可达"
+	case sshcheck.ErrorTimeout:
+		return "unreachable", "ssh_check_timeout", "单台主机 SSH 检查超过 10 秒"
+	case sshcheck.ErrorCommand:
+		return "failed", "ssh_command_failed", "SSH 已认证，但创建会话或执行 true 失败"
+	default:
+		return "failed", "ssh_handshake_failed", "SSH 协议握手或会话创建失败"
+	}
 }
 
 func (p *Platform) saveEnvironmentSSHCheck(ctx context.Context, user domain.User, environment domain.Environment, started time.Time, results []domain.EnvironmentSSHHostCheck) (domain.EnvironmentSSHCheck, error) {

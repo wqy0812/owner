@@ -11,13 +11,14 @@ test('component page shows upstream parameter lineage and visibility editor', as
   await expect(page.getByText(/本组件参数 kubeRoot 来自 kubelet .*的公开参数 kubeInstallRoot/)).toHaveCount(3);
   await expect(page.getByText('各版本参数来源')).toBeVisible();
 
-  const editDependencies = page.getByRole('button', { name: /编辑直接依赖/ });
-  await expect(editDependencies).toBeVisible();
-  await editDependencies.click();
-  if (await page.getByRole('dialog', { name: /创建 Draft 编辑直接依赖/ }).count()) {
+  const editContract = page.getByRole('button', { name: /创建 Draft 编辑合同|选择 Draft 编辑合同|编辑依赖和参数/ });
+  await expect(editContract).toBeVisible();
+  await editContract.click();
+  if (await page.getByRole('dialog', { name: /创建 Draft 编辑依赖和参数/ }).count()) {
     await page.getByPlaceholder('v1.1.0').fill(`1.17.5-ui-${Date.now()}`);
     await page.locator('textarea[name="notes"]').fill('验证页面内依赖和参数编辑');
-    await page.getByRole('button', { name: '创建 Draft' }).click();
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: '创建 Draft', exact: true }).click();
   }
 
   await expect(page.getByRole('button', { name: '新增依赖' })).toBeVisible();

@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；所有操作目标均为测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-29 当前工作区代码与测试环境只读快照
+> 文档基线：2026-08-30 当前工作区代码与测试环境只读快照
 > 适用对象：组件 Owner、场景 Owner、环境 Owner 及演示平台管理员
 > 重要提示：这是本地 Demo。身份可无密码切换，不应直接作为生产权限系统使用。
 
@@ -525,9 +525,11 @@ Inventory、环境事实、环境变量和凭据引用分区采用同一保存�
 变量会直接成为每个组件作业的同名 Ansible extra-vars。例如配置：
 
 ```text
-IMAGE_REGISTRY=192.168.88.54:5000
+IMAGE_REGISTRY=192.168.88.116:5000
 FILE_STATION=192.168.88.57:8080
 ```
+
+当前测试环境的主 Registry 是 `192.168.88.116:5000`；`192.168.88.54:5000` 只作迁移回退源。两套测试环境都必须在自己的当前 Revision 中显式保存主端点，不依赖平台进程的默认值。
 
 Playbook 可以直接使用 `{{ IMAGE_REGISTRY }}`。变量名只允许大写字母、数字和
 下划线，且不能以数字开头；不得使用 password、secret、token、private key、
@@ -564,13 +566,15 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 环境 Owner 可以单击一次“立即检查”，对当前 Revision 依次执行两类只读检查：
 
 - TCP 端点检查：Inventory 主机检查配置的 SSH 端口，未填写时使用 22；`IMAGE_REGISTRY` 和 `FILE_STATION` 存在时检查各自 `host:port`。
-- SSH / Ansible 检查：仅针对远端 Inventory 主机执行无提权、无 facts、无写操作的 `ansible.builtin.ping`，验证 SSH 认证、主机指纹、远端 Python 和 Ansible 基础执行。
-- 检查 Playbook 内置在平台二进制中，启动时按内容摘要释放到只读运行目录并由独立 Runner 执行，不依赖也不会修改发布目录中的用户 Playbook。若内置文件、权限或摘要异常，服务启动和受保护部署都会失败关闭。
+- Go SSH 检查：仅针对远端 Inventory 主机严格校验主机指纹、完成身份认证、创建 Session 并执行只读命令 `true`。不提权、不采集 facts，也不依赖 Ansible。
+- SSH 检查最多并发连接 8 台主机，单机超时 10 秒、整体超时 30 秒。
 - 两类检查分别记录来源 Revision、结果和时间，并追加独立审计事件。创建新 Revision 后，旧结果都会被标记为需要重检。
 
-页面在同一区域分别展示 TCP 和 SSH / Ansible 结果。TCP `healthy` 只证明端口可连接；SSH / Ansible `healthy` 才证明本次检查完成了 SSH 认证和 Ping 模块执行，但仍不证明 sudo、镜像推送、介质校验或组件安装一定成功。错误会区分凭据未配置、认证失败、主机指纹失败、连接拒绝、网络超时、远端 Python/Ansible 失败等类别。仓库和文件站若未显式包含端口，会被报告为配置异常。
+页面在同一区域分别展示 TCP 和 SSH 结果。TCP `healthy` 只证明端口可连接；SSH `healthy` 才证明本次检查完成了主机指纹校验、身份认证、Session 创建和 `true` 执行，但仍不证明 sudo、镜像推送、介质校验或组件安装一定成功。错误会区分凭据缺失、私钥无效、认证失败、主机指纹失败、连接拒绝、网络超时、协议握手或命令执行失败等类别。仓库和文件站若未显式包含端口，会被报告为配置异常。
 
-SSH 检查只解析当前 Revision 中的标准连接 CredentialRef：`ansible_ssh_pass`、`ansible_password`、`ansible_private_key_file` 和 `ansible_ssh_private_key_file`；未声明时沿用平台 Runner 用户的 SSH agent/config。平台不会关闭主机指纹校验，也不会把凭据值或 Ansible 原始错误输出写入检查结果。
+SSH 检查要求当前 Revision 显式提供 `ssh_password`（`envVarRef`）或 `ssh_private_key`（`sshKeyPath`）；中性名称不存在时兼容 `ansible_ssh_pass`、`ansible_password`、`ansible_private_key_file` 和 `ansible_ssh_private_key_file`，旧私钥名称还接受值为绝对路径的 `envVarRef`。中性名称优先，私钥优先于密码，二者都存在时密码作为认证回退。平台不读取 SSH agent、默认私钥或 `~/.ssh/config`，暂不支持加密私钥；远端 Inventory 主机必须填写 SSH 用户。
+
+主机指纹文件由 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指定，默认是服务账号的 `~/.ssh/known_hosts`。文件缺失、主机未知或指纹变化都会失败关闭，平台不会自动接受新主机，也不会把凭据值或底层 SSH 错误原文写入检查结果。
 
 ### 5.7 查看和恢复历史 Revision
 
@@ -736,7 +740,7 @@ Failed 或 Interrupted Run 会在详情顶部汇总失败步骤和最近一条�
 
 精确组件 ID、Release ID、版本、动作、Playbook、场景节点与边、Environment Revision、Inventory、Variables、CredentialRef 和 Catalog 恢复点见 [测试环境资产目录](demo-catalog.md)。复现当前发布目录应优先从该文档记录的不可变恢复点恢复空库；手工复录适合重建业务结构，但不能还原原 ID、审计、Run 或验证证据。
 
-正式运行前仍须重新验证 Inventory、SSH/Ansible、介质摘要、镜像 digest、仓库、凭据、网络、备份和回退方案。页面显示 TCP 或 SSH/Ansible 连通，只证明对应检查当时成功，不代表 Kubernetes 已安装或收敛。
+正式运行前仍须重新验证 Inventory、SSH、介质摘要、镜像 digest、仓库、凭据、网络、备份和回退方案。页面显示 TCP 或 SSH 连通，只证明对应检查当时成功，不代表 Kubernetes 已安装或收敛。
 
 ## 9. 常见问题排查
 

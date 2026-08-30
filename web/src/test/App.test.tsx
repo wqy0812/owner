@@ -47,8 +47,14 @@ function isEnvironmentList(url: string) {
   return url.endsWith('/environments') || url.endsWith('/environments?includeArchived=true');
 }
 
-function installFetch(options: { componentCreateForbidden?: boolean; initialUser?: typeof alice | typeof dave | typeof carol; withScenario?: boolean } = {}) {
+function installFetch(options: {
+  componentCreateForbidden?: boolean;
+  initialUser?: typeof alice | typeof dave | typeof carol;
+  notifications?: Array<Record<string, unknown>>;
+  withScenario?: boolean;
+} = {}) {
   let current = options.initialUser ?? alice;
+  let notifications = options.notifications ?? [];
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/session/me')) return json(current);
@@ -98,7 +104,12 @@ function installFetch(options: { componentCreateForbidden?: boolean; initialUser
     if (url.endsWith('/catalog-repository')) return json({ enabled: true, configured: true, path: '/data/private/catalog.git', branch: 'catalog', allowedRoot: '/data/private', recoveryPoints: [{ ref: 'backup/20260829', commit: 'a'.repeat(40), createdAt: '2026-08-29T08:00:00Z' }], restoreTargetKnown: true, targetCatalogEmpty: true, targetComponentCount: 0, targetScenarioCount: 0 });
     if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }]);
     if (url.endsWith('/runs')) return json([]);
-    if (url.endsWith('/notifications')) return json([]);
+    if (/\/notifications\/[^/]+$/.test(url) && init?.method === 'PATCH') {
+      const id = decodeURIComponent(url.split('/').pop() ?? '');
+      notifications = notifications.map((item) => item.id === id ? { ...item, read: true } : item);
+      return json(notifications.find((item) => item.id === id));
+    }
+    if (url.endsWith('/notifications')) return json(notifications);
     return json({});
   });
   vi.stubGlobal('fetch', mock);
@@ -152,6 +163,27 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('当前没有待办')).toBeInTheDocument();
     expect(screen.getByText(/首页主任务仍是处理交付待办/)).toBeInTheDocument();
     expect(screen.queryByText(/允许以“未验证”状态发布/)).not.toBeInTheDocument();
+  });
+
+  it('filters impact notifications and marks a selected notification as read', async () => {
+    const fetchMock = installFetch({ notifications: [
+      {
+        id: 'notification-1', userId: alice.id, type: 'release.updated', title: 'containerd 发布新版本',
+        body: '场景可能受到上游版本影响', read: false, resourceUrl: '/components?selected=component-containerd',
+        payload: { componentId: 'component-containerd', componentName: 'containerd', oldVersion: '2.1.0', newVersion: '2.1.1', breaking: true, paths: [['containerd', 'kubelet']], scenarioIds: ['scenario-kubernetes'] },
+        createdAt: '2026-08-30T00:00:00Z',
+      },
+    ] });
+    renderApp('/notifications?selected=notification-1');
+
+    expect(await screen.findByRole('heading', { name: '通知中心' })).toBeInTheDocument();
+    expect(await screen.findByText('containerd 发布新版本')).toBeInTheDocument();
+    expect(screen.getByText(/containerd\s+→\s+kubelet/, { selector: '.notification-impact span' })).toBeInTheDocument();
+    expect(screen.getByText('BREAKING')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /标为已读/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/notifications/notification-1'), expect.objectContaining({ method: 'PATCH' })));
+    await userEvent.click(screen.getByRole('button', { name: /^未读/ }));
+    expect(await screen.findByText('没有未读通知')).toBeInTheDocument();
   });
 
   it('lets the user collapse and expand the desktop sidebar', async () => {
@@ -1625,7 +1657,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(checkButton);
 
     const tcpResults = await screen.findByRole('region', { name: 'TCP 端点检查结果' });
-    const sshResults = screen.getByRole('region', { name: 'SSH 和 Ansible 检查结果' });
+    const sshResults = screen.getByRole('region', { name: 'SSH 检查结果' });
     expect(within(tcpResults).getByText('TCP 连接失败')).toBeInTheDocument();
     expect(within(sshResults).getByText('SSH 用户或凭据认证失败')).toBeInTheDocument();
     expect(within(sshResults).getByText('ssh_authentication_failed')).toBeInTheDocument();

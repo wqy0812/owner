@@ -370,7 +370,7 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed), Cause: &domain.WorkCause{Kind: "health_check", Summary: "当前 Revision 的只读 TCP 检查未全部通过", At: &checkedAt}, NextAction: workAction("查看异常端点", environmentHref+"&focus=health")})
 		}
 		if environment.SSHCheck == nil {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_missing", Message: "当前 Revision 尚未执行 SSH / Ansible 检查", Cause: ruleCause("SSH 登录与 Ansible Ping 证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_missing", Message: "当前 Revision 尚未执行 SSH 检查", Cause: ruleCause("SSH 认证与远端 true 执行证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.SSHCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
 			at := environment.Revision.CreatedAt
 			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
@@ -386,7 +386,7 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 				}
 			}
 			checkedAt := environment.SSHCheck.CheckedAt
-			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_degraded", Message: fmt.Sprintf("当前 SSH / Ansible 检查有 %d 项失败", failed), Cause: &domain.WorkCause{Kind: "ssh_check", Summary: "当前 Revision 的 SSH 登录或 Ansible Ping 未全部通过", At: &checkedAt}, NextAction: workAction("查看 SSH 错误", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_degraded", Message: fmt.Sprintf("当前 SSH 检查有 %d 项失败", failed), Cause: &domain.WorkCause{Kind: "ssh_check", Summary: "当前 Revision 的 SSH 认证或远端 true 执行未全部通过", At: &checkedAt}, NextAction: workAction("查看 SSH 错误", environmentHref+"&focus=health")})
 		}
 		if len(reasons) == 0 {
 			continue

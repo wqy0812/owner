@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,26 @@ import (
 func TestSnapshotAndBothRestorePaths(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
+	artifactContents := strings.Repeat("x", 42)
+	artifactDigest := sha256.Sum256([]byte(artifactContents))
+	var externalArtifactValid atomic.Bool
+	externalArtifactValid.Store(true)
+	artifactServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		contents := artifactContents
+		if !externalArtifactValid.Load() {
+			contents = strings.Repeat("y", len(artifactContents))
+		}
+		_, _ = response.Write([]byte(contents))
+	}))
+	t.Cleanup(artifactServer.Close)
+	dockerDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(dockerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dockerDir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	databasePath := filepath.Join(root, "source.db")
 	playbookRoot := filepath.Join(root, "jobs")
 	playbookPath := filepath.Join(playbookRoot, "managed", "runtime", "release-runtime-1", "install.yml")
@@ -50,7 +72,7 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 		{`INSERT INTO component_releases(id,component_id,version,status,release_notes,breaking,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-runtime-1", "component-runtime", "1.0.0", "released", "stable", 0, 0, 3, "low", `{}`, `[]`, now, now}},
 		{`INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES(?,?,?,?,?,?)`, []any{"dependency-runtime-host", "release-runtime-1", "component-host", "release-host-1", "prepared host", `[]`}},
 		{`INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"action-install", "release-runtime-1", "install", "install", "managed/runtime/release-runtime-1/install.yml", playbookSHA, `[]`, "", "runtime", `[]`, `[]`, 1800, "low", 0, 1}},
-		{`INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, []any{"artifact-runtime", "release-runtime-1", "runtime_media", "runtime.tgz", strings.Repeat("a", 64), 42, "https://fss.example.invalid/runtime.tgz", "component-owner", now, "component-owner", now}},
+		{`INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, []any{"artifact-runtime", "release-runtime-1", "runtime_media", "runtime.tgz", hex.EncodeToString(artifactDigest[:]), int64(len(artifactContents)), artifactServer.URL + "/runtime.tgz", "component-owner", now, "component-owner", now}},
 		{`INSERT INTO component_release_images(id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, []any{"image-runtime", "release-runtime-1", "main", "sha256:" + strings.Repeat("b", 64), "registry.example.invalid/runtime:1.0.0", "component-owner", now, "component-owner", now}},
 		{`INSERT INTO scenarios(id,slug,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, []any{"scenario-runtime", "runtime-scenario", "Runtime Scenario", "scenario", "scenario-owner", "scenario-runtime-r1", now, now}},
 		{`INSERT INTO scenario_revisions(id,scenario_id,revision,status,publication_generation,graph_json,created_at,test_passed_at,released_at) VALUES(?,?,?,?,?,?,?,?,?)`, []any{"scenario-runtime-r1", "scenario-runtime", 1, "released", 2, `{"nodes":[{"id":"runtime","name":"Runtime","releaseId":"release-runtime-1","action":"install","hostGroup":"runtime","values":{},"runInputs":[],"position":{"x":0,"y":0}}],"edges":[]}`, now, now, now}},
@@ -105,6 +127,13 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 	}
 	if _, err := manager.Verify(ctx, manifest.BackupID, true); err != nil {
 		t.Fatal(err)
+	}
+	if err := manager.VerifyExternal(ctx, manifest.BackupID); err != nil {
+		t.Fatalf("external Catalog verification failed: %v", err)
+	}
+	externalArtifactValid.Store(false)
+	if err := manager.VerifyExternal(ctx, manifest.BackupID); err == nil || !strings.Contains(err.Error(), "does not match its Catalog identity") {
+		t.Fatalf("tampered external artifact verification error=%v", err)
 	}
 	catalogContents, err := manager.gitShow(ctx, manifest.GitCommit, "catalog.json")
 	if err != nil {

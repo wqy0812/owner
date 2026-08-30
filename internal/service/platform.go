@@ -13,20 +13,26 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/sshcheck"
 	"codex/platform-demo/internal/store"
 )
 
+type EnvironmentSSHChecker interface {
+	Check(context.Context, sshcheck.Request) error
+}
+
 type Platform struct {
-	store              *store.Store
-	runner             Runner
-	connectivityRunner Runner
-	artifactDelivery   ArtifactDelivery
-	imageDelivery      ImageDelivery
-	hub                *EventHub
-	playbookRoot       string
-	imageBuildRoot     string
-	dockerBinary       string
-	dialContext        func(context.Context, string, string) (net.Conn, error)
+	store             *store.Store
+	runner            Runner
+	sshChecker        EnvironmentSSHChecker
+	sshKnownHostsPath string
+	artifactDelivery  ArtifactDelivery
+	imageDelivery     ImageDelivery
+	hub               *EventHub
+	playbookRoot      string
+	imageBuildRoot    string
+	dockerBinary      string
+	dialContext       func(context.Context, string, string) (net.Conn, error)
 
 	rootCtx         context.Context
 	cancel          context.CancelFunc
@@ -75,7 +81,7 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	platform := &Platform{
-		store: database, runner: runner, connectivityRunner: runner, hub: hub,
+		store: database, runner: runner, hub: hub,
 		artifactDelivery: NewHTTPArtifactDelivery(nil), imageDelivery: NewDockerImageDelivery("docker"),
 		dialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
 		rootCtx:     ctx, cancel: cancel,
@@ -98,10 +104,11 @@ func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform 
 	return platform
 }
 
-// ConfigureConnectivityRunner isolates platform-owned diagnostic Playbooks
-// from the owner-managed Catalog execution tree.
-func (p *Platform) ConfigureConnectivityRunner(runner Runner) {
-	p.connectivityRunner = runner
+// ConfigureEnvironmentSSHChecker installs the native, read-only SSH probe.
+// Component execution continues to use the owner-managed Ansible runner.
+func (p *Platform) ConfigureEnvironmentSSHChecker(checker EnvironmentSSHChecker, knownHostsPath string) {
+	p.sshChecker = checker
+	p.sshKnownHostsPath = strings.TrimSpace(knownHostsPath)
 }
 
 func (p *Platform) ConfigureEnvironmentHealthDialer(dial func(context.Context, string, string) (net.Conn, error)) {

@@ -66,7 +66,10 @@ type ImageDelivery interface {
 	Transfer(context.Context, ImageTransfer) error
 }
 
-var ErrDeliveryTargetMissing = errors.New("delivery target missing")
+var (
+	ErrArtifactIdentityMismatch = errors.New("artifact source SHA-256 does not match content identity")
+	ErrDeliveryTargetMissing    = errors.New("delivery target missing")
+)
 
 type HTTPArtifactDelivery struct{ client *http.Client }
 
@@ -97,7 +100,7 @@ func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocat
 			return fmt.Errorf("read artifact source: %w", err)
 		}
 		if identity.SHA256 != "" && hex.EncodeToString(hash.Sum(nil)) != identity.SHA256 {
-			return fmt.Errorf("artifact source SHA-256 does not match content identity")
+			return ErrArtifactIdentityMismatch
 		}
 		if location.ObservedSize != nil {
 			*location.ObservedSize = size
@@ -158,7 +161,6 @@ func (d *HTTPArtifactDelivery) Transfer(ctx context.Context, transfer ArtifactTr
 type DockerImageDelivery struct{ binary string }
 
 var _ ActionRunner = (*ansiblerunner.Runner)(nil)
-var _ ActionRunner = (*ansiblerunner.BuiltinRunner)(nil)
 var _ ArtifactDelivery = (*HTTPArtifactDelivery)(nil)
 var _ ImageDelivery = (*DockerImageDelivery)(nil)
 
