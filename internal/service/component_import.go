@@ -46,7 +46,7 @@ type ComponentImportEntry struct {
 	Release struct {
 		Version                string                       `json:"version"`
 		ReleaseNotes           string                       `json:"releaseNotes"`
-		Breaking               bool                         `json:"breaking"`
+		LineName               string                       `json:"lineName"`
 		RiskLevel              domain.RiskLevel             `json:"riskLevel"`
 		EnvironmentConstraints map[string]any               `json:"environmentConstraints"`
 		Parameters             []domain.ParameterDefinition `json:"parameters"`
@@ -99,6 +99,7 @@ func normalizeComponentImportRequest(input ComponentImportRequest) ComponentImpo
 		entry.Component.Description = strings.TrimSpace(entry.Component.Description)
 		entry.Component.Tags = normalizeStrings(entry.Component.Tags)
 		entry.Release.Version = strings.TrimSpace(entry.Release.Version)
+		entry.Release.LineName = strings.TrimSpace(entry.Release.LineName)
 		entry.Release.ReleaseNotes = strings.TrimSpace(entry.Release.ReleaseNotes)
 		entry.Release.Parameters = append([]domain.ParameterDefinition(nil), entry.Release.Parameters...)
 		for index := range entry.Release.Parameters {
@@ -173,6 +174,9 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		indegree[slug] = 0
 		if entry.Release.Version == "" {
 			return ComponentImportPlan{}, fmt.Errorf("%w: %s release version is required", domain.ErrInvalid, slug)
+		}
+		if entry.Release.LineName == "" {
+			return ComponentImportPlan{}, fmt.Errorf("%w: %s release lineName is required", domain.ErrInvalid, slug)
 		}
 		if err := rejectSensitiveMap(entry.Release.EnvironmentConstraints, "environment constraint"); err != nil {
 			return ComponentImportPlan{}, err
@@ -379,13 +383,15 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 		}
 		release := domain.ComponentRelease{
 			ID: newID("release"), ComponentID: component.ID, Version: entry.Release.Version,
-			Status: domain.ReleaseDraft, ReleaseNotes: entry.Release.ReleaseNotes, Breaking: entry.Release.Breaking,
+			Status: domain.ReleaseDraft, ReleaseNotes: entry.Release.ReleaseNotes, Compatibility: domain.CompatibilityNotApplicable,
+			LineName:  entry.Release.LineName,
 			RiskLevel: entry.Release.RiskLevel, EnvironmentConstraints: entry.Release.EnvironmentConstraints,
 			Parameters: entry.Release.Parameters, CreatedAt: now,
 		}
 		if release.RiskLevel == "" {
 			release.RiskLevel = domain.RiskLow
 		}
+		release.LineID = newID("release-line")
 		components[slug], releases[slug] = component, release
 		prepared.Components = append(prepared.Components, component)
 		prepared.Result.CompletedComponents = append(prepared.Result.CompletedComponents, slug)

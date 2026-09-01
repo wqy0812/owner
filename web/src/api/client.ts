@@ -363,11 +363,15 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
   return {
     id: requireString(raw, 'id'),
     componentId: requireString(raw, 'componentId'),
+    lineId: requireString(raw, 'lineId'),
+    lineName: requireString(raw, 'lineName'),
+    parentReleaseId: optionalString(raw, 'parentReleaseId'),
+    templateSourceReleaseId: optionalString(raw, 'templateSourceReleaseId'),
     version: requireString(raw, 'version'),
     state,
     candidate: optionalBoolean(raw, 'candidate'),
     readiness: normalizeReadiness(requireRecord(raw.readiness, 'readiness')),
-    breaking: optionalBoolean(raw, 'breaking'),
+    compatibility: requireEnum(raw, ['not_applicable', 'compatible', 'breaking'] as const, 'compatibility'),
     releaseNotes: optionalString(raw, 'releaseNotes'),
     riskLevel: optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel'),
     dependencies,
@@ -378,6 +382,7 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     images: optionalRecords(raw, 'images')?.map(normalizeImage) ?? [],
     createdAt: optionalString(raw, 'createdAt'),
     releasedAt: optionalString(raw, 'releasedAt'),
+    deprecatedAt: optionalString(raw, 'deprecatedAt'),
   };
 }
 
@@ -391,6 +396,7 @@ function normalizeReadiness(raw: LooseRecord): ComponentRelease['readiness'] {
     })),
     installEvidenceRunId: optionalString(raw, 'installEvidenceRunId'),
     rollbackEvidenceRunId: optionalString(raw, 'rollbackEvidenceRunId'),
+    transitionEvidenceRunId: optionalString(raw, 'transitionEvidenceRunId'),
   };
 }
 
@@ -438,7 +444,19 @@ function normalizePlaybook(raw: LooseRecord): PlaybookFile {
 
 function normalizeComponent(raw: LooseRecord): Component {
   const releases = optionalRecords(raw, 'releases')?.map((release) => normalizeRelease(release));
-  const latest = optionalRecord(raw, 'latestRelease');
+  const releaseLines = optionalRecords(raw, 'releaseLines')?.map((line) => ({
+    id: requireString(line, 'id'),
+    componentId: requireString(line, 'componentId'),
+    name: requireString(line, 'name'),
+    latestReleasedId: optionalString(line, 'latestReleasedId'),
+    currentDraftId: optionalString(line, 'currentDraftId'),
+    evolutionEligible: optionalBoolean(line, 'evolutionEligible') ?? false,
+    evolutionParentId: optionalString(line, 'evolutionParentId'),
+    evolutionBlockedReason: optionalString(line, 'evolutionBlockedReason'),
+    releases: requireRecords(line, 'releases').map(normalizeRelease),
+    createdAt: requireString(line, 'createdAt'),
+  }));
+  const canonicalReleases = releaseLines?.flatMap((line) => line.releases) ?? releases;
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
@@ -448,8 +466,9 @@ function normalizeComponent(raw: LooseRecord): Component {
     ownerName: optionalString(raw, 'ownerName'),
     layer: requireEnum(raw, COMPONENT_LAYERS, 'layer'),
     tags: requireStringArray(raw, 'tags'),
-    latestRelease: latest ? normalizeRelease(latest) : releases?.[0],
-    releases,
+    latestRelease: canonicalReleases?.[0],
+    releases: canonicalReleases,
+    releaseLines,
     releaseCount: optionalNumber(raw, 'releaseCount'),
     updatedAt: optionalString(raw, 'updatedAt'),
   };
@@ -988,7 +1007,7 @@ function serializeRelease(input: Partial<ComponentRelease>) {
     version: input.version,
     status: input.state,
     releaseNotes: input.releaseNotes,
-    breaking: input.breaking,
+    compatibility: input.compatibility,
     riskLevel: input.riskLevel,
     environmentConstraints: input.environmentConstraints,
     parameters: input.parameters,
@@ -1077,20 +1096,17 @@ export const api = {
   async updateComponent(id: string, input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
-  async previewReleaseClone(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown> }) {
-    return unwrap(await post<unknown>(`/component-releases/${releaseId}/clone-plan`, input)) as { sourceReleaseId: string; sourceVersion: string; targetVersion: string; planDigest: string; actions: string[]; playbooks: string[]; artifactCount: number };
+  async previewReleaseDraft(componentId: string, input: { mode: 'new_line' | 'evolution'; lineName?: string; parentReleaseId?: string; templateSourceReleaseId?: string; version: string; releaseNotes: string; compatibility?: ComponentRelease['compatibility']; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown> }) {
+    return unwrap(await post<unknown>(`/components/${componentId}/release-draft-plan`, input)) as { mode: 'new_line' | 'evolution'; lineId?: string; lineName: string; parentReleaseId?: string; parentVersion?: string; templateSourceReleaseId?: string; templateSourceVersion?: string; targetVersion: string; compatibility: ComponentRelease['compatibility']; planDigest: string; actions: string[]; removedActions: string[]; playbooks: string[]; artifactCount: number; imageCount: number };
   },
-  async cloneRelease(releaseId: string, input: { version: string; releaseNotes: string; breaking: boolean; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown>; expectedPlanDigest: string }) {
-    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/clone`, input));
+  async createReleaseDraft(componentId: string, input: { mode: 'new_line' | 'evolution'; lineName?: string; parentReleaseId?: string; templateSourceReleaseId?: string; version: string; releaseNotes: string; compatibility?: ComponentRelease['compatibility']; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown>; expectedPlanDigest: string }) {
+    return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/release-drafts`, input));
   },
   async previewComponentImport(entries: unknown[]) {
     return unwrap(await post<unknown>('/component-imports/plan', { entries })) as { planDigest: string; order: string[]; items: Array<{ slug: string; name: string; version: string; dependencyCount: number; actionCount: number; playbookCount: number }> };
   },
   async importComponents(entries: unknown[], expectedPlanDigest: string) {
     return unwrap(await post<unknown>('/component-imports', { entries, expectedPlanDigest })) as { completedComponents: string[]; completedReleases: string[]; savedPlaybooks: string[]; createdDrafts: Record<string, string> };
-  },
-  async createRelease(componentId: string, input: Partial<ComponentRelease>) {
-    return normalizeReleaseActionResponse(await post<unknown>(`/components/${componentId}/releases`, serializeRelease(input)));
   },
   async updateRelease(releaseId: string, input: Partial<ComponentRelease>) {
     return normalizeReleaseActionResponse(await put<unknown>(`/component-releases/${releaseId}`, serializeRelease(input)));
@@ -1139,10 +1155,15 @@ export const api = {
     form.set('playbook', file, file.name);
     return normalizePlaybook(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/playbook`, form)), 'Playbook'));
   },
-  async releaseImpact(releaseId: string): Promise<ImpactPreview> {
-    const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact`));
+  async releaseImpact(releaseId: string, operation: 'publish' | 'deprecate' = 'deprecate'): Promise<ImpactPreview> {
+    const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact?operation=${operation}`));
     if (!isRecord(raw)) throw invalidResponse(200, '平台 API 返回了无效的影响分析响应。');
     return {
+      changeKind: raw.changeKind === 'evolution' ? 'evolution' : raw.changeKind === 'deprecation' ? 'deprecation' : 'new_line',
+      lineId: typeof raw.lineId === 'string' ? raw.lineId : undefined,
+      lineName: typeof raw.lineName === 'string' ? raw.lineName : undefined,
+      fromReleaseId: typeof raw.fromReleaseId === 'string' ? raw.fromReleaseId : undefined,
+      toReleaseId: typeof raw.toReleaseId === 'string' ? raw.toReleaseId : undefined,
       componentOwners: narrowPeople(raw.componentOwners),
       scenarioOwners: narrowPeople(raw.scenarioOwners),
       scenarios: narrowPeople(raw.scenarios),
@@ -1158,6 +1179,12 @@ export const api = {
   },
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
+  },
+  async restoreRelease(releaseId: string) {
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/restore`));
+  },
+  async deleteRelease(releaseId: string) {
+    await request<unknown>(`/component-releases/${releaseId}`, { method: 'DELETE' });
   },
   async imageBuilds(releaseId: string) {
     return unwrapList(await get<unknown>(`/component-releases/${releaseId}/image-builds`)).map((item) => normalizeImageBuild(requireRecord(item, 'image build')));
@@ -1177,6 +1204,9 @@ export const api = {
   },
   async testRelease(releaseId: string, input: ComponentTestRequest) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, input)), 'run'));
+  },
+  async releaseRunEvidence(releaseId: string, signal?: AbortSignal) {
+    return unwrapList(await get<unknown>(`/component-releases/${releaseId}/run-evidence`, signal)).map((item) => normalizeRun(requireRecord(item, 'run evidence')));
   },
   async scenarios(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/scenarios', signal)).map((item) => normalizeScenario(requireRecord(item, 'scenario')));

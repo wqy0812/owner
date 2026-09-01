@@ -1,6 +1,6 @@
 # ClusterForge 项目结构说明
 
-> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，但允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
+> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 只接受当前精确合同，不提供历史迁移或双合同兼容；其他合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
 > 文档基线：2026-08-30 当前工作区代码
 >
@@ -175,7 +175,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前合同为 `clusterforge-v1-20260829-ssh-connectivity`。当前结构包含模块化发布围栏、环境 `archived_at` 生命周期状态，以及分离持久化的 TCP 与 Go SSH 连通性证据。代码只对精确前序合同 `clusterforge-v1-20260828-environment-lifecycle` 执行经过测试的加法迁移；更旧或未知合同仍失败关闭，不做模糊兼容或双写。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260901-release-lines`。测试环境的一次性发布线迁移已通过受控部署完成，前序合同常量、推导逻辑和迁移测试均已删除；其他合同失败关闭，不做历史迁移、模糊兼容、双读或双写。
 
 ### 3.7 `internal/ansible`
 
@@ -325,7 +325,7 @@ make build
 | 新增领域字段 | `internal/domain` → `internal/store`/首版结构 → `internal/service` → `internal/api` → `web/src/types` 和页面 |
 | 新增 API | `internal/api` 路由与 Handler，同时在 Service 层实现规则并补 API 测试 |
 | 修改权限或状态机 | `internal/service`，必要时同步 Domain；前端只展示结果 |
-| 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；需要保留数据时增加精确前序合同迁移，并补 schema/store 测试 |
+| 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；需要保留数据时使用单独受控转换流程，完成后不把历史迁移留在运行时代码中 |
 | 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
 | 新增组件示例 | `examples/ansible`、`internal/seed` 及 Seed/组件脚本测试 |

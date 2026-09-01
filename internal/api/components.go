@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 
@@ -10,16 +11,16 @@ import (
 
 type componentDTO struct {
 	domain.Component
-	OwnerName     string                   `json:"ownerName"`
-	LatestRelease *domain.ComponentRelease `json:"latestRelease,omitempty"`
-	ReleaseCount  int                      `json:"releaseCount"`
+	OwnerName    string                        `json:"ownerName"`
+	ReleaseCount int                           `json:"releaseCount"`
+	ReleaseLines []domain.ComponentReleaseLine `json:"releaseLines"`
 }
 
 type releaseInput struct {
 	Version                string                       `json:"version"`
 	Status                 domain.ReleaseStatus         `json:"status"`
 	ReleaseNotes           string                       `json:"releaseNotes"`
-	Breaking               bool                         `json:"breaking"`
+	Compatibility          domain.ReleaseCompatibility  `json:"compatibility"`
 	RiskLevel              domain.RiskLevel             `json:"riskLevel"`
 	EnvironmentConstraints map[string]any               `json:"environmentConstraints"`
 	Parameters             []domain.ParameterDefinition `json:"parameters"`
@@ -73,7 +74,7 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 func (input releaseInput) domain(existing *domain.ComponentRelease) domain.ComponentRelease {
 	release := domain.ComponentRelease{
 		Version: input.Version, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
-		Breaking: input.Breaking, RiskLevel: input.RiskLevel,
+		Compatibility: input.Compatibility, RiskLevel: input.RiskLevel,
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
 	release.Dependencies = dependencyInputs(input.Dependencies)
@@ -159,20 +160,6 @@ func (h *Handler) updateComponent(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, h.componentDTO(r, component))
 }
 
-func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request) {
-	var input releaseInput
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	release, err := h.platform.Catalog().CreateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(nil))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusCreated, release)
-}
-
 func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
 	var input releaseInput
 	if err := decodeJSON(r, &input); err != nil {
@@ -208,13 +195,13 @@ func (h *Handler) updateReleaseContract(w http.ResponseWriter, r *http.Request) 
 	writeData(w, http.StatusOK, release)
 }
 
-func (h *Handler) cloneRelease(w http.ResponseWriter, r *http.Request) {
-	var input service.ReleaseCloneRequest
+func (h *Handler) createReleaseDraft(w http.ResponseWriter, r *http.Request) {
+	var input service.ReleaseDraftRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.Catalog().CloneRelease(r.Context(), currentUser(r), r.PathValue("id"), input)
+	release, err := h.platform.Catalog().CreateReleaseDraft(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -222,13 +209,13 @@ func (h *Handler) cloneRelease(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusCreated, release)
 }
 
-func (h *Handler) previewReleaseClone(w http.ResponseWriter, r *http.Request) {
-	var input service.ReleaseCloneRequest
+func (h *Handler) previewReleaseDraft(w http.ResponseWriter, r *http.Request) {
+	var input service.ReleaseDraftRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	plan, err := h.platform.Catalog().PreviewReleaseClone(r.Context(), currentUser(r), r.PathValue("id"), input)
+	plan, err := h.platform.Catalog().PreviewReleaseDraft(r.Context(), currentUser(r), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -236,8 +223,30 @@ func (h *Handler) previewReleaseClone(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, plan)
 }
 
+func (h *Handler) renameReleaseLine(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	line, err := h.platform.Catalog().RenameReleaseLine(r.Context(), currentUser(r), r.PathValue("id"), input.Name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, line)
+}
+
 func (h *Handler) releaseImpact(w http.ResponseWriter, r *http.Request) {
-	report, err := h.platform.Catalog().Impact(r.Context(), currentUser(r), r.PathValue("id"))
+	var report domain.ImpactReport
+	var err error
+	if r.URL.Query().Get("operation") == "publish" {
+		report, err = h.platform.Catalog().PublicationImpact(r.Context(), currentUser(r), r.PathValue("id"))
+	} else {
+		report, err = h.platform.Catalog().Impact(r.Context(), currentUser(r), r.PathValue("id"))
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -261,6 +270,23 @@ func (h *Handler) deprecateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, release)
+}
+
+func (h *Handler) restoreRelease(w http.ResponseWriter, r *http.Request) {
+	release, err := h.platform.Catalog().RestoreRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
+}
+
+func (h *Handler) deleteRelease(w http.ResponseWriter, r *http.Request) {
+	if err := h.platform.Catalog().DeleteRelease(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 func (h *Handler) setReleaseCandidate(w http.ResponseWriter, r *http.Request) {
@@ -310,11 +336,51 @@ func (h *Handler) previewReleaseTest(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) componentDTO(r *http.Request, component domain.Component) componentDTO {
 	user, _ := h.platform.Catalog().GetUser(r.Context(), component.OwnerID)
 	sort.SliceStable(component.Releases, func(i, j int) bool { return component.Releases[i].CreatedAt.After(component.Releases[j].CreatedAt) })
-	output := componentDTO{Component: component, OwnerName: user.Name, ReleaseCount: len(component.Releases)}
-	if len(component.Releases) > 0 {
-		latest := component.Releases[0]
-		output.LatestRelease = &latest
+	output := componentDTO{Component: component, OwnerName: user.Name, ReleaseCount: len(component.Releases), ReleaseLines: []domain.ComponentReleaseLine{}}
+	lineIndex := map[string]int{}
+	for _, release := range component.Releases {
+		index, ok := lineIndex[release.LineID]
+		if !ok {
+			index = len(output.ReleaseLines)
+			lineIndex[release.LineID] = index
+			output.ReleaseLines = append(output.ReleaseLines, domain.ComponentReleaseLine{ID: release.LineID, ComponentID: component.ID, Name: release.LineName, Releases: []domain.ComponentRelease{}, CreatedAt: release.CreatedAt})
+		}
+		line := &output.ReleaseLines[index]
+		line.Releases = append(line.Releases, release)
+		if release.CreatedAt.Before(line.CreatedAt) {
+			line.CreatedAt = release.CreatedAt
+		}
+		if release.Status == domain.ReleaseDraft && line.CurrentDraftID == "" {
+			line.CurrentDraftID = release.ID
+		}
+		if release.Status == domain.ReleaseReleased && line.LatestReleasedID == "" {
+			line.LatestReleasedID = release.ID
+		}
 	}
+	for index := range output.ReleaseLines {
+		line := &output.ReleaseLines[index]
+		if line.CurrentDraftID != "" {
+			line.EvolutionBlockedReason = "发布线已有活动 Draft"
+			continue
+		}
+		var latestPublished *domain.ComponentRelease
+		for releaseIndex := range line.Releases {
+			release := &line.Releases[releaseIndex]
+			if release.ReleasedAt == nil || (latestPublished != nil && !release.ReleasedAt.After(*latestPublished.ReleasedAt)) {
+				continue
+			}
+			latestPublished = release
+		}
+		if latestPublished == nil {
+			line.EvolutionBlockedReason = "发布线尚无已发布版本"
+		} else if latestPublished.Status == domain.ReleaseDeprecated {
+			line.EvolutionBlockedReason = fmt.Sprintf("最后一个曾发布版本 %s 已废弃，请创建新发布线", latestPublished.Version)
+		} else {
+			line.EvolutionEligible = true
+			line.EvolutionParentID = latestPublished.ID
+		}
+	}
+	sort.SliceStable(output.ReleaseLines, func(i, j int) bool { return output.ReleaseLines[i].CreatedAt.After(output.ReleaseLines[j].CreatedAt) })
 	return output
 }
 
@@ -353,5 +419,10 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 		scenarioList = append(scenarioList, scenario)
 	}
 	sort.Slice(scenarioList, func(i, j int) bool { return scenarioList[i]["name"].(string) < scenarioList[j]["name"].(string) })
-	return map[string]any{"componentOwners": componentOwners, "scenarioOwners": scenarioOwners, "scenarios": scenarioList, "paths": paths, "scenarioRunCount": report.ScenarioRunCount}
+	return map[string]any{
+		"changeKind": report.ChangeKind, "lineId": report.LineID, "lineName": report.LineName,
+		"fromReleaseId": report.FromReleaseID, "toReleaseId": report.ToReleaseID,
+		"componentOwners": componentOwners, "scenarioOwners": scenarioOwners, "scenarios": scenarioList,
+		"paths": paths, "scenarioRunCount": report.ScenarioRunCount,
+	}
 }

@@ -75,6 +75,26 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 }
 
 func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string {
+	upgradeSeen, targetVerified, rollbackSeen, parentVerified := false, false, false, false
+	for _, step := range steps {
+		switch step.Action {
+		case domain.ActionUpgrade:
+			upgradeSeen = true
+		case domain.ActionRollback:
+			if upgradeSeen && targetVerified {
+				rollbackSeen = true
+			}
+		case domain.ActionVerify:
+			if rollbackSeen {
+				parentVerified = true
+			} else if upgradeSeen {
+				targetVerified = true
+			}
+		}
+	}
+	if upgradeSeen && targetVerified && rollbackSeen && parentVerified {
+		return "evolution_round_trip"
+	}
 	if action == domain.ActionRollback {
 		rollbackSeen := false
 		rollbackSelfVerifies := false

@@ -35,8 +35,11 @@ SELECT id,name,role,created_at FROM users WHERE id IN (
 	{name: "components", columns: []string{"id", "slug", "name", "description", "owner_id", "created_at", "updated_at", "layer", "tags_json"}, query: `
 SELECT id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json FROM components c
 WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND r.status IN ('released','deprecated')) ORDER BY slug,id`},
-	{name: "component_releases", columns: []string{"id", "component_id", "version", "status", "release_notes", "breaking", "candidate", "publication_generation", "risk_level", "environment_constraints_json", "parameters_json", "created_at", "released_at", "deprecated_at"}, query: `
-SELECT id,component_id,version,status,release_notes,breaking,0,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at
+	{name: "component_release_lines", columns: []string{"id", "component_id", "name", "created_at"}, query: `
+SELECT l.id,l.component_id,l.name,l.created_at FROM component_release_lines l
+WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.line_id=l.id AND r.status IN ('released','deprecated')) ORDER BY l.component_id,l.created_at,l.id`},
+	{name: "component_releases", columns: []string{"id", "component_id", "line_id", "parent_release_id", "template_source_release_id", "version", "status", "release_notes", "compatibility", "candidate", "publication_generation", "risk_level", "environment_constraints_json", "parameters_json", "created_at", "released_at", "deprecated_at"}, query: `
+SELECT id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,0,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at
 FROM component_releases WHERE status IN ('released','deprecated') ORDER BY component_id,created_at,id`},
 	{name: "component_dependencies", columns: []string{"id", "release_id", "upstream_component_id", "upstream_release_id", "purpose", "parameter_mappings_json"}, query: `
 SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json FROM component_dependencies d

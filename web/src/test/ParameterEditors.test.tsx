@@ -10,6 +10,9 @@ const readiness: ComponentRelease['readiness'] = { status: 'ready', blockers: []
 const kubeletRelease: ComponentRelease = {
   id: 'release-kubelet',
   componentId: 'component-kubelet',
+  lineId: 'line-kubelet',
+  lineName: 'kubelet 1.17',
+  compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
   readiness,
@@ -31,6 +34,9 @@ const kubelet: Component = {
 const proxyRelease: ComponentRelease = {
   id: 'release-kube-proxy',
   componentId: 'component-kube-proxy',
+  lineId: 'line-kube-proxy',
+  lineName: 'kube-proxy 1.17',
+  compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
   readiness,
@@ -110,7 +116,7 @@ describe('parameter contract editor', () => {
       ownerId: 'alice',
       layer: 'runtime_state',
       tags: ['runtime'],
-      releases: [{ id: 'release-containerd', componentId: 'component-containerd', version: 'v2.1.1', state: 'released', readiness, parameters: [] }],
+      releases: [{ id: 'release-containerd', componentId: 'component-containerd', lineId: 'line-containerd', lineName: 'containerd 2.1', compatibility: 'not_applicable', version: 'v2.1.1', state: 'released', readiness, parameters: [] }],
     };
     const seen: ComponentRelease['dependencies'][] = [];
     const view = (dependencies: NonNullable<ComponentRelease['dependencies']>) => (
@@ -156,7 +162,7 @@ describe('parameter contract editor', () => {
   });
 
   it('defaults the contract view to a release that has mappings', () => {
-    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', version: '1.34.3', state: 'released', readiness };
+    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', lineId: 'line-kube-proxy-new', lineName: 'kube-proxy 1.34', compatibility: 'not_applicable', version: '1.34.3', state: 'released', readiness };
     expect(defaultContractRelease([empty, proxyRelease], empty)?.id).toBe('release-kube-proxy');
   });
 

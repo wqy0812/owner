@@ -106,7 +106,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
   const release = value.release;
   assertOnlyKeys(value, ['component', 'release', 'playbooks'], `第 ${index + 1} 项`);
   assertOnlyKeys(component, ['name', 'slug', 'description', 'layer', 'tags'], `第 ${index + 1} 项 component`);
-  assertOnlyKeys(release, ['version', 'releaseNotes', 'breaking', 'riskLevel', 'environmentConstraints', 'parameters', 'dependencies', 'actions'], `第 ${index + 1} 项 release`);
+  assertOnlyKeys(release, ['version', 'lineName', 'releaseNotes', 'riskLevel', 'environmentConstraints', 'parameters', 'dependencies', 'actions'], `第 ${index + 1} 项 release`);
   const slug = nonEmptyString(component.slug, `第 ${index + 1} 项 component.slug`);
   if (!SLUG.test(slug)) throw new Error(`${slug} 的 slug 只能包含小写字母、数字和连字符。`);
   const layer = nonEmptyString(component.layer, `${slug}.component.layer`) as Component['layer'];
@@ -116,13 +116,13 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
   if (tags.length > 8) throw new Error(`${slug} 最多允许 8 个标签。`);
   if (tags.some((tag) => tag.length > 32 || tag !== tag.toLowerCase() || /[\s,]/.test(tag))) throw new Error(`${slug} 的标签必须为不超过 32 字符的小写非空白文本。`);
   const version = nonEmptyString(release.version, `${slug}.release.version`);
+  const lineName = nonEmptyString(release.lineName, `${slug}.release.lineName`);
   if (release.environmentConstraints !== undefined && !isRecord(release.environmentConstraints)) {
     throw new Error(`${slug}.release.environmentConstraints 必须是对象。`);
   }
   const sensitiveConstraint = findSensitivePath(release.environmentConstraints ?? {});
   if (sensitiveConstraint) throw new Error(`${slug}.release.environmentConstraints.${sensitiveConstraint} 必须改用 CredentialRef。`);
   const releaseNotes = optionalString(release.releaseNotes, `${slug}.release.releaseNotes`) ?? '';
-  const breaking = optionalBoolean(release.breaking, `${slug}.release.breaking`);
   const riskLevel = (optionalString(release.riskLevel, `${slug}.release.riskLevel`) ?? 'low') as NonNullable<ComponentRelease['riskLevel']>;
   if (!RISK_LEVELS.has(riskLevel)) throw new Error(`${slug}.release.riskLevel 无效。`);
 
@@ -240,8 +240,8 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     },
     release: {
       version,
+      lineName,
       releaseNotes,
-      breaking,
       riskLevel,
       environmentConstraints: (release.environmentConstraints ?? {}) as Record<string, unknown>,
       parameters,

@@ -61,7 +61,14 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 	}
 
 	if input.Mode == "" {
-		input.Mode = ComponentTestInstallVerify
+		if release.ParentReleaseID != "" {
+			input.Mode = ComponentTestEvolutionRoundTrip
+		} else {
+			input.Mode = ComponentTestInstallVerify
+		}
+	}
+	if input.Mode == ComponentTestEvolutionRoundTrip {
+		return p.prepareEvolutionRoundTrip(ctx, component, release, environment, input)
 	}
 	var selected domain.ActionDefinition
 	switch input.Mode {
@@ -168,6 +175,110 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 	return preparedComponentTest{
 		release: release, environment: environment, action: selected.Kind, steps: steps,
 		provenance: map[string]map[string]resolvedParameter{nodeID: provenance},
+	}, nil
+}
+
+func (p *Platform) prepareEvolutionRoundTrip(ctx context.Context, component domain.Component, release domain.ComponentRelease, environment domain.Environment, input ComponentTestRequest) (preparedComponentTest, error) {
+	if release.ParentReleaseID == "" {
+		return preparedComponentTest{}, fmt.Errorf("%w: evolution_round_trip requires an evolution release", domain.ErrInvalid)
+	}
+	if input.RollbackVerification.Kind != "" || input.RollbackVerification.ReleaseID != "" {
+		return preparedComponentTest{}, fmt.Errorf("%w: rollbackVerification is implicit for evolution_round_trip", domain.ErrInvalid)
+	}
+	parent, err := p.store.GetComponentRelease(ctx, release.ParentReleaseID)
+	if err != nil {
+		return preparedComponentTest{}, err
+	}
+	if parent.ComponentID != release.ComponentID || parent.LineID != release.LineID || parent.Status != domain.ReleaseReleased {
+		return preparedComponentTest{}, fmt.Errorf("%w: evolution parent must be a released version in the same line", domain.ErrInvalid)
+	}
+	if err := validateEnvironmentConstraints(parent.EnvironmentConstraints, environment.Revision.Facts); err != nil {
+		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
+	}
+	parentInstall, err := actionFor(parent, domain.ActionInstall)
+	if err != nil {
+		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
+	}
+	parentVerify, ok := findAction(parent, domain.ActionVerify)
+	if !ok {
+		return preparedComponentTest{}, fmt.Errorf("%w: parent release requires Verify for evolution evidence", domain.ErrInvalid)
+	}
+	upgrade, err := actionFor(release, domain.ActionUpgrade)
+	if err != nil {
+		return preparedComponentTest{}, err
+	}
+	targetVerify, ok := findAction(release, domain.ActionVerify)
+	if !ok {
+		return preparedComponentTest{}, fmt.Errorf("%w: evolution release requires Verify", domain.ErrInvalid)
+	}
+	rollback, ok := findAction(release, domain.ActionRollback)
+	if !ok || rollback.FromReleaseID != release.ID || rollback.ToReleaseID != parent.ID {
+		return preparedComponentTest{}, fmt.Errorf("%w: evolution rollback must point from the Draft to its parent", domain.ErrInvalid)
+	}
+
+	allowed := func(actions ...domain.ActionDefinition) []string {
+		seen := map[string]bool{}
+		var values []string
+		for _, action := range actions {
+			for _, name := range action.AllowedParameters {
+				if !seen[name] {
+					seen[name] = true
+					values = append(values, name)
+				}
+			}
+		}
+		return values
+	}
+	parentVariables, parentProvenance, err := resolveOwnParameters(parent, domain.ScenarioNode{}, input.RunInput, allowed(parentInstall, parentVerify))
+	if err != nil {
+		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
+	}
+	if err := applyDependencyFixtures(parent, input.DependencyFixtures, parentVariables, parentProvenance); err != nil {
+		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
+	}
+	if err := validateResolvedParameters(parent.Parameters, parentVariables); err != nil {
+		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
+	}
+	targetVariables, targetProvenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, input.RunInput, allowed(upgrade, targetVerify, rollback))
+	if err != nil {
+		return preparedComponentTest{}, err
+	}
+	if err := applyDependencyFixtures(release, input.DependencyFixtures, targetVariables, targetProvenance); err != nil {
+		return preparedComponentTest{}, err
+	}
+	if err := validateResolvedParameters(release.Parameters, targetVariables); err != nil {
+		return preparedComponentTest{}, err
+	}
+
+	parentNodeID, targetNodeID := "component-"+component.ID+"-parent", "component-"+component.ID+"-target"
+	steps := make([]lockedStep, 0, 6)
+	appendStep := func(nodeID string, item domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) error {
+		step, stepErr := p.lockAction(component, nodeID, item, action, variables)
+		if stepErr == nil {
+			steps = append(steps, step)
+		}
+		return stepErr
+	}
+	for _, step := range []struct {
+		nodeID    string
+		release   domain.ComponentRelease
+		action    domain.ActionDefinition
+		variables map[string]any
+	}{
+		{parentNodeID, parent, parentInstall, parentVariables},
+		{parentNodeID + "-verify", parent, parentVerify, parentVariables},
+		{targetNodeID, release, upgrade, targetVariables},
+		{targetNodeID + "-verify", release, targetVerify, targetVariables},
+		{targetNodeID + "-rollback", release, rollback, targetVariables},
+		{parentNodeID + "-verify-restored", parent, parentVerify, parentVariables},
+	} {
+		if err := appendStep(step.nodeID, step.release, step.action, step.variables); err != nil {
+			return preparedComponentTest{}, err
+		}
+	}
+	return preparedComponentTest{
+		release: release, environment: environment, action: domain.ActionUpgrade, steps: steps,
+		provenance: map[string]map[string]resolvedParameter{parentNodeID: parentProvenance, targetNodeID: targetProvenance},
 	}, nil
 }
 
@@ -589,6 +700,15 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		BackupCapturedAt    string
 	}
 	digestSteps := make([]digestStep, 0, len(plan.Steps))
+	sameRunBackupRefs := map[string]bool{}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
+			if step.BackupRef != "" {
+				sameRunBackupRefs[step.BackupRef] = true
+			}
+		}
+	}
 	for _, step := range plan.Steps {
 		variables := cloneMap(step.Variables)
 		for _, name := range []string{
@@ -601,6 +721,9 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		if (step.Action == domain.ActionRollback || step.Action == domain.ActionUninstall) && step.Backup != nil {
 			backupRef, backupInstallRunID, backupPlaybookSHA = step.BackupRef, step.Backup.InstallRunID, step.Backup.PlaybookSHA256
 			backupCapturedAt = step.Backup.CapturedAt.UTC().Format(time.RFC3339Nano)
+			if sameRunBackupRefs[step.BackupRef] {
+				backupRef, backupInstallRunID, backupCapturedAt = "same-run", "same-run", "same-run"
+			}
 		}
 		digestSteps = append(digestSteps, digestStep{
 			ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, ReleaseSpecDigest: step.ReleaseSpecDigest,

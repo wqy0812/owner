@@ -26,6 +26,23 @@ func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeItems(w, output)
 }
 
+func (h *Handler) listComponentReleaseRunEvidence(w http.ResponseWriter, r *http.Request) {
+	runs, err := h.platform.Execution().ListRunsForComponentRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	output := make([]map[string]any, 0, len(runs))
+	for i := range runs {
+		runs[i].Steps, _ = h.platform.Execution().ListRunSteps(r.Context(), runs[i].ID)
+		if approval, approvalErr := h.platform.Execution().GetApprovalByRun(r.Context(), runs[i].ID); approvalErr == nil {
+			runs[i].Approval = &approval
+		}
+		output = append(output, h.runDTO(r, runs[i]))
+	}
+	writeItems(w, output)
+}
+
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	if !h.canViewRun(r, currentUser(r), r.PathValue("id")) {
 		writeError(w, domain.ErrForbidden)

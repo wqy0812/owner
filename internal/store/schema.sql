@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260829-ssh-connectivity');
+VALUES(1, 'clusterforge-v1-20260901-release-lines');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -42,13 +42,24 @@ CREATE TABLE IF NOT EXISTS components (
   tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json))
 );
 
+CREATE TABLE IF NOT EXISTS component_release_lines (
+  id TEXT PRIMARY KEY,
+  component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(component_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS component_releases (
   id TEXT PRIMARY KEY,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  line_id TEXT NOT NULL REFERENCES component_release_lines(id) ON DELETE CASCADE,
+  parent_release_id TEXT REFERENCES component_releases(id),
+  template_source_release_id TEXT REFERENCES component_releases(id),
   version TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('draft','released','deprecated')),
   release_notes TEXT NOT NULL DEFAULT '',
-  breaking INTEGER NOT NULL DEFAULT 0,
+  compatibility TEXT NOT NULL CHECK (compatibility IN ('not_applicable','compatible','breaking')),
   candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1)),
   publication_generation INTEGER NOT NULL DEFAULT 1 CHECK (publication_generation > 0),
   risk_level TEXT NOT NULL DEFAULT 'low',
@@ -91,6 +102,13 @@ CREATE TABLE IF NOT EXISTS action_definitions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_releases_component ON component_releases(component_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_releases_line ON component_releases(line_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_draft_per_line
+  ON component_releases(line_id) WHERE status = 'draft';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_successor
+  ON component_releases(parent_release_id)
+  WHERE parent_release_id IS NOT NULL
+    AND (status IN ('draft', 'released') OR released_at IS NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dependencies_upstream ON component_dependencies(upstream_component_id);
 
 CREATE TABLE IF NOT EXISTS scenarios (

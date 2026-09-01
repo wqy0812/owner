@@ -135,8 +135,9 @@ type ComponentTestMode string
 type RollbackVerificationKind string
 
 const (
-	ComponentTestInstallVerify ComponentTestMode = "install_verify"
-	ComponentTestRollback      ComponentTestMode = "rollback"
+	ComponentTestInstallVerify      ComponentTestMode = "install_verify"
+	ComponentTestRollback           ComponentTestMode = "rollback"
+	ComponentTestEvolutionRoundTrip ComponentTestMode = "evolution_round_trip"
 
 	RollbackVerificationTargetRelease RollbackVerificationKind = "target_release"
 	RollbackVerificationOnly          RollbackVerificationKind = "rollback_only"

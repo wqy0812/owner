@@ -20,13 +20,6 @@ func (s *CatalogService) Create(ctx context.Context, user domain.User, input dom
 func (s *CatalogService) Update(ctx context.Context, user domain.User, id string, input domain.Component) (domain.Component, error) {
 	return s.platform.UpdateComponent(ctx, user, id, input)
 }
-func (s *CatalogService) CreateRelease(ctx context.Context, user domain.User, componentID string, input domain.ComponentRelease) (domain.ComponentRelease, error) {
-	release, err := s.platform.CreateRelease(ctx, user, componentID, input)
-	if err != nil {
-		return release, err
-	}
-	return s.platform.decorateReleaseReadiness(ctx, release)
-}
 func (s *CatalogService) UpdateRelease(ctx context.Context, user domain.User, id string, input domain.ComponentRelease) (domain.ComponentRelease, error) {
 	release, err := s.platform.UpdateRelease(ctx, user, id, input)
 	if err != nil {
@@ -41,18 +34,24 @@ func (s *CatalogService) UpdateReleaseContract(ctx context.Context, user domain.
 	}
 	return s.platform.decorateReleaseReadiness(ctx, release)
 }
-func (s *CatalogService) CloneRelease(ctx context.Context, user domain.User, id string, input ReleaseCloneRequest) (domain.ComponentRelease, error) {
-	release, err := s.platform.CloneRelease(ctx, user, id, input)
+func (s *CatalogService) CreateReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (domain.ComponentRelease, error) {
+	release, err := s.platform.CreateReleaseDraft(ctx, user, componentID, input)
 	if err != nil {
 		return release, err
 	}
 	return s.platform.decorateReleaseReadiness(ctx, release)
 }
-func (s *CatalogService) PreviewReleaseClone(ctx context.Context, user domain.User, id string, input ReleaseCloneRequest) (ReleaseClonePlan, error) {
-	return s.platform.PreviewReleaseClone(ctx, user, id, input)
+func (s *CatalogService) PreviewReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (ReleaseDraftPlan, error) {
+	return s.platform.PreviewReleaseDraft(ctx, user, componentID, input)
+}
+func (s *CatalogService) RenameReleaseLine(ctx context.Context, user domain.User, lineID, name string) (domain.ComponentReleaseLine, error) {
+	return s.platform.RenameReleaseLine(ctx, user, lineID, name)
 }
 func (s *CatalogService) Impact(ctx context.Context, user domain.User, id string) (domain.ImpactReport, error) {
 	return s.platform.Impact(ctx, user, id)
+}
+func (s *CatalogService) PublicationImpact(ctx context.Context, user domain.User, id string) (domain.ImpactReport, error) {
+	return s.platform.PublicationImpact(ctx, user, id)
 }
 func (s *CatalogService) DeprecateRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
 	release, err := s.platform.DeprecateRelease(ctx, user, id)
@@ -60,6 +59,16 @@ func (s *CatalogService) DeprecateRelease(ctx context.Context, user domain.User,
 		return release, err
 	}
 	return s.platform.decorateReleaseReadiness(ctx, release)
+}
+func (s *CatalogService) RestoreRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+	release, err := s.platform.RestoreRelease(ctx, user, id)
+	if err != nil {
+		return release, err
+	}
+	return s.platform.decorateReleaseReadiness(ctx, release)
+}
+func (s *CatalogService) DeleteRelease(ctx context.Context, user domain.User, id string) error {
+	return s.platform.DeleteRelease(ctx, user, id)
 }
 func (s *CatalogService) SetReleaseCandidate(ctx context.Context, user domain.User, id string, candidate bool) (domain.ComponentRelease, error) {
 	release, err := s.platform.SetReleaseCandidate(ctx, user, id, candidate)

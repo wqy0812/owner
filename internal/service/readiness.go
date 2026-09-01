@@ -26,10 +26,20 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	for _, action := range release.Actions {
 		configured[action.Kind] = true
 	}
-	for _, required := range []struct {
+	requiredActions := []struct {
 		kind  domain.ActionKind
 		label string
-	}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}} {
+	}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}}
+	if release.ParentReleaseID != "" {
+		requiredActions = []struct {
+			kind  domain.ActionKind
+			label string
+		}{{domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}}
+		if _, err := actionFor(release, domain.ActionUpgrade); err != nil {
+			add("lifecycle_action_missing", "缺少 Upgrade 生命周期能力（显式 Upgrade 或幂等 Install）", "lifecycle")
+		}
+	}
+	for _, required := range requiredActions {
 		if !configured[required.kind] {
 			add("lifecycle_action_missing", "缺少 "+required.label+" 生命周期动作", "lifecycle")
 		}
@@ -42,17 +52,28 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	}
 
 	digest := componentReleaseSpecDigest(release)
-	installID, rollbackID, err := p.store.SuccessfulComponentEvidenceRunIDs(ctx, release.ID, digest)
-	if err != nil {
-		return result, err
-	}
-	result.InstallEvidenceRunID = installID
-	result.RollbackEvidenceRunID = rollbackID
-	if installID == "" {
-		add("install_evidence_missing", "当前合同缺少安装及 Verify 成功证据", "validate")
-	}
-	if rollbackID == "" {
-		add("rollback_evidence_missing", "当前合同缺少回滚及回滚后验证证据", "validate")
+	if release.ParentReleaseID != "" {
+		transitionID, err := p.store.SuccessfulComponentEvolutionEvidenceRunID(ctx, release.ID, digest)
+		if err != nil {
+			return result, err
+		}
+		result.TransitionEvidenceRunID = transitionID
+		if transitionID == "" {
+			add("evolution_evidence_missing", "当前合同缺少父版本安装、升级、验证和回退闭环证据", "validate")
+		}
+	} else {
+		installID, rollbackID, err := p.store.SuccessfulComponentEvidenceRunIDs(ctx, release.ID, digest)
+		if err != nil {
+			return result, err
+		}
+		result.InstallEvidenceRunID = installID
+		result.RollbackEvidenceRunID = rollbackID
+		if installID == "" {
+			add("install_evidence_missing", "当前合同缺少安装及 Verify 成功证据", "validate")
+		}
+		if rollbackID == "" {
+			add("rollback_evidence_missing", "当前合同缺少回滚及回滚后验证证据", "validate")
+		}
 	}
 
 	if visiting[release.ID] {
@@ -86,7 +107,7 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 
 	if len(result.Blockers) > 0 {
 		result.Status = domain.ReadinessBlocked
-	} else if release.Breaking || release.RiskLevel == domain.RiskHigh || release.RiskLevel == domain.RiskDestructive {
+	} else if release.Compatibility == domain.CompatibilityBreaking || release.RiskLevel == domain.RiskHigh || release.RiskLevel == domain.RiskDestructive {
 		result.Status = domain.ReadinessRisky
 	}
 	memo[release.ID] = result
@@ -94,22 +115,52 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 }
 
 func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {
+	var parent domain.ComponentRelease
+	if release.ParentReleaseID == "" {
+		for _, action := range release.Actions {
+			if action.Kind == domain.ActionUpgrade || (action.Kind == domain.ActionRollback && (action.FromReleaseID != "" || action.ToReleaseID != "")) {
+				return fmt.Errorf("%w: a new-line baseline cannot declare cross-release upgrade or rollback transitions", domain.ErrInvalid)
+			}
+		}
+	} else {
+		var err error
+		parent, err = p.store.GetComponentRelease(ctx, release.ParentReleaseID)
+		if err != nil || parent.ComponentID != release.ComponentID || parent.LineID != release.LineID || parent.Status != domain.ReleaseReleased {
+			return fmt.Errorf("%w: evolution parent must be a released version in the same line", domain.ErrInvalid)
+		}
+		if release.Status == domain.ReleaseDraft {
+			latest, latestErr := p.store.LatestPublishedInLine(ctx, release.LineID)
+			if latestErr != nil || latest.ID != parent.ID {
+				return fmt.Errorf("%w: evolution parent is no longer the latest published version in the line", domain.ErrConflict)
+			}
+		}
+		if _, err := actionFor(release, domain.ActionUpgrade); err != nil {
+			return fmt.Errorf("%w: evolution requires an explicit Upgrade or idempotent Install", domain.ErrInvalid)
+		}
+		rollback, ok := findAction(release, domain.ActionRollback)
+		if !ok || rollback.FromReleaseID != release.ID || rollback.ToReleaseID != parent.ID {
+			return fmt.Errorf("%w: evolution rollback must point from this release to its parent", domain.ErrInvalid)
+		}
+	}
 	for _, action := range release.Actions {
 		switch action.Kind {
 		case domain.ActionUpgrade:
-			if action.ToReleaseID != release.ID || action.FromReleaseID == release.ID {
-				return fmt.Errorf("%w: upgrade action must point from an earlier release to this release", domain.ErrInvalid)
+			if release.ParentReleaseID == "" || action.ToReleaseID != release.ID || action.FromReleaseID != release.ParentReleaseID {
+				return fmt.Errorf("%w: upgrade action must point from the evolution parent to this release", domain.ErrInvalid)
 			}
 			from, err := p.store.GetComponentRelease(ctx, action.FromReleaseID)
-			if err != nil || from.ComponentID != release.ComponentID || from.Status != domain.ReleaseReleased {
+			if err != nil || from.ComponentID != release.ComponentID || from.LineID != release.LineID || from.Status != domain.ReleaseReleased {
 				return fmt.Errorf("%w: upgrade fromReleaseId must lock a released version of the same component", domain.ErrInvalid)
 			}
 		case domain.ActionRollback:
 			if action.FromReleaseID == "" && action.ToReleaseID == "" {
+				if release.ParentReleaseID != "" {
+					return fmt.Errorf("%w: evolution rollback must be bound to its parent", domain.ErrInvalid)
+				}
 				continue
 			}
-			if action.FromReleaseID != release.ID || action.ToReleaseID == release.ID {
-				return fmt.Errorf("%w: rollback action must point from this release to an earlier release", domain.ErrInvalid)
+			if action.FromReleaseID != release.ID || action.ToReleaseID != release.ParentReleaseID {
+				return fmt.Errorf("%w: rollback action must point from this release to its evolution parent", domain.ErrInvalid)
 			}
 			to, err := p.store.GetComponentRelease(ctx, action.ToReleaseID)
 			if err != nil || to.ComponentID != release.ComponentID || to.Status != domain.ReleaseReleased {

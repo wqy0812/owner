@@ -82,11 +82,15 @@ export interface PlaybookFile {
 export interface ComponentRelease {
   id: string;
   componentId: string;
+  lineId: string;
+  lineName: string;
+  parentReleaseId?: string;
+  templateSourceReleaseId?: string;
   version: string;
   state: ReleaseState;
   candidate?: boolean;
   readiness: ReleaseReadiness;
-  breaking?: boolean;
+  compatibility: 'not_applicable' | 'compatible' | 'breaking';
   releaseNotes?: string;
   riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
   dependencies?: ComponentDependency[];
@@ -97,6 +101,7 @@ export interface ComponentRelease {
   images?: ComponentImage[];
   createdAt?: string;
   releasedAt?: string;
+  deprecatedAt?: string;
 }
 
 export interface ReleaseReadiness {
@@ -104,6 +109,20 @@ export interface ReleaseReadiness {
   blockers: Array<{ code: string; message: string; actionUrl: string }>;
   installEvidenceRunId?: string;
   rollbackEvidenceRunId?: string;
+  transitionEvidenceRunId?: string;
+}
+
+export interface ComponentReleaseLine {
+  id: string;
+  componentId: string;
+  name: string;
+  latestReleasedId?: string;
+  currentDraftId?: string;
+  evolutionEligible: boolean;
+  evolutionParentId?: string;
+  evolutionBlockedReason?: string;
+  releases: ComponentRelease[];
+  createdAt: string;
 }
 
 export interface ComponentArtifact {
@@ -171,6 +190,7 @@ export interface Component {
   tags: string[];
   latestRelease?: ComponentRelease;
   releases?: ComponentRelease[];
+  releaseLines?: ComponentReleaseLine[];
   releaseCount?: number;
   updatedAt?: string;
 }
@@ -567,7 +587,7 @@ export interface RunRetryPlan {
   planDigest: string;
 }
 
-export type ComponentTestMode = 'install_verify' | 'rollback';
+export type ComponentTestMode = 'install_verify' | 'rollback' | 'evolution_round_trip';
 
 export type RollbackVerification =
   | { kind: 'target_release'; releaseId: string }
@@ -691,6 +711,11 @@ export interface Notification {
 }
 
 export interface ImpactPreview {
+  changeKind: 'new_line' | 'evolution' | 'deprecation';
+  lineId?: string;
+  lineName?: string;
+  fromReleaseId?: string;
+  toReleaseId?: string;
   componentOwners: Array<{ id: string; name: string }>;
   scenarioOwners: Array<{ id: string; name: string }>;
   scenarios: Array<{ id: string; name: string }>;

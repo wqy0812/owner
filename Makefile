@@ -6,7 +6,7 @@ APP := bin/newplatform
 BACKUP_APP := bin/clusterforge-backup
 EMBED_DIR := internal/ui/dist
 
-.PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-fixture-boundary test-ansible test-e2e test-e2e-live test-e2e-real-scenarios-preflight test-e2e-real-scenarios build build-web
+.PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-deploy-script test-fixture-boundary test-ansible test-e2e test-e2e-live test-e2e-real-scenarios-preflight test-e2e-real-scenarios build build-web
 
 bootstrap:
 	$(GO) mod download
@@ -28,10 +28,14 @@ reset-demo:
 	$(GO) run ./cmd/server --reset-demo
 
 test:
+	$(MAKE) test-deploy-script
 	$(MAKE) test-fixture-boundary
 	$(GO) test ./...
 	$(PNPM) --dir web test
 	$(MAKE) test-ansible
+
+test-deploy-script:
+	./scripts/test-deploy-test-88-55.sh
 
 test-fixture-boundary:
 	./scripts/check-test-fixture-boundary.sh

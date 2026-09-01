@@ -87,12 +87,16 @@ type Component struct {
 }
 
 type ComponentRelease struct {
-	ID           string        `json:"id"`
-	ComponentID  string        `json:"componentId"`
-	Version      string        `json:"version"`
-	Status       ReleaseStatus `json:"status"`
-	ReleaseNotes string        `json:"releaseNotes"`
-	Breaking     bool          `json:"breaking"`
+	ID                      string               `json:"id"`
+	ComponentID             string               `json:"componentId"`
+	LineID                  string               `json:"lineId"`
+	LineName                string               `json:"lineName"`
+	ParentReleaseID         string               `json:"parentReleaseId,omitempty"`
+	TemplateSourceReleaseID string               `json:"templateSourceReleaseId,omitempty"`
+	Version                 string               `json:"version"`
+	Status                  ReleaseStatus        `json:"status"`
+	ReleaseNotes            string               `json:"releaseNotes"`
+	Compatibility           ReleaseCompatibility `json:"compatibility"`
 	// Candidate is an explicit component-owner handoff. A ready Draft marked as
 	// a candidate may be composed and tested by a scenario owner, then released
 	// atomically with that scenario revision.
@@ -111,6 +115,31 @@ type ComponentRelease struct {
 	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
 }
 
+type ReleaseCompatibility string
+
+const (
+	CompatibilityNotApplicable ReleaseCompatibility = "not_applicable"
+	CompatibilityCompatible    ReleaseCompatibility = "compatible"
+	CompatibilityBreaking      ReleaseCompatibility = "breaking"
+)
+
+func (value ReleaseCompatibility) Valid() bool {
+	return value == CompatibilityNotApplicable || value == CompatibilityCompatible || value == CompatibilityBreaking
+}
+
+type ComponentReleaseLine struct {
+	ID                     string             `json:"id"`
+	ComponentID            string             `json:"componentId"`
+	Name                   string             `json:"name"`
+	LatestReleasedID       string             `json:"latestReleasedId,omitempty"`
+	CurrentDraftID         string             `json:"currentDraftId,omitempty"`
+	EvolutionEligible      bool               `json:"evolutionEligible"`
+	EvolutionParentID      string             `json:"evolutionParentId,omitempty"`
+	EvolutionBlockedReason string             `json:"evolutionBlockedReason,omitempty"`
+	Releases               []ComponentRelease `json:"releases"`
+	CreatedAt              time.Time          `json:"createdAt"`
+}
+
 type ReadinessStatus string
 
 const (
@@ -126,10 +155,11 @@ type ReadinessBlocker struct {
 }
 
 type ReleaseReadiness struct {
-	Status                ReadinessStatus    `json:"status"`
-	Blockers              []ReadinessBlocker `json:"blockers"`
-	InstallEvidenceRunID  string             `json:"installEvidenceRunId,omitempty"`
-	RollbackEvidenceRunID string             `json:"rollbackEvidenceRunId,omitempty"`
+	Status                  ReadinessStatus    `json:"status"`
+	Blockers                []ReadinessBlocker `json:"blockers"`
+	InstallEvidenceRunID    string             `json:"installEvidenceRunId,omitempty"`
+	RollbackEvidenceRunID   string             `json:"rollbackEvidenceRunId,omitempty"`
+	TransitionEvidenceRunID string             `json:"transitionEvidenceRunId,omitempty"`
 }
 
 type ComponentArtifact struct {
@@ -842,6 +872,11 @@ type ImpactRecipient struct {
 
 type ImpactReport struct {
 	ComponentID      string            `json:"componentId"`
+	ChangeKind       string            `json:"changeKind"`
+	LineID           string            `json:"lineId,omitempty"`
+	LineName         string            `json:"lineName,omitempty"`
+	FromReleaseID    string            `json:"fromReleaseId,omitempty"`
+	ToReleaseID      string            `json:"toReleaseId,omitempty"`
 	Recipients       []ImpactRecipient `json:"recipients"`
 	ScenarioRunCount int               `json:"scenarioRunCount"`
 }

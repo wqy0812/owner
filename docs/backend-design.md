@@ -1,6 +1,6 @@
 # ClusterForge 平台设计文档（后端为主）
 
-> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 不提供通用历史兼容，仅允许代码显式列出的精确前序 V1 合同执行经过测试的加法迁移；未知合同失败关闭，旧 API 字段不兼容。统一规则见 [首版与环境策略](version-policy.md)。
+> 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 只接受当前数据库与 API 合同，不提供历史迁移、旧字段或双合同兼容；其他合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
 > 文档基线：2026-08-30 当前工作区代码
 > 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
@@ -143,17 +143,23 @@ erDiagram
 - `layer`：L1-L6 对应的主机基础、运行时与状态、编排核心、集群服务、可观测管理和平台扩展层。
 - `tags`：少量自由标签，只参与检索和展示，不参与调度或依赖推导。
 
-`ComponentRelease` 表示具体版本；是否包含多个动作、介质或镜像由实际内容表达，不再保存 `atomic/bundle` 类型：
+`ComponentReleaseLine` 表示一条独立安装基线及其线性演进关系。名称只用于展示，可修改且记录审计；稳定关系始终使用 `lineId`。每条线最多一个有效 Draft，每个 Released 版本最多一个直接后继。没有显式转换边的版本属于不同发布线，例如 Kubernetes 1.17 与 1.34 默认互不构成升级关系。
 
-- 状态：`draft -> released -> deprecated`。
-- 属性：发布说明、Breaking 标记、风险等级、环境约束和结构化参数合同。
+`ComponentRelease` 表示发布线上的具体版本；是否包含多个动作、介质或镜像由实际内容表达，不再保存 `atomic/bundle` 类型：
+
+- 状态：未发布版本支持 `draft -> deprecated -> draft`；已发布版本支持 `draft -> released -> deprecated`。只有 `released_at IS NULL` 的 Deprecated Release 可以恢复为 Draft 或进入永久删除门禁。
+- 关系：`parentReleaseId` 只表示同一发布线的升级来源；`templateSourceReleaseId` 只表示复制来源，不建立升级关系。
+- 兼容性：新发布线根版本固定为 `not_applicable`；演进版本必须选择 `compatible` 或 `breaking`。兼容性与 Action 的 `riskLevel` 独立。
+- 属性：发布说明、风险等级、环境约束和结构化参数合同。
 - 候选交接：满足当前 Readiness 的 Draft 可由组件 Owner 显式设置 `candidate=true`。`candidate` 只记录交接意图；合同、内容身份或 Playbook 摘要变化不会静默清除意图，但会让派生 `readiness` 变为 `blocked`，场景校验和发布会据此失败关闭。
 - 参数：每个参数必须声明 `name`、`description`、`type` 和 `visibility`（`internal` 或 `public`）。敏感值继续使用 CredentialRef，不能作为普通参数或公开参数。
 - 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。Draft 编辑期可锁定同一组件 Owner 的私有 Draft，便于按 DAG 导入；跨 Owner 只能锁定 Released 或已共享且 Readiness 未阻断的候选 Draft。候选交接和发布仍会重新执行更严格的状态检查。
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
 - `install` 动作可以显式声明 `idempotent=true`。此时场景节点选择 `upgrade` 会复用同一个 Playbook 和动作合同；若 Release 另有显式 `upgrade`，仍优先使用显式动作。
 
-Released Release 不可修改；更新时从已有版本克隆新 Draft。复制提交把 Release、依赖、Action、介质/镜像内容身份和审计放在同一 SQLite 事务；托管 Playbook 先通过 manifest 暂存并提升，事务失败时清理，进程中断后由启动恢复依据目标 Release 是否落库决定保留或删除。修改 Draft 的动作、依赖、约束、参数、内容身份或 Playbook 内容摘要后，既有证据因规格摘要不匹配而自然失效。
+Released Release 不可修改。创建 Draft 必须先预览并提交 `expectedPlanDigest`，并明确选择“创建全新发布线”或“基于发布线演进”。全新发布线可以空白创建，也可以把同组件 Released/Deprecated Release 当作模板；模板复制会清除 Upgrade 以及 Rollback 的旧版本绑定。演进只能基于该线最后一个曾发布且当前仍为 Released 的版本，并且该父版本不得已有活动或曾发布后继；若末代曾发布版本已 Deprecated，该线关闭演进入口，只能创建新发布线。平台自动继承发布线和合同，并把 Upgrade 重写为“父版本 → 新版本”、Rollback 重写为“新版本 → 父版本”。复制提交把 Release、依赖、Action、介质/镜像内容身份和审计放在同一 SQLite 事务；托管 Playbook 先通过 manifest 暂存并提升，事务失败时清理，进程中断后由启动恢复依据目标 Release 是否落库决定保留或删除。修改 Draft 的动作、依赖、约束、参数、内容身份或 Playbook 内容摘要后，既有证据因规格摘要不匹配而自然失效。
+
+未发布 Draft 可随时废弃，即使已经产生或正在产生验证 Run；废弃只关闭编辑与候选共享，不删除合同或证据。未发布的 Deprecated Release 可恢复为 Draft，但同一发布线已有其他 Draft、或同一父版本已有其他有效后继时恢复失败关闭。永久删除仅接受从未发布且已废弃的 Release；事务内再次确认不存在组件/场景 Run、镜像构建、下游依赖、场景 Revision 引用、其他 Release/Action 合同引用或环境安装记录，然后删除个人运行参数预设、Release 自有合同数据及空发布线，并保留 `component_release.deleted` 审计。已发布版本永不物理删除。
 
 参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`defaultValue`、`enum` 与 `minLength` 必须和类型一致。不存在隐式可见性或旧 `parameterSchema` 兼容字段。
 
@@ -161,7 +167,7 @@ Released Release 不可修改；更新时从已有版本克隆新 Draft。复制
 
 安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同：带 from/to 的版本回滚必须选择一个同组件的 Released/Deprecated Release 追加其 verify；只有 from/to 都为空、目标为干净状态的清理 rollback 才允许 `rollback_only`。普通 `rollback_only` 仅证明清理动作完成，不能作为候选共享或发布所需的回退后验证证据；清理 rollback 若以动作标签 `clusterforge.rollback-self-verifies` 明确声明 Playbook 内含严格后置验证，则相同内容摘要下成功的 `rollback_only` 可作为回退证据。该标签用于其他 Action 或版本回滚时，Release 合同校验直接拒绝。`clusterforge.` 前缀保留为合同元数据命名空间，执行器不会把这类标签传给 Ansible `--tags`；其余动作标签仍用于选择 Ansible task。
 
-`readiness` 是唯一就绪结论，实时复核 install/verify/rollback 合同、当前内容身份与 Playbook SHA-256 下的安装和回滚双证据、精确依赖和参数映射、候选依赖闭包，返回 `ready|blocked|risky` 以及统一 blocker/actionUrl。SSE 只负责刷新提示，丢失事件或服务重启不会改变结论。直接发布还要求上游依赖已经 Released；候选链允许依赖其他已共享且 Readiness 未阻断的候选 Draft。
+`readiness` 是唯一就绪结论。新基线实时复核 install、verify、无版本绑定的清理型 rollback 及相应成功证据；演进版本要求显式 Upgrade 或幂等 Install、精确回到父版本的 Rollback，以及同一锁定计划完成“父版本安装与验证 → 目标升级与验证 → 回退 → 父版本验证”的闭环证据。Draft 规格摘要变化会让旧证据失效。`breaking` 使就绪度显示 `risky`，但不会替代 Action 风险判断。SSE 只负责刷新提示，丢失事件或服务重启不会改变结论。直接发布还要求上游依赖已经 Released；候选链允许依赖其他已共享且 Readiness 未阻断的候选 Draft。
 
 每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
 CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
@@ -247,11 +253,12 @@ SQLite 主要表如下：
 
 | 表 | 作用 | 关键约束 |
 | --- | --- | --- |
-| `schema_contract` | 数据库结构标识 | 只接受当前合同或代码显式支持的精确前序合同 |
+| `schema_contract` | 数据库结构标识 | 只接受当前精确合同 |
 | `users` | 演示用户 | 角色枚举约束 |
 | `sessions` | Cookie 会话摘要 | token hash 主键、过期时间 |
 | `components` | 组件元数据与轻量分类 | slug 唯一、Owner 外键、layer 枚举、tags JSON |
-| `component_releases` | 组件版本 | `(component_id, version)` 唯一；`candidate` 记录显式场景交接状态 |
+| `component_release_lines` | 独立发布线 | `(component_id, name)` 唯一；名称可改，关系使用稳定 ID |
+| `component_releases` | 发布线版本 | `(component_id, version)` 唯一；每线最多一个 Draft；父版本最多一个后继 |
 | `component_dependencies` | 精确上游依赖 | 每个下游 Release 对同一上游组件唯一 |
 | `action_definitions` | Ansible 生命周期动作 | Release 外键；锁定 Playbook SHA-256；`idempotent` 只允许 install 复用于 upgrade |
 | `scenarios` | 场景元数据 | slug 唯一、current Revision 指针 |
@@ -306,13 +313,13 @@ SQLite 主要表如下：
 
 ### 7.1 组件发布与影响通知
 
-1. 组件 Owner 配置 Draft。
-2. 后端先校验版本、依赖、动作、敏感参数和 Playbook 路径。
-3. Upgrade/Rollback 必须显式锁定同组件的正确起止 Release；直接发布的上游依赖必须已经 Released，且不能形成依赖环。
-4. 校验 install、verify、rollback 生命周期完整性，以及当前规格摘要下的安装验证与回退证据。
-5. 全部门禁通过后才计算反向依赖的直接和传递影响，并查找引用受影响组件的场景。
+1. 组件 Owner 预览并创建全新发布线 Draft，或基于现有发布线最新 Released 版本创建演进 Draft。
+2. 后端校验版本、发布线线性约束、依赖、动作、敏感参数和 Playbook 路径。
+3. 新基线校验 Install、Verify、清理型 Rollback 和相应证据；演进版本校验 Upgrade 能力、精确父版本 Rollback 和完整升级回退闭环证据。
+4. 直接发布的上游依赖必须已经 Released，且不能形成依赖环。
+5. 全部门禁通过后，演进版本才从父 Release ID 沿精确依赖链计算直接和传递影响，并查找锁定相关 Release 的场景。
 6. Release 进入 Released。
-7. 为下游组件 Owner 和场景 Owner 生成站内通知。
+7. 全新基线不替换现有锁定版本，也不发送影响通知；演进版本仅通知精确受影响的组件 Owner 和场景 Owner。
 8. 追加审计事件并发送 SSE 刷新信号。
 
 通知只提示影响，不会自动修改下游锁定版本或场景 DAG。
@@ -513,19 +520,22 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | --- | --- | --- |
 | GET / POST | `/components` | 列表 / 创建组件 |
 | GET / PATCH | `/components/{id}` | 详情 / 修改元数据 |
-| POST | `/components/{id}/releases` | 创建首个或新 Release Draft |
+| POST | `/components/{id}/release-draft-plan` | 预览全新发布线或发布线演进 Draft，并生成计划指纹 |
+| POST | `/components/{id}/release-drafts` | 按 `expectedPlanDigest` 创建 Draft |
+| PATCH | `/component-release-lines/{id}` | 修改发布线展示名称并记录审计 |
 | PUT | `/component-releases/{id}` | 更新 Draft |
 | PUT | `/component-releases/{id}/contract` | 仅替换 Draft 的直接依赖与参数合同，保留动作和其他版本字段 |
-| POST | `/component-releases/{id}/clone` | 克隆为新 Draft |
-| POST | `/component-releases/{id}/clone-plan` | 只读预览 Release 复制并生成计划指纹 |
 | POST | `/component-imports/plan` | 完整预检批量组件导入，不写入 |
 | POST | `/component-imports` | 按预检指纹原子导入组件、Draft、Playbook 和审计记录 |
-| GET | `/component-releases/{id}/impact` | 发布影响预览 |
+| GET | `/component-releases/{id}/impact?operation=publish|deprecate` | 发布或废弃影响预览；发布线演进按父 Release 精确计算 |
 | POST | `/component-releases/{id}/candidate` | 加入或撤回场景候选集 |
 | POST | `/component-releases/{id}/publish` | 按当前交付证据门禁直接发布 |
 | POST | `/component-releases/{id}/deprecate` | 废弃 |
+| POST | `/component-releases/{id}/restore` | 将从未发布的 Deprecated Release 恢复为 Draft |
+| DELETE | `/component-releases/{id}` | 永久删除无证据、无引用且从未发布的 Deprecated Release |
 | POST | `/component-releases/{id}/test-plan` | 只读预览组件测试执行计划 |
 | POST | `/component-releases/{id}/test-runs` | 发起组件测试 |
+| GET | `/component-releases/{id}/run-evidence` | 组件 Owner 查询该 Release 的组件测试，以及由不可变执行快照锁定的场景测试和正式运行证据 |
 | GET / PUT / POST | `/component-releases/{id}/playbook` | 读取、在线保存或上传 Draft Playbook |
 | GET / POST | `/component-releases/{id}/image-builds` | 查询或创建 Dockerfile 镜像构建 |
 | POST | `/component-releases/{id}/artifacts/upload` | 上传并登记组件介质 |
@@ -656,7 +666,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验当前合同 → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。本批旧合同与未知结构均失败关闭，不执行兼容迁移。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260901-release-lines` → 幂等 seed → 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。
 
 ### 11.1 发布目录灾备
 

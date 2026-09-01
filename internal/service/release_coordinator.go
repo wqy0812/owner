@@ -25,7 +25,6 @@ type releaseCoordinatorStore interface {
 	LatestSuccessfulScenarioTestRun(context.Context, string) (domain.Run, error)
 	PublishCandidateReleaseSet(context.Context, store.ScenarioPublicationGuard, []string, []store.ReleasePublicationGuard, string, int64, time.Time) error
 	PublishComponentRelease(context.Context, string, int64, []store.ReleasePublicationGuard, time.Time) error
-	LatestReleasedVersion(context.Context, string) (string, error)
 	CreateNotifications(context.Context, []domain.Notification) error
 }
 
@@ -57,11 +56,15 @@ func (c *ReleaseCoordinator) PublishRelease(ctx context.Context, user domain.Use
 	if err := p.validateReleaseEvidence(ctx, release); err != nil {
 		return release, domain.ImpactReport{}, actionableExistingError(err, "release.evidence_missing", "当前合同缺少安装或回滚成功证据", "前往环境验证", fmt.Sprintf("/components?selected=%s&release=%s&action=validate", component.ID, release.ID))
 	}
-	oldVersion, oldErr := c.store.LatestReleasedVersion(ctx, release.ComponentID)
-	if oldErr != nil && !errors.Is(oldErr, domain.ErrNotFound) {
-		return release, domain.ImpactReport{}, oldErr
+	oldVersion := ""
+	if release.ParentReleaseID != "" {
+		parent, parentErr := c.store.GetComponentRelease(ctx, release.ParentReleaseID)
+		if parentErr != nil {
+			return release, domain.ImpactReport{}, parentErr
+		}
+		oldVersion = parent.Version
 	}
-	report, err := p.Impact(ctx, user, id)
+	report, err := p.PublicationImpact(ctx, user, id)
 	if err != nil {
 		return release, report, err
 	}
@@ -80,12 +83,13 @@ func (c *ReleaseCoordinator) PublishRelease(ctx context.Context, user domain.Use
 		notifications = append(notifications, domain.Notification{
 			ID: newID("notification"), UserID: recipient.UserID, Type: "component_release_impact",
 			Title:       fmt.Sprintf("%s 发布 %s", component.Name, release.Version),
-			Body:        fmt.Sprintf("上游组件从 %s 更新为 %s；请评估锁定版本和兼容性。", valueOr(oldVersion, "首次发布"), release.Version),
+			Body:        fmt.Sprintf("上游组件在发布线 %s 从 %s 演进为 %s；请评估锁定版本和兼容性。", release.LineName, oldVersion, release.Version),
 			ResourceURL: "/components?selected=" + component.ID,
 			Payload: map[string]any{
 				"componentId": component.ID, "componentName": component.Name,
 				"oldVersion": oldVersion, "newVersion": release.Version,
-				"releaseNotes": release.ReleaseNotes, "breaking": release.Breaking,
+				"releaseNotes": release.ReleaseNotes, "compatibility": release.Compatibility, "breaking": release.Compatibility == domain.CompatibilityBreaking,
+				"lineId": release.LineID, "lineName": release.LineName, "fromReleaseId": release.ParentReleaseID,
 				"impactPaths": pathNames, "scenarioIds": recipient.ScenarioIDs,
 			}, CreatedAt: now,
 		})
@@ -95,7 +99,7 @@ func (c *ReleaseCoordinator) PublishRelease(ctx context.Context, user domain.Use
 	}
 	p.audit(ctx, user, "component_release.published", "component_release", id, map[string]any{
 		"componentId": component.ID, "oldVersion": oldVersion, "newVersion": release.Version,
-		"breaking": release.Breaking, "recipientCount": len(notifications),
+		"compatibility": release.Compatibility, "recipientCount": len(notifications),
 	})
 	p.hub.Publish("release.published", map[string]any{"releaseId": id, "componentId": component.ID})
 	if len(notifications) > 0 {

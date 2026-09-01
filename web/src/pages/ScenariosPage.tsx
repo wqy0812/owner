@@ -26,7 +26,7 @@ import { RunInputPresetPicker } from '../components/RunInputPresetPicker';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
-import { executableActionTypes, type CandidateReleaseSet, type Component, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
+import { executableActionTypes, type CandidateReleaseSet, type Component, type ComponentRelease, type Environment, type Scenario, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from './scenarioTemplate';
 
 type FlowNode = Node<ScenarioNodeData>;
@@ -162,9 +162,9 @@ export function ScenariosPage() {
     ...nodes.flatMap((node) => node.data.runInputs ?? []),
   ]), [nodes]);
 
-  function addComponent(component: Component) {
-    if (!editable || !component.latestRelease) return;
-    const declaredActions = executableActionTypes(component.latestRelease.actions);
+  function addComponent(component: Component, release: ComponentRelease) {
+    if (!editable) return;
+    const declaredActions = executableActionTypes(release.actions);
     const defaultAction = declaredActions.includes('install') ? 'install' : declaredActions.includes('upgrade') ? 'upgrade' : declaredActions.includes('configure') ? 'configure' : declaredActions.includes('preflight') ? 'preflight' : declaredActions.includes('inspect') ? 'inspect' : declaredActions.includes('verify') ? 'verify' : declaredActions[0] ?? 'install';
     setNodes((items) => {
       const count = items.length;
@@ -172,7 +172,7 @@ export function ScenariosPage() {
         id: `node-${component.id}-${Date.now()}-${count}`,
         type: 'component',
         position: { x: 80 + (count % 3) * 260, y: 80 + Math.floor(count / 3) * 170 },
-        data: { label: component.name, componentId: component.id, releaseId: component.latestRelease!.id, version: component.latestRelease!.version, action: defaultAction, hostGroup: 'all', layer: component.layer },
+        data: { label: component.name, componentId: component.id, releaseId: release.id, version: release.version, action: defaultAction, hostGroup: 'all', layer: component.layer },
       }];
     });
   }
@@ -336,10 +336,12 @@ export function ScenariosPage() {
         <aside className="scenario-palette panel">
           <header><h3>组件版本</h3><p>{editable ? '点击加入画布' : '当前为只读视图'}</p></header>
           <div className="palette-list">{COMPONENT_LAYERS.map((layer) => {
-            const available = components?.filter((component) => component.layer === layer.value && (component.latestRelease?.state === 'released' || component.latestRelease?.candidate)) ?? [];
-            return <section className="palette-layer" key={layer.value}><div className="palette-layer__header"><span>{layer.code}</span><strong>{layer.label}</strong></div>{available.length ? available.map((component) => {
-              const used = nodes.filter((node) => node.data.componentId === component.id).length;
-              return <button key={component.id} disabled={!editable} onClick={() => addComponent(component)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{component.tags.join(' · ') || '暂无标签'} · {component.latestRelease?.version}{component.latestRelease?.candidate ? ' · 候选' : ''}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
+            const available = components?.filter((component) => component.layer === layer.value).flatMap((component) =>
+              (component.releases ?? []).filter((release) => release.state === 'released' || release.candidate).map((release) => ({ component, release })),
+            ) ?? [];
+            return <section className="palette-layer" key={layer.value}><div className="palette-layer__header"><span>{layer.code}</span><strong>{layer.label}</strong></div>{available.length ? available.map(({ component, release }) => {
+              const used = nodes.filter((node) => node.data.releaseId === release.id).length;
+              return <button key={release.id} disabled={!editable} onClick={() => addComponent(component, release)}><span><Boxes size={16} /></span><div><strong>{component.name}</strong><small>{release.lineName} · {release.version}{release.candidate ? ' · 候选' : ''}{used ? ` · 已使用 ${used} 次` : ''}</small></div><Plus size={15} /></button>;
             }) : <div className="palette-layer__empty">本层暂无已发布或候选组件</div>}</section>;
           })}</div>
           <div className="palette-hint"><GitCommitHorizontal size={17} /><p>分层只用于分类提示；连线才表示硬依赖和实际执行顺序。</p></div>

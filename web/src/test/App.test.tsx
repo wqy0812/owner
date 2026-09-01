@@ -30,8 +30,31 @@ function json(data: unknown, status = 200) {
     if (Array.isArray(value)) return value.map(completeReleaseDTOs);
     if (!value || typeof value !== 'object') return value;
     const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, completeReleaseDTOs(item)]));
-    if (typeof result.componentId === 'string' && typeof result.version === 'string' && typeof result.status === 'string' && !result.readiness) {
-      result.readiness = { status: 'ready', blockers: [] };
+    if (typeof result.componentId === 'string' && typeof result.version === 'string' && typeof result.status === 'string') {
+      result.lineId ??= `line-${result.componentId}`;
+      result.lineName ??= `${result.componentId} baseline`;
+      result.compatibility ??= result.parentReleaseId ? 'compatible' : 'not_applicable';
+      result.readiness ??= { status: 'ready', blockers: [] };
+      result.parameters ??= [];
+      result.dependencies ??= [];
+      result.actions ??= [];
+      result.artifacts ??= [];
+      result.images ??= [];
+    }
+    if (typeof result.ownerId === 'string' && Array.isArray(result.releases) && !result.releaseLines) {
+      const grouped = new Map<string, any[]>();
+      for (const release of result.releases as any[]) {
+        const values = grouped.get(release.lineId) ?? [];
+        values.push(release);
+        grouped.set(release.lineId, values);
+      }
+      result.releaseLines = [...grouped.entries()].map(([id, releases]) => ({
+        id, componentId: result.id, name: releases[0]?.lineName ?? id, createdAt: '2026-08-01T00:00:00Z', releases,
+        latestReleasedId: releases.find((release) => release.status === 'released')?.id,
+        currentDraftId: releases.find((release) => release.status === 'draft')?.id,
+        evolutionEligible: !releases.some((release) => release.status === 'draft') && releases[0]?.status === 'released',
+        evolutionParentId: !releases.some((release) => release.status === 'draft') && releases[0]?.status === 'released' ? releases[0].id : undefined,
+      }));
     }
     return result;
   };
@@ -756,7 +779,7 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
     let buttonDirectory = screen.getByRole('region', { name: '组件 Owner 按钮操作目录' });
-    for (const label of ['新建组件', '新建空白 Draft', '批量导入 / 预检并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
+    for (const label of ['新建组件', '全新发布线', '空白创建 / 复制现有版本', '批量导入 / 预检并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
     expect(buttonDirectory).not.toHaveTextContent('允许以未验证状态发布');
@@ -932,7 +955,7 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     }));
     renderApp('/components?selected=component-kube-proxy');
-    expect(await screen.findByText(/当前展示 1.17.5，因为它有参数映射/)).toBeInTheDocument();
+    expect(await screen.findByText(/当前展示 .*1.17.5，因为它有参数映射/)).toBeInTheDocument();
     expect(screen.getAllByText(/本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot/).length).toBeGreaterThan(0);
     expect(screen.getByText(/1.17.5：本组件参数 kubeRoot/)).toBeInTheDocument();
     expect(screen.getByText(/1.17.5 的公开参数可被下游引用/)).toBeInTheDocument();
@@ -1004,14 +1027,14 @@ describe('platform shell and RBAC UI', () => {
 
   it('creates a draft from the centralized contract entry', async () => {
     const released = components[0].releases[0];
-    const draft = { ...released, id: 'release-containerd-draft', version: 'v2.1.2', status: 'draft', parameters: [], dependencies: [] };
+    const draft = { ...released, id: 'release-containerd-draft', parentReleaseId: released.id, compatibility: 'compatible', version: 'v2.1.2', status: 'draft', parameters: [], dependencies: [] };
     let created = false;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: created ? draft : released, releases: created ? [draft, released] : [released] }]);
-      if (url.endsWith('/component-releases/release-containerd-2/clone-plan')) return json({ sourceReleaseId: released.id, sourceVersion: released.version, targetVersion: draft.version, planDigest: 'clone-plan', actions: [], playbooks: [], artifactCount: 0 });
-      if (url.endsWith('/component-releases/release-containerd-2/clone')) { created = true; return json(draft); }
+      if (url.endsWith('/components/component-containerd/release-draft-plan')) return json({ mode: 'evolution', lineId: 'line-component-containerd', lineName: 'component-containerd baseline', parentReleaseId: released.id, parentVersion: released.version, targetVersion: draft.version, compatibility: 'compatible', planDigest: 'draft-plan', actions: [], removedActions: [], playbooks: [], artifactCount: 0, imageCount: 0 });
+      if (url.endsWith('/components/component-containerd/release-drafts')) { created = true; return json(draft); }
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
     }));
@@ -1020,7 +1043,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '创建 Draft 编辑合同' }));
     expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
-    expect(screen.getByText(/已发布且不可直接修改/)).toBeInTheDocument();
+    expect(screen.getByText(/复制内容不等于建立升级关系/)).toBeInTheDocument();
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.2');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '调整合同');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
@@ -1029,31 +1052,116 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('groups versions by release line and renders the three compatibility badges', async () => {
+    const root117 = { ...components[0].releases[0], id: 'release-117', lineId: 'line-117', lineName: 'Kubernetes 1.17', version: '1.17.17', compatibility: 'not_applicable' };
+    const root134 = { ...components[0].releases[0], id: 'release-134', lineId: 'line-134', lineName: 'Kubernetes 1.34', version: '1.34.8', compatibility: 'not_applicable' };
+    const compatible = { ...root134, id: 'release-134-compatible', version: '1.34.9', parentReleaseId: root134.id, compatibility: 'compatible' };
+    const breaking = { ...root134, id: 'release-134-breaking', version: '1.35.0', parentReleaseId: compatible.id, compatibility: 'breaking' };
+    const catalog = [{
+      ...components[0],
+      releases: [root117, breaking, compatible, root134],
+      releaseLines: [
+        { id: 'line-117', componentId: components[0].id, name: 'Kubernetes 1.17', latestReleasedId: root117.id, releases: [root117], createdAt: '2026-08-01T00:00:00Z' },
+        { id: 'line-134', componentId: components[0].id, name: 'Kubernetes 1.34', latestReleasedId: breaking.id, releases: [breaking, compatible, root134], createdAt: '2026-08-01T00:00:00Z' },
+      ],
+    }];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json(catalog);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    expect(await screen.findByText('Kubernetes 1.17')).toBeInTheDocument();
+    expect(screen.getByText('Kubernetes 1.34')).toBeInTheDocument();
+    expect(screen.getAllByText('全新基线')).toHaveLength(2);
+    expect(screen.getByText('兼容升级')).toBeInTheDocument();
+    expect(screen.getByText('破坏性升级')).toBeInTheDocument();
+    expect(screen.queryByText('不兼容变更')).not.toBeInTheDocument();
+  });
+
   it('creates an empty Draft without cloning an existing release', async () => {
-    const released = components[0].releases[0];
+    const released = { ...components[0].releases[0], environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] } };
+    const catalog = [{ ...components[0], latestRelease: released, releases: [released] }];
     const draft = { ...released, id: 'release-containerd-empty', version: 'v2.2.0', status: 'draft', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [] };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-      if (url.endsWith('/components/component-containerd/releases') && init?.method === 'POST') return json(draft);
-      if (url.endsWith('/components')) return json(components);
+      if (url.endsWith('/components/component-containerd/release-draft-plan') && init?.method === 'POST') return json({ mode: 'new_line', lineName: 'containerd 2.2', targetVersion: draft.version, compatibility: 'not_applicable', planDigest: 'draft-plan', actions: [], removedActions: [], playbooks: [], artifactCount: 0, imageCount: 0 });
+      if (url.endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST') return json(draft);
+      if (url.endsWith('/components')) return json(catalog);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
     });
     vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('confirm', vi.fn(() => true));
 
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
-    expect(screen.getByRole('dialog', { name: '新建空白 Draft · containerd' })).toHaveTextContent('不继承依赖、参数、Action、Playbook、介质或镜像');
+    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toHaveTextContent('复制内容不等于建立升级关系');
+    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'SUSE' })).not.toBeChecked();
+    await userEvent.type(screen.getByRole('textbox', { name: '发布线名称' }), 'containerd 2.2');
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.selectOptions(screen.getByLabelText('风险级别'), 'destructive');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '全新合同');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
 
     expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/clone'))).toBe(false);
-    const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/releases') && init?.method === 'POST');
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ version: 'v2.2.0', releaseNotes: '全新合同', riskLevel: 'destructive', status: 'draft' });
+    const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST');
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ mode: 'new_line', lineName: 'containerd 2.2', version: 'v2.2.0', releaseNotes: '全新合同', riskLevel: 'destructive', compatibility: 'not_applicable', environmentConstraints: {}, expectedPlanDigest: 'draft-plan' });
+  });
+
+  it('synchronizes template constraints and confirms before overwriting manual edits', async () => {
+    const first = { ...components[0].releases[0], id: 'release-template-a', version: '1.0.0', environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] } };
+    const second = { ...components[0].releases[0], id: 'release-template-b', version: '2.0.0', environmentConstraints: { architecture: ['arm64'], operatingSystem: ['Ubuntu'] } };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: second, releases: [second, first] }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    vi.stubGlobal('confirm', confirm);
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    const template = screen.getByRole('combobox', { name: '内容模板（可选）' });
+    await userEvent.selectOptions(template, first.id);
+    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'ARM/arm64' }));
+    await userEvent.selectOptions(template, second.id);
+    expect(template).toHaveValue(first.id);
+    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
+    await userEvent.selectOptions(template, second.id);
+    expect(template).toHaveValue(second.id);
+    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'ARM/arm64' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Ubuntu' })).toBeChecked();
+  });
+
+  it('shows the backend reason when a deprecated latest publication blocks evolution', async () => {
+    const root = { ...components[0].releases[0], id: 'release-root', version: '1.0.0' };
+    const deprecated = { ...components[0].releases[0], id: 'release-deprecated', version: '2.0.0', status: 'deprecated', releasedAt: '2026-08-31T00:00:00Z' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        ...components[0], latestRelease: root, releases: [deprecated, root],
+        releaseLines: [{ id: 'line-deprecated', componentId: components[0].id, name: '稳定线', latestReleasedId: root.id, evolutionEligible: false, evolutionBlockedReason: '最后一个曾发布版本 2.0.0 已废弃，请创建新发布线', releases: [deprecated, root], createdAt: '2026-08-01T00:00:00Z' }],
+      }]);
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    }));
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    expect(screen.getByText(/最后一个曾发布版本 2.0.0 已废弃/)).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '基于现有发布线演进' })).not.toBeInTheDocument();
   });
 
   it('keeps readiness and lifecycle editing on the selected Draft when several Drafts exist', async () => {
@@ -1093,19 +1201,22 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-      if (url.endsWith('/components/component-containerd/releases') && init?.method === 'POST') return json({ error: { code: 'CONFLICT', message: '版本 v2.1.1 已存在' } }, 409);
+      if (url.endsWith('/components/component-containerd/release-draft-plan') && init?.method === 'POST') return json({ mode: 'new_line', lineName: 'duplicate', targetVersion: 'v2.1.1', compatibility: 'not_applicable', planDigest: 'duplicate-plan', actions: [], removedActions: [], playbooks: [], artifactCount: 0, imageCount: 0 });
+      if (url.endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST') return json({ error: { code: 'CONFLICT', message: '版本 v2.1.1 已存在' } }, 409);
       if (url.endsWith('/components')) return json(components);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
     }));
+    vi.stubGlobal('confirm', vi.fn(() => true));
 
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '发布线名称' }), 'duplicate');
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.1');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '重复版本');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
     expect(await screen.findByText('版本 v2.1.1 已存在')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: '新建空白 Draft · containerd' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
   });
 
   it('scrolls to the matching contract section when editing a draft', async () => {
@@ -1127,6 +1238,11 @@ describe('platform shell and RBAC UI', () => {
     }));
     try {
       renderApp('/components?selected=component-kubelet');
+      await userEvent.click(await screen.findByRole('button', { name: '配置合同' }));
+      expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
+      expect(scrolled).toContain('release-contract-editor');
+      await userEvent.click(screen.getByRole('button', { name: '取消' }));
+      scrolled.length = 0;
       await userEvent.click(await screen.findByRole('button', { name: '编辑参数合同' }));
       expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
       expect(document.getElementById('contract-parameters')).toBeInTheDocument();
@@ -1235,6 +1351,75 @@ describe('platform shell and RBAC UI', () => {
     expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeEnabled();
   });
 
+  it('shows all component and scenario Run evidence grouped by stable scenario', async () => {
+    const fallback = installFetch();
+    const release = { ...components[0].releases[0], readiness: { status: 'ready', blockers: [], installEvidenceRunId: 'run-component-current' } };
+    const evidence = [
+      { id: 'run-scenario-a-latest', kind: 'scenario_run', status: 'succeeded', scenarioId: 'scenario-a', scenarioName: '场景 A', scenarioRevisionId: 'scenario-a-r2', environmentId: 'environment-test', environmentName: 'Kubernetes 测试集群 1', createdAt: '2026-08-31T05:00:00Z' },
+      { id: 'run-scenario-a-test', kind: 'scenario_test', status: 'failed', scenarioId: 'scenario-a', scenarioName: '场景 A', scenarioRevisionId: 'scenario-a-r1', environmentId: 'environment-test', environmentName: 'Kubernetes 测试集群 1', createdAt: '2026-08-31T04:00:00Z' },
+      { id: 'run-scenario-b', kind: 'scenario_run', status: 'running', scenarioId: 'scenario-b', scenarioName: '场景 B', scenarioRevisionId: 'scenario-b-r1', environmentId: 'environment-test', environmentName: 'Kubernetes 测试集群 2', createdAt: '2026-08-31T03:00:00Z' },
+      { id: 'run-component-current', kind: 'component_test', status: 'succeeded', componentReleaseId: release.id, action: 'install', environmentId: 'environment-test', environmentName: 'Kubernetes 测试集群 1', createdAt: '2026-08-31T02:00:00Z' },
+      { id: 'run-component-history', kind: 'component_test', status: 'cancelled', componentReleaseId: release.id, action: 'rollback', environmentId: 'environment-test', environmentName: 'Kubernetes 测试集群 1', createdAt: '2026-08-31T01:00:00Z' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: release, releases: [release] }]);
+      if (url.endsWith(`/component-releases/${release.id}/run-evidence`)) return json(evidence);
+      return fallback(input, init);
+    }));
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: 'Run 证据' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Run 证据 v2.1.1' });
+    expect(dialog).toHaveTextContent('2 个场景');
+    expect(dialog).toHaveTextContent('3');
+    expect(dialog).toHaveTextContent('当前安装证据');
+    expect(dialog).toHaveTextContent('历史证据');
+    expect(dialog).toHaveTextContent('场景 A');
+    expect(dialog).toHaveTextContent('1 次正式运行 · 1 次完整测试');
+    expect(dialog).toHaveTextContent('场景 B');
+    expect(dialog).toHaveTextContent('1 次正式运行 · 0 次完整测试');
+    expect(within(dialog).getAllByText('执行中')).toHaveLength(2);
+    const scenarioA = within(dialog).getByText('场景 A').closest('details');
+    if (!scenarioA) throw new Error('missing grouped Scenario A evidence');
+    await userEvent.click(within(scenarioA).getByText('场景 A'));
+    const links = within(scenarioA).getAllByRole('link');
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute('href', '/runs?selected=run-scenario-a-latest');
+    expect(links[1]).toHaveAttribute('href', '/runs?selected=run-scenario-a-test');
+    expect(within(scenarioA).getByText('失败')).toBeInTheDocument();
+  });
+
+  it('shows empty Release Run evidence and retries a failed evidence request', async () => {
+    const fallback = installFetch();
+    let attempts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/component-releases/release-containerd-2/run-evidence')) {
+        attempts++;
+        if (attempts === 1) return json({ error: { code: 'INTERNAL', message: 'temporary evidence failure' } }, 500);
+        return json([]);
+      }
+      return fallback(input, init);
+    }));
+
+    renderApp('/components');
+    await userEvent.click(await screen.findByRole('button', { name: 'Run 证据' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Run 证据 v2.1.1' });
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('temporary evidence failure');
+    await userEvent.click(within(dialog).getByRole('button', { name: '重试' }));
+    expect(await within(dialog).findByText('暂无组件验证 Run')).toBeInTheDocument();
+    expect(within(dialog).getByText('尚未被场景运行使用')).toBeInTheDocument();
+    expect(attempts).toBe(2);
+  });
+
+  it('only shows the Release Run evidence entry to the owning component Owner', async () => {
+    installFetch({ initialUser: dave });
+    renderApp('/components');
+    expect(await screen.findByRole('button', { name: /containerd/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run 证据' })).not.toBeInTheDocument();
+  });
+
   it('does not count rollback-only runs as Draft delivery evidence', async () => {
     const draft = {
       ...components[0].releases[0], id: 'release-containerd-rollback-only', version: 'v2.2.0-rc2', status: 'draft',
@@ -1268,7 +1453,7 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json(components);
-      if (url.endsWith('/component-releases/release-containerd-2/impact')) return json({ componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
+      if (url.endsWith('/component-releases/release-containerd-2/impact?operation=deprecate')) return json({ changeKind: 'deprecation', componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
       if (url.endsWith('/component-releases/release-containerd-2/deprecate') && init?.method === 'POST') {
         deprecated = true;
         return json({ ...components[0].releases[0], status: 'deprecated' });
@@ -1294,7 +1479,8 @@ describe('platform shell and RBAC UI', () => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json(components);
-      if (url.endsWith('/component-releases/release-containerd-2/impact')) return json({
+      if (url.endsWith('/component-releases/release-containerd-2/impact?operation=deprecate')) return json({
+        changeKind: 'deprecation',
         componentOwners: [], scenarioOwners: [{ id: carol.id, name: carol.name }],
         scenarios: [{ id: 'scenario-kubernetes', name: 'Kubernetes 集群' }], paths: [['containerd']], scenarioRunCount: 2,
       });
@@ -1335,7 +1521,7 @@ describe('platform shell and RBAC UI', () => {
         id: 'component-draft-deprecate', name: 'Draft Component', slug: 'draft-component', ownerId: alice.id,
         layer: 'runtime_state', tags: ['runtime'], latestRelease: draft, releases: [draft],
       }]);
-      if (url.endsWith('/component-releases/release-draft-deprecate/impact')) return json({ componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
+      if (url.endsWith('/component-releases/release-draft-deprecate/impact?operation=deprecate')) return json({ changeKind: 'deprecation', componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
       if (url.endsWith('/component-releases/release-draft-deprecate/deprecate') && init?.method === 'POST') {
         deprecated = true;
         return json({ ...draft, status: 'deprecated' });
@@ -1347,7 +1533,7 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '废弃草稿' }));
-    expect(screen.getByRole('dialog', { name: '废弃草稿 2.0.0-rc1' })).toHaveTextContent('Playbook、介质');
+    expect(screen.getByRole('dialog', { name: '废弃草稿 2.0.0-rc1' })).toHaveTextContent('废弃后仍可恢复为 Draft');
     await userEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(deprecated).toBe(false);
 
@@ -1356,6 +1542,55 @@ describe('platform shell and RBAC UI', () => {
     await waitFor(() => expect(confirm).toBeEnabled());
     await userEvent.click(confirm);
     await waitFor(() => expect(deprecated).toBe(true));
+  });
+
+  it('restores or permanently deletes a never-published deprecated Release', async () => {
+    const release = {
+      id: 'release-disposable', componentId: 'component-disposable', lineId: 'line-disposable', lineName: 'Disposable',
+      version: 'test', status: 'deprecated', compatibility: 'not_applicable', readiness: { status: 'blocked', blockers: [] },
+      releaseNotes: 'discardable', parameters: [], dependencies: [], actions: [], artifacts: [], images: [], createdAt: '2026-09-01T07:39:00Z',
+    };
+    let state: 'draft' | 'deprecated' = 'deprecated';
+    let deleted = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/session/me')) return json(alice);
+      if (url.endsWith('/components')) return json([{
+        id: 'component-disposable', name: 'Disposable Component', slug: 'disposable-component', ownerId: alice.id,
+        layer: 'runtime_state', tags: ['runtime'], releases: deleted ? [] : [{ ...release, status: state }],
+      }]);
+      if (url.endsWith('/component-releases/release-disposable/restore') && init?.method === 'POST') {
+        state = 'draft';
+        return json({ ...release, status: state });
+      }
+      if (url.endsWith('/component-releases/release-disposable/impact?operation=deprecate')) return json({ changeKind: 'deprecation', componentOwners: [], scenarioOwners: [], scenarios: [], paths: [] });
+      if (url.endsWith('/component-releases/release-disposable/deprecate') && init?.method === 'POST') {
+        state = 'deprecated';
+        return json({ ...release, status: state, deprecatedAt: '2026-09-01T08:00:00Z' });
+      }
+      if (url.endsWith('/component-releases/release-disposable') && init?.method === 'DELETE') {
+        deleted = true;
+        return json({ deleted: true });
+      }
+      if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
+      return json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirm);
+
+    renderApp('/components?selected=component-disposable&release=release-disposable');
+    await userEvent.click(await screen.findByRole('button', { name: '恢复 Draft' }));
+    await waitFor(() => expect(state).toBe('draft'));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('确认恢复 test'));
+    await userEvent.click(await screen.findByRole('button', { name: '废弃草稿' }));
+    const deprecate = screen.getByRole('button', { name: '确认废弃草稿' });
+    await waitFor(() => expect(deprecate).toBeEnabled());
+    await userEvent.click(deprecate);
+    await userEvent.click(await screen.findByRole('button', { name: '永久删除' }));
+    await waitFor(() => expect(deleted).toBe(true));
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining('此操作不可恢复'));
+    expect(await screen.findByText('组件版本已永久删除')).toBeInTheDocument();
   });
 
   it('shows released details and Playbook content without Draft edit shortcuts', async () => {
@@ -1438,12 +1673,12 @@ describe('platform shell and RBAC UI', () => {
           environmentConstraints: { architecture: ['amd64'], operatingSystem: ['SUSE'] },
         }],
       }]);
-      if (url.endsWith('/component-releases/release-containerd-2/clone-plan')) {
-        return json({ sourceReleaseId: 'release-containerd-2', sourceVersion: 'v2.1.1', targetVersion: 'v2.2.0', planDigest: 'clone-plan', actions: [], playbooks: [], artifactCount: 0 });
+      if (url.endsWith('/components/component-containerd/release-draft-plan')) {
+        return json({ mode: 'evolution', lineId: 'line-component-containerd', lineName: 'containerd baseline', parentReleaseId: 'release-containerd-2', parentVersion: 'v2.1.1', targetVersion: 'v2.2.0', compatibility: 'compatible', planDigest: 'draft-plan', actions: [], removedActions: [], playbooks: [], artifactCount: 0, imageCount: 0 });
       }
-      if (url.endsWith('/component-releases/release-containerd-2/clone')) {
+      if (url.endsWith('/components/component-containerd/release-drafts')) {
         return json({
-          id: 'release-containerd-3', componentId: 'component-containerd', version: 'v2.2.0', status: 'draft',
+          id: 'release-containerd-3', componentId: 'component-containerd', parentReleaseId: 'release-containerd-2', version: 'v2.2.0', status: 'draft',
           environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], ipFamily: ['IPv4'] },
         });
       }
@@ -1465,8 +1700,11 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '增加 ARM 适配');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/clone') && init?.method === 'POST');
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST');
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        mode: 'evolution',
+        parentReleaseId: 'release-containerd-2',
+        compatibility: 'compatible',
         version: 'v2.2.0',
         releaseNotes: '增加 ARM 适配',
         environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], operatingSystemVersion: ['24.04'], ipFamily: ['IPv4'] },

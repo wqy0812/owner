@@ -45,9 +45,12 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		ToReleaseID         string     `json:"toReleaseId"`
 	}
 	spec := struct {
+		LineID                  string                `json:"lineId"`
+		ParentReleaseID         string                `json:"parentReleaseId"`
+		TemplateSourceReleaseID string                `json:"templateSourceReleaseId"`
 		Version                string                `json:"version"`
 		ReleaseNotes           string                `json:"releaseNotes"`
-		Breaking               bool                  `json:"breaking"`
+		Compatibility          ReleaseCompatibility  `json:"compatibility"`
 		RiskLevel              RiskLevel             `json:"riskLevel"`
 		EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
 		Parameters             []ParameterDefinition `json:"parameters"`
@@ -56,8 +59,9 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Artifacts              []artifactSpec        `json:"artifacts"`
 		Images                 []imageSpec           `json:"images"`
 	}{
+		LineID: release.LineID, ParentReleaseID: release.ParentReleaseID, TemplateSourceReleaseID: release.TemplateSourceReleaseID,
 		Version: release.Version, ReleaseNotes: release.ReleaseNotes,
-		Breaking: release.Breaking, RiskLevel: release.RiskLevel,
+		Compatibility: release.Compatibility, RiskLevel: release.RiskLevel,
 		EnvironmentConstraints: release.EnvironmentConstraints, Parameters: release.Parameters,
 	}
 	artifacts := append([]ComponentArtifact(nil), release.Artifacts...)

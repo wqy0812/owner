@@ -120,9 +120,16 @@ WHERE r.id IN (`+placeholders+`) ORDER BY c.slug,c.id`, args...)
 	if len(components.Rows) != legacyK8S1175ReleaseCount {
 		return LegacyK8S1175Conversion{}, fmt.Errorf("legacy closure contains %d Components; expected %d", len(components.Rows), legacyK8S1175ReleaseCount)
 	}
+	lines, err := dumpQuery(ctx, tx, "component_release_lines", catalogTableSpec("component_release_lines").columns, `
+SELECT 'line-'||r.id,r.component_id,c.name||' '||r.version,r.created_at
+FROM component_releases r JOIN components c ON c.id=r.component_id
+WHERE r.id IN (`+placeholders+`) AND r.status='released' ORDER BY r.component_id,r.created_at,r.id`, args...)
+	if err != nil {
+		return LegacyK8S1175Conversion{}, err
+	}
 
 	releases, err := dumpQuery(ctx, tx, "component_releases", catalogTableSpec("component_releases").columns, `
-SELECT id,component_id,version,status,release_notes,breaking,0,1,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at
+SELECT id,component_id,'line-'||id,NULL,NULL,version,status,release_notes,'not_applicable',0,1,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at
 FROM component_releases WHERE id IN (`+placeholders+`) AND status='released' ORDER BY component_id,created_at,id`, args...)
 	if err != nil {
 		return LegacyK8S1175Conversion{}, err
@@ -219,7 +226,7 @@ SELECT id,name,role,created_at FROM users WHERE id IN (`+sqlPlaceholders(len(own
 		FormatVersion:         CatalogFormatVersion,
 		SchemaContract:        options.TargetSchema,
 		PublicationGeneration: 1,
-		Tables: []TableDump{users, components, releases, dependencies, actions, scenarios, revisions,
+		Tables: []TableDump{users, components, lines, releases, dependencies, actions, scenarios, revisions,
 			emptyTable("component_release_artifacts"), emptyTable("component_release_images")},
 		Playbooks: playbooks,
 	}

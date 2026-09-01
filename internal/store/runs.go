@@ -141,6 +141,34 @@ WHERE runs.scenario_revision_id IS NOT NULL
 	return count, err
 }
 
+// ListRunsForComponentRelease returns every immutable Run that directly tested
+// the Release or locked it as part of a Scenario execution. The execution
+// snapshot is authoritative for Scenario Runs because the mutable Scenario
+// graph may have changed since an older Run was created.
+func (s *Store) ListRunsForComponentRelease(ctx context.Context, releaseID string) ([]domain.Run, error) {
+	rows, err := s.db.QueryContext(ctx, runSelect+`
+WHERE (runs.kind='component_test' AND runs.component_release_id=?)
+   OR (runs.kind IN ('scenario_test','scenario_run') AND EXISTS (
+     SELECT 1
+     FROM json_each(runs.input_snapshot_json, '$.steps') AS locked_step
+     WHERE json_extract(locked_step.value, '$.releaseId')=?
+   ))
+ORDER BY runs.created_at DESC`, releaseID, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Run
+	for rows.Next() {
+		run, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) HasActiveRetry(ctx context.Context, retryRootRunID string) (bool, error) {
 	var active int
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE retry_root_run_id=? AND status IN ('awaiting_approval','queued','running'))`, retryRootRunID).Scan(&active)
@@ -492,6 +520,19 @@ ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, relea
 	}
 	rollbackID, err := lookup("rollback_verify")
 	return installID, rollbackID, err
+}
+
+func (s *Store) SuccessfulComponentEvolutionEvidenceRunID(ctx context.Context, releaseID, releaseSpecDigest string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM runs
+WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
+  AND json_extract(input_snapshot_json,'$.componentReleaseSpecDigest')=?
+  AND json_extract(input_snapshot_json,'$.componentTestEvidence')='evolution_round_trip'
+ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC LIMIT 1`, releaseID, releaseSpecDigest).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {

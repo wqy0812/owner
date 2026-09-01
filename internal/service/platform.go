@@ -264,6 +264,20 @@ func validateRelease(release domain.ComponentRelease) error {
 	if strings.TrimSpace(release.Version) == "" {
 		return fmt.Errorf("%w: version is required", domain.ErrInvalid)
 	}
+	// Focused domain tests may validate an unpersisted release definition. All
+	// persisted creation paths assign a line before reaching the store.
+	if (release.LineID == "") != (strings.TrimSpace(release.LineName) == "") {
+		return fmt.Errorf("%w: release line id and name must be provided together", domain.ErrInvalid)
+	}
+	if release.Compatibility != "" && !release.Compatibility.Valid() {
+		return fmt.Errorf("%w: invalid release compatibility %q", domain.ErrInvalid, release.Compatibility)
+	}
+	if release.ParentReleaseID == "" && release.Compatibility != "" && release.Compatibility != domain.CompatibilityNotApplicable {
+		return fmt.Errorf("%w: a release-line baseline must use not_applicable compatibility", domain.ErrInvalid)
+	}
+	if release.ParentReleaseID != "" && release.Compatibility == domain.CompatibilityNotApplicable {
+		return fmt.Errorf("%w: an evolution release must declare compatible or breaking", domain.ErrInvalid)
+	}
 	if release.RiskLevel != "" && !validRiskLevel(release.RiskLevel) {
 		return fmt.Errorf("%w: invalid release risk level %q", domain.ErrInvalid, release.RiskLevel)
 	}

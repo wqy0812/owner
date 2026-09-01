@@ -413,6 +413,39 @@ h1, h2, h3, p { margin-top: 0; }
 .verification-evidence { display: inline-flex; align-items: center; gap: 4px; color: #667189; font-size: 9px; line-height: 1.35; }
 .verification-evidence--passed { color: #18805f; }
 .verification-evidence--failed, .verification-evidence--missing { color: #a66c1d; }
+.run-evidence-modal { max-height: min(68vh, 760px); overflow-y: auto; }
+.run-evidence-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.run-evidence-summary > div { padding: 11px 13px; border: 1px solid #e5e9f2; border-radius: 9px; background: #fafbfe; }
+.run-evidence-summary span, .run-evidence-summary strong { display: block; }
+.run-evidence-summary span { color: #8a93a6; font-size: 8px; }
+.run-evidence-summary strong { margin-top: 3px; color: #34405b; font-size: 15px; }
+.run-evidence-section { border: 1px solid #e5e9f2; border-radius: 10px; overflow: hidden; }
+.run-evidence-section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #e9ecf3; background: #fafbfe; }
+.run-evidence-section > header h3, .run-evidence-section > header p { margin: 0; }
+.run-evidence-section > header h3 { color: #34405b; font-size: 11px; }
+.run-evidence-section > header p { margin-top: 3px; color: #8b93a4; font-size: 8px; }
+.run-evidence-section > header > strong { color: #69758e; font-size: 9px; white-space: nowrap; }
+.run-evidence-list > a { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #edf0f4; color: #6d7890; }
+.run-evidence-list > a:last-child { border-bottom: 0; }
+.run-evidence-list > a:hover { background: #f8f9fc; }
+.run-evidence-list strong, .run-evidence-list small { display: block; }
+.run-evidence-list strong { color: #39445e; font-size: 10px; }
+.run-evidence-list small { margin-top: 3px; color: #969dac; font-size: 8px; }
+.run-evidence-kind, .run-evidence-id { color: #8a93a6; font-size: 8px; white-space: nowrap; }
+.run-evidence-kind--current { color: #18805f; font-weight: 800; }
+.scenario-evidence-group { border-bottom: 1px solid #e9ecf3; }
+.scenario-evidence-group:last-child { border-bottom: 0; }
+.scenario-evidence-group > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.scenario-evidence-group > summary::-webkit-details-marker { display: none; }
+.scenario-evidence-group > summary:hover { background: #f8f9fc; }
+.scenario-evidence-group > summary strong, .scenario-evidence-group > summary small { display: block; }
+.scenario-evidence-group > summary strong { color: #39445e; font-size: 10px; }
+.scenario-evidence-group > summary small { margin-top: 3px; color: #929aa9; font-size: 8px; }
+.scenario-evidence-group > summary > div:nth-child(2) { display: flex; align-items: center; gap: 8px; }
+.scenario-evidence-group > summary > div:nth-child(2) small { margin: 0; }
+.scenario-evidence-group > summary > svg { transition: transform .15s ease; }
+.scenario-evidence-group[open] > summary > svg { transform: rotate(180deg); }
+.scenario-evidence-group > .run-evidence-list { border-top: 1px dashed #e3e7ef; background: #fcfdff; }
 .release-facts { display: flex; flex-direction: column; gap: 2px; }
 .lifecycle-completeness { color: #a86d18; font-weight: 700; }
 .lifecycle-completeness--complete { color: #16835f; }
@@ -420,6 +453,9 @@ h1, h2, h3, p { margin-top: 0; }
 .release-row > .row-actions { grid-column: 1 / -1; justify-content: flex-end; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed #e4e8f1; }
 .release-row > .row-actions .icon-text { flex: 0 0 auto; white-space: nowrap; }
 .breaking-badge { padding: 2px 5px; border-radius: 4px; color: #b73d53; background: #fff0f3; font-size: 7px; font-weight: 800; letter-spacing: .4px; }
+.release-line-badge { padding: 2px 5px; border-radius: 4px; color: #17745d; background: #eaf8f3; font-size: 7px; font-weight: 800; letter-spacing: .4px; }
+.release-line-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--ink-700); background: #f3f8f7; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.release-line-header span { margin-left: auto; color: var(--ink-500); font-size: 12px; }
 .readiness-panel { overflow: hidden; }
 .readiness-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 18px 12px; }
 .readiness-header > div:first-child { display: flex; align-items: center; gap: 10px; }
@@ -446,7 +482,7 @@ h1, h2, h3, p { margin-top: 0; }
 .readiness-actions > div { display: flex; align-items: center; gap: 7px; }
 .readiness-actions span { color: #7d879b; font-size: 9px; }
 .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.contract-panels--editing { display: grid; gap: 14px; }
+.contract-panels--editing { display: grid; gap: 14px; scroll-margin-top: 86px; }
 .contract-panels--editing > .panel { scroll-margin-top: 86px; outline: none; }
 .contract-editor { display: grid; gap: 12px; padding: 12px 16px 16px; }
 .contract-editor-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
@@ -963,6 +999,12 @@ input:disabled, select:disabled, textarea:disabled { color: #69738a; background:
   .release-row > div:nth-child(4)::before { content: '依赖与生命周期'; }
   .release-row > div:nth-child(5)::before { content: '发布时间'; }
   .release-row .row-actions { flex-wrap: wrap; padding-top: 5px; border-top: 1px solid #edf0f4; }
+  .run-evidence-summary { grid-template-columns: 1fr; }
+  .scenario-evidence-group > summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .scenario-evidence-group > summary > div:nth-child(2) { grid-column: 1; align-items: flex-start; flex-direction: column; }
+  .scenario-evidence-group > summary > svg { grid-column: 2; grid-row: 1 / span 2; }
+  .run-evidence-list > a { grid-template-columns: minmax(0, 1fr) auto; }
+  .run-evidence-list > a > .status-pill, .run-evidence-list > a > svg { justify-self: end; }
   .host-table__head { display: none; }
   .host-row { grid-template-columns: 1fr 1fr; padding-block: 12px; }
   .credential-list > div { grid-template-columns: auto 1fr; }

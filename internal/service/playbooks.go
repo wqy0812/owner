@@ -215,6 +215,20 @@ func managedReleasePrefix(component domain.Component, release domain.ComponentRe
 	return "managed/" + component.Slug + "/" + release.ID + "/"
 }
 
+func (p *Platform) removeManagedReleasePlaybooks(component domain.Component, release domain.ComponentRelease) error {
+	if strings.TrimSpace(p.playbookRoot) == "" {
+		return nil
+	}
+	_, placeholder, err := p.resolveManagedPlaybookWriteTarget(component, release, managedReleasePrefix(component, release)+"delete-placeholder.yml", false)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Dir(placeholder))
+}
+
 // resolveManagedPlaybookWriteTarget validates both the logical managed path
 // and its resolved parent. The second check prevents a symlink created below
 // playbookRoot from redirecting an import write or cleanup outside the root.

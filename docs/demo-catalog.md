@@ -47,7 +47,7 @@
 
 除下文显式列出的 Action 差异外，15 个 Release 具有相同的当前合同：
 
-- 状态 `released`，Release 风险等级 `low`，`breaking=false`，`candidate=false`。
+- 状态 `released`，Release 风险等级 `low`，`compatibility=not_applicable`，`candidate=false`。当前目录没有声明版本转换边，因此每个既有版本都是独立发布线的新基线，不互相暗示可升级关系。
 - 发布说明均为“Ubuntu 18.04 / AMD64 六节点 Kubernetes 1.17.5 细粒度交付版本。”
 - 环境约束为 `architecture=amd64`、`deploymentMode=standard`、`hardwareProfile=general`、`ipFamily=IPv4`、`isolationRuntime=runc`。
 - 当前 Release 没有结构化参数、Release 依赖、CredentialRef 声明、介质或镜像记录。场景的 50 条边是当前执行先后关系的唯一表达。

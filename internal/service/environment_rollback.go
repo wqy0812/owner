@@ -379,7 +379,8 @@ func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run do
 		}
 	}
 	checked := map[string]struct{}{}
-	for _, step := range plan.Steps {
+	for index := range plan.Steps {
+		step := plan.Steps[index]
 		if step.Action != domain.ActionRollback && step.Action != domain.ActionUninstall {
 			continue
 		}
@@ -389,6 +390,12 @@ func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run do
 		checked[step.ComponentID] = struct{}{}
 		if step.Backup == nil || step.BackupRef == "" {
 			return fmt.Errorf("%w: locked rollback step is missing backup metadata", domain.ErrConflict)
+		}
+		if source := priorSameRunBackupStep(plan.Steps, index, &step); source != nil {
+			if source.Backup == nil || source.BackupRef != step.BackupRef || source.Backup.InstallRunID != step.Backup.InstallRunID || source.Backup.PlaybookSHA256 != step.Backup.PlaybookSHA256 {
+				return fmt.Errorf("%w: same-run rollback backup is inconsistent with its source action", domain.ErrConflict)
+			}
+			continue
 		}
 		installation, err := p.store.GetEnvironmentComponentInstallation(ctx, run.EnvironmentID, step.ComponentID)
 		if errors.Is(err, domain.ErrNotFound) {

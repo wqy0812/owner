@@ -122,6 +122,78 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domai
 	return runID
 }
 
+func TestListRunsForComponentReleaseUsesImmutableRunEvidence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	component := componentFixture("evidence-runtime", "component-owner-a")
+	otherComponent := componentFixture("evidence-other", "component-owner-b")
+	if err := s.CreateComponent(ctx, component); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateComponent(ctx, otherComponent); err != nil {
+		t.Fatal(err)
+	}
+	release := releaseFixture("evidence-runtime-r1", component.ID, "1.0.0", domain.ReleaseReleased)
+	otherRelease := releaseFixture("evidence-other-r1", otherComponent.ID, "1.0.0", domain.ReleaseReleased)
+	if err := s.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateComponentRelease(ctx, otherRelease); err != nil {
+		t.Fatal(err)
+	}
+	inventory, _ := json.Marshal(map[string]any{"all": map[string]any{"hosts": map[string]any{}}})
+	environment := domain.Environment{ID: "evidence-lab", Name: "Evidence Lab", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
+	environmentRevision := domain.EnvironmentRevision{ID: "evidence-lab-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: testNow}
+	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
+		t.Fatal(err)
+	}
+	scenario := domain.Scenario{ID: "evidence-scenario", Slug: "evidence-scenario", Name: "Evidence Scenario", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
+	revision := domain.ScenarioRevision{ID: "evidence-scenario-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, CreatedAt: testNow}
+	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
+		t.Fatal(err)
+	}
+
+	create := func(run domain.Run) {
+		t.Helper()
+		if err := s.CreateRun(ctx, run, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := domain.Run{RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+	componentRun := base
+	componentRun.ID, componentRun.Kind, componentRun.Status, componentRun.ComponentReleaseID = "evidence-component", domain.RunComponentTest, domain.RunSucceeded, release.ID
+	create(componentRun)
+	scenarioTest := base
+	scenarioTest.ID, scenarioTest.Kind, scenarioTest.Status, scenarioTest.RequestedBy, scenarioTest.ScenarioRevisionID, scenarioTest.CreatedAt = "evidence-scenario-test", domain.RunScenarioTest, domain.RunFailed, "scenario-owner-a", revision.ID, testNow.Add(time.Minute)
+	scenarioTest.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": otherRelease.ID}}}
+	create(scenarioTest)
+	scenarioRun := base
+	scenarioRun.ID, scenarioRun.Kind, scenarioRun.Status, scenarioRun.RequestedBy, scenarioRun.ScenarioRevisionID, scenarioRun.CreatedAt = "evidence-scenario-run", domain.RunScenario, domain.RunCancelled, "scenario-owner-a", revision.ID, testNow.Add(2*time.Minute)
+	scenarioRun.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}
+	create(scenarioRun)
+	unrelated := base
+	unrelated.ID, unrelated.Kind, unrelated.Status, unrelated.ComponentReleaseID, unrelated.CreatedAt = "evidence-unrelated", domain.RunComponentTest, domain.RunSucceeded, otherRelease.ID, testNow.Add(3*time.Minute)
+	create(unrelated)
+	rollback := base
+	rollback.ID, rollback.Kind, rollback.Status, rollback.ComponentReleaseID, rollback.CreatedAt = "evidence-rollback", domain.RunEnvironmentRollback, domain.RunSucceeded, release.ID, testNow.Add(4*time.Minute)
+	rollback.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}
+	create(rollback)
+
+	runs, err := s.ListRunsForComponentRelease(ctx, release.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"evidence-scenario-run", "evidence-scenario-test", "evidence-component"}
+	if len(runs) != len(want) {
+		t.Fatalf("release evidence runs=%+v, want ids=%v", runs, want)
+	}
+	for index, id := range want {
+		if runs[index].ID != id {
+			t.Fatalf("release evidence order[%d]=%s, want %s", index, runs[index].ID, id)
+		}
+	}
+}
+
 func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -629,6 +701,11 @@ func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 
 	cloned := got
 	cloned.ID = "release-kube-proxy-clone"
+	cloned.LineID = "line-release-kube-proxy-clone"
+	cloned.LineName = "Independent 1.17.6"
+	cloned.ParentReleaseID = ""
+	cloned.TemplateSourceReleaseID = got.ID
+	cloned.Compatibility = domain.CompatibilityNotApplicable
 	cloned.Version = "1.17.6"
 	cloned.Status = domain.ReleaseDraft
 	cloned.Dependencies[0].ID = "dependency-clone"

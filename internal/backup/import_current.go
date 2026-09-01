@@ -213,10 +213,10 @@ func restoreUsers(ctx context.Context, tx *sql.Tx, catalog Catalog) error {
 
 func restoreDefinitionTables(ctx context.Context, tx *sql.Tx, catalog Catalog, currentGeneration int64) error {
 	tables := catalogTableMap(catalog)
-	for _, name := range []string{"components", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"} {
+	for _, name := range []string{"components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"} {
 		for _, row := range tables[name].Rows {
 			if err := insertTableRow(ctx, tx, tables[name], row); err != nil {
-				if (name == "components" || name == "scenarios") && strings.Contains(err.Error(), "UNIQUE constraint") {
+				if (name == "components" || name == "component_release_lines" || name == "scenarios") && strings.Contains(err.Error(), "UNIQUE constraint") {
 					return &domain.CodedError{Code: "catalog_conflict", Message: "Git Catalog conflicts with an existing component or scenario", Details: map[string]any{"table": name}, Cause: domain.ErrConflict}
 				}
 				return fmt.Errorf("restore %s: %w", name, err)

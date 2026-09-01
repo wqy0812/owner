@@ -252,6 +252,91 @@ func BuildImpactReport(
 	return report
 }
 
+// BuildReleaseImpactReport follows exact Release locks. Publishing an
+// evolution only affects consumers that lock its parent Release; unrelated
+// release lines of the same component are intentionally excluded.
+func BuildReleaseImpactReport(
+	startReleaseID string,
+	components []domain.Component,
+	releases []domain.ComponentRelease,
+	scenarios []domain.Scenario,
+) domain.ImpactReport {
+	componentByID := make(map[string]domain.Component, len(components))
+	releaseByID := make(map[string]domain.ComponentRelease, len(releases))
+	for _, component := range components {
+		componentByID[component.ID] = component
+	}
+	for _, release := range releases {
+		releaseByID[release.ID] = release
+	}
+	start, ok := releaseByID[startReleaseID]
+	if !ok {
+		return domain.ImpactReport{Recipients: []domain.ImpactRecipient{}}
+	}
+	reverse := map[string][]string{}
+	for _, release := range releases {
+		for _, dependency := range release.Dependencies {
+			reverse[dependency.UpstreamReleaseID] = appendUnique(reverse[dependency.UpstreamReleaseID], release.ID)
+		}
+	}
+	type queueItem struct {
+		releaseID string
+		path      []string
+	}
+	queue := []queueItem{{releaseID: startReleaseID, path: []string{start.ComponentID}}}
+	affected := map[string]bool{startReleaseID: true}
+	recipients := map[string]*domain.ImpactRecipient{}
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		for _, downstreamID := range reverse[item.releaseID] {
+			downstream, exists := releaseByID[downstreamID]
+			if !exists {
+				continue
+			}
+			nextPath := append(append([]string(nil), item.path...), downstream.ComponentID)
+			component := componentByID[downstream.ComponentID]
+			if component.OwnerID != "" {
+				recipient := ensureRecipient(recipients, component.OwnerID, domain.RoleComponentOwner)
+				recipient.Paths = appendImpactPath(recipient.Paths, namedPath(nextPath, componentByID))
+			}
+			if !affected[downstreamID] {
+				affected[downstreamID] = true
+				queue = append(queue, queueItem{releaseID: downstreamID, path: nextPath})
+			}
+		}
+	}
+	for _, scenario := range scenarios {
+		matched := false
+		for _, revision := range scenario.Revisions {
+			for _, node := range revision.Graph.Nodes {
+				if affected[node.ReleaseID] {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if matched && scenario.OwnerID != "" {
+			recipient := ensureRecipient(recipients, scenario.OwnerID, domain.RoleScenarioOwner)
+			recipient.ScenarioIDs = appendUnique(recipient.ScenarioIDs, scenario.ID)
+		}
+	}
+	result := domain.ImpactReport{ComponentID: start.ComponentID, Recipients: []domain.ImpactRecipient{}}
+	for _, recipient := range recipients {
+		result.Recipients = append(result.Recipients, *recipient)
+	}
+	sort.Slice(result.Recipients, func(i, j int) bool {
+		if result.Recipients[i].Role != result.Recipients[j].Role {
+			return result.Recipients[i].Role < result.Recipients[j].Role
+		}
+		return result.Recipients[i].UserID < result.Recipients[j].UserID
+	})
+	return result
+}
+
 func ensureRecipient(values map[string]*domain.ImpactRecipient, userID string, role domain.Role) *domain.ImpactRecipient {
 	key := string(role) + ":" + userID
 	if values[key] == nil {

@@ -21,6 +21,13 @@ func (r *RollbackPlanner) bindBackupPlan(ctx context.Context, environmentID, run
 				return err
 			}
 		case domain.ActionRollback:
+			if source := priorSameRunBackupStep(plan.Steps, index, step); source != nil {
+				step.BackupRef = source.BackupRef
+				metadata := *source.Backup
+				step.Backup = &metadata
+				bindBackupVariables(step, "restore", kind != domain.RunScenario && isFinalCleanupStep(plan.Steps, index))
+				continue
+			}
 			installation, err := p.store.GetEnvironmentComponentInstallation(ctx, environmentID, step.ComponentID)
 			if err != nil {
 				if errors.Is(err, domain.ErrNotFound) {
@@ -62,8 +69,28 @@ func (r *RollbackPlanner) bindBackupPlan(ctx context.Context, environmentID, run
 	return nil
 }
 
+func priorSameRunBackupStep(steps []lockedStep, rollbackIndex int, rollback *lockedStep) *lockedStep {
+	expectedReleaseID := rollback.ReleaseID
+	if rollback.FromReleaseID != "" {
+		expectedReleaseID = rollback.FromReleaseID
+	}
+	for index := rollbackIndex - 1; index >= 0; index-- {
+		candidate := &steps[index]
+		if candidate.ComponentID != rollback.ComponentID || candidate.ReleaseID != expectedReleaseID || candidate.Backup == nil || candidate.BackupRef == "" {
+			continue
+		}
+		switch candidate.Action {
+		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
+			return candidate
+		}
+	}
+	return nil
+}
+
 func (r *RollbackPlanner) rebindRetryBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
 	p := r.platform
+	// Rebind every remaining capture step first. A later Rollback must see the
+	// complete retry-local capture set rather than the source Run's metadata.
 	for index := range plan.Steps {
 		switch plan.Steps[index].Action {
 		case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
@@ -71,6 +98,23 @@ func (r *RollbackPlanner) rebindRetryBackupPlan(ctx context.Context, environment
 				return err
 			}
 		}
+	}
+	for index := range plan.Steps {
+		step := &plan.Steps[index]
+		if step.Action != domain.ActionRollback {
+			continue
+		}
+		if source := priorSameRunBackupStep(plan.Steps, index, step); source != nil {
+			step.BackupRef = source.BackupRef
+			metadata := *source.Backup
+			step.Backup = &metadata
+		} else if step.Backup == nil || step.BackupRef == "" {
+			return fmt.Errorf("%w: retry rollback step is missing its locked backup metadata", domain.ErrConflict)
+		}
+		if step.Variables == nil {
+			step.Variables = map[string]any{}
+		}
+		bindBackupVariables(step, "restore", kind != domain.RunScenario && isFinalCleanupStep(plan.Steps, index))
 	}
 	return nil
 }

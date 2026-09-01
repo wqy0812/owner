@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
 )
 
@@ -43,6 +44,9 @@ func (m *Manager) CatalogRestorePlan(ctx context.Context, ref string) (RestorePl
 	if err != nil {
 		return RestorePlan{}, err
 	}
+	if err := validateCatalogReferences(catalog); err != nil {
+		return RestorePlan{}, err
+	}
 	digest, err := m.catalogDigestAt(ctx, ref, catalogBytes, catalog)
 	if err != nil {
 		return RestorePlan{}, err
@@ -64,6 +68,9 @@ func (m *Manager) RestorePlan(ctx context.Context, backupID string) (RestorePlan
 	}
 	catalog, catalogBytes, err := m.catalogAt(ctx, manifest.GitCommit)
 	if err != nil {
+		return RestorePlan{}, err
+	}
+	if err := validateCatalogReferences(catalog); err != nil {
 		return RestorePlan{}, err
 	}
 	digest, err := m.catalogDigestAt(ctx, manifest.GitCommit, catalogBytes, catalog)
@@ -185,7 +192,7 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
 	}
-	order := []string{"users", "components", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
+	order := []string{"users", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -228,16 +235,231 @@ func validateCatalogReferences(catalog Catalog) error {
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
 	}
-	releaseIDs := tableIDs(tables["component_releases"])
-	dependencies := tables["component_dependencies"]
-	for _, row := range dependencies.Rows {
-		for _, column := range []string{"release_id", "upstream_release_id"} {
-			value, _ := row[columnIndex(dependencies.Columns, column)].Value().(string)
-			if !releaseIDs[value] {
-				return fmt.Errorf("Catalog dependency references missing Release %s", value)
+	invalid := func(table, objectID, relation, message string) error {
+		return &domain.CodedError{
+			Code: "catalog_relationship_invalid", Message: message, Cause: domain.ErrInvalid,
+			Details: map[string]any{"table": table, "objectId": objectID, "relation": relation},
+		}
+	}
+	requiredText := func(table TableDump, row []DBCell, column string) (string, error) {
+		cell := row[columnIndex(table.Columns, column)]
+		if cell.Kind != "text" || cell.Text == "" {
+			return "", invalid(table.Name, "", column, fmt.Sprintf("Catalog %s contains an invalid %s", table.Name, column))
+		}
+		return cell.Text, nil
+	}
+	optionalText := func(table TableDump, row []DBCell, column string) (string, error) {
+		cell := row[columnIndex(table.Columns, column)]
+		if cell.Kind == "null" {
+			return "", nil
+		}
+		if cell.Kind != "text" {
+			return "", invalid(table.Name, "", column, fmt.Sprintf("Catalog %s contains an invalid %s", table.Name, column))
+		}
+		return cell.Text, nil
+	}
+
+	componentIDs := tableIDs(tables["components"])
+	type lineRecord struct{ componentID string }
+	lines := map[string]lineRecord{}
+	lineTable := tables["component_release_lines"]
+	for _, row := range lineTable.Rows {
+		id, err := requiredText(lineTable, row, "id")
+		if err != nil {
+			return err
+		}
+		componentID, err := requiredText(lineTable, row, "component_id")
+		if err != nil {
+			return err
+		}
+		if !componentIDs[componentID] {
+			return invalid(lineTable.Name, id, "component_id", fmt.Sprintf("Catalog release line %s references missing Component %s", id, componentID))
+		}
+		lines[id] = lineRecord{componentID: componentID}
+	}
+
+	type releaseRecord struct {
+		id, componentID, lineID, parentID, templateID, status, compatibility, releasedAt string
+	}
+	releaseRecords := map[string]releaseRecord{}
+	releases := tables["component_releases"]
+	for _, row := range releases.Rows {
+		id, err := requiredText(releases, row, "id")
+		if err != nil {
+			return err
+		}
+		componentID, err := requiredText(releases, row, "component_id")
+		if err != nil {
+			return err
+		}
+		lineID, err := requiredText(releases, row, "line_id")
+		if err != nil {
+			return err
+		}
+		parentID, err := optionalText(releases, row, "parent_release_id")
+		if err != nil {
+			return err
+		}
+		templateID, err := optionalText(releases, row, "template_source_release_id")
+		if err != nil {
+			return err
+		}
+		status, err := requiredText(releases, row, "status")
+		if err != nil {
+			return err
+		}
+		compatibility, err := requiredText(releases, row, "compatibility")
+		if err != nil {
+			return err
+		}
+		releasedAt, err := optionalText(releases, row, "released_at")
+		if err != nil {
+			return err
+		}
+		line, found := lines[lineID]
+		if !found {
+			return invalid(releases.Name, id, "line_id", fmt.Sprintf("Catalog Release %s references missing release line %s", id, lineID))
+		}
+		if !componentIDs[componentID] || line.componentID != componentID {
+			return invalid(releases.Name, id, "line_component", fmt.Sprintf("Catalog Release %s does not belong to the Component that owns release line %s", id, lineID))
+		}
+		if status == string(domain.ReleaseDraft) {
+			return invalid(releases.Name, id, "status", fmt.Sprintf("Git Catalog must not contain Draft Release %s", id))
+		}
+		if status != string(domain.ReleaseReleased) && status != string(domain.ReleaseDeprecated) {
+			return invalid(releases.Name, id, "status", fmt.Sprintf("Catalog Release %s has unsupported status %s", id, status))
+		}
+		if status == string(domain.ReleaseReleased) && releasedAt == "" {
+			return invalid(releases.Name, id, "released_at", fmt.Sprintf("Released Catalog Release %s has no publication timestamp", id))
+		}
+		if parentID == "" && compatibility != string(domain.CompatibilityNotApplicable) {
+			return invalid(releases.Name, id, "compatibility", fmt.Sprintf("Catalog baseline Release %s must use not_applicable compatibility", id))
+		}
+		if parentID != "" && compatibility != string(domain.CompatibilityCompatible) && compatibility != string(domain.CompatibilityBreaking) {
+			return invalid(releases.Name, id, "compatibility", fmt.Sprintf("Catalog evolution Release %s must use compatible or breaking compatibility", id))
+		}
+		releaseRecords[id] = releaseRecord{id: id, componentID: componentID, lineID: lineID, parentID: parentID, templateID: templateID, status: status, compatibility: compatibility, releasedAt: releasedAt}
+	}
+
+	retainedSuccessors := map[string]string{}
+	for _, release := range releaseRecords {
+		if release.parentID != "" {
+			parent, found := releaseRecords[release.parentID]
+			if !found {
+				return invalid(releases.Name, release.id, "parent_release_id", fmt.Sprintf("Catalog Release %s references missing parent %s", release.id, release.parentID))
+			}
+			if parent.id == release.id || parent.componentID != release.componentID || parent.lineID != release.lineID {
+				return invalid(releases.Name, release.id, "parent_release_id", fmt.Sprintf("Catalog Release %s parent must be a different Release in the same Component and release line", release.id))
+			}
+			if release.status == string(domain.ReleaseReleased) || release.releasedAt != "" {
+				if prior := retainedSuccessors[release.parentID]; prior != "" && prior != release.id {
+					return invalid(releases.Name, release.id, "parent_release_id", fmt.Sprintf("Catalog parent Release %s has multiple retained successors", release.parentID))
+				}
+				retainedSuccessors[release.parentID] = release.id
+			}
+		}
+		if release.templateID != "" {
+			template, found := releaseRecords[release.templateID]
+			if !found {
+				return invalid(releases.Name, release.id, "template_source_release_id", fmt.Sprintf("Catalog Release %s references missing template source %s", release.id, release.templateID))
+			}
+			if template.id == release.id || template.componentID != release.componentID {
+				return invalid(releases.Name, release.id, "template_source_release_id", fmt.Sprintf("Catalog Release %s template source must be a different Release of the same Component", release.id))
 			}
 		}
 	}
+	for id := range releaseRecords {
+		seen := map[string]bool{}
+		for current := id; current != ""; current = releaseRecords[current].parentID {
+			if seen[current] {
+				return invalid(releases.Name, id, "parent_release_id", fmt.Sprintf("Catalog Release %s belongs to a cyclic parent chain", id))
+			}
+			seen[current] = true
+		}
+	}
+
+	dependencies := tables["component_dependencies"]
+	for _, row := range dependencies.Rows {
+		id, err := requiredText(dependencies, row, "id")
+		if err != nil {
+			return err
+		}
+		releaseID, err := requiredText(dependencies, row, "release_id")
+		if err != nil {
+			return err
+		}
+		upstreamComponentID, err := requiredText(dependencies, row, "upstream_component_id")
+		if err != nil {
+			return err
+		}
+		upstreamReleaseID, err := requiredText(dependencies, row, "upstream_release_id")
+		if err != nil {
+			return err
+		}
+		if _, found := releaseRecords[releaseID]; !found {
+			return invalid(dependencies.Name, id, "release_id", fmt.Sprintf("Catalog dependency %s references missing Release %s", id, releaseID))
+		}
+		upstream, found := releaseRecords[upstreamReleaseID]
+		if !found || upstream.componentID != upstreamComponentID {
+			return invalid(dependencies.Name, id, "upstream_release_id", fmt.Sprintf("Catalog dependency %s upstream Release does not belong to Component %s", id, upstreamComponentID))
+		}
+	}
+
+	actions := tables["action_definitions"]
+	for _, row := range actions.Rows {
+		id, err := requiredText(actions, row, "id")
+		if err != nil {
+			return err
+		}
+		releaseID, err := requiredText(actions, row, "release_id")
+		if err != nil {
+			return err
+		}
+		kind, err := requiredText(actions, row, "kind")
+		if err != nil {
+			return err
+		}
+		fromID, err := optionalText(actions, row, "from_release_id")
+		if err != nil {
+			return err
+		}
+		toID, err := optionalText(actions, row, "to_release_id")
+		if err != nil {
+			return err
+		}
+		owner, found := releaseRecords[releaseID]
+		if !found {
+			return invalid(actions.Name, id, "release_id", fmt.Sprintf("Catalog Action %s references missing Release %s", id, releaseID))
+		}
+		for _, endpoint := range []struct{ name, id string }{{"from_release_id", fromID}, {"to_release_id", toID}} {
+			if endpoint.id == "" {
+				continue
+			}
+			target, found := releaseRecords[endpoint.id]
+			if !found || target.componentID != owner.componentID || target.lineID != owner.lineID {
+				return invalid(actions.Name, id, endpoint.name, fmt.Sprintf("Catalog Action %s endpoint %s must be a Release in the same Component and release line", id, endpoint.id))
+			}
+		}
+		switch domain.ActionKind(kind) {
+		case domain.ActionUpgrade:
+			if owner.parentID == "" || fromID != owner.parentID || toID != owner.id {
+				return invalid(actions.Name, id, "transition", fmt.Sprintf("Catalog Upgrade Action %s must point from its parent to its owning Release", id))
+			}
+		case domain.ActionRollback:
+			if owner.parentID == "" {
+				if fromID != "" || toID != "" {
+					return invalid(actions.Name, id, "transition", fmt.Sprintf("Catalog baseline Rollback Action %s must not bind cross-Release endpoints", id))
+				}
+			} else if fromID != owner.id || toID != owner.parentID {
+				return invalid(actions.Name, id, "transition", fmt.Sprintf("Catalog Rollback Action %s must point from its owning Release to its parent", id))
+			}
+		default:
+			if fromID != "" || toID != "" {
+				return invalid(actions.Name, id, "transition", fmt.Sprintf("Catalog non-transition Action %s must not bind Release endpoints", id))
+			}
+		}
+	}
+
 	revisions := tables["scenario_revisions"]
 	graphIndex := columnIndex(revisions.Columns, "graph_json")
 	for _, row := range revisions.Rows {
@@ -251,8 +473,8 @@ func validateCatalogReferences(catalog Catalog) error {
 			return fmt.Errorf("Catalog scenario graph is invalid: %w", err)
 		}
 		for _, node := range graph.Nodes {
-			if !releaseIDs[node.ReleaseID] {
-				return fmt.Errorf("Catalog scenario references missing Release %s", node.ReleaseID)
+			if _, found := releaseRecords[node.ReleaseID]; !found {
+				return invalid(revisions.Name, "", "graph_json", fmt.Sprintf("Catalog scenario references missing Release %s", node.ReleaseID))
 			}
 		}
 	}

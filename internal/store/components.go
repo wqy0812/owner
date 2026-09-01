@@ -110,7 +110,42 @@ func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRe
 }
 
 func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentRelease) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,version,status,release_notes,breaking,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.Version, r.Status, r.ReleaseNotes, r.Breaking, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	if r.ParentReleaseID == "" && r.LineID == "" {
+		for _, action := range r.Actions {
+			parentID := ""
+			if action.Kind == domain.ActionUpgrade && action.ToReleaseID == r.ID {
+				parentID = action.FromReleaseID
+			} else if action.Kind == domain.ActionRollback && action.FromReleaseID == r.ID {
+				parentID = action.ToReleaseID
+			}
+			if parentID == "" {
+				continue
+			}
+			var componentID, lineID, lineName string
+			if err := tx.QueryRowContext(ctx, `SELECT r.component_id,r.line_id,l.name FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.id=?`, parentID).Scan(&componentID, &lineID, &lineName); err == nil && componentID == r.ComponentID {
+				r.ParentReleaseID, r.TemplateSourceReleaseID = parentID, parentID
+				r.LineID, r.LineName = lineID, lineName
+				break
+			}
+		}
+	}
+	if r.LineID == "" {
+		r.LineID = "line-" + r.ID
+	}
+	if r.LineName == "" {
+		r.LineName = r.Version
+	}
+	if r.Compatibility == "" {
+		if r.ParentReleaseID != "" {
+			r.Compatibility = domain.CompatibilityCompatible
+		} else {
+			r.Compatibility = domain.CompatibilityNotApplicable
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, r.LineID, r.ComponentID, r.LineName, timeText(r.CreatedAt)); err != nil {
+		return mapSQLError(err)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -151,7 +186,7 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,breaking=?,candidate=?,risk_level=?,environment_constraints_json=?,parameters_json=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Breaking, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=?,risk_level=?,environment_constraints_json=?,parameters_json=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -210,7 +245,7 @@ func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.Comp
 }
 
 func getComponentRelease(ctx context.Context, q queryer, id string) (domain.ComponentRelease, error) {
-	row := q.QueryRowContext(ctx, `SELECT id,component_id,version,status,release_notes,breaking,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE id=?`, id)
+	row := q.QueryRowContext(ctx, `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.id=?`, id)
 	r, err := scanRelease(row)
 	if err != nil {
 		return r, mapSQLError(err)
@@ -263,11 +298,12 @@ type scanner interface{ Scan(...any) error }
 
 func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var r domain.ComponentRelease
-	var breaking, candidate int
+	var candidate int
 	var constraints, parameters, created string
-	var released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Status, &r.ReleaseNotes, &breaking, &candidate, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
-	r.Breaking = breaking != 0
+	var parent, template, released, deprecated sql.NullString
+	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
+	r.ParentReleaseID = parent.String
+	r.TemplateSourceReleaseID = template.String
 	r.Candidate = candidate != 0
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	r.Parameters = decodeJSON(parameters, []domain.ParameterDefinition{})
@@ -278,11 +314,11 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 }
 
 func (s *Store) ListComponentReleases(ctx context.Context, componentID string, releasedOnly bool) ([]domain.ComponentRelease, error) {
-	q := `SELECT id,component_id,version,status,release_notes,breaking,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=?`
+	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=?`
 	if releasedOnly {
-		q += ` AND status='released'`
+		q += ` AND r.status='released'`
 	}
-	q += ` ORDER BY created_at DESC`
+	q += ` ORDER BY r.created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, componentID)
 	if err != nil {
 		return nil, err
@@ -327,7 +363,7 @@ func (s *Store) listVisibleComponentReleases(ctx context.Context, componentID st
 	if ownerView {
 		return s.ListComponentReleases(ctx, componentID, false)
 	}
-	q := `SELECT id,component_id,version,status,release_notes,breaking,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at FROM component_releases WHERE component_id=? AND (status='released' OR (status='draft' AND candidate=1)) ORDER BY created_at DESC`
+	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=? AND (r.status='released' OR (r.status='draft' AND r.candidate=1)) ORDER BY r.created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, componentID)
 	if err != nil {
 		return nil, err
@@ -432,15 +468,7 @@ WHERE id=?
 	    WHERE runs.scenario_revision_id IS NOT NULL
 	    AND runs.kind IN ('scenario_test','scenario_run')
 	    AND json_extract(step.value, '$.releaseId')=component_releases.id
-	)
-	AND (
-	  component_releases.status<>'draft'
-	  OR NOT EXISTS (
-	    SELECT 1 FROM runs
-	    WHERE runs.kind='component_test'
-	      AND runs.component_release_id=component_releases.id
-	      AND runs.status IN ('awaiting_approval','queued','running')
-	  )
+	    AND component_releases.status='released'
 	)`, timeText(at), id)
 	if err != nil {
 		return err
@@ -448,23 +476,186 @@ WHERE id=?
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		_ = tx.Rollback()
-		if count, countErr := s.CountScenarioRunsForComponentRelease(ctx, id); countErr != nil {
-			return countErr
-		} else if count > 0 {
-			return fmt.Errorf("%w: component release is retained by %d scenario run(s)", domain.ErrConflict, count)
-		}
 		var status domain.ReleaseStatus
 		if statusErr := s.db.QueryRowContext(ctx, `SELECT status FROM component_releases WHERE id=?`, id).Scan(&status); statusErr != nil {
 			return mapSQLError(statusErr)
 		}
-		if status == domain.ReleaseDraft {
-			if active, activeErr := s.HasActiveComponentTest(ctx, id); activeErr != nil {
-				return activeErr
-			} else if active {
-				return fmt.Errorf("%w: wait for the active component test before deprecating this draft", domain.ErrConflict)
+		if status == domain.ReleaseReleased {
+			if count, countErr := s.CountScenarioRunsForComponentRelease(ctx, id); countErr != nil {
+				return countErr
+			} else if count > 0 {
+				return fmt.Errorf("%w: component release is retained by %d scenario run(s)", domain.ErrConflict, count)
 			}
 		}
 		return fmt.Errorf("%w: only draft or released versions can be deprecated", domain.ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RestoreDeprecatedComponentRelease returns a never-published deprecated
+// Release to Draft. The checks mirror the partial unique indexes so callers
+// receive an actionable conflict instead of a raw SQLite constraint error.
+func (s *Store) RestoreDeprecatedComponentRelease(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status domain.ReleaseStatus
+	var lineID string
+	var parentReleaseID sql.NullString
+	var releasedAt sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status,line_id,parent_release_id,released_at FROM component_releases WHERE id=?`, id).Scan(&status, &lineID, &parentReleaseID, &releasedAt); err != nil {
+		return mapSQLError(err)
+	}
+	if status != domain.ReleaseDeprecated || releasedAt.Valid {
+		return fmt.Errorf("%w: only never-published deprecated releases can be restored", domain.ErrConflict)
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_releases WHERE line_id=? AND id<>? AND status='draft'`, lineID, id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: release line already has an active draft", domain.ErrConflict)
+	}
+	if parentReleaseID.Valid {
+		if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM component_releases
+WHERE parent_release_id=? AND id<>?
+  AND (status IN ('draft','released') OR released_at IS NOT NULL)`, parentReleaseID.String, id).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: parent release already has another successor", domain.ErrConflict)
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE component_releases
+SET status='draft',candidate=0,deprecated_at=NULL,publication_generation=publication_generation+1
+WHERE id=? AND status='deprecated' AND released_at IS NULL`, id)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: release lifecycle changed; refresh and retry", domain.ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type ComponentReleaseDeletionImpact struct {
+	RunCount                  int
+	ImageBuildCount           int
+	DownstreamDependencyCount int
+	ScenarioReferenceCount    int
+	ReleaseReferenceCount     int
+	ActionReferenceCount      int
+	InstallationCount         int
+}
+
+func (impact ComponentReleaseDeletionImpact) ReferenceCount() int {
+	return impact.DownstreamDependencyCount + impact.ScenarioReferenceCount + impact.ReleaseReferenceCount + impact.ActionReferenceCount + impact.InstallationCount
+}
+
+func componentReleaseDeletionImpact(ctx context.Context, q queryer, id string) (ComponentReleaseDeletionImpact, error) {
+	var impact ComponentReleaseDeletionImpact
+	err := q.QueryRowContext(ctx, `
+SELECT
+  (SELECT COUNT(DISTINCT r.id) FROM runs r
+   WHERE r.component_release_id=?
+      OR (r.kind IN ('scenario_test','scenario_run') AND EXISTS (
+        SELECT 1 FROM json_each(r.input_snapshot_json, '$.steps') step
+        WHERE json_extract(step.value, '$.releaseId')=?
+      ))),
+  (SELECT COUNT(*) FROM component_image_builds WHERE release_id=?),
+  (SELECT COUNT(*) FROM component_dependencies WHERE upstream_release_id=?),
+  (SELECT COUNT(*) FROM scenario_revisions sr
+   WHERE EXISTS (
+     SELECT 1 FROM json_each(sr.graph_json, '$.nodes') node
+     WHERE json_extract(node.value, '$.releaseId')=?
+   )),
+  (SELECT COUNT(*) FROM component_releases
+   WHERE id<>? AND (parent_release_id=? OR template_source_release_id=?)),
+  (SELECT COUNT(*) FROM action_definitions
+   WHERE release_id<>? AND (from_release_id=? OR to_release_id=?)),
+  (SELECT COUNT(*) FROM environment_component_installations WHERE release_id=?)`,
+		id, id, id, id, id, id, id, id, id, id, id, id,
+	).Scan(
+		&impact.RunCount,
+		&impact.ImageBuildCount,
+		&impact.DownstreamDependencyCount,
+		&impact.ScenarioReferenceCount,
+		&impact.ReleaseReferenceCount,
+		&impact.ActionReferenceCount,
+		&impact.InstallationCount,
+	)
+	return impact, err
+}
+
+func (s *Store) ComponentReleaseDeletionImpact(ctx context.Context, id string) (ComponentReleaseDeletionImpact, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_releases WHERE id=?`, id).Scan(&exists); err != nil {
+		return ComponentReleaseDeletionImpact{}, err
+	}
+	if exists == 0 {
+		return ComponentReleaseDeletionImpact{}, domain.ErrNotFound
+	}
+	return componentReleaseDeletionImpact(ctx, s.db, id)
+}
+
+// DeleteComponentRelease permanently removes only a never-published Release
+// that has already been deprecated and has no retained execution or reference
+// evidence. Owned Draft content is cascaded; the audit event remains.
+func (s *Store) DeleteComponentRelease(ctx context.Context, id string, audit domain.AuditEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status domain.ReleaseStatus
+	var lineID string
+	var releasedAt sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status,line_id,released_at FROM component_releases WHERE id=?`, id).Scan(&status, &lineID, &releasedAt); err != nil {
+		return mapSQLError(err)
+	}
+	if status != domain.ReleaseDeprecated || releasedAt.Valid {
+		return fmt.Errorf("%w: only never-published deprecated releases can be permanently deleted", domain.ErrConflict)
+	}
+	impact, err := componentReleaseDeletionImpact(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if impact.RunCount > 0 {
+		return fmt.Errorf("%w: component release run history must be retained", domain.ErrConflict)
+	}
+	if impact.ImageBuildCount > 0 {
+		return fmt.Errorf("%w: component release image build history must be retained", domain.ErrConflict)
+	}
+	if impact.ReferenceCount() > 0 {
+		return fmt.Errorf("%w: component release is still referenced", domain.ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM run_input_presets WHERE resource_type='component_release' AND resource_id=?`, id); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM component_releases WHERE id=?`, id)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM component_release_lines WHERE id=? AND NOT EXISTS (SELECT 1 FROM component_releases WHERE line_id=?)`, lineID, lineID); err != nil {
+		return mapSQLError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, audit.ID, audit.ActorID, audit.Action, audit.ResourceType, audit.ResourceID, jsonText(audit.Metadata), timeText(audit.CreatedAt)); err != nil {
+		return mapSQLError(err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=generation+1 WHERE id=1`); err != nil {
 		return err
@@ -547,4 +738,60 @@ func (s *Store) LatestReleasedVersion(ctx context.Context, componentID string) (
 	var version string
 	err := s.db.QueryRowContext(ctx, `SELECT version FROM component_releases WHERE component_id=? AND status='released' ORDER BY released_at DESC LIMIT 1`, componentID).Scan(&version)
 	return version, mapSQLError(err)
+}
+
+func (s *Store) LatestReleasedInLine(ctx context.Context, lineID string) (domain.ComponentRelease, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM component_releases WHERE line_id=? AND status='released' ORDER BY released_at DESC,created_at DESC LIMIT 1`, lineID).Scan(&id)
+	if err != nil {
+		return domain.ComponentRelease{}, mapSQLError(err)
+	}
+	return s.GetComponentRelease(ctx, id)
+}
+
+func (s *Store) LatestPublishedInLine(ctx context.Context, lineID string) (domain.ComponentRelease, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM component_releases WHERE line_id=? AND released_at IS NOT NULL ORDER BY released_at DESC,created_at DESC LIMIT 1`, lineID).Scan(&id)
+	if err != nil {
+		return domain.ComponentRelease{}, mapSQLError(err)
+	}
+	return s.GetComponentRelease(ctx, id)
+}
+
+func (s *Store) HasRetainedSuccessor(ctx context.Context, parentReleaseID string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM component_releases
+		WHERE parent_release_id=? AND (status IN ('draft','released') OR released_at IS NOT NULL)
+	)`, parentReleaseID).Scan(&exists)
+	return exists != 0, err
+}
+
+func (s *Store) HasActiveDraftInLine(ctx context.Context, lineID string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM component_releases WHERE line_id=? AND status='draft')`, lineID).Scan(&exists)
+	return exists != 0, err
+}
+
+func (s *Store) GetReleaseLine(ctx context.Context, lineID string) (domain.ComponentReleaseLine, error) {
+	var line domain.ComponentReleaseLine
+	var created string
+	err := s.db.QueryRowContext(ctx, `SELECT id,component_id,name,created_at FROM component_release_lines WHERE id=?`, lineID).Scan(&line.ID, &line.ComponentID, &line.Name, &created)
+	if err != nil {
+		return line, mapSQLError(err)
+	}
+	line.CreatedAt = parseTime(created)
+	return line, nil
+}
+
+func (s *Store) RenameReleaseLine(ctx context.Context, lineID, componentID, name string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE component_release_lines SET name=? WHERE id=? AND component_id=?`, name, lineID, componentID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	updated, _ := res.RowsAffected()
+	if updated == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }

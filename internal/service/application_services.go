@@ -43,6 +43,7 @@ type environmentStore interface {
 
 type executionStore interface {
 	ListRuns(context.Context, domain.User) ([]domain.Run, error)
+	ListRunsForComponentRelease(context.Context, string) ([]domain.Run, error)
 	ListRunSteps(context.Context, string) ([]domain.RunStep, error)
 	GetApprovalByRun(context.Context, string) (domain.Approval, error)
 	GetRun(context.Context, string) (domain.Run, error)
@@ -161,6 +162,20 @@ func (s *EnvironmentService) LatestSSHCheck(ctx context.Context, environmentID s
 
 func (s *ExecutionService) ListRuns(ctx context.Context, user domain.User) ([]domain.Run, error) {
 	return s.store.ListRuns(ctx, user)
+}
+func (s *ExecutionService) ListRunsForComponentRelease(ctx context.Context, user domain.User, releaseID string) ([]domain.Run, error) {
+	release, err := s.store.GetComponentRelease(ctx, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	component, err := s.store.GetComponent(ctx, release.ComponentID, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+		return nil, err
+	}
+	return s.store.ListRunsForComponentRelease(ctx, releaseID)
 }
 func (s *ExecutionService) ListRunSteps(ctx context.Context, runID string) ([]domain.RunStep, error) {
 	return s.store.ListRunSteps(ctx, runID)

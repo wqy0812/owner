@@ -113,8 +113,13 @@ func TestValidateReleaseTransitionContractsLocksDirectionAndExecutablePlaybooks(
 	if err := database.CreateComponentRelease(context.Background(), previous); err != nil {
 		t.Fatal(err)
 	}
+	previous, err := database.GetComponentRelease(context.Background(), previous.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	current := domain.ComponentRelease{
-		ID: "release-new", ComponentID: "component-1", Version: "2.0.0", Status: domain.ReleaseDraft,
+		ID: "release-new", ComponentID: "component-1", LineID: previous.LineID, ParentReleaseID: previous.ID,
+		Compatibility: domain.CompatibilityCompatible, Version: "2.0.0", Status: domain.ReleaseDraft,
 		Actions: []domain.ActionDefinition{
 			{Name: "upgrade", Kind: domain.ActionUpgrade, Playbook: "upgrade.yml", FromReleaseID: previous.ID, ToReleaseID: "release-new"},
 			{Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", FromReleaseID: "release-new", ToReleaseID: previous.ID},

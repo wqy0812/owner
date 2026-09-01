@@ -106,21 +106,22 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '搜索名称或标识 / 全部 / 我负责的 / 有 Draft / 待处理', purpose: '快速定位组件或仅查看需要 Owner 处理的对象。', availability: '所有用户；Owner 筛选按当前身份生效', result: '只筛选目录，不修改组件。' },
       { label: '组件条目', purpose: '选择组件并读取 Release 列表。', availability: '所有用户', result: '切换详情；编辑 Draft 时其他条目会禁用。' },
       { label: '编辑组件 / 保存组件', purpose: '修改名称、标识、分类和说明。', availability: '组件 Owner 且拥有该组件', result: '保存组件元数据，不修改已发布 Release。' },
-      { label: '创建 Draft 编辑合同 / 创建 Draft', purpose: '从现有版本克隆或创建可编辑版本。', availability: '组件 Owner 且没有可编辑 Draft 时', result: '创建新 Draft；Released Release 保持不可变。' },
-      { label: '新建空白 Draft', purpose: '为已有组件创建不继承任何合同或文件的新版本。', availability: '组件 Owner 且拥有该组件', result: '创建独立 Draft，不复制依赖、参数、Action、Playbook、介质或镜像。' },
+      { label: '创建 Draft / 全新发布线 / 基于现有发布线演进', purpose: '明确创建独立安装基线，或从一条发布线的最新 Released 版本继续演进。', availability: '组件 Owner；目标发布线没有有效 Draft', result: '预览确认后创建 Draft；Released Release 保持不可变。' },
+      { label: '空白创建 / 复制现有版本', purpose: '为全新发布线选择空白基线或可编辑模板。', availability: '创建全新发布线时', result: '复制只保留合同、Playbook、介质和镜像模板；清除 Upgrade 与 Rollback 的旧版本绑定，不建立升级关系。' },
       { label: '批量导入 / 预检并导入', purpose: '从 JSON 模板批量录入细粒度组件、Draft、依赖和独立 Playbook；Action 按文件名严格绑定模板内文件。', availability: '组件 Owner；全部条目、依赖 DAG 和文件引用必须先通过校验', result: '组件、Draft、托管文件和审计记录整批生效或整批失败；不会自动验证、加入候选集或发布。' },
     ],
   },
   {
     page: 'Release 合同与生命周期', path: '/components', description: '先选 Release，再根据其状态进行查看、编辑、环境验证、发布或废弃。', entries: [
-      { label: 'Release 版本行', purpose: '选择该版本的依赖和参数合同。', availability: '所有用户', result: '只切换当前查看版本。' },
+      { label: '发布线 / Release 版本行', purpose: '按独立发布线查看版本，并选择具体合同。', availability: '所有用户', result: '只切换当前查看版本；不会把不同发布线解释为升级关系。' },
       { label: 'Draft 发布就绪度 / 编辑合同 / 配置动作 / 构建镜像 / 管理介质', purpose: '汇总发布阻断项并进入对应处理入口。', availability: '组件 Owner 自有 Draft', result: '卡片本身只汇总状态；具体写操作仍需在后续表单确认。' },
       { label: '查看详情 / 关闭', purpose: '只读查看版本信息、环境约束、参数、依赖、生命周期动作和 Playbook。', availability: '所有可见 Release', result: '不修改 Release 或 Playbook。' },
+      { label: 'Run 证据 / 关闭', purpose: '查看当前 Release 的组件验证历史，以及按场景聚合的完整测试和正式运行记录。', availability: '组件 Owner 自有 Release', result: '只读展示不可变 Run 证据；展开场景后可进入运行中心查看每次执行的步骤与日志。' },
       { label: '配置合同 / 编辑依赖和参数 / 编辑', purpose: '编辑 Draft 的参数与精确依赖映射。', availability: '组件 Owner 自有 Draft', result: '打开合同编辑器；需“保存依赖和参数”才写入。' },
       { label: '编辑可见性与映射', purpose: '从合同查看弹窗转入 Draft 编辑。', availability: '当前 Release 可编辑时', result: '关闭只读视图并打开编辑器。' },
       { label: '保存依赖和参数', purpose: '保存 Draft 参数、依赖及公开参数映射。', availability: '合同编辑器校验通过', result: '更新 Draft，并使相关旧测试证据失效。' },
       { label: '加入候选集 / 撤回候选', purpose: '把已完成交付证据的 Draft 交给场景 Owner 编排，或停止新的候选引用。', availability: '组件 Owner 自有 Draft；加入时必须满足当前合同的生命周期、安装验证和回退证据', result: '候选 Draft 可随场景 Revision 原子发布；Draft 再次编辑会自动撤回候选状态。' },
-      { label: '发布 / 确认发布并通知', purpose: '预览下游影响并发布不可变 Release。', availability: '组件 Owner 自有 Draft 且满足发布校验', result: 'Release 进入 Released，并为受影响 Owner 创建通知。' },
+      { label: '发布 / 确认发布', purpose: '预览影响并发布不可变 Release。', availability: '组件 Owner 自有 Draft 且满足发布校验', result: '全新基线不通知；演进版本只通知精确锁定父 Release 的受影响 Owner。' },
       { label: '废弃草稿 / 废弃 / 确认废弃', purpose: '预览影响后撤销候选 Draft 或停止把旧 Release 作为推荐版本。', availability: '组件 Owner 自有 Draft 或已发布 Release；活动测试中的 Draft，以及已被场景 Run 锁定的版本不可废弃', result: '确认后状态变为已废弃并保留历史引用、Playbook 与介质。' },
     ],
   },
@@ -137,12 +138,15 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '添加 / 清空全部 / 删除 CredentialRef', purpose: '声明动作所需的凭据引用名称。', availability: 'Draft 编辑器', result: '只保存引用名，不读取或展示实际 Secret。' },
       { label: '新增参数 / 删除参数 / 新增依赖 / 删除依赖 / 增加映射 / 删除映射', purpose: '维护参数合同和精确依赖传值。', availability: 'Draft 编辑器', result: '改变尚未提交的 Draft 表单。' },
       { label: '保存 Draft', purpose: '提交版本、约束、动作和合同。', availability: '校验通过且 Playbook 无未保存内容', result: '更新 Draft；不会改写 Released Release。' },
+      { label: '废弃草稿', purpose: '停止继续维护尚未发布的 Draft。', availability: '组件 Owner 自有 Draft', result: '进入可恢复的 Deprecated 状态；合同与证据不删除。' },
+      { label: '恢复 Draft', purpose: '继续维护此前废弃的未发布 Release。', availability: '从未发布的 Deprecated Release，且发布线没有冲突 Draft/后继', result: '恢复为 Draft；后端重新检查发布线唯一性。' },
+      { label: '永久删除', purpose: '清理不再需要的未发布 Release。', availability: '从未发布且已废弃，并且没有 Run、构建、引用或安装记录', result: '确认后永久删除 Release 自有内容和个人预设，保留审计；不可恢复。' },
     ],
   },
   {
     page: '组件测试与镜像构建', path: '/components', description: '预览成功前不能提交测试；回滚合同与 verify 目标相互独立。', entries: [
-      { label: '环境验证', purpose: '打开安装验证或回退验证，并明确提示是否会修改环境。', availability: '具备可执行动作的 Release', result: '只打开表单，不创建 Run。' },
-      { label: '验证模式 / 回退验证策略 / verify 目标 Release / 目标环境', purpose: '明确运行类型、可选 verify 基线和环境。', availability: '组件环境验证弹窗', result: '任一选择变化都会使旧执行计划失效。' },
+      { label: '环境验证', purpose: '为新基线执行安装或清理回退验证，为演进版本执行完整升级回退闭环。', availability: '具备可执行动作的 Release', result: '只打开表单，不创建 Run。' },
+      { label: '验证模式 / 回退验证策略 / 目标环境', purpose: '明确运行类型和环境；演进闭环自动锁定父版本与目标版本。', availability: '组件环境验证弹窗', result: '任一选择变化都会使旧执行计划失效。' },
       { label: '预览执行计划 / 刷新执行计划', purpose: '由服务端校验并返回完整步骤和 planDigest。', availability: '必填项完整', result: '不创建 Run、Approval 或审计执行记录。' },
       { label: '确认提交安装验证 / 确认提交回退验证', purpose: '按已确认计划创建 Run。', availability: '预览成功且计划仍有效', result: '创建 Run；破坏性动作进入环境 Owner 审批。' },
       { label: '构建镜像', purpose: '为 Draft 上传 Dockerfile 并查看构建。', availability: '组件 Owner 自有 Draft', result: '打开镜像构建弹窗。' },
@@ -238,7 +242,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 ### 1. 创建组件与 Draft
 
 1. 在 **组件** 页面新建组件，填写名称、标识、说明和 L1-L6 分类。
-2. 点击 **创建 Draft 编辑合同**；已有版本时会复制当前合同，新组件则从空 Draft 开始。
+2. 点击 **创建 Draft**，明确选择 **全新发布线** 或 **基于现有发布线演进**。全新发布线需要命名，可空白创建或复制一个同组件历史版本作为模板；复制不建立升级关系。演进只能选择该线最新 Released 版本，并声明兼容升级或破坏性升级。
 3. 只有组件 Owner 能修改自己拥有的组件和 Draft。
 4. 需要批量录入时使用 **批量导入**；点击 **预检并导入** 后，组件、Draft 和 Playbook 整批生效或整批失败，成功后仍要逐个完成环境验证与候选交接。
 
@@ -247,22 +251,22 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 - 使用结构化表单设置操作系统、版本、Docker 版本等环境约束，以及参数、依赖和 Ansible 生命周期动作。
 - 直接发布时依赖必须锁定已发布的上游 Release；候选链应由场景 Revision 一并编排和原子发布。下游只能映射上游的公开参数。
 - 密码、Token、私钥等不能写进参数或动作 JSON，只能声明所需的 CredentialRef。
-- install 可显式声明为幂等并复用于 upgrade；正式发布仍必须定义 install、verify、rollback。
+- install 可显式声明为幂等并复用于 upgrade。全新基线需要 install、verify 和无版本绑定的清理型 rollback；演进版本需要显式 upgrade 或幂等 install，以及精确回到父版本的 rollback。
 - 分层用于目录展示；真正的执行先后由依赖关系和场景 DAG 决定。
 
 ### 3. 在共享环境测试
 
 1. 需要镜像时先构建镜像；需要离线介质时通过 **组件介质** 上传或登记，并校验 SHA-256。
-2. 选择 Draft，点击 **环境验证**，选择安装验证或回退验证及共享环境。
+2. 选择 Draft，点击 **环境验证**。全新基线分别完成安装验证和清理回退验证；演进版本执行“父版本安装与验证 → 目标升级与验证 → 回退 → 父版本验证”的单次锁定闭环。
 3. 补齐运行输入和依赖 Fixture，提交后到 **运行** 页面查看步骤与脱敏日志。
 4. 来源仓库与目标环境不一致时，Run 会要求目标环境 Owner 审批平移；Draft 再次保存后旧测试证据失效。
 
 ### 4. 发布与维护
 
-1. 当前合同必须已完成 install + verify 的安装验证，并具备相同规格摘要下的 rollback + verify 回退证据；带 clusterforge.rollback-self-verifies 标签的卸载型 rollback 可用其 Playbook 内严格后置验证形成等价证据；Draft 再次保存后旧证据失效。
-2. 独立直接发布前，所有上游依赖必须已经 Released；打开影响预览并用 **确认发布并通知** 提交。
+1. 全新基线必须完成 install + verify 与清理型 rollback 证据；演进版本必须完成同一锁定计划的完整升级回退闭环。Draft 再次保存后旧证据失效。
+2. 独立直接发布前，所有上游依赖必须已经 Released。全新基线的预览会明确“不替换现有锁定版本”且不发送通知；演进版本只沿父 Release ID 的精确依赖链通知受影响 Owner。
 3. 一组相互依赖的 Draft 应先逐个 **加入候选集**，由场景 Owner 编排、测试，再随 Scenario Revision 原子发布；不再交接时使用 **撤回候选**。
-4. 后续变更请创建新 Draft；不再使用且没有被场景 Run 锁定的 Released Release 可废弃，但不会删除历史。
+4. 未发布 Draft 可随时废弃；废弃后可恢复为 Draft，或在没有 Run、构建、引用和安装记录时永久删除。Released Release 可废弃但永不物理删除。
 
 ### 5. 前台版本更新时
 

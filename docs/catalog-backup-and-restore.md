@@ -69,7 +69,7 @@ Environment Owner 也可在“灾备目录 → 发布目录灾备”单击“立
 /opt/clusterforge/platform/clusterforge-backup resume --backup-id <id>
 ```
 
-受保护部署使用 `--rebuild-v1-db` 重建数据库时，会在新数据库通过 Schema contract 与外键检查后通过自动化入口强制创建并确认新的恢复点；加法 Schema contract 迁移也必须已经选择私有仓库，并在迁移后同步创建当前合同恢复点。任一恢复点失败都会触发部署回滚。应用内 Reset 保持发布代次单调递增；启动补偿还会同时比较发布代次与 Schema contract，避免旧合同仓库清单掩盖待备份状态。
+受保护部署使用 `--rebuild-v1-db` 重建数据库时，会在新数据库通过 Schema contract 与外键检查后通过自动化入口强制创建并确认新的恢复点。常规部署只接受当前精确合同，并在停止服务前创建恢复点；任一恢复点失败都会触发部署回滚。应用内 Reset 保持发布代次单调递增；启动补偿还会同时比较发布代次与 Schema contract，避免旧合同仓库清单掩盖待备份状态。
 
 ## 恢复
 
