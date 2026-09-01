@@ -287,7 +287,7 @@ Release 状态下修复，不改变状态、候选意图或历史证据；变更
 ### 3.7 发起组件测试
 
 1. 在发布历史中单击目标 Release 的“环境验证”。
-2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；可以选择一个同组件的 Released/Deprecated Release 追加其 Verify，也可以选择“仅执行 Draft rollback”。Verify 目标不会覆盖 rollback 合同。
+2. 选择安装验证或回滚验证。回滚验证会展示 Draft rollback 的不可变 from/to 合同；带 from/to 的版本回滚必须选择一个同组件的 Released/Deprecated Release 追加其 Verify，不能选择“仅执行 Draft rollback”。只有不带 from/to、目标为干净状态的清理 rollback 才允许仅执行自身动作。Verify 目标不会覆盖 rollback 合同。普通清理 rollback 不形成发布就绪证据；仅当其 Playbook 已包含严格后置验证且动作带有 `clusterforge.rollback-self-verifies` 标签时，成功 Run 才形成等价回退证据。该标签用于其他 Action 或带 from/to 的版本回滚时，Release 合同校验会拒绝保存。`clusterforge.` 前缀是平台合同元数据，不会作为 Ansible task tag 传入执行器。
 3. 选择共享环境并填写动作声明允许的运行参数。
 4. 如果该 Release 或所选 Verify 目标声明了参数映射，必须填写 `dependencyFixtures`。界面可用上游公开默认值预填，但提交时不会由 API 静默推断。
 5. 单击“预览执行计划”，确认每一步所属版本、Playbook、目标主机组和审批要求。目标环境已有相同内容时直接复用；目标缺失但来源可读时会列出逐项交付要求。
@@ -320,7 +320,7 @@ Release 状态下修复，不改变状态、候选意图或历史证据；变更
 
 前台和 `POST /component-releases/{id}/publish` 使用同一门禁：Release 必须定义 install、verify、rollback，具备当前规格摘要下成功的 install + verify 安装验证和 rollback + verify 回退证据；规格摘要过期等同缺少证据。直接发布还要求所有上游已经 Released。
 
-“仅执行 Draft 回退”用于验证清理动作本身，不包含回退目标的 verify，因此不会满足候选共享或发布门禁。要形成交付证据，回退测试必须选择同组件的 Released/Deprecated 目标 Release 并成功执行其 verify。
+“仅执行 Draft 回退”只适用于无 from/to 的干净状态清理动作。普通清理动作不包含独立 verify，因此不会满足候选共享或发布门禁；只有带 `clusterforge.rollback-self-verifies` 合同标签并在 Playbook 内完成严格后置验证的清理动作可形成等价证据。带 from/to 的版本回滚必须选择同组件的 Released/Deprecated 目标 Release 并成功执行其 verify。
 
 需要与一组相互依赖的 Draft 一起交付时，不要逐个直接发布：每个组件 Owner 在 Readiness 满足后单击“加入候选集”。该显式交接会让场景 Owner看见 Draft 及统一阻断原因；场景经完整测试后使用“预览候选集并发布”，把 Scenario Revision 与全部候选 Release 原子发布。组件 Owner 可使用“撤回候选”。后续合同、内容身份或 Playbook 修改会保留候选意图但使 Readiness 变为 blocked，必须重新完成证据后才能继续测试或发布。
 
