@@ -64,7 +64,7 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	}
 	users, _ := database.ListUsers(ctx)
 	if len(users) != 4 {
-		t.Fatalf("users=%d, want four demo personas", len(users))
+		t.Fatalf("users=%d, want four seeded personas", len(users))
 	}
 	viewer, _ := database.GetUser(ctx, ComponentOwnerRuntimeID)
 	components, err := database.ListComponents(ctx, viewer)
@@ -161,9 +161,9 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		revisionID, role, clusterID string
 		nodes, steps                int
 	}{
-		{"scenario-openfuyao-r1", "manager", "demo-management-cluster", 5, 6},
-		{"scenario-openfuyao-work-cluster-r1", "work", "demo-work-cluster", 4, 5},
-		{"scenario-openfuyao-work-nodes-r1", "work", "demo-work-cluster", 2, 2},
+		{"scenario-openfuyao-r1", "manager", openFuyaoManagementClusterID, 5, 6},
+		{"scenario-openfuyao-work-cluster-r1", "work", openFuyaoWorkClusterID, 4, 5},
+		{"scenario-openfuyao-work-nodes-r1", "work", openFuyaoWorkClusterID, 2, 2},
 	}
 	for _, expectation := range scenarios {
 		revision, err := database.GetScenarioRevision(ctx, expectation.revisionID)
@@ -223,12 +223,12 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	}
 	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
 	componentDefaults := map[string]struct{ role, group, clusterID string }{
-		"release-bke-cert-25.12":      {group: "bootstrap_host", clusterID: "demo-management-cluster"},
-		"release-bke-bootstrap-25.12": {group: "bootstrap_host", clusterID: "demo-management-cluster"},
+		"release-bke-cert-25.12":      {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
+		"release-bke-bootstrap-25.12": {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
 		"release-bke-common-25.12":    {group: "management_cluster_k8smaster"},
 		"release-bke-addon-25.12":     {group: "management_cluster_k8smaster"},
-		"release-bke-master-25.12":    {role: "manager", group: "management_cluster_k8smaster", clusterID: "demo-management-cluster"},
-		"release-bke-nodes-25.12":     {role: "work", group: "work_cluster_k8snode", clusterID: "demo-work-cluster"},
+		"release-bke-master-25.12":    {role: "manager", group: "management_cluster_k8smaster", clusterID: openFuyaoManagementClusterID},
+		"release-bke-nodes-25.12":     {role: "work", group: "work_cluster_k8snode", clusterID: openFuyaoWorkClusterID},
 	}
 	for _, releaseID := range []string{"release-bke-cert-25.12", "release-bke-bootstrap-25.12", "release-bke-common-25.12", "release-bke-addon-25.12", "release-bke-master-25.12", "release-bke-nodes-25.12"} {
 		release, err := database.GetComponentRelease(ctx, releaseID)
@@ -537,7 +537,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 		t.Fatal(err)
 	}
 	if err := database.AppendAudit(ctx, domain.AuditEvent{
-		ID: "audit-demo-seeded", ActorID: "system", Action: "user.preserved", ResourceType: "platform", ResourceID: "newplatform-demo", Metadata: map[string]any{"preserved": true}, CreatedAt: now,
+		ID: seedAuditID, ActorID: "system", Action: "user.preserved", ResourceType: "platform", ResourceID: "existing-platform", Metadata: map[string]any{"preserved": true}, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +562,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	}
 	seenBaseAudit := 0
 	for _, event := range audits {
-		if event.ID == "audit-demo-seeded" {
+		if event.ID == seedAuditID {
 			seenBaseAudit++
 			if event.Action != "user.preserved" {
 				t.Fatalf("existing append-only audit was replaced: %+v", event)

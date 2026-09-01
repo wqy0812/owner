@@ -994,7 +994,7 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 
 	dave := f.session(seed.EnvironmentOwnerID)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
-	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000", "FILE_STATION": station}}, dave)
+	updated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "registry.example.test:5000", "FILE_STATION": station}}, dave)
 	if updated.Code != http.StatusOK {
 		t.Fatalf("configure file station status=%d body=%s", updated.Code, updated.Body.String())
 	}
@@ -1042,7 +1042,7 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	targetServer := httptest.NewServer(targetHandler)
 	defer targetServer.Close()
 	targetStation := strings.TrimPrefix(targetServer.URL, "http://")
-	targetRevision := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000", "FILE_STATION": targetStation}}, dave)
+	targetRevision := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "registry.example.test:5000", "FILE_STATION": targetStation}}, dave)
 	if targetRevision.Code != http.StatusOK {
 		t.Fatalf("configure target file station status=%d body=%s", targetRevision.Code, targetRevision.Body.String())
 	}
@@ -1102,8 +1102,8 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	imageBuild := domain.ComponentImageBuild{
 		ID: "image-build-cross-registry", ReleaseID: release.ID, RequestedBy: seed.ComponentOwnerRuntimeID,
 		Status: domain.ImageBuildSucceeded, DockerfileSHA256: strings.Repeat("b", 64), ImageTag: "v1.1.0",
-		ImageRef:    "192.168.88.53:5000/components/component-test-runtime:v1.1.0",
-		ImageDigest: "192.168.88.53:5000/components/component-test-runtime@sha256:" + imageHash,
+		ImageRef:    "origin.example.test:5000/components/component-test-runtime:v1.1.0",
+		ImageDigest: "origin.example.test:5000/components/component-test-runtime@sha256:" + imageHash,
 		CreatedAt:   time.Now().UTC(), FinishedAt: func() *time.Time { value := time.Now().UTC(); return &value }(),
 	}
 	if err := f.database.CreateComponentImageBuild(context.Background(), imageBuild); err != nil {
@@ -1123,8 +1123,8 @@ func TestComponentArtifactUploadAndDetach(t *testing.T) {
 	if imagePreview.Code != http.StatusOK || decodeEnvelope(t, imagePreview)["data"].(map[string]any)["requiresApproval"] != true {
 		t.Fatalf("cross-registry image preview status=%d body=%s", imagePreview.Code, imagePreview.Body.String())
 	}
-	targetDigest := "192.168.88.54:5000/components/component-test-runtime@sha256:" + imageHash
-	if err := f.database.RecordComponentImageMirror(context.Background(), "192.168.88.54:5000", imageBuild.ImageDigest, "192.168.88.54:5000/components/component-test-runtime:v1.1.0", targetDigest, time.Now().UTC()); err != nil {
+	targetDigest := "registry.example.test:5000/components/component-test-runtime@sha256:" + imageHash
+	if err := f.database.RecordComponentImageMirror(context.Background(), "registry.example.test:5000", imageBuild.ImageDigest, "registry.example.test:5000/components/component-test-runtime:v1.1.0", targetDigest, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	imageDelivery.targetPresent = true
@@ -1350,7 +1350,7 @@ type fakeRunner struct {
 type fakeImageDelivery struct{ targetPresent bool }
 
 func (delivery *fakeImageDelivery) Probe(_ context.Context, location service.ImageLocation, _ service.ImageDigest) error {
-	if strings.Contains(location.Ref, "192.168.88.54:5000/") && !delivery.targetPresent {
+	if strings.Contains(location.Ref, "registry.example.test:5000/") && !delivery.targetPresent {
 		return service.ErrDeliveryTargetMissing
 	}
 	if location.ObservedDigest != nil {
@@ -1496,7 +1496,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	}
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{map[string]any{"name": "localhost", "address": "127.0.0.1", "groups": []any{"test_nodes"}}}})
 	environment := domain.Environment{ID: "environment-test", Name: "Test Environment", OwnerID: seed.EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: now}
+	environmentRevision := domain.EnvironmentRevision{ID: "environment-test-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.test:5000"}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: now}
 	if err := database.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
@@ -1593,7 +1593,7 @@ func (f *apiFixture) session(userID string) *http.Cookie {
 	}
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-		f.t.Fatalf("unsafe demo session cookie: %#v", cookies)
+		f.t.Fatalf("unsafe session cookie: %#v", cookies)
 	}
 	return cookies[0]
 }
@@ -1859,7 +1859,7 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	carol := f.session(seed.ScenarioOwnerID)
 	dave := f.session(seed.EnvironmentOwnerID)
 
-	created := f.request(http.MethodPost, "/api/v1/components", componentRequest("Alice private", "alice-private"), alice)
+	created := f.request(http.MethodPost, "/api/v1/components", componentRequest("Owner A private", "alice-private"), alice)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("owner create status=%d body=%s", created.Code, created.Body.String())
 	}
@@ -1890,8 +1890,8 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 	if response := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "hijacked.invalid"}}, alice); response.Code != http.StatusForbidden {
 		t.Fatalf("component owner environment variable update status=%d", response.Code)
 	}
-	variablesUpdated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "192.168.88.54:5000/"}}, dave)
-	if variablesUpdated.Code != http.StatusOK || !strings.Contains(variablesUpdated.Body.String(), `"IMAGE_REGISTRY":"192.168.88.54:5000"`) {
+	variablesUpdated := f.request(http.MethodPut, "/api/v1/environments/environment-test/variables", map[string]any{"variables": map[string]any{"IMAGE_REGISTRY": "registry.example.test:5000/"}}, dave)
+	if variablesUpdated.Code != http.StatusOK || !strings.Contains(variablesUpdated.Body.String(), `"IMAGE_REGISTRY":"registry.example.test:5000"`) {
 		t.Fatalf("environment variable update status=%d body=%s", variablesUpdated.Code, variablesUpdated.Body.String())
 	}
 	var variableAuditCount int
@@ -1925,7 +1925,7 @@ func TestRBACOwnerIsolationAndCredentialRedaction(t *testing.T) {
 func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 	f := newAPIFixture(t)
 	binary := filepath.Join(t.TempDir(), "fake-docker")
-	script := "#!/bin/sh\nif [ \"$1\" = image ]; then printf '%s\\n' '192.168.88.54:5000/components/component-test-runtime:v1.1.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; else printf '%s ok\\n' \"$1\"; fi\n"
+	script := "#!/bin/sh\nif [ \"$1\" = image ]; then printf '%s\\n' 'registry.example.test:5000/components/component-test-runtime:v1.1.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; else printf '%s ok\\n' \"$1\"; fi\n"
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1952,7 +1952,7 @@ func TestDraftDockerfileBuildPublishesForcedRegistryReference(t *testing.T) {
 	}
 	data := decodeEnvelope(t, created)["data"].(map[string]any)
 	buildID := data["id"].(string)
-	if data["imageRef"] != "192.168.88.54:5000/components/component-test-runtime:v1.1.0" {
+	if data["imageRef"] != "registry.example.test:5000/components/component-test-runtime:v1.1.0" {
 		t.Fatalf("image reference was not forced to configured registry: %#v", data)
 	}
 	if data["environmentId"] != "environment-test" || data["environmentRevisionId"] == "" {

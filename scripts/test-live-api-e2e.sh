@@ -35,7 +35,7 @@ NEWPLATFORM_RUN_ROOT="$test_root/runs" \
 NEWPLATFORM_IMAGE_BUILD_ROOT="$test_root/image-builds" \
 NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS="$PROJECT_ROOT/examples/ansible" \
 NEWPLATFORM_ANSIBLE_BIN="false" \
-NEWPLATFORM_SEED_PROFILE="demo" \
+NEWPLATFORM_SEED_PROFILE="catalog" \
 CLUSTERFORGE_BACKUP_ENABLED="false" \
   go run ./cmd/server >"$test_root/api.log" 2>&1 &
 api_pid="$!"

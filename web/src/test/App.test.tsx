@@ -9,9 +9,9 @@ import { parseRunInput, uniqueRunInputs } from '../components/RunInputFields';
 import { EventSourceMock } from './setup';
 import { executableActionTypes } from '../types/domain';
 
-const alice = { id: 'component-alice', name: 'Alice Component', role: 'component_owner' };
-const dave = { id: 'environment-dave', name: 'Dave Environment', role: 'environment_owner' };
-const carol = { id: 'scenario-carol', name: 'Carol Scenario', role: 'scenario_owner' };
+const alice = { id: 'component-owner-a', name: 'Component Owner A', role: 'component_owner' };
+const dave = { id: 'environment-owner-a', name: 'Environment Owner', role: 'environment_owner' };
+const carol = { id: 'scenario-owner-a', name: 'Scenario Owner', role: 'scenario_owner' };
 
 const components = [{
   id: 'component-containerd',
@@ -57,6 +57,7 @@ function installFetch(options: {
   let notifications = options.notifications ?? [];
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/session/users')) return json([alice, dave, carol]);
     if (url.endsWith('/session/me')) return json(current);
     if (url.endsWith('/session/switch')) {
       const id = JSON.parse(String(init?.body)).userId;
@@ -75,25 +76,25 @@ function installFetch(options: {
     }
     if (url.endsWith('/components')) return json(components);
     if (url.endsWith('/scenarios')) return json(options.withScenario ? [{
-      id: 'scenario-openfuyao',
-      name: 'OpenFuyao Management Cluster Build',
+      id: 'scenario-sample',
+      name: 'Sample Cluster Build',
       ownerId: carol.id,
-      slug: 'openfuyao-management-cluster-build',
-      currentRevisionId: 'scenario-openfuyao-r1',
+      slug: 'sample-cluster-build',
+      currentRevisionId: 'scenario-sample-r1',
       currentRevision: {
-        id: 'scenario-openfuyao-r1',
-        scenarioId: 'scenario-openfuyao',
+        id: 'scenario-sample-r1',
+        scenarioId: 'scenario-sample',
         revision: 1,
         state: 'draft',
-        nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
+        nodes: [{ id: 'component-step', type: 'component', position: { x: 80, y: 80 }, data: { label: 'component-step', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
       },
       revisions: [{
-        id: 'scenario-openfuyao-r1',
-        scenarioId: 'scenario-openfuyao',
+        id: 'scenario-sample-r1',
+        scenarioId: 'scenario-sample',
         revision: 1,
         state: 'draft',
-        nodes: [{ id: 'bke-cert', type: 'component', position: { x: 80, y: 80 }, data: { label: 'bke-cert', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
+        nodes: [{ id: 'component-step', type: 'component', position: { x: 80, y: 80 }, data: { label: 'component-step', componentId: 'component-containerd', releaseId: 'release-containerd-2', action: 'rollback', hostGroup: 'bootstrap_host', runInputs: ['rollback_version'] } }],
         edges: [],
       }],
     }] : []);
@@ -129,11 +130,12 @@ describe('platform shell and RBAC UI', () => {
   beforeEach(() => installFetch());
   afterEach(() => vi.unstubAllGlobals());
 
-  it('waits for Demo identity initialization before requesting protected resources', async () => {
+  it('waits for identity initialization before requesting protected resources', async () => {
     let resolveSwitch!: (response: Response) => void;
     const switchResponse = new Promise<Response>((resolve) => { resolveSwitch = resolve; });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith('/session/users')) return json([alice, dave, carol]);
       if (url.endsWith('/session/me')) return json({ error: { code: 'UNAUTHORIZED', message: '未登录' } }, 401);
       if (url.endsWith('/session/switch')) return switchResponse;
       if (url.endsWith('/components')) return json(components);
@@ -142,7 +144,7 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<StrictMode><MemoryRouter initialEntries={['/components']}><AppProvider><App /></AppProvider></MemoryRouter></StrictMode>);
-    expect(screen.getByRole('status')).toHaveTextContent('正在初始化 Demo 身份…');
+    expect(screen.getByRole('status')).toHaveTextContent(/正在初始化 .*身份/);
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/session/switch'))).toBe(true));
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/session/me'))).toHaveLength(1);
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/components'))).toBe(false);
@@ -650,9 +652,9 @@ describe('platform shell and RBAC UI', () => {
 
   it('reloads the role-scoped workbench safely after an identity switch', async () => {
     renderApp();
-    expect(await screen.findByRole('heading', { name: /早上好，Alice Component/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /早上好，Component Owner A/ })).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('切换演示身份'), dave.id);
-    expect(await screen.findByRole('heading', { name: /早上好，Dave Environment/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /早上好，Environment Owner/ })).toBeInTheDocument();
     expect(screen.getByText('当前没有待办')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '页面暂时无法显示' })).not.toBeInTheDocument();
   });
@@ -1493,8 +1495,8 @@ describe('platform shell and RBAC UI', () => {
     installFetch({ componentCreateForbidden: true });
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '新建组件' }));
-    await userEvent.type(screen.getByPlaceholderText('例如 containerd'), 'demo');
-    await userEvent.type(screen.getByPlaceholderText('containerd'), 'demo');
+    await userEvent.type(screen.getByPlaceholderText('例如 containerd'), 'sample');
+    await userEvent.type(screen.getByPlaceholderText('containerd'), 'sample');
     await userEvent.click(screen.getByRole('button', { name: '创建组件' }));
     expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
   });
@@ -1606,12 +1608,12 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(await screen.findByRole('tab', { name: '环境变量' }));
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
     await userEvent.type(screen.getByRole('textbox', { name: '环境变量名' }), 'image_registry');
-    await userEvent.type(screen.getByRole('textbox', { name: /环境变量 IMAGE_REGISTRY 的值/ }), '192.168.88.54:5000/');
+    await userEvent.type(screen.getByRole('textbox', { name: /环境变量 IMAGE_REGISTRY 的值/ }), 'registry.example.test:5000/');
     await userEvent.click(screen.getByRole('button', { name: '保存新 Revision' }));
     await userEvent.type(screen.getByRole('textbox', { name: '变更原因' }), '配置测试镜像仓库');
     await userEvent.click(screen.getByRole('button', { name: '确认创建 Revision' }));
 
-    await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: '192.168.88.54:5000/' }));
+    await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: 'registry.example.test:5000/' }));
     expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
   });
 
@@ -1798,7 +1800,7 @@ describe('platform shell and RBAC UI', () => {
         return json({
           id: 'image-build-test', releaseId: draft.id, environmentId: 'environment-build', environmentRevisionId: 'environment-build-r3',
           requestedBy: alice.id, status: 'queued', dockerfileSha256: 'a'.repeat(64), imageTag: '1.0.0-rc1',
-          imageRef: '192.168.88.54:5000/components/image:1.0.0-rc1', createdAt: new Date().toISOString(),
+          imageRef: 'registry.example.test:5000/components/image:1.0.0-rc1', createdAt: new Date().toISOString(),
         });
       }
       if (url.endsWith('/component-releases/release-image-draft/image-builds')) return json([]);
@@ -1808,7 +1810,7 @@ describe('platform shell and RBAC UI', () => {
       }]);
       if (url.endsWith('/environments')) return json([{
         id: 'environment-build', name: 'Build Environment', ownerId: dave.id,
-        currentRevision: { id: 'environment-build-r3', environmentId: 'environment-build', revision: 3, facts: {}, hosts: [], variables: { IMAGE_REGISTRY: '192.168.88.54:5000' }, credentialRefs: [] },
+        currentRevision: { id: 'environment-build-r3', environmentId: 'environment-build', revision: 3, facts: {}, hosts: [], variables: { IMAGE_REGISTRY: 'registry.example.test:5000' }, credentialRefs: [] },
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
@@ -1817,7 +1819,7 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components?selected=component-image');
     await userEvent.click(await screen.findByRole('button', { name: '构建镜像' }));
-    expect(await screen.findByText('IMAGE_REGISTRY=192.168.88.54:5000')).toBeInTheDocument();
+    expect(await screen.findByText('IMAGE_REGISTRY=registry.example.test:5000')).toBeInTheDocument();
     await userEvent.upload(screen.getByLabelText('Dockerfile'), new File(['FROM scratch\n'], 'Dockerfile', { type: 'text/plain' }));
     const submitButton = screen.getByRole('button', { name: '上传并构建' });
     await waitFor(() => expect(submitButton).toBeEnabled());
@@ -1997,7 +1999,7 @@ describe('platform shell and RBAC UI', () => {
     try {
       renderApp('/scenarios');
       await userEvent.click(await screen.findByRole('button', { name: '导出 JSON' }));
-      expect(downloadedAs).toBe('openfuyao-management-cluster-build-r1.json');
+      expect(downloadedAs).toBe('sample-cluster-build-r1.json');
       expect(exportedBlob?.type).toBe('application/json;charset=utf-8');
       const exportedText = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -2005,7 +2007,7 @@ describe('platform shell and RBAC UI', () => {
         reader.onerror = () => reject(reader.error);
         reader.readAsText(exportedBlob!);
       });
-      expect(JSON.parse(exportedText)).toMatchObject({ nodes: [{ id: 'bke-cert' }], edges: [] });
+      expect(JSON.parse(exportedText)).toMatchObject({ nodes: [{ id: 'component-step' }], edges: [] });
       expect(JSON.parse(exportedText)).not.toHaveProperty('executionPolicy');
       expect(clipboardWrite).not.toHaveBeenCalled();
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:scenario-export');
@@ -2021,7 +2023,7 @@ describe('platform shell and RBAC UI', () => {
   it('adapts the backend graph DTO into an editable React Flow node', async () => {
     installFetch({ initialUser: carol, withScenario: true });
     renderApp('/scenarios');
-    const node = await screen.findByText('bke-cert');
+    const node = await screen.findByText('component-step');
     expect(screen.getByRole('button', { name: '保存草稿' })).toBeInTheDocument();
     fireEvent.click(node);
     expect(screen.getByDisplayValue('bootstrap_host')).toBeInTheDocument();
@@ -2251,7 +2253,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '开始完整测试' }));
 
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/scenario-revisions/scenario-openfuyao-r1/test-runs'));
+      const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/scenario-revisions/scenario-sample-r1/test-runs'));
       expect(call).toBeDefined();
       expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-test', runInput: { rollback_version: '1.0.0' } });
     });

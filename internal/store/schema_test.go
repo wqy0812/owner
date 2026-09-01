@@ -179,13 +179,13 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 		t.Fatalf("schema contract=%q err=%v", contract, err)
 	}
 	for _, user := range []domain.User{
-		{ID: "component-alice", Name: "Alice", Role: domain.RoleComponentOwner},
+		{ID: "component-owner-a", Name: "Owner A", Role: domain.RoleComponentOwner},
 	} {
 		if err := reopened.UpsertUser(ctx, user); err != nil {
 			t.Fatal(err)
 		}
 	}
-	component := componentFixture("fresh-runtime", "component-alice")
+	component := componentFixture("fresh-runtime", "component-owner-a")
 	if err := reopened.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}

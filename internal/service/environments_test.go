@@ -419,7 +419,7 @@ func workItemByID(items []domain.WorkItem, id string) *domain.WorkItem {
 
 func TestRestoreEnvironmentRevisionCreatesNewRevisionWithReason(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	updated, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "10.0.0.2", Port: 22, Groups: []string{"all"}}}, "替换测试节点")
+	updated, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.2", Port: 22, Groups: []string{"all"}}}, "替换测试节点")
 	if err != nil {
 		t.Fatal(err)
 	}

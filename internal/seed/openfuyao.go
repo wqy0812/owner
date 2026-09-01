@@ -11,6 +11,11 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
+const (
+	openFuyaoManagementClusterID = "demo-management-cluster"
+	openFuyaoWorkClusterID       = "demo-work-cluster"
+)
+
 var openFuyaoEnvironmentPaths = map[string]string{
 	"cluster_id":                   "operation.management_cluster_id",
 	"strategy":                     "operation.strategy",
@@ -190,7 +195,7 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 		parameters := openFuyaoParameterDefault(openFuyaoParameters(item.parameters...), "target_host_group", item.group)
 		if item.slug == "bke-nodes" {
 			parameters = openFuyaoParameterDefault(parameters, "cluster_role", "work")
-			parameters = openFuyaoParameterDefault(parameters, "cluster_id", "demo-work-cluster")
+			parameters = openFuyaoParameterDefault(parameters, "cluster_id", openFuyaoWorkClusterID)
 		}
 		release := domain.ComponentRelease{
 			ID: releaseID, ComponentID: item.id, Version: "v25.12", Status: domain.ReleaseReleased,
@@ -293,7 +298,7 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 
 func openFuyaoDefaultParameters() map[string]any {
 	return map[string]any{
-		"operation": map[string]any{"management_cluster_id": "demo-management-cluster", "work_cluster_id": "demo-work-cluster", "strategy": "StatelessFlatNetworkStrategy"},
+		"operation": map[string]any{"management_cluster_id": openFuyaoManagementClusterID, "work_cluster_id": openFuyaoWorkClusterID, "strategy": "StatelessFlatNetworkStrategy"},
 		"artifact_sources": map[string]any{
 			"registry":         map[string]any{"domain": "registry.example.invalid", "ip": "192.0.2.60", "port": 443, "project": "openfuyao"},
 			"chart_repository": map[string]any{"url": "https://charts.example.invalid", "port": 443, "name": "openfuyao"},

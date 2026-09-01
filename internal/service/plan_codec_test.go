@@ -61,12 +61,12 @@ func TestLockedPlanMapRoundTripAndEmptyPlanRejection(t *testing.T) {
 
 func TestValidatePlanHostGroups(t *testing.T) {
 	raw := inventoryJSON(t,
-		InventoryHost{Name: "control-1", Address: "10.0.0.10", Groups: []string{"control_plane"}},
-		InventoryHost{Name: "worker-1", Address: "10.0.0.20", Groups: []string{"workers"}},
+		InventoryHost{Name: "control-1", Address: "192.0.2.10", Groups: []string{"control_plane"}},
+		InventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"workers"}},
 	)
-	for _, limit := range []string{"all", "control-1", "workers", "10.0.0.0/24"} {
+	for _, limit := range []string{"all", "control-1", "workers", "192.0.2.0/24"} {
 		err := validatePlanHostGroups(raw, []lockedStep{{Name: "install", Limit: limit}})
-		if limit == "10.0.0.0/24" {
+		if limit == "192.0.2.0/24" {
 			if err != nil {
 				t.Fatalf("literal Ansible limit %q rejected: %v", limit, err)
 			}
@@ -85,22 +85,22 @@ func TestValidatePlanHostGroups(t *testing.T) {
 func TestRenderInventorySortsGroupsAndProtectsTokens(t *testing.T) {
 	raw := inventoryJSON(t,
 		InventoryHost{Name: "local", Address: "127.0.0.1", Groups: []string{"zeta", "all"}},
-		InventoryHost{Name: "worker-1", Address: "10.0.0.20", Groups: []string{"alpha"}, User: "deploy", Port: 2222},
+		InventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"alpha"}, User: "deploy", Port: 2222},
 	)
 	got, err := renderInventory(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "[all]\nlocal ansible_connection=local\nworker-1 ansible_host=10.0.0.20 ansible_user=deploy ansible_port=2222\n\n[alpha]\nworker-1\n\n[zeta]\nlocal\n"
+	want := "[all]\nlocal ansible_connection=local\nworker-1 ansible_host=192.0.2.20 ansible_user=deploy ansible_port=2222\n\n[alpha]\nworker-1\n\n[zeta]\nlocal\n"
 	if string(got) != want {
 		t.Fatalf("inventory:\n%s\nwant:\n%s", got, want)
 	}
 	for name, document := range map[string]json.RawMessage{
 		"empty":   inventoryJSON(t),
-		"host":    inventoryJSON(t, InventoryHost{Name: "bad host", Address: "10.0.0.1"}),
-		"user":    inventoryJSON(t, InventoryHost{Name: "host", Address: "10.0.0.1", User: "bad user"}),
-		"group":   inventoryJSON(t, InventoryHost{Name: "host", Address: "10.0.0.1", Groups: []string{"bad group"}}),
-		"address": inventoryJSON(t, InventoryHost{Name: "host", Address: "10.0.0.1;touch"}),
+		"host":    inventoryJSON(t, InventoryHost{Name: "bad host", Address: "192.0.2.1"}),
+		"user":    inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1", User: "bad user"}),
+		"group":   inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1", Groups: []string{"bad group"}}),
+		"address": inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1;touch"}),
 	} {
 		if _, err := renderInventory(document); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("%s unsafe inventory error=%v", name, err)

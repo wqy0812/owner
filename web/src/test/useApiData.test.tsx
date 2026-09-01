@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('useApiData', () => {
   it('aborts the previous scoped request and never exposes its data to the next scope', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: { id: 'component-alice', name: 'Alice', role: 'component_owner' },
+      data: { id: 'component-owner-a', name: 'Alice', role: 'component_owner' },
     }), { headers: { 'Content-Type': 'application/json' } })));
     const pending: PendingRequest[] = [];
     const view = render(<AppProvider><Query scope="alice" pending={pending} /></AppProvider>);

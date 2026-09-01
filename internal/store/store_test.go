@@ -24,10 +24,10 @@ func newTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	for _, u := range []domain.User{
-		{ID: "component-alice", Name: "Alice", Role: domain.RoleComponentOwner, CreatedAt: testNow},
-		{ID: "component-bob", Name: "Bob", Role: domain.RoleComponentOwner, CreatedAt: testNow},
-		{ID: "scenario-carol", Name: "Carol", Role: domain.RoleScenarioOwner, CreatedAt: testNow},
-		{ID: "environment-dave", Name: "Dave", Role: domain.RoleEnvironmentOwner, CreatedAt: testNow},
+		{ID: "component-owner-a", Name: "Owner A", Role: domain.RoleComponentOwner, CreatedAt: testNow},
+		{ID: "component-owner-b", Name: "Owner B", Role: domain.RoleComponentOwner, CreatedAt: testNow},
+		{ID: "scenario-owner-a", Name: "Scenario Owner", Role: domain.RoleScenarioOwner, CreatedAt: testNow},
+		{ID: "environment-owner-a", Name: "Environment Owner", Role: domain.RoleEnvironmentOwner, CreatedAt: testNow},
 	} {
 		if err := s.UpsertUser(context.Background(), u); err != nil {
 			t.Fatalf("UpsertUser: %v", err)
@@ -51,7 +51,7 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 		Parameters:             []domain.ParameterDefinition{},
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
-			Playbook: "demo/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
+			Playbook: "fixtures/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
 			RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}, Idempotent: true,
 		}},
 	}
@@ -91,7 +91,7 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domai
 	ctx := context.Background()
 	environmentID := "environment-" + revision.ID
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
-	environment := domain.Environment{ID: environmentID, Name: environmentID, OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	environment := domain.Environment{ID: environmentID, Name: environmentID, OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	environmentRevision := domain.EnvironmentRevision{
 		ID: environmentID + "-r1", EnvironmentID: environmentID, Revision: 1,
 		Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: testNow,
@@ -109,7 +109,7 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domai
 	runID := "run-" + revision.ID
 	run := domain.Run{
 		ID: runID, Kind: domain.RunScenarioTest, Status: domain.RunSucceeded,
-		RequestedBy: "scenario-carol", EnvironmentID: environmentID, EnvironmentRevisionID: environmentRevision.ID,
+		RequestedBy: "scenario-owner-a", EnvironmentID: environmentID, EnvironmentRevisionID: environmentRevision.ID,
 		ScenarioRevisionID: revision.ID, CreatedAt: testNow,
 		InputSnapshot: map[string]any{
 			"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision),
@@ -125,7 +125,7 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domai
 func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	for _, c := range []domain.Component{componentFixture("alice-private", "component-alice"), componentFixture("bob-private", "component-bob"), componentFixture("bob-public", "component-bob")} {
+	for _, c := range []domain.Component{componentFixture("alice-private", "component-owner-a"), componentFixture("bob-private", "component-owner-b"), componentFixture("bob-public", "component-owner-b")} {
 		if err := s.CreateComponent(ctx, c); err != nil {
 			t.Fatal(err)
 		}
@@ -140,20 +140,20 @@ func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	alice, _ := s.GetUser(ctx, "component-alice")
+	alice, _ := s.GetUser(ctx, "component-owner-a")
 	got, err := s.ListComponents(ctx, alice)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("Alice sees %d components, want own private plus Bob public", len(got))
+		t.Fatalf("Owner A sees %d components, want own private plus Owner B public", len(got))
 	}
 	for _, c := range got {
 		if c.ID == "bob-private" {
-			t.Fatal("Alice can see Bob's draft-only component")
+			t.Fatal("Owner A can see Owner B's draft-only component")
 		}
 		if c.ID == "bob-public" && len(c.Releases) != 1 {
-			t.Fatalf("expected one released Bob version, got %d", len(c.Releases))
+			t.Fatalf("expected one released Owner B version, got %d", len(c.Releases))
 		}
 	}
 
@@ -176,7 +176,7 @@ func TestComponentVisibilityAndReleaseImmutability(t *testing.T) {
 func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("candidate-runtime", "component-alice")
+	component := componentFixture("candidate-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
 	if err := s.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
-	viewer, _ := s.GetUser(ctx, "scenario-carol")
+	viewer, _ := s.GetUser(ctx, "scenario-owner-a")
 	visible, err := s.ListComponents(ctx, viewer)
 	if err != nil || len(visible) != 1 || len(visible[0].Releases) != 1 || !visible[0].Releases[0].Candidate {
 		t.Fatalf("candidate visibility=%+v err=%v", visible, err)
@@ -227,7 +227,7 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 	for _, id := range []string{"candidate-a", "candidate-b"} {
-		if err := s.CreateComponent(ctx, componentFixture(id, "component-alice")); err != nil {
+		if err := s.CreateComponent(ctx, componentFixture(id, "component-owner-a")); err != nil {
 			t.Fatal(err)
 		}
 		release := releaseFixture(id+"-r1", id, "1.0.0-rc1", domain.ReleaseDraft)
@@ -238,7 +238,7 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 	}
 	releaseA, _ := s.GetComponentRelease(ctx, "candidate-a-r1")
 	releaseB, _ := s.GetComponentRelease(ctx, "candidate-b-r1")
-	scenario := domain.Scenario{ID: "stale-set", Slug: "stale-set", Name: "Stale", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "stale-set", Slug: "stale-set", Name: "Stale", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{ID: "stale-set-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTestPassed, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{
 		{ID: "a", ReleaseID: releaseA.ID, Action: domain.ActionInstall},
 		{ID: "b", ReleaseID: releaseB.ID, Action: domain.ActionInstall},
@@ -270,7 +270,7 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 func TestStandalonePublishRejectsDefinitionChangedAfterValidation(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("guarded-runtime", "component-alice")
+	component := componentFixture("guarded-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestStandalonePublishRejectsDefinitionChangedAfterValidation(t *testing.T) 
 func TestArtifactSourceRepairDoesNotAdvancePublicationGeneration(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("source-stable-runtime", "component-alice")
+	component := componentFixture("source-stable-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -307,14 +307,14 @@ func TestArtifactSourceRepairDoesNotAdvancePublicationGeneration(t *testing.T) {
 	}
 	artifact := domain.ComponentArtifact{
 		ID: "source-stable-artifact", ReleaseID: release.ID, Alias: "package", Filename: "package.tgz", SHA256: strings.Repeat("a", 64),
-		SourceURL: "https://example.invalid/one", SourceUpdatedBy: "component-alice", SourceUpdatedAt: testNow,
-		CreatedBy: "component-alice", CreatedAt: testNow,
+		SourceURL: "https://example.invalid/one", SourceUpdatedBy: "component-owner-a", SourceUpdatedAt: testNow,
+		CreatedBy: "component-owner-a", CreatedAt: testNow,
 	}
 	if err := s.UpsertDraftComponentArtifactAndInvalidate(ctx, artifact); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := s.GetComponentRelease(ctx, release.ID)
-	if _, err := s.UpdateComponentArtifactSource(ctx, release.ID, artifact.Alias, "https://example.invalid/two", "component-alice", testNow.Add(time.Minute)); err != nil {
+	if _, err := s.UpdateComponentArtifactSource(ctx, release.ID, artifact.Alias, "https://example.invalid/two", "component-owner-a", testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	afterSource, _ := s.GetComponentRelease(ctx, release.ID)
@@ -335,7 +335,7 @@ func TestArtifactSourceRepairDoesNotAdvancePublicationGeneration(t *testing.T) {
 func TestImageSourceRepairPreservesIdentityWhileDigestChangesInvalidate(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("image-source-runtime", "component-alice")
+	component := componentFixture("image-source-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -345,8 +345,8 @@ func TestImageSourceRepairPreservesIdentityWhileDigestChangesInvalidate(t *testi
 	}
 	image := domain.ComponentImage{
 		ID: "image-source-main", ReleaseID: release.ID, LogicalName: "main", Digest: "sha256:" + strings.Repeat("a", 64),
-		SourceRef: "registry-one.invalid/runtime:1.0.0", SourceUpdatedBy: "component-alice", SourceUpdatedAt: testNow,
-		CreatedBy: "component-alice", CreatedAt: testNow,
+		SourceRef: "registry-one.invalid/runtime:1.0.0", SourceUpdatedBy: "component-owner-a", SourceUpdatedAt: testNow,
+		CreatedBy: "component-owner-a", CreatedAt: testNow,
 	}
 	if err := s.UpsertDraftComponentImage(ctx, image); err != nil {
 		t.Fatal(err)
@@ -355,12 +355,12 @@ func TestImageSourceRepairPreservesIdentityWhileDigestChangesInvalidate(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := s.UpdateComponentImageSource(ctx, release.ID, image.LogicalName, "registry-two.invalid/runtime:1.0.0", "component-bob", testNow.Add(time.Minute))
+	updated, err := s.UpdateComponentImageSource(ctx, release.ID, image.LogicalName, "registry-two.invalid/runtime:1.0.0", "component-owner-b", testNow.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	afterSource, _ := s.GetComponentRelease(ctx, release.ID)
-	if updated.Digest != image.Digest || updated.SourceRef != "registry-two.invalid/runtime:1.0.0" || updated.SourceUpdatedBy != "component-bob" {
+	if updated.Digest != image.Digest || updated.SourceRef != "registry-two.invalid/runtime:1.0.0" || updated.SourceUpdatedBy != "component-owner-b" {
 		t.Fatalf("updated image=%+v", updated)
 	}
 	if afterSource.PublicationGeneration != before.PublicationGeneration {
@@ -418,7 +418,7 @@ func TestArtifactMirrorRecordIsIdempotentByTargetAndIdentity(t *testing.T) {
 func TestScenarioTestEvidenceRejectsChangedReleaseDefinition(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("tested-runtime", "component-alice")
+	component := componentFixture("tested-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestScenarioTestEvidenceRejectsChangedReleaseDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	release, _ = s.GetComponentRelease(ctx, release.ID)
-	scenario := domain.Scenario{ID: "tested-scenario", Slug: "tested-scenario", Name: "Tested", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "tested-scenario", Slug: "tested-scenario", Name: "Tested", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{
 		ID: "tested-scenario-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTesting,
 		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: release.ID, Action: domain.ActionInstall}}, Edges: []domain.ScenarioEdge{}}, CreatedAt: testNow,
@@ -454,7 +454,7 @@ func TestScenarioTestEvidenceRejectsChangedReleaseDefinition(t *testing.T) {
 func TestScenarioPublishRejectsReleaseChangedAfterSuccessfulTest(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := componentFixture("publish-tested-runtime", "component-alice")
+	component := componentFixture("publish-tested-runtime", "component-owner-a")
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestScenarioPublishRejectsReleaseChangedAfterSuccessfulTest(t *testing.T) {
 		t.Fatal(err)
 	}
 	release, _ = s.GetComponentRelease(ctx, release.ID)
-	scenario := domain.Scenario{ID: "publish-tested-scenario", Slug: "publish-tested-scenario", Name: "Publish Tested", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "publish-tested-scenario", Slug: "publish-tested-scenario", Name: "Publish Tested", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{
 		ID: "publish-tested-scenario-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTestPassed,
 		Graph:     domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: release.ID, Action: domain.ActionInstall}}, Edges: []domain.ScenarioEdge{}},
@@ -499,7 +499,7 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 	newEnvironment := func(t *testing.T, s *Store, id string) domain.EnvironmentRevision {
 		t.Helper()
 		inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
-		environment := domain.Environment{ID: id, Name: id, OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+		environment := domain.Environment{ID: id, Name: id, OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 		revision := domain.EnvironmentRevision{ID: id + "-r1", EnvironmentID: id, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: testNow}
 		if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
 			t.Fatal(err)
@@ -507,7 +507,7 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 		return revision
 	}
 	active := func(id string, kind domain.RunKind, revision domain.EnvironmentRevision) domain.Run {
-		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-dave", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-owner-a", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
 	}
 
 	t.Run("rollback blocks another active run", func(t *testing.T) {
@@ -537,19 +537,19 @@ func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 	inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
-	environment := domain.Environment{ID: "batch-env", Name: "Batch", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	environment := domain.Environment{ID: "batch-env", Name: "Batch", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.EnvironmentRevision{ID: "batch-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 2; index++ {
-		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
+		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
 		approval := domain.Approval{ID: fmt.Sprintf("batch-approval-%d", index), RunID: run.ID, Status: "pending", RequestedAt: run.CreatedAt}
 		if err := s.CreateRun(ctx, run, &approval); err != nil {
 			t.Fatal(err)
 		}
 	}
-	runs, err := s.BatchDecideApprovals(ctx, []string{"batch-approval-1", "batch-approval-2"}, "environment-dave", "approved", "window", testNow.Add(time.Minute))
+	runs, err := s.BatchDecideApprovals(ctx, []string{"batch-approval-1", "batch-approval-2"}, "environment-owner-a", "approved", "window", testNow.Add(time.Minute))
 	if err != nil || len(runs) != 2 || runs[0].Status != domain.RunQueued || runs[1].Status != domain.RunQueued {
 		t.Fatalf("batch approval runs=%+v err=%v", runs, err)
 	}
@@ -558,12 +558,12 @@ func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 		t.Fatalf("batch FIFO claim=%+v err=%v", claimed, err)
 	}
 
-	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(3 * time.Minute)}
+	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(3 * time.Minute)}
 	staleApproval := domain.Approval{ID: "batch-stale-approval", RunID: stale.ID, Status: "pending", RequestedAt: stale.CreatedAt}
 	if err := s.CreateRun(ctx, stale, &staleApproval); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.BatchDecideApprovals(ctx, []string{"batch-stale-approval", "missing"}, "environment-dave", "approved", "window", testNow.Add(4*time.Minute)); !errors.Is(err, domain.ErrConflict) {
+	if _, err := s.BatchDecideApprovals(ctx, []string{"batch-stale-approval", "missing"}, "environment-owner-a", "approved", "window", testNow.Add(4*time.Minute)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale batch error=%v", err)
 	}
 	unchanged, _ := s.GetRun(ctx, stale.ID)
@@ -574,7 +574,7 @@ func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 
 func TestComponentLayerDatabaseConstraint(t *testing.T) {
 	s := newTestStore(t)
-	component := componentFixture("invalid-classification", "component-alice")
+	component := componentFixture("invalid-classification", "component-owner-a")
 	component.Layer = "unknown"
 	if err := s.CreateComponent(context.Background(), component); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("invalid layer insert=%v, want conflict", err)
@@ -584,10 +584,10 @@ func TestComponentLayerDatabaseConstraint(t *testing.T) {
 func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	if err := s.CreateComponent(ctx, componentFixture("kubelet", "component-alice")); err != nil {
+	if err := s.CreateComponent(ctx, componentFixture("kubelet", "component-owner-a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateComponent(ctx, componentFixture("kube-proxy", "component-alice")); err != nil {
+	if err := s.CreateComponent(ctx, componentFixture("kube-proxy", "component-owner-a")); err != nil {
 		t.Fatal(err)
 	}
 	minLength := 1
@@ -691,7 +691,7 @@ func TestIsSQLiteBusyRecognizesSnapshotAndLockErrors(t *testing.T) {
 func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	if err := s.CreateComponent(ctx, componentFixture("runtime", "component-alice")); err != nil {
+	if err := s.CreateComponent(ctx, componentFixture("runtime", "component-owner-a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateComponentRelease(ctx, releaseFixture("runtime-1", "runtime", "1.0.0", domain.ReleaseReleased)); err != nil {
@@ -699,7 +699,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", Name: "Runtime", ReleaseID: "runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{}}}, Edges: []domain.ScenarioEdge{}}
-	scenario := domain.Scenario{ID: "cluster", Slug: "cluster", Name: "Cluster", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "cluster", Slug: "cluster", Name: "Cluster", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{ID: "cluster-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, Graph: graph, CreatedAt: testNow}
 	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
 		t.Fatal(err)
@@ -712,18 +712,18 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 
 	inventory, _ := json.Marshal(map[string]any{"all": map[string]any{"hosts": map[string]any{"localhost": map[string]any{"ansible_connection": "local"}}}})
-	env := domain.Environment{ID: "lab", Name: "Lab", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
-	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, CreatedAt: testNow}
+	env := domain.Environment{ID: "lab", Name: "Lab", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
+	envRev := domain.EnvironmentRevision{ID: "lab-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.test:5000"}, CredentialRefs: []domain.CredentialRef{{Name: "ssh", Kind: "envVarRef", Reference: "TEST_KEY"}}, CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, env, envRev); err != nil {
 		t.Fatal(err)
 	}
 	storedEnvironment, err := s.GetEnvironment(ctx, env.ID, false)
-	if err != nil || storedEnvironment.Revision == nil || storedEnvironment.Revision.Variables["IMAGE_REGISTRY"] != "192.168.88.54:5000" {
+	if err != nil || storedEnvironment.Revision == nil || storedEnvironment.Revision.Variables["IMAGE_REGISTRY"] != "registry.example.test:5000" {
 		t.Fatalf("stored environment variables=%+v err=%v", storedEnvironment.Revision, err)
 	}
 
 	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
-	run1 := domain.Run{ID: "run-1", Kind: domain.RunScenarioTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-carol", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ScenarioRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
+	run1 := domain.Run{ID: "run-1", Kind: domain.RunScenarioTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ScenarioRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run1, &approval); err != nil {
 		t.Fatal(err)
 	}
@@ -740,10 +740,10 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 		userID string
 		want   bool
 	}{
-		{userID: "scenario-carol", want: true},
-		{userID: "environment-dave", want: true},
-		{userID: "component-alice", want: true},
-		{userID: "component-bob", want: false},
+		{userID: "scenario-owner-a", want: true},
+		{userID: "environment-owner-a", want: true},
+		{userID: "component-owner-a", want: true},
+		{userID: "component-owner-b", want: false},
 	} {
 		viewer, _ := s.GetUser(ctx, test.userID)
 		visible, err := s.CanViewRun(ctx, viewer, run1.ID)
@@ -751,7 +751,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 			t.Fatalf("CanViewRun(%s)=%v err=%v, want %v", test.userID, visible, err, test.want)
 		}
 	}
-	if err := s.DecideApproval(ctx, approval.ID, "environment-dave", "approved", "safe lab", testNow.Add(time.Second)); err != nil {
+	if err := s.DecideApproval(ctx, approval.ID, "environment-owner-a", "approved", "safe lab", testNow.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	run2 := run1
@@ -792,7 +792,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	if err := s.UpdateRunStatus(ctx, cancelledRun.ID, []domain.RunStatus{domain.RunAwaitingApproval}, domain.RunCancelled, "cancelled", testNow.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DecideApproval(ctx, cancelledApproval.ID, "environment-dave", "approved", "too late", testNow.Add(12*time.Minute)); !errors.Is(err, domain.ErrConflict) {
+	if err := s.DecideApproval(ctx, cancelledApproval.ID, "environment-owner-a", "approved", "too late", testNow.Add(12*time.Minute)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("approval of cancelled run = %v, want conflict", err)
 	}
 	gotApproval, err := s.GetApproval(ctx, cancelledApproval.ID)
@@ -801,7 +801,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 	componentTest := domain.Run{
 		ID: "component-test-active", Kind: domain.RunComponentTest, Status: domain.RunQueued,
-		RequestedBy: "component-alice", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID,
+		RequestedBy: "component-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID,
 		ComponentReleaseID: "runtime-1", InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(20 * time.Minute),
 	}
 	if err := s.CreateRun(ctx, componentTest, nil); err != nil {
@@ -833,19 +833,19 @@ func TestEmptyImageBuildListsEncodeAsArrays(t *testing.T) {
 func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	if err := s.CreateComponent(ctx, componentFixture("reconcile-component", "component-alice")); err != nil {
+	if err := s.CreateComponent(ctx, componentFixture("reconcile-component", "component-owner-a")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateComponentRelease(ctx, releaseFixture("reconcile-release", "reconcile-component", "1.0.0", domain.ReleaseReleased)); err != nil {
 		t.Fatal(err)
 	}
-	environment := domain.Environment{ID: "reconcile-env", Name: "Reconcile", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	environment := domain.Environment{ID: "reconcile-env", Name: "Reconcile", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.EnvironmentRevision{ID: "reconcile-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
 	}
 	plan := map[string]any{"steps": []any{map[string]any{"releaseId": "reconcile-release"}}}
-	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-alice", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, InputSnapshot: plan, CreatedAt: testNow}
+	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, InputSnapshot: plan, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, invalid, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	component := domain.Component{ID: "restart-component", Slug: "restart-component", Name: "Restart Component", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: "component-alice", CreatedAt: testNow, UpdatedAt: testNow}
+	component := domain.Component{ID: "restart-component", Slug: "restart-component", Name: "Restart Component", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: "component-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	if err := s.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
@@ -881,17 +881,17 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 	if err := s.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
-	scenario := domain.Scenario{ID: "restart-scenario", Slug: "restart-scenario", Name: "Restart", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "restart-scenario", Slug: "restart-scenario", Name: "Restart", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{ID: "restart-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionTesting, Graph: domain.ScenarioGraph{}, CreatedAt: testNow}
 	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
 		t.Fatal(err)
 	}
-	environment := domain.Environment{ID: "restart-env", Name: "Restart Env", OwnerID: "environment-dave", CreatedAt: testNow, UpdatedAt: testNow}
+	environment := domain.Environment{ID: "restart-env", Name: "Restart Env", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	environmentRevision := domain.EnvironmentRevision{ID: "restart-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
-	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-carol", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}, CreatedAt: testNow}
+	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -914,14 +914,14 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 func TestNotificationsAuditSessionAndLogs(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	if err := s.CreateSession(ctx, "hash", "component-alice", time.Now().UTC().Add(time.Hour)); err != nil {
+	if err := s.CreateSession(ctx, "hash", "component-owner-a", time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := s.UserBySession(ctx, "hash"); err != nil || u.ID != "component-alice" {
+	if u, err := s.UserBySession(ctx, "hash"); err != nil || u.ID != "component-owner-a" {
 		t.Fatalf("session user=%+v err=%v", u, err)
 	}
 
-	n := domain.Notification{ID: "n1", UserID: "component-alice", Type: "component_released", Title: "Runtime updated", Body: "1.1.0", Payload: map[string]any{"path": []any{"runtime", "kubernetes"}}, CreatedAt: testNow}
+	n := domain.Notification{ID: "n1", UserID: "component-owner-a", Type: "component_released", Title: "Runtime updated", Body: "1.1.0", Payload: map[string]any{"path": []any{"runtime", "kubernetes"}}, CreatedAt: testNow}
 	if err := s.CreateNotification(ctx, n); err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +972,7 @@ func TestNotificationsAuditSessionAndLogs(t *testing.T) {
 func TestScenarioGraphEditInvalidatesTestAndReleasedIsImmutable(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	scenario := domain.Scenario{ID: "editable", Slug: "editable", Name: "Editable", OwnerID: "scenario-carol", CreatedAt: testNow, UpdatedAt: testNow}
+	scenario := domain.Scenario{ID: "editable", Slug: "editable", Name: "Editable", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node", ReleaseID: "release", Action: domain.ActionInstall, HostGroup: "all"}}, Edges: []domain.ScenarioEdge{}}
 	revision := domain.ScenarioRevision{ID: "editable-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, Graph: graph, CreatedAt: testNow}
 	if err := s.CreateScenario(ctx, scenario, revision); err != nil {

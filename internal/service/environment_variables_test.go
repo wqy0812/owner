@@ -9,13 +9,13 @@ import (
 
 func TestNormalizeEnvironmentVariablesAndRegistry(t *testing.T) {
 	normalized, err := normalizeEnvironmentVariables(map[string]string{
-		"IMAGE_REGISTRY": " 192.168.88.54:5000/ ",
+		"IMAGE_REGISTRY": " registry.example.test:5000/ ",
 		"REGION":         "cn-east",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if normalized["IMAGE_REGISTRY"] != "192.168.88.54:5000" {
+	if normalized["IMAGE_REGISTRY"] != "registry.example.test:5000" {
 		t.Fatalf("registry=%q", normalized["IMAGE_REGISTRY"])
 	}
 	for name, variables := range map[string]map[string]string{
@@ -35,12 +35,12 @@ func TestNormalizeEnvironmentVariablesAndRegistry(t *testing.T) {
 }
 
 func TestInjectEnvironmentVariablesDirectlyAndRejectsCollisions(t *testing.T) {
-	revision := domain.EnvironmentRevision{Variables: map[string]string{"IMAGE_REGISTRY": "192.168.88.54:5000"}}
+	revision := domain.EnvironmentRevision{Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.test:5000"}}
 	steps := []lockedStep{{Variables: map[string]any{"component_version": "1.0.0"}}}
 	if err := injectEnvironmentVariables(revision, steps); err != nil {
 		t.Fatal(err)
 	}
-	if steps[0].Variables["IMAGE_REGISTRY"] != "192.168.88.54:5000" {
+	if steps[0].Variables["IMAGE_REGISTRY"] != "registry.example.test:5000" {
 		t.Fatalf("variables=%#v", steps[0].Variables)
 	}
 	if err := injectEnvironmentVariables(revision, []lockedStep{{Variables: map[string]any{"IMAGE_REGISTRY": "override"}}}); err == nil || !strings.Contains(err.Error(), "component parameter") {

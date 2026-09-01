@@ -114,7 +114,7 @@ describe('scenario template import', () => {
     expect(() => parseScenarioTemplate(JSON.stringify(cyclic))).toThrow(/无环 DAG/);
 
     const component = {
-      id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: 'component-alice',
+      id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: 'component-owner-a',
       layer: 'runtime_state', tags: ['runtime', 'core'],
       releases: [{ id: 'release-runtime', componentId: 'component-runtime', version: '1.0.0', state: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
     } as Component;

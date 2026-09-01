@@ -174,7 +174,7 @@ func TestRedactorHandlesExplicitStructuredAndPrivateKeySecrets(t *testing.T) {
 		`{"password":"json-secret"}`,
 		`token: yaml-secret`,
 		`Authorization: Bearer bearer-secret`,
-		`https://demo:url-secret@example.invalid/v1`,
+		`https://user:url-secret@example.invalid/v1`,
 		`-----BEGIN PRIVATE KEY-----`,
 		`base64-private-material`,
 		`-----END PRIVATE KEY-----`,

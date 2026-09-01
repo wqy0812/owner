@@ -106,13 +106,13 @@ func TestScenarioRunInputIsValidatedGloballyAndScopedPerNode(t *testing.T) {
 		{ID: "control-plane", RunInputs: []string{"api_endpoint"}},
 		{ID: "workers", RunInputs: []string{"worker_count"}},
 	}
-	input := map[string]any{"api_endpoint": "10.0.0.1", "worker_count": float64(3)}
+	input := map[string]any{"api_endpoint": "192.0.2.1", "worker_count": float64(3)}
 	if err := validateScenarioRunInput(nodes, input); err != nil {
 		t.Fatalf("globally declared run input rejected: %v", err)
 	}
 	controlPlane := runInputForNode(nodes[0], input)
 	workers := runInputForNode(nodes[1], input)
-	if !reflect.DeepEqual(controlPlane, map[string]any{"api_endpoint": "10.0.0.1"}) || !reflect.DeepEqual(workers, map[string]any{"worker_count": float64(3)}) {
+	if !reflect.DeepEqual(controlPlane, map[string]any{"api_endpoint": "192.0.2.1"}) || !reflect.DeepEqual(workers, map[string]any{"worker_count": float64(3)}) {
 		t.Fatalf("node run inputs control-plane=%#v workers=%#v", controlPlane, workers)
 	}
 	if err := validateScenarioRunInput(nodes, map[string]any{"undeclared": true}); err == nil {
@@ -301,8 +301,8 @@ func TestInlineSensitiveMapsAreRejectedBeforePersistence(t *testing.T) {
 
 func TestCredentialReferencesAndRedaction(t *testing.T) {
 	valid := []domain.CredentialRef{
-		{Name: "ssh", Kind: "sshKeyPath", Reference: "/tmp/demo-key"},
-		{Name: "registry", Kind: "envVarRef", Reference: "DEMO_REGISTRY_TOKEN"},
+		{Name: "ssh", Kind: "sshKeyPath", Reference: "/tmp/test-key"},
+		{Name: "registry", Kind: "envVarRef", Reference: "TEST_REGISTRY_TOKEN"},
 	}
 	if err := ValidateCredentialRefs(valid); err != nil {
 		t.Fatal(err)

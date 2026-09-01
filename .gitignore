@@ -4,6 +4,9 @@
 bin/
 data/
 coverage/
+output/
+/automation/scenarios/*.local.json
+/automation/scenarios/local/
 web/node_modules/
 web/dist/
 web/coverage/

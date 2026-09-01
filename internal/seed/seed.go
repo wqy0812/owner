@@ -16,6 +16,7 @@ const (
 	ComponentOwnerK8sID     = "component-bob"
 	ScenarioOwnerID         = "scenario-carol"
 	EnvironmentOwnerID      = "environment-dave"
+	seedAuditID             = "audit-demo-seeded"
 )
 
 type Seeder struct {
@@ -44,7 +45,7 @@ func (s Seeder) Run(ctx context.Context) error {
 		return err
 	}
 	if err := s.appendAuditIfMissing(ctx, domain.AuditEvent{
-		ID: "audit-demo-seeded", ActorID: "system", Action: "demo.seeded",
+		ID: seedAuditID, ActorID: "system", Action: "demo.seeded",
 		ResourceType: "platform", ResourceID: "newplatform-demo",
 		Metadata: map[string]any{"openFuyaoSnapshot": "examples/ansible/openfuyao"}, CreatedAt: now,
 	}); err != nil {
