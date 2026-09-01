@@ -677,6 +677,17 @@ func TestSQLiteConnectionPragmasApplyAcrossPool(t *testing.T) {
 	}
 }
 
+func TestIsSQLiteBusyRecognizesSnapshotAndLockErrors(t *testing.T) {
+	for _, message := range []string{"database is locked (517)", "SQLITE_BUSY: database is locked"} {
+		if !isSQLiteBusy(errors.New(message)) {
+			t.Fatalf("expected %q to be treated as retryable SQLite contention", message)
+		}
+	}
+	if isSQLiteBusy(errors.New("constraint failed")) {
+		t.Fatal("non-locking SQLite failures must not be retried")
+	}
+}
+
 func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

@@ -114,11 +114,37 @@ func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRe
 }
 
 func (s *Store) CreateScenarioRevision(ctx context.Context, r domain.ScenarioRevision) error {
+	return s.CreateScenarioRevisionFromSource(ctx, "", r)
+}
+
+// CreateScenarioRevisionFromSource creates the next Draft atomically. A
+// Test Passed source still occupies the scenario's single active-revision
+// slot, so cloning it first retains the immutable record as an abandoned
+// historical revision while preserving test_passed_at and its Run links.
+func (s *Store) CreateScenarioRevisionFromSource(ctx context.Context, sourceRevisionID string, r domain.ScenarioRevision) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if sourceRevisionID != "" {
+		res, err := tx.ExecContext(ctx, `
+UPDATE scenario_revisions
+SET status='deprecated',deprecated_at=?,abandoned_at=?
+WHERE id=? AND scenario_id=? AND status='test_passed'`, timeText(r.CreatedAt), timeText(r.CreatedAt), sourceRevisionID, r.ScenarioID)
+		if err != nil {
+			return err
+		}
+		if changed, _ := res.RowsAffected(); changed == 0 {
+			var status string
+			if err := tx.QueryRowContext(ctx, `SELECT status FROM scenario_revisions WHERE id=? AND scenario_id=?`, sourceRevisionID, r.ScenarioID).Scan(&status); err != nil {
+				return mapSQLError(err)
+			}
+			if status != string(domain.RevisionReleased) && status != string(domain.RevisionDeprecated) {
+				return fmt.Errorf("%w: source scenario revision is not immutable", domain.ErrConflict)
+			}
+		}
+	}
 	if err = insertScenarioRevision(ctx, tx, r); err != nil {
 		return err
 	}

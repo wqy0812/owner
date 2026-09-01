@@ -198,6 +198,9 @@ func (r *Runner) RunInWorkspace(parent context.Context, workspace *Workspace, re
 	}
 	result.Logs, result.LogsTruncated = collector.Snapshot()
 	result.Recap = collector.Recap()
+	if len(result.Recap) == 0 {
+		return result, ErrNoHostRecap
+	}
 	return result, nil
 }
 
@@ -344,6 +347,11 @@ func (r *Runner) commandEnv(localTemp string) []string {
 	environment["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
 	environment["ANSIBLE_NOCOLOR"] = "True"
 	environment["ANSIBLE_FORCE_COLOR"] = "0"
+	// Recap parsing is part of the execution contract. Force the builtin
+	// default callback after inherited and caller-supplied environment values so
+	// ansible.cfg, ANSIBLE_STDOUT_CALLBACK, or Runner.Env cannot silently switch
+	// the execute phase to an incompatible format after hosts have been mutated.
+	environment["ANSIBLE_STDOUT_CALLBACK"] = "default"
 	environment["PYTHONUNBUFFERED"] = "1"
 	keys := make([]string, 0, len(environment))
 	for key := range environment {

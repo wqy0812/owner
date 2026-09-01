@@ -42,6 +42,7 @@ export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[]
       { value: '18.04', label: '18.04' },
       { value: '20.04', label: '20.04' },
       { value: '22.04', label: '22.04' },
+      { value: '24.04', label: '24.04' },
       { value: '18.04 / 24.04', label: '18.04 / 24.04（混合）' },
     ],
   },

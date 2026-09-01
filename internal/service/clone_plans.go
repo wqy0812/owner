@@ -103,10 +103,13 @@ func (p *Platform) PreviewScenarioClone(ctx context.Context, user domain.User, s
 	if source.ID == "" {
 		return ScenarioClonePlan{}, fmt.Errorf("%w: source revision does not belong to scenario", domain.ErrInvalid)
 	}
-	if source.Status != domain.RevisionReleased && source.Status != domain.RevisionDeprecated {
-		return ScenarioClonePlan{}, fmt.Errorf("%w: source revision must be released or deprecated", domain.ErrConflict)
+	if source.Status != domain.RevisionReleased && source.Status != domain.RevisionDeprecated && source.Status != domain.RevisionTestPassed {
+		return ScenarioClonePlan{}, fmt.Errorf("%w: source revision must be test passed, released, or deprecated", domain.ErrConflict)
 	}
 	for _, revision := range scenario.Revisions {
+		if revision.ID == source.ID {
+			continue
+		}
 		if revision.Status == domain.RevisionDraft || revision.Status == domain.RevisionTesting || revision.Status == domain.RevisionTestPassed {
 			return ScenarioClonePlan{}, fmt.Errorf("%w: scenario already has an active draft revision", domain.ErrConflict)
 		}

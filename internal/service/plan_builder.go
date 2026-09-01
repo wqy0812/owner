@@ -126,6 +126,9 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 			if verification.ReleaseID != "" {
 				return preparedComponentTest{}, fmt.Errorf("%w: rollback_only must not include a releaseId", domain.ErrInvalid)
 			}
+			if selected.FromReleaseID != "" || selected.ToReleaseID != "" {
+				return preparedComponentTest{}, fmt.Errorf("%w: rollback_only is only valid for a clean-state rollback without fromReleaseId/toReleaseId", domain.ErrInvalid)
+			}
 		case RollbackVerificationTargetRelease:
 			if verification.ReleaseID == "" {
 				return preparedComponentTest{}, fmt.Errorf("%w: target_release requires a releaseId", domain.ErrInvalid)

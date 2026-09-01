@@ -66,6 +66,33 @@ func TestReleaseReadinessExplainsLifecycleContractAndEvidenceBlockers(t *testing
 	}
 }
 
+func TestComponentTestEvidenceAcceptsOnlyDeclaredRollbackSelfVerification(t *testing.T) {
+	rollback := lockedStep{Action: domain.ActionRollback}
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_only" {
+		t.Fatalf("unmarked rollback evidence=%q", got)
+	}
+	rollback.Tags = []string{rollbackSelfVerifyTag}
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_self_verify" {
+		t.Fatalf("self-verifying rollback evidence=%q", got)
+	}
+	rollback.FromReleaseID = "release-new"
+	rollback.ToReleaseID = "release-old"
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_only" {
+		t.Fatalf("targeted self-verifying rollback evidence=%q", got)
+	}
+	verify := lockedStep{Action: domain.ActionVerify}
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback, verify}); got != "rollback_verify" {
+		t.Fatalf("explicit rollback verify evidence=%q", got)
+	}
+}
+
+func TestClusterForgeMetadataTagsAreNotForwardedToAnsible(t *testing.T) {
+	got := actionRuntimeTags([]string{"install", rollbackSelfVerifyTag, "network"})
+	if len(got) != 2 || got[0] != "install" || got[1] != "network" {
+		t.Fatalf("runtime tags=%v", got)
+	}
+}
+
 type digestFailureRunner struct{}
 
 func (digestFailureRunner) Run(context.Context, ActionRequest) (ActionResult, error) {

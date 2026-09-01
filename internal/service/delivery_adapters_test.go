@@ -115,13 +115,21 @@ func TestDockerImageDeliveryProbesAndTransfersImmutableImage(t *testing.T) {
 	script := `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
-  printf 'registry.test/runtime@sha256:%064d\n' 0
-  exit 0
-fi
 if [ "${FAKE_DOCKER_FAIL:-}" = "$1" ]; then
   printf 'forced %s failure\n' "$1"
   exit 9
+fi
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then
+  if [ "${FAKE_DOCKER_MANIFEST_FAIL:-}" = "1" ]; then
+    printf 'OCI manifest is not supported\n'
+    exit 9
+  fi
+  printf '{"Descriptor":{"digest":"sha256:%064d"}}\n' 0
+  exit 0
+fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf '["registry.test/runtime@sha256:%064d"]\n' 0
+  exit 0
 fi
 printf 'completed %s\n' "$1"
 `
@@ -138,6 +146,15 @@ printf 'completed %s\n' "$1"
 	if observed != "registry.test/runtime@"+digest {
 		t.Fatalf("observed digest=%q", observed)
 	}
+	t.Setenv("FAKE_DOCKER_MANIFEST_FAIL", "1")
+	observed = ""
+	if err := delivery.Probe(context.Background(), ImageLocation{Ref: "registry.test/runtime:oci", ObservedDigest: &observed}, ImageDigest{Value: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if observed != "registry.test/runtime@"+digest {
+		t.Fatalf("OCI fallback observed digest=%q", observed)
+	}
+	t.Setenv("FAKE_DOCKER_MANIFEST_FAIL", "")
 	var logs []string
 	if err := delivery.Transfer(context.Background(), ImageTransfer{
 		Source: ImageLocation{Ref: "source.test/runtime:latest"}, Target: ImageLocation{Ref: "target.test/runtime:latest"},
@@ -150,7 +167,10 @@ printf 'completed %s\n' "$1"
 		t.Fatal(err)
 	}
 	for _, command := range []string{
-		"pull registry.test/runtime:latest", "image inspect --format={{index .RepoDigests 0}} registry.test/runtime:latest",
+		"manifest inspect --insecure --verbose registry.test/runtime:latest",
+		"manifest inspect --insecure --verbose registry.test/runtime:oci",
+		"pull registry.test/runtime:oci",
+		"image inspect --format {{json .RepoDigests}} registry.test/runtime:oci",
 		"pull source.test/runtime:latest", "tag source.test/runtime:latest target.test/runtime:latest",
 		"push target.test/runtime:latest", "pull target.test/runtime@" + digest,
 	} {

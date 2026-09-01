@@ -77,14 +77,19 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string {
 	if action == domain.ActionRollback {
 		rollbackSeen := false
+		rollbackSelfVerifies := false
 		for _, step := range steps {
 			if step.Action == domain.ActionRollback {
 				rollbackSeen = true
+				rollbackSelfVerifies = step.FromReleaseID == "" && step.ToReleaseID == "" && containsString(step.Tags, rollbackSelfVerifyTag)
 				continue
 			}
 			if rollbackSeen && step.Action == domain.ActionVerify {
 				return "rollback_verify"
 			}
+		}
+		if rollbackSeen && rollbackSelfVerifies {
+			return "rollback_self_verify"
 		}
 		return "rollback_only"
 	}
@@ -99,6 +104,17 @@ func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string 
 		}
 	}
 	return "incomplete"
+}
+
+const rollbackSelfVerifyTag = "clusterforge.rollback-self-verifies"
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []lockedStep) error {

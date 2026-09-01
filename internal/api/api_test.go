@@ -2129,10 +2129,9 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		}
 	})
 
-	t.Run("rollback only is not delivery evidence", func(t *testing.T) {
+	t.Run("targeted rollback cannot bypass target verification", func(t *testing.T) {
 		f := newAPIFixture(t)
 		alice := f.session(seed.ComponentOwnerRuntimeID)
-		dave := f.session(seed.EnvironmentOwnerID)
 		f.recordReleaseReadiness("release-test-runtime-1.1.0")
 		if _, err := f.database.DB().Exec(`DELETE FROM runs WHERE component_release_id=? AND json_extract(input_snapshot_json,'$.componentTestEvidence')='rollback_verify'`, "release-test-runtime-1.1.0"); err != nil {
 			t.Fatal(err)
@@ -2140,15 +2139,9 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
 			"environmentId": "environment-test", "mode": "rollback", "rollbackVerification": map[string]any{"kind": "rollback_only"},
 		}, alice)
-		if response.Code != http.StatusAccepted {
-			t.Fatalf("rollback-only run status=%d body=%s", response.Code, response.Body.String())
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "clean-state rollback") {
+			t.Fatalf("targeted rollback-only status=%d body=%s", response.Code, response.Body.String())
 		}
-		data := decodeEnvelope(t, response)["data"].(map[string]any)
-		approvalID := data["approval"].(map[string]any)["id"].(string)
-		if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", nil, dave); approved.Code != http.StatusOK {
-			t.Fatalf("approve rollback-only status=%d body=%s", approved.Code, approved.Body.String())
-		}
-		waitForRun(t, f.database, data["id"].(string), domain.RunSucceeded)
 		candidate := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/candidate", map[string]any{"candidate": true}, alice)
 		if candidate.Code != http.StatusConflict || !strings.Contains(candidate.Body.String(), "缺少回滚及回滚后验证证据") {
 			t.Fatalf("rollback-only accepted as candidate evidence status=%d body=%s", candidate.Code, candidate.Body.String())
@@ -2908,13 +2901,8 @@ func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
 	}
 
 	rollbackOnly := preview(map[string]any{"kind": "rollback_only"})
-	if rollbackOnly.Code != http.StatusOK {
-		t.Fatalf("rollback-only preview status=%d body=%s", rollbackOnly.Code, rollbackOnly.Body.String())
-	}
-	rollbackOnlyData := decodeEnvelope(t, rollbackOnly)["data"].(map[string]any)
-	rollbackOnlySteps := rollbackOnlyData["steps"].([]any)
-	if rollbackOnlyData["requiresApproval"] != true || len(rollbackOnlySteps) != 1 || rollbackOnlySteps[0].(map[string]any)["releaseVersion"] != "v1.1.0" || rollbackOnlySteps[0].(map[string]any)["backupInstallRunId"] != "run-installed-runtime-1.1" {
-		t.Fatalf("rollback-only preview=%#v", rollbackOnlyData)
+	if rollbackOnly.Code != http.StatusBadRequest || !strings.Contains(rollbackOnly.Body.String(), "clean-state rollback") {
+		t.Fatalf("targeted rollback-only preview status=%d body=%s", rollbackOnly.Code, rollbackOnly.Body.String())
 	}
 
 	alternate := preview(map[string]any{"kind": "target_release", "releaseId": "release-test-runtime-0.9.0"})
@@ -2963,7 +2951,7 @@ func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
 	}
 	stale := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-runs", map[string]any{
 		"environmentId": "environment-test", "mode": "rollback",
-		"rollbackVerification": map[string]any{"kind": "rollback_only"}, "expectedPlanDigest": rollbackOnlyData["planDigest"],
+		"rollbackVerification": map[string]any{"kind": "target_release", "releaseId": "release-test-runtime-0.9.0"}, "expectedPlanDigest": alternateData["planDigest"],
 	}, alice)
 	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "execution plan changed") {
 		t.Fatalf("stale plan status=%d body=%s", stale.Code, stale.Body.String())

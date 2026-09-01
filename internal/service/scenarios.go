@@ -94,7 +94,7 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 	next := plan.NextRevision
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
 	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
-	if err := p.store.CreateScenarioRevision(ctx, source); err != nil {
+	if err := p.store.CreateScenarioRevisionFromSource(ctx, input.SourceRevisionID, source); err != nil {
 		return source, err
 	}
 	p.audit(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next, "sourceRevisionId": input.SourceRevisionID, "planDigest": plan.PlanDigest})

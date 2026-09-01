@@ -13,8 +13,9 @@ var (
 )
 
 type recapParser struct {
-	mu    sync.Mutex
-	hosts map[string]HostRecap
+	mu      sync.Mutex
+	inRecap bool
+	hosts   map[string]HostRecap
 }
 
 func newRecapParser() *recapParser {
@@ -23,6 +24,15 @@ func newRecapParser() *recapParser {
 
 func (p *recapParser) Add(line string) {
 	line = ansiCode.ReplaceAllString(line, "")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if strings.HasPrefix(strings.TrimSpace(line), "PLAY RECAP") {
+		p.inRecap = true
+		return
+	}
+	if !p.inRecap {
+		return
+	}
 	colon := strings.Index(line, ":")
 	if colon <= 0 {
 		return
@@ -42,7 +52,6 @@ func (p *recapParser) Add(line string) {
 	if _, ok := values["ok"]; !ok {
 		return
 	}
-	p.mu.Lock()
 	p.hosts[host] = HostRecap{
 		OK:          values["ok"],
 		Changed:     values["changed"],
@@ -52,7 +61,6 @@ func (p *recapParser) Add(line string) {
 		Rescued:     values["rescued"],
 		Ignored:     values["ignored"],
 	}
-	p.mu.Unlock()
 }
 
 func (p *recapParser) Snapshot() map[string]HostRecap {

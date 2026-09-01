@@ -274,7 +274,7 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id string, from []domain.Ru
 		args = append(args, v)
 	}
 	q := fmt.Sprintf(`UPDATE runs SET status=?,error_text=?,started_at=COALESCE(?,started_at),finished_at=COALESCE(?,finished_at) WHERE id=? AND status IN (%s)`, ph)
-	res, err := s.db.ExecContext(ctx, q, args...)
+	res, err := s.execWithBusyRetry(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -476,8 +476,11 @@ func (s *Store) SuccessfulComponentEvidenceRunIDs(ctx context.Context, releaseID
 SELECT id FROM runs
 WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
   AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
-  AND json_extract(input_snapshot_json, '$.componentTestEvidence')=?
-ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, evidence).Scan(&id)
+  AND CASE
+    WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json, '$.componentTestEvidence') IN ('rollback_verify','rollback_self_verify')
+    ELSE json_extract(input_snapshot_json, '$.componentTestEvidence')=?
+  END
+ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, evidence, evidence).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
@@ -525,11 +528,11 @@ func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.
 }
 
 func (s *Store) CreateRunStep(ctx context.Context, st domain.RunStep) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO run_steps(id,run_id,node_id,name,status,exit_code,summary,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)`, st.ID, st.RunID, st.NodeID, st.Name, st.Status, st.ExitCode, st.Summary, ptrTimeText(st.StartedAt), ptrTimeText(st.FinishedAt))
+	_, err := s.execWithBusyRetry(ctx, `INSERT INTO run_steps(id,run_id,node_id,name,status,exit_code,summary,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)`, st.ID, st.RunID, st.NodeID, st.Name, st.Status, st.ExitCode, st.Summary, ptrTimeText(st.StartedAt), ptrTimeText(st.FinishedAt))
 	return mapSQLError(err)
 }
 func (s *Store) UpdateRunStep(ctx context.Context, st domain.RunStep) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE run_steps SET status=?,exit_code=?,summary=?,started_at=?,finished_at=? WHERE id=?`, st.Status, st.ExitCode, st.Summary, ptrTimeText(st.StartedAt), ptrTimeText(st.FinishedAt), st.ID)
+	res, err := s.execWithBusyRetry(ctx, `UPDATE run_steps SET status=?,exit_code=?,summary=?,started_at=?,finished_at=? WHERE id=?`, st.Status, st.ExitCode, st.Summary, ptrTimeText(st.StartedAt), ptrTimeText(st.FinishedAt), st.ID)
 	if err != nil {
 		return err
 	}

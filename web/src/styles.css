@@ -696,6 +696,7 @@ input:disabled, select:disabled, textarea:disabled { color: #69738a; background:
 .revision-list strong, .revision-list small { display: block; }
 .revision-list strong { color: #35405b; font-size: 11px; }
 .revision-list small { margin-top: 3px; color: #929aab; font-size: 9px; }
+.revision-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .revision-preview { display: grid; gap: 13px; }
 .catalog-repository-panel__header { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 18px; padding: 22px 24px 20px; }
 .catalog-repository-panel__toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; width: 100%; padding-top: 16px; border-top: 1px solid #edf0f5; }
@@ -975,7 +976,7 @@ input:disabled, select:disabled, textarea:disabled { color: #69738a; background:
   .editor-footer { align-items: stretch; flex-direction: column; }
   .editor-footer > div { justify-content: flex-end; flex-wrap: wrap; }
   .revision-list > div { grid-template-columns: auto minmax(0, 1fr); }
-  .revision-list > div > :last-child { grid-column: 2; justify-self: start; }
+  .revision-actions { grid-column: 2; justify-self: start; flex-wrap: wrap; }
   .parameter-card__grid, .dependency-card__grid, .mapping-row__fields, .visibility-toggle { grid-template-columns: 1fr; }
   .parameter-card__grid .span-2 { grid-column: auto; }
   .manual-shell { grid-template-columns: 1fr; }

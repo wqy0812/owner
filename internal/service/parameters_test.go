@@ -46,9 +46,33 @@ func TestValidateReleaseAllowsStandaloneInstallRollback(t *testing.T) {
 	if err := validateRelease(base); err != nil {
 		t.Fatalf("standalone install rollback rejected: %v", err)
 	}
+	base.Actions[0].Tags = []string{rollbackSelfVerifyTag}
+	if err := validateRelease(base); err != nil {
+		t.Fatalf("standalone self-verifying rollback rejected: %v", err)
+	}
+	base.Actions[0].FromReleaseID = "release-current"
+	base.Actions[0].ToReleaseID = "release-previous"
+	if err := validateRelease(base); err == nil || !strings.Contains(err.Error(), rollbackSelfVerifyTag) {
+		t.Fatalf("targeted self-verifying rollback accepted: %v", err)
+	}
+	base.Actions[0].Tags = nil
+	base.Actions[0].ToReleaseID = ""
 	base.Actions[0].FromReleaseID = "release-current"
 	if err := validateRelease(base); err == nil || !strings.Contains(err.Error(), "both fromReleaseId and toReleaseId") {
 		t.Fatalf("half-configured version rollback accepted: %v", err)
+	}
+}
+
+func TestValidateReleaseRejectsRollbackSelfVerificationTagOnOtherActions(t *testing.T) {
+	release := domain.ComponentRelease{
+		Version: "1.0.0",
+		Actions: []domain.ActionDefinition{{
+			Name: "verify", Kind: domain.ActionVerify, Playbook: "verify.yml", TimeoutSeconds: 60,
+			Tags: []string{rollbackSelfVerifyTag},
+		}},
+	}
+	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), rollbackSelfVerifyTag) {
+		t.Fatalf("non-rollback self-verification tag accepted: %v", err)
 	}
 }
 

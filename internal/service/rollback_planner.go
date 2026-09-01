@@ -164,28 +164,52 @@ func (r *RollbackPlanner) validateCurrentInstallEvidence(ctx context.Context, in
 	if err != nil {
 		return fmt.Errorf("%w: rollback refused: installed release no longer exists", domain.ErrConflict)
 	}
-	var capturedAction domain.ActionDefinition
-	for _, action := range release.Actions {
-		if action.ID == installation.Backup.ActionID {
-			capturedAction = action
-			break
-		}
-	}
-	if capturedAction.ID == "" {
-		return fmt.Errorf("%w: rollback refused: captured install action no longer matches release %s", domain.ErrConflict, release.ID)
-	}
 	digester, ok := p.runner.(digestRunner)
 	if !ok {
 		return fmt.Errorf("%w: rollback refused: runner cannot verify the captured Playbook hash", domain.ErrConflict)
 	}
-	currentDigest, _, err := digester.Digest(capturedAction.Playbook)
+	matched, err := currentReleaseContainsCapturedInstallPlaybook(release, installation.Backup.ActionID, installation.Backup.PlaybookSHA256, digester)
 	if err != nil {
-		return fmt.Errorf("%w: rollback refused: cannot verify captured Playbook: %v", domain.ErrConflict, err)
+		return err
 	}
-	if currentDigest != installation.Backup.PlaybookSHA256 {
+	if !matched {
 		return fmt.Errorf("%w: rollback refused: captured Playbook hash does not match the current release definition", domain.ErrConflict)
 	}
 	return nil
+}
+
+func currentReleaseContainsCapturedInstallPlaybook(release domain.ComponentRelease, actionID, playbookSHA256 string, digester digestRunner) (bool, error) {
+	candidates := make([]domain.ActionDefinition, 0, len(release.Actions))
+	for _, action := range release.Actions {
+		if action.ID == actionID {
+			candidates = append(candidates, action)
+			break
+		}
+	}
+	// Saving a Draft replaces Action rows, so a metadata-only correction can
+	// rotate the Action ID even though the captured install Playbook is still
+	// byte-for-byte identical. Preserve the digest guard while allowing that
+	// auditable edit to remain rollback-compatible.
+	if len(candidates) == 0 {
+		for _, action := range release.Actions {
+			if action.Kind == domain.ActionInstall || action.Kind == domain.ActionConfigure || action.Kind == domain.ActionUpgrade {
+				candidates = append(candidates, action)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return false, fmt.Errorf("%w: rollback refused: captured install action no longer matches release %s", domain.ErrConflict, release.ID)
+	}
+	for _, action := range candidates {
+		currentDigest, _, err := digester.Digest(action.Playbook)
+		if err != nil {
+			return false, fmt.Errorf("%w: rollback refused: cannot verify captured Playbook: %v", domain.ErrConflict, err)
+		}
+		if currentDigest == playbookSHA256 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func safeBackupSegment(value string) string {

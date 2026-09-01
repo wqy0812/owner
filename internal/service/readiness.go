@@ -9,10 +9,13 @@ import (
 )
 
 func (p *Platform) releaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ReleaseReadiness, error) {
-	return p.releaseReadinessWithin(ctx, release, map[string]bool{})
+	return p.releaseReadinessWithin(ctx, release, map[string]bool{}, map[string]domain.ReleaseReadiness{})
 }
 
-func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.ComponentRelease, visiting map[string]bool) (domain.ReleaseReadiness, error) {
+func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.ComponentRelease, visiting map[string]bool, memo map[string]domain.ReleaseReadiness) (domain.ReleaseReadiness, error) {
+	if cached, ok := memo[release.ID]; ok {
+		return cached, nil
+	}
 	componentURL := fmt.Sprintf("/components?selected=%s&release=%s", release.ComponentID, release.ID)
 	result := domain.ReleaseReadiness{Status: domain.ReadinessReady, Blockers: []domain.ReadinessBlocker{}}
 	add := func(code, message, action string) {
@@ -69,7 +72,7 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 				add("candidate_dependency_not_shared", fmt.Sprintf("依赖 %s 不是 Released 或共享候选", dependency.UpstreamReleaseID), "contract")
 				continue
 			}
-			upstreamReadiness, readyErr := p.releaseReadinessWithin(ctx, upstream, visiting)
+			upstreamReadiness, readyErr := p.releaseReadinessWithin(ctx, upstream, visiting, memo)
 			if readyErr != nil {
 				delete(visiting, release.ID)
 				return result, readyErr
@@ -86,6 +89,7 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	} else if release.Breaking || release.RiskLevel == domain.RiskHigh || release.RiskLevel == domain.RiskDestructive {
 		result.Status = domain.ReadinessRisky
 	}
+	memo[release.ID] = result
 	return result, nil
 }
 

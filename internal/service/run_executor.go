@@ -87,7 +87,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		mergeMap(variables, credentialVariables)
 		request := ansiblerunner.Request{
 			Playbook: locked.Playbook, Inventory: inventory, Variables: variables, SecretValues: secrets,
-			Limit: locked.Limit, Tags: locked.Tags, Timeout: time.Duration(locked.TimeoutSeconds) * time.Second,
+			Limit: locked.Limit, Tags: actionRuntimeTags(locked.Tags), Timeout: time.Duration(locked.TimeoutSeconds) * time.Second,
 			ExpectedPlaybookSHA256: locked.PlaybookDigest, ExpectedTreeSHA256: run.ArtifactDigest,
 			LogSink: func(event ansiblerunner.LogEvent) {
 				_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{
@@ -151,6 +151,16 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "stepId": step.ID, "status": step.Status})
 	}
 	p.finishRun(run, domain.RunSucceeded, nil)
+}
+
+func actionRuntimeTags(tags []string) []string {
+	runtimeTags := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if !strings.HasPrefix(tag, "clusterforge.") {
+			runtimeTags = append(runtimeTags, tag)
+		}
+	}
+	return runtimeTags
 }
 
 func (e *RunExecutor) mirrorRunImages(ctx context.Context, runID string, plan *lockedPlan) error {

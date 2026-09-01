@@ -123,6 +123,23 @@ wait
 	}
 }
 
+func TestRunnerRejectsSuccessfulExecuteWithoutHostRecap(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "site.yml"), "---\n- hosts: all\n  tasks: []\n", 0o600)
+	binary := filepath.Join(t.TempDir(), "fake-ansible-playbook")
+	writeTestFile(t, binary, "#!/bin/sh\nprintf 'PLAY RECAP *********************************************************************\\n'\n", 0o700)
+	runner := &Runner{AllowedRoot: root, WorkRoot: t.TempDir(), Binary: binary}
+	result, err := runner.Run(context.Background(), Request{
+		Playbook: "site.yml", Inventory: []byte("[all]\nlocalhost ansible_connection=local\n"),
+	})
+	if !errors.Is(err, ErrNoHostRecap) {
+		t.Fatalf("Run() error = %v, want ErrNoHostRecap", err)
+	}
+	if result.Successful {
+		t.Fatalf("Run() successful = true, want false")
+	}
+}
+
 func TestResolvePlaybookRejectsEscapeAndSymlink(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.yml")
@@ -190,12 +207,32 @@ func TestLogCollectorBoundsPersistentSinkAndEmitsOneMarker(t *testing.T) {
 
 func TestRecapParser(t *testing.T) {
 	parser := newRecapParser()
+	parser.Add("task output: ok=99 changed=99 unreachable=0 failed=0")
+	if len(parser.Snapshot()) != 0 {
+		t.Fatalf("task output before PLAY RECAP was accepted: %+v", parser.Snapshot())
+	}
+	parser.Add("PLAY RECAP *********************************************************************")
 	parser.Add("localhost : ok=7 changed=2 unreachable=0 failed=1 skipped=3 rescued=1 ignored=0")
 	parser.Add("not a recap: changed=9")
 	got := parser.Snapshot()["localhost"]
 	want := (HostRecap{OK: 7, Changed: 2, Failed: 1, Skipped: 3, Rescued: 1})
 	if got != want {
 		t.Fatalf("recap = %+v, want %+v", got, want)
+	}
+}
+
+func TestCommandEnvForcesDefaultStdoutCallback(t *testing.T) {
+	t.Setenv("ANSIBLE_STDOUT_CALLBACK", "minimal")
+	runner := &Runner{Env: map[string]string{"ANSIBLE_STDOUT_CALLBACK": "json"}}
+	got := map[string]string{}
+	for _, item := range runner.commandEnv(t.TempDir()) {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			got[key] = value
+		}
+	}
+	if got["ANSIBLE_STDOUT_CALLBACK"] != "default" {
+		t.Fatalf("stdout callback=%q, want default", got["ANSIBLE_STDOUT_CALLBACK"])
 	}
 }
 
@@ -254,7 +291,7 @@ func TestPreparedWorkspaceIsSharedAcrossSteps(t *testing.T) {
 		writeTestFile(t, filepath.Join(root, playbook), "---\n- hosts: all\n  tasks: []\n", 0o600)
 	}
 	binary := filepath.Join(t.TempDir(), "fake-ansible-playbook")
-	writeTestFile(t, binary, "#!/bin/sh\nexit 0\n", 0o700)
+	writeTestFile(t, binary, "#!/bin/sh\nprintf 'PLAY RECAP *********************************************************************\\n'\nprintf 'localhost : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\\n'\n", 0o700)
 	runner := &Runner{AllowedRoot: root, WorkRoot: t.TempDir(), Binary: binary}
 	digests, treeDigest, err := runner.DigestPlan([]string{"one.yml", "two.yml"})
 	if err != nil {

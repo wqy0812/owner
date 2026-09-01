@@ -118,6 +118,7 @@ var (
 	ErrOutsideRoot     = errors.New("playbook is outside allowed root")
 	ErrInvalidRequest  = errors.New("invalid ansible request")
 	ErrArtifactChanged = errors.New("ansible artifact changed after the run was locked")
+	ErrNoHostRecap     = errors.New("ansible execute phase completed without a host recap")
 )
 
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {

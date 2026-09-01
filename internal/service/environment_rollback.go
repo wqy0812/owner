@@ -253,6 +253,10 @@ func rollbackVariablesFromInstall(values map[string]any, sourceRevision, current
 		delete(output, artifact.Alias+"_url")
 		delete(output, artifact.Alias+"_sha256")
 	}
+	for _, image := range release.Images {
+		delete(output, image.LogicalName+"_image_ref")
+		delete(output, image.LogicalName+"_image_digest")
+	}
 	return output
 }
 

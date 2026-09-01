@@ -1458,7 +1458,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
     await userEvent.click(screen.getByRole('checkbox', { name: 'ARM/arm64' }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'IPv4' }));
-    await userEvent.click(screen.getByRole('checkbox', { name: '18.04 / 24.04（混合）' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: '24.04' }));
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '增加 ARM 适配');
     await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
@@ -1467,7 +1467,7 @@ describe('platform shell and RBAC UI', () => {
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
         version: 'v2.2.0',
         releaseNotes: '增加 ARM 适配',
-        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], operatingSystemVersion: ['18.04 / 24.04'], ipFamily: ['IPv4'] },
+        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], operatingSystemVersion: ['24.04'], ipFamily: ['IPv4'] },
       });
     });
   });
@@ -1499,7 +1499,7 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
   });
 
-  it('previews rollback versions, invalidates stale plans, and submits rollback-only with the digest', async () => {
+  it('requires target verification for a version rollback and submits the locked digest', async () => {
     const draft = {
       id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1',
       status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
@@ -1560,6 +1560,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('回退验证将修改环境状态')).toBeInTheDocument();
     expect(screen.getByText('来源：2.0.0-rc1 · Draft')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '1.9.0 · released · 合同目标' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '仅执行 Draft 回退' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '目标环境' }), 'environment-test');
     await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
 
@@ -1567,19 +1568,13 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 1.9.0');
     expect(screen.getByRole('button', { name: '确认提交回退验证' })).toBeEnabled();
 
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '回退验证策略' }), 'rollback_only');
-    expect(screen.queryByRole('region', { name: '完整执行计划' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认提交回退验证' })).toBeDisabled();
-    await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
-    expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('managed/runtime/rollback.yml');
-    expect(screen.getByRole('region', { name: '完整执行计划' })).not.toHaveTextContent('managed/runtime/verify.yml');
     await userEvent.click(screen.getByRole('button', { name: '确认提交回退验证' }));
 
     await waitFor(() => expect(submitted).toMatchObject({
       environmentId: 'environment-test', mode: 'rollback',
-      rollbackVerification: { kind: 'rollback_only' }, expectedPlanDigest: 'digest-rollback-only',
+      rollbackVerification: { kind: 'target_release', releaseId: 'release-runtime-stable' }, expectedPlanDigest: 'digest-target',
     }));
-    expect(previews).toHaveLength(2);
+    expect(previews).toHaveLength(1);
     expect(previews[0]).toMatchObject({ rollbackVerification: { kind: 'target_release', releaseId: 'release-runtime-stable' } });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -2034,9 +2029,9 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.queryByRole('option', { name: 'uninstall' })).not.toBeInTheDocument();
   });
 
-  it('confirms before creating a revision and does not submit when cancelled', async () => {
-    const released = {
-      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released',
+  it('confirms before cloning a test-passed revision and does not submit when cancelled', async () => {
+    const testPassed = {
+      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'test_passed',
       nodes: [], edges: [],
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2044,14 +2039,14 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(carol);
       if (url.endsWith('/components')) return json(components);
       if (url.endsWith('/scenarios/scenario-confirm/revision-clone-plan') && init?.method === 'POST') {
-        return json({ scenarioId: 'scenario-confirm', sourceRevisionId: released.id, sourceRevision: 1, nextRevision: 2, nodeCount: 0, edgeCount: 0, planDigest: 'scenario-clone-plan' });
+        return json({ scenarioId: 'scenario-confirm', sourceRevisionId: testPassed.id, sourceRevision: 1, nextRevision: 2, nodeCount: 0, edgeCount: 0, planDigest: 'scenario-clone-plan' });
       }
       if (url.endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST') {
-        return json({ ...released, id: 'scenario-confirm-r2', revision: 2, state: 'draft' }, 201);
+        return json({ ...testPassed, id: 'scenario-confirm-r2', revision: 2, state: 'draft' }, 201);
       }
       if (url.endsWith('/scenarios')) return json([{
         id: 'scenario-confirm', slug: 'scenario-confirm', name: 'Confirm Scenario', ownerId: carol.id,
-        currentRevisionId: released.id, currentRevision: released, revisions: [released],
+        currentRevisionId: testPassed.id, currentRevision: testPassed, revisions: [testPassed],
       }]);
       if (url.endsWith('/environments')) return json([]);
       if (url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);

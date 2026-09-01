@@ -163,7 +163,7 @@ const SCENARIO_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '场景条目 / Revision 选择', purpose: '切换场景或查看某个 Revision。', availability: '所有用户', result: '只切换详情。' },
       { label: '校验', purpose: '检查 DAG、依赖、动作和参数解析。', availability: '已选择 Revision', result: '返回校验结果，不创建 Run。' },
       { label: '保存草稿', purpose: '保存节点、连线、策略和参数。', availability: '自有 Draft', result: '更新 Draft，并使旧完整测试证据失效。' },
-      { label: '新 Revision', purpose: '确认后从当前 Released/Deprecated Revision 克隆新草稿。', availability: '场景 Owner 自有不可变 Revision且没有活动 Draft', result: '创建新 Draft并设为当前，不修改原 Revision。' },
+      { label: '新 Revision', purpose: '确认后从当前 Test Passed/Released/Deprecated Revision 克隆新草稿。', availability: '场景 Owner 自有不可变 Revision且没有其他活动 Draft', result: '创建新 Draft并设为当前，不修改原 Revision与历史 Run。' },
       { label: '放弃草稿', purpose: '放弃误建或不再需要的当前 Draft。', availability: '自有当前 Draft且存在可恢复的不可变 Revision', result: '草稿保留为已放弃历史，并恢复最近的不可变 Revision。' },
       { label: '预览候选集并发布 / 确认原子发布', purpose: '预览本 Revision 引用的候选 Draft，并提交场景发布。', availability: '自有 Test Passed Revision 且候选集整体就绪', result: '场景 Revision 与全部候选 Release 在同一事务中进入 Released；任一项变化或失败都不会部分发布。' },
       { label: '废弃', purpose: '废弃已发布 Revision。', availability: '场景 Owner 自有 Released Revision', result: '状态变为 Deprecated；历史 Run 不变。' },
@@ -259,7 +259,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 ### 4. 发布与维护
 
-1. 当前合同必须已完成 install + verify 的安装验证，并具备相同规格摘要下的 rollback + verify 回退证据；Draft 再次保存后旧证据失效。
+1. 当前合同必须已完成 install + verify 的安装验证，并具备相同规格摘要下的 rollback + verify 回退证据；带 clusterforge.rollback-self-verifies 标签的卸载型 rollback 可用其 Playbook 内严格后置验证形成等价证据；Draft 再次保存后旧证据失效。
 2. 独立直接发布前，所有上游依赖必须已经 Released；打开影响预览并用 **确认发布并通知** 提交。
 3. 一组相互依赖的 Draft 应先逐个 **加入候选集**，由场景 Owner 编排、测试，再随 Scenario Revision 原子发布；不再交接时使用 **撤回候选**。
 4. 后续变更请创建新 Draft；不再使用且没有被场景 Run 锁定的 Released Release 可废弃，但不会删除历史。

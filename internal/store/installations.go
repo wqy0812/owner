@@ -60,7 +60,7 @@ ORDER BY installed_at,component_id`, environmentID)
 }
 
 func (s *Store) UpsertEnvironmentComponentInstallation(ctx context.Context, installation domain.EnvironmentComponentInstallation) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.execWithBusyRetry(ctx, `
 INSERT INTO environment_component_installations(
   environment_id,component_id,release_id,install_run_id,backup_ref,backup_metadata_json,test_only,installed_at
 ) VALUES(?,?,?,?,?,?,?,?)
@@ -79,7 +79,7 @@ ON CONFLICT(environment_id,component_id) DO UPDATE SET
 }
 
 func (s *Store) DeleteEnvironmentComponentInstallation(ctx context.Context, environmentID, componentID, installRunID string) error {
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.execWithBusyRetry(ctx, `
 DELETE FROM environment_component_installations
 WHERE environment_id=? AND component_id=? AND install_run_id=?`, environmentID, componentID, installRunID)
 	if err != nil {

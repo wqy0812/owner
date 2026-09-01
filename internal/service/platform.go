@@ -311,6 +311,9 @@ func validateRelease(release domain.ComponentRelease) error {
 		if action.Kind == domain.ActionRollback && (action.FromReleaseID == "") != (action.ToReleaseID == "") {
 			return fmt.Errorf("%w: rollback action must declare both fromReleaseId and toReleaseId, or leave both empty for an install rollback", domain.ErrInvalid)
 		}
+		if containsString(action.Tags, rollbackSelfVerifyTag) && (action.Kind != domain.ActionRollback || action.FromReleaseID != "" || action.ToReleaseID != "") {
+			return fmt.Errorf("%w: %s is only valid on a clean-state rollback without fromReleaseId/toReleaseId", domain.ErrInvalid, rollbackSelfVerifyTag)
+		}
 		for _, parameter := range action.AllowedParameters {
 			if isSensitiveKey(parameter) {
 				return fmt.Errorf("%w: sensitive action parameter %q must use a CredentialRef", domain.ErrInvalid, parameter)

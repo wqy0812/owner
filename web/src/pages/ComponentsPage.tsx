@@ -1197,6 +1197,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
     .map((type) => release.actions?.find((action) => action.type === type))
     .find((action) => action !== undefined);
   const rollbackAction = release.actions?.find((action) => action.type === 'rollback');
+  const rollbackOnlyAllowed = !rollbackAction?.fromReleaseId && !rollbackAction?.toReleaseId;
   const [mode, setMode] = useState<'install_verify' | 'rollback'>(() => installAction ? 'install_verify' : 'rollback');
   const selectedAction = mode === 'rollback' ? rollbackAction : installAction;
   const [environmentId, setEnvironmentId] = useState('');
@@ -1249,7 +1250,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
       environmentId,
       mode,
       rollbackVerification: mode === 'rollback'
-        ? rollbackVerificationKind === 'rollback_only'
+        ? rollbackOnlyAllowed && rollbackVerificationKind === 'rollback_only'
           ? { kind: 'rollback_only' }
           : { kind: 'target_release', releaseId: verifyReleaseId }
         : undefined,
@@ -1307,7 +1308,7 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
       {mode === 'rollback' ? <>
         <div className="warning-callout"><AlertTriangle size={19} /><div><strong>回退合同不可变</strong><p>Draft 回退始终按已保存的来源/目标合同执行；下方目标只决定追加哪个 Release 的 verify，不会覆盖回退合同。</p></div></div>
         <div className="rollback-contract"><strong>Draft 回退合同</strong><span>来源：{releaseLabel(rollbackAction?.fromReleaseId)}</span><span>目标：{releaseLabel(rollbackAction?.toReleaseId)}</span></div>
-        <label><span>回退验证策略</span><select aria-label="回退验证策略" value={rollbackVerificationKind} onChange={(event) => { setRollbackVerificationKind(event.target.value as 'target_release' | 'rollback_only'); invalidatePlan(); }}><option value="target_release">Draft 回退 + 所选 Release verify</option><option value="rollback_only">仅执行 Draft 回退</option></select></label>
+        <label><span>回退验证策略</span><select aria-label="回退验证策略" value={rollbackVerificationKind} onChange={(event) => { setRollbackVerificationKind(event.target.value as 'target_release' | 'rollback_only'); invalidatePlan(); }}><option value="target_release">Draft 回退 + 所选 Release verify</option>{rollbackOnlyAllowed ? <option value="rollback_only">仅执行 Draft 回退</option> : null}</select></label>
         {rollbackVerificationKind === 'target_release' ? <label><span>verify 目标 Release</span><select aria-label="verify 目标 Release" value={verifyReleaseId} onChange={(event) => { setVerifyReleaseId(event.target.value); invalidatePlan(); }}><option value="">请选择包含 verify 的保留版本</option>{retainedVerifyReleases.map((item) => <option key={item.id} value={item.id}>{item.version} · {item.state}{item.id === rollbackAction?.toReleaseId ? ' · 合同目标' : ''}</option>)}</select></label> : null}
       </> : null}
       <label><span>目标环境</span><select aria-label="目标环境" value={environmentId} onChange={(event) => { setEnvironmentId(event.target.value); invalidatePlan(); }}><option value="">请选择环境</option>{environments?.map((env: Environment) => <option key={env.id} value={env.id}>{env.name} · {env.status ?? 'ready'}</option>)}</select></label>
