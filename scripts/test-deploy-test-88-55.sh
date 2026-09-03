@@ -86,6 +86,17 @@ connection.close()
 PY
 )" == "kept" ]]
 
+fallback_backup="$test_root/backup/platform-python36.db"
+clusterforge_backup_sqlite "$database" "$fallback_backup" copy
+[[ "$(python3 - "$fallback_backup" <<'PY'
+import sqlite3
+import sys
+connection = sqlite3.connect(sys.argv[1])
+print(connection.execute("SELECT value FROM retained WHERE id=1").fetchone()[0])
+connection.close()
+PY
+)" == "kept" ]]
+
 failed_target="$test_root/failed-target"
 mkdir "$failed_target"
 if clusterforge_backup_sqlite "$database" "$failed_target" 2>/dev/null; then

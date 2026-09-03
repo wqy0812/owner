@@ -100,27 +100,54 @@ clusterforge_snapshot_if_configured() {
 clusterforge_backup_sqlite() {
   local source="$1"
   local destination="$2"
-  python3 - "$source" "$destination" <<'PY'
+  local mode="${3:-auto}"
+  python3 - "$source" "$destination" "$mode" <<'PY'
 import os
+import shutil
 import sqlite3
 import sys
 
-source, destination = sys.argv[1:]
+source, destination, mode = sys.argv[1:]
 source_stat = os.stat(source)
-source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-destination_connection = sqlite3.connect(destination)
 try:
-    source_connection.backup(destination_connection)
-    integrity = destination_connection.execute("PRAGMA integrity_check").fetchall()
-    if integrity != [("ok",)]:
-        raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
-    violations = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
-    if violations:
-        raise RuntimeError(f"SQLite backup foreign key violations: {violations!r}")
-finally:
-    destination_connection.close()
-    source_connection.close()
-try:
+    source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        backup_method = getattr(source_connection, "backup", None)
+        if mode == "auto" and backup_method is not None:
+            destination_connection = sqlite3.connect(destination)
+            try:
+                backup_method(destination_connection)
+            finally:
+                destination_connection.close()
+        else:
+            # Python 3.6 does not expose sqlite3.Connection.backup(). The
+            # deployer calls this helper only after systemd has stopped the
+            # sole database writer, so checkpoint WAL before copying the file.
+            source_connection.close()
+            source_connection = sqlite3.connect(source, timeout=30)
+            journal_mode = source_connection.execute("PRAGMA journal_mode").fetchone()
+            if journal_mode and str(journal_mode[0]).lower() == "wal":
+                checkpoint = source_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if checkpoint and checkpoint[0] != 0:
+                    raise RuntimeError(f"SQLite WAL checkpoint remained busy: {checkpoint!r}")
+            source_connection.close()
+            source_connection = None
+            shutil.copyfile(source, destination)
+    finally:
+        if source_connection is not None:
+            source_connection.close()
+
+    destination_connection = sqlite3.connect(f"file:{destination}?mode=ro", uri=True)
+    try:
+        integrity = destination_connection.execute("PRAGMA integrity_check").fetchall()
+        if integrity != [("ok",)]:
+            raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
+        violations = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"SQLite backup foreign key violations: {violations!r}")
+    finally:
+        destination_connection.close()
+
     os.chmod(destination, source_stat.st_mode & 0o7777)
     os.chown(destination, source_stat.st_uid, source_stat.st_gid)
 except Exception:
