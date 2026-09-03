@@ -16,6 +16,12 @@ for command_name in curl go pnpm; do
   }
 done
 
+api_url="http://$API_ADDRESS"
+if curl -s --max-time 1 -o /dev/null "$api_url"; then
+  echo "error: isolated API address is already serving HTTP: $API_ADDRESS" >&2
+  exit 1
+fi
+
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/clusterforge-live-api-e2e.XXXXXX")"
 api_pid=""
 cleanup() {
@@ -29,6 +35,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
+# Run the built binary directly: killing `go run` leaves its server child alive
+# with an unlinked database, and later tests can accidentally connect to it.
+go build -o "$test_root/server" ./cmd/server
 NEWPLATFORM_ADDR="$API_ADDRESS" \
 NEWPLATFORM_DB_PATH="$test_root/platform.db" \
 NEWPLATFORM_RUN_ROOT="$test_root/runs" \
@@ -37,12 +46,14 @@ NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS="$PROJECT_ROOT/examples/ansible" \
 NEWPLATFORM_ANSIBLE_BIN="false" \
 NEWPLATFORM_SEED_PROFILE="catalog" \
 CLUSTERFORGE_BACKUP_ENABLED="false" \
-  go run ./cmd/server >"$test_root/api.log" 2>&1 &
+  "$test_root/server" >"$test_root/api.log" 2>&1 &
 api_pid="$!"
 
-api_url="http://$API_ADDRESS"
 ready=false
 for _ in {1..40}; do
+  if ! kill -0 "$api_pid" >/dev/null 2>&1; then
+    break
+  fi
   if curl -fsS --max-time 1 "$api_url/api/v1/session/users" >/dev/null 2>&1; then
     ready=true
     break
@@ -52,7 +63,7 @@ for _ in {1..40}; do
   fi
   sleep 0.25
 done
-if [[ "$ready" != true ]]; then
+if [[ "$ready" != true ]] || ! kill -0 "$api_pid" >/dev/null 2>&1; then
   echo "error: isolated Go API did not become ready" >&2
   sed -n '1,160p' "$test_root/api.log" >&2
   exit 1
