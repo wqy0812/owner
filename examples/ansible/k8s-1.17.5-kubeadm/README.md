@@ -26,3 +26,29 @@ environment's `FILE_STATION`. The archive must contain `bin/kubeadm`,
 
 Optional parameters have LAN defaults: `control_plane_endpoint`,
 `pod_network_cidr`, `service_cidr`, `image_repository`, and `deploy_registry`.
+
+## Component lifecycle entrypoints
+
+The `components/` directory provides install, verify, and rollback playbooks
+for PKI, encryption configuration, API Server, Flannel, and CoreDNS. API Server
+entrypoints target control-plane nodes; installation uses kubeadm init/join.
+Its rollback removes the API Server workload and its owned configuration and
+kubeconfig copies, and does not perform a full kubeadm reset.
+
+CoreDNS uses the `kube-system` namespace. CoreDNS and API Server installations
+refuse to adopt existing resources without an ownership receipt. All target
+nodes pass ownership checks before changes begin. Successful installation
+records resource UIDs or file checksums and static Pod identities under
+`component_state_dir`; receipt files contain no credential contents.
+
+Rollback requires those receipts on every target node. Replaced resources or
+files stop cleanup. API Server cleanup selects the checked container IDs,
+including restarted containers belonging to the same recorded static Pod.
+Receipts are removed only after cleanup succeeds and remain available after a
+failed cleanup so it can be retried. An installation failure before ownership
+is recorded requires inspection of the partial installation; these playbooks
+do not infer ownership from names or create receipts for existing resources.
+
+Run `scripts/test-kubeadm-component-ownership.sh` from the repository root with
+Ansible installed to exercise the ownership checks and rollback retries using
+local command stubs and temporary files. These checks do not contact a cluster.

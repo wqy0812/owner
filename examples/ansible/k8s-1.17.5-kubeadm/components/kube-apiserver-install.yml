@@ -1,0 +1,278 @@
+---
+- name: Check every target before initializing any control plane
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check API server ownership before changing the node
+      tags: always
+      vars:
+        api_managed_paths:
+          - /etc/kubernetes/manifests/kube-apiserver.yaml
+          - /etc/kubernetes/clusterforge-kubeadm.yaml
+          - "{{ admin_kubeconfig_path }}"
+          - /root/.kube/config
+      block:
+        - name: Require a control-plane target and the kubeadm admin path
+          assert:
+            that:
+              - inventory_hostname in (groups['primary_control_plane'] + (groups['secondary_control_plane'] | default([])))
+              - admin_kubeconfig_path == '/etc/kubernetes/admin.conf'
+        - name: Check the local API server ownership receipt
+          stat:
+            path: "{{ component_state_dir }}/kube-apiserver.owned"
+          register: api_owner
+        - name: Read the local API server ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/kube-apiserver.owned"
+          register: api_receipt
+          when: api_owner.stat.exists
+        - name: Inspect managed files without changing them
+          stat:
+            path: "{{ item }}"
+            checksum_algorithm: sha256
+          loop: "{{ api_managed_paths }}"
+          register: api_files_before
+        - name: Inspect API server workload container IDs
+          command: docker ps -aq --filter label=io.kubernetes.container.name=kube-apiserver --filter label=io.kubernetes.pod.namespace=kube-system
+          register: api_containers_before
+          changed_when: false
+        - name: Read the workload identities
+          command:
+            argv: "{{ ['docker', 'inspect'] + api_containers_before.stdout_lines }}"
+          register: api_workloads_before
+          changed_when: false
+          when: api_containers_before.stdout_lines | length > 0
+        - name: Refuse adoption of existing control-plane files or containers
+          assert:
+            that:
+              - api_files_before.results | selectattr('stat.exists') | list | length == 0
+              - api_containers_before.stdout_lines | length == 0
+          when: not api_owner.stat.exists
+        - name: Validate the API server ownership receipt
+          assert:
+            that:
+              - receipt.format == 1
+              - receipt.files.keys() | list | sort == api_managed_paths | sort
+              - receipt.files['/etc/kubernetes/manifests/kube-apiserver.yaml'] | length == 64
+              - receipt.pod_uids | length > 0
+              - "'' not in receipt.pod_uids"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+        - name: Refuse replaced control-plane files
+          assert:
+            that:
+              - not item.stat.exists or (item.stat.isreg | default(false) and not item.stat.islnk | default(false) and item.stat.checksum | default('') == receipt.files[item.item])
+          loop: "{{ api_files_before.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+        - name: Refuse replaced or unowned API server containers
+          assert:
+            that:
+              - item.Config.Labels['io.kubernetes.pod.uid'] | default('') in receipt.pod_uids
+              - item.Config.Labels['io.kubernetes.pod.namespace'] | default('') == 'kube-system'
+              - item.Config.Labels['io.kubernetes.container.name'] | default('') == 'kube-apiserver'
+          loop: "{{ (api_workloads_before.stdout | from_json) if api_containers_before.stdout_lines | length > 0 else [] }}"
+          loop_control:
+            label: "{{ item.Id }}"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+- name: Initialize the primary Kubernetes control plane
+  hosts: primary_control_plane
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require generated CA and encryption configuration
+      stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/kubernetes/pki/ca.crt
+        - /etc/kubernetes/pki/ca.key
+        - /etc/kubernetes/encryption-config.yaml
+      register: control_plane_inputs
+    - assert:
+        that: control_plane_inputs.results | map(attribute='stat.exists') | list | min
+    - name: Write kubeadm cluster configuration
+      copy:
+        dest: /etc/kubernetes/clusterforge-kubeadm.yaml
+        mode: '0600'
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta2
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "{{ ansible_host }}"
+            bindPort: 6443
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta2
+          kind: ClusterConfiguration
+          kubernetesVersion: "v{{ kubernetes_version }}"
+          controlPlaneEndpoint: "{{ control_plane_endpoint }}"
+          imageRepository: "{{ image_repository }}"
+          certificatesDir: /etc/kubernetes/pki
+          networking:
+            podSubnet: "{{ pod_network_cidr }}"
+            serviceSubnet: "{{ service_cidr }}"
+          etcd:
+            local:
+              imageTag: "3.4.3"
+          dns:
+            type: CoreDNS
+            imageTag: "1.6.5"
+          apiServer:
+            extraArgs:
+              encryption-provider-config: /etc/kubernetes/encryption-config.yaml
+            extraVolumes:
+              - name: encryption-config
+                hostPath: /etc/kubernetes/encryption-config.yaml
+                mountPath: /etc/kubernetes/encryption-config.yaml
+                readOnly: true
+                pathType: File
+    - name: Initialize encrypted Kubernetes control plane
+      command: kubeadm init --config /etc/kubernetes/clusterforge-kubeadm.yaml --skip-phases=addon/coredns
+      args:
+        creates: "{{ admin_kubeconfig_path }}"
+      no_log: true
+    - name: Read bootstrap token id created by kubeadm
+      shell: "kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get secrets -o name | sed -n 's#secret/bootstrap-token-##p' | head -1"
+      register: token_id
+      changed_when: false
+    - name: Read bootstrap token secret
+      shell: "kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get secret bootstrap-token-{{ token_id.stdout | trim }} -o jsonpath='{.data.token-secret}' | base64 -d"
+      register: token_secret
+      changed_when: false
+      no_log: true
+    - name: Calculate CA certificate hash
+      shell: "openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | awk '{print $2}'"
+      register: ca_hash
+      changed_when: false
+    - name: Upload control-plane certificates
+      command: kubeadm init phase upload-certs --upload-certs
+      register: certificate_upload
+      changed_when: true
+      no_log: true
+    - name: Store join data
+      set_fact:
+        cluster_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ token_id.stdout | trim }}.{{ token_secret.stdout | trim }} --discovery-token-ca-cert-hash sha256:{{ ca_hash.stdout | trim }}"
+        cluster_certificate_key: "{{ certificate_upload.stdout_lines | last | trim }}"
+      no_log: true
+    - file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+    - copy:
+        remote_src: true
+        src: "{{ admin_kubeconfig_path }}"
+        dest: /root/.kube/config
+        mode: "0600"
+      diff: false
+      no_log: true
+- name: Join secondary Kubernetes control planes
+  hosts: secondary_control_plane
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Join control plane
+      command: >-
+        {{ hostvars[groups['primary_control_plane'][0]].cluster_worker_join_command }}
+        --control-plane
+        --certificate-key {{ hostvars[groups['primary_control_plane'][0]].cluster_certificate_key }}
+        --apiserver-advertise-address={{ ansible_host }}
+      args:
+        creates: "{{ admin_kubeconfig_path }}"
+      no_log: true
+    - file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+    - copy:
+        remote_src: true
+        src: "{{ admin_kubeconfig_path }}"
+        dest: /root/.kube/config
+        mode: "0600"
+      diff: false
+      no_log: true
+- name: Record kube-apiserver activation
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Record API server ownership before declaring installation complete
+      vars:
+        api_managed_paths:
+          - /etc/kubernetes/manifests/kube-apiserver.yaml
+          - /etc/kubernetes/clusterforge-kubeadm.yaml
+          - "{{ admin_kubeconfig_path }}"
+          - /root/.kube/config
+      block:
+        - name: Inspect installed control-plane files
+          stat:
+            path: "{{ item }}"
+            checksum_algorithm: sha256
+          loop: "{{ api_managed_paths }}"
+          register: api_files_installed
+        - name: Require a real API server manifest
+          assert:
+            that:
+              - api_files_installed.results[0].stat.isreg | default(false)
+              - not api_files_installed.results[0].stat.islnk | default(false)
+        - name: Initialize the installed file identity map
+          set_fact:
+            api_owned_files: {}
+            api_owned_pod_uids: []
+        - name: Collect installed file identities
+          set_fact:
+            api_owned_files: "{{ api_owned_files | combine({item.item: item.stat.checksum | default('')}) }}"
+          loop: "{{ api_files_installed.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+        - name: Inspect installed API server containers
+          command: docker ps -aq --filter label=io.kubernetes.container.name=kube-apiserver --filter label=io.kubernetes.pod.namespace=kube-system
+          register: api_containers_installed
+          changed_when: false
+        - name: Require an installed API server workload
+          assert:
+            that: api_containers_installed.stdout_lines | length > 0
+        - name: Read installed workload identities
+          command:
+            argv: "{{ ['docker', 'inspect'] + api_containers_installed.stdout_lines }}"
+          register: api_workloads_installed
+          changed_when: false
+        - name: Require identifiable API server workloads
+          assert:
+            that:
+              - item.Config.Labels['io.kubernetes.pod.uid'] | default('') | length > 0
+              - item.Config.Labels['io.kubernetes.pod.namespace'] | default('') == 'kube-system'
+              - item.Config.Labels['io.kubernetes.container.name'] | default('') == 'kube-apiserver'
+          loop: "{{ api_workloads_installed.stdout | from_json }}"
+          loop_control:
+            label: "{{ item.Id }}"
+        - name: Collect static Pod identities that survive container restarts
+          set_fact:
+            api_owned_pod_uids: "{{ (api_owned_pod_uids + [item.Config.Labels['io.kubernetes.pod.uid']]) | unique }}"
+          loop: "{{ api_workloads_installed.stdout | from_json }}"
+          loop_control:
+            label: "{{ item.Id }}"
+        - name: Create the private component state directory
+          file:
+            path: "{{ component_state_dir }}"
+            state: directory
+            mode: '0700'
+        - name: Write the API server ownership receipt
+          copy:
+            dest: "{{ component_state_dir }}/kube-apiserver.owned"
+            mode: '0600'
+            content: "{{ {'format': 1, 'files': api_owned_files, 'pod_uids': api_owned_pod_uids} | to_json }}"
+    - copy:
+        dest: "{{ component_state_dir }}/kube-apiserver.installed"
+        content: "1.17.5-u1-p1\n"
+        mode: "0644"

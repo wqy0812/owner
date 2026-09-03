@@ -1,0 +1,26 @@
+---
+- name: Verify actual certificate authorities and signing keys
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify CA signatures validity and matching private keys
+      shell: |
+        set -eu
+        prefix={{ (pki_dir + '/' + item) | quote }}
+        openssl verify -CAfile "$prefix.crt" "$prefix.crt"
+        openssl x509 -checkend 86400 -noout -in "$prefix.crt"
+        cert_modulus=$(openssl x509 -noout -modulus -in "$prefix.crt")
+        key_modulus=$(openssl rsa -noout -modulus -in "$prefix.key")
+        test "$cert_modulus" = "$key_modulus"
+        test "$(stat -c %a "$prefix.key")" = 600
+      loop: [ca, front-proxy-ca, etcd/ca]
+      changed_when: false
+    - name: Verify service account key pair
+      shell: |
+        set -eu
+        openssl rsa -in {{ (pki_dir + '/sa.key') | quote }} -pubout 2>/dev/null | cmp - {{ (pki_dir + '/sa.pub') | quote }}
+        test "$(stat -c %a {{ (pki_dir + '/sa.key') | quote }})" = 600
+      args:
+        executable: /bin/bash
+      changed_when: false

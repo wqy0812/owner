@@ -1,0 +1,55 @@
+---
+- name: Install Secret encryption configuration on every control plane
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate encryption input without exposing the key
+      assert:
+        that:
+          - encrypted_resource == 'secrets'
+          - encryption_config_path == '/etc/kubernetes/encryption-config.yaml'
+          - K8S_ENCRYPTION_KEY is defined
+          - K8S_ENCRYPTION_KEY is match('^[A-Za-z0-9+/]{43}=$')
+      no_log: true
+    - name: Check existing encryption configuration
+      stat:
+        path: "{{ encryption_config_path }}"
+      register: encryption_before
+    - name: Check configuration ownership
+      stat:
+        path: "{{ component_state_dir }}/kubernetes-encryption-configuration.owned"
+      register: encryption_owner
+    - name: Refuse to replace an unmanaged encryption configuration
+      assert:
+        that: not encryption_before.stat.exists or encryption_owner.stat.exists
+    - name: Ensure private configuration directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+      loop: [/etc/kubernetes, "{{ component_state_dir }}"]
+    - name: Record configuration ownership
+      copy:
+        dest: "{{ component_state_dir }}/kubernetes-encryption-configuration.owned"
+        content: "aescbc-v1\n"
+        mode: '0600'
+    - name: Write AES-CBC configuration without implicit key rotation
+      copy:
+        dest: "{{ encryption_config_path }}"
+        mode: '0600'
+        force: false
+        content: |
+          apiVersion: apiserver.config.k8s.io/v1
+          kind: EncryptionConfiguration
+          resources:
+            - resources: [secrets]
+              providers:
+                - aescbc:
+                    keys:
+                      - name: clusterforge-key-1
+                        secret: {{ K8S_ENCRYPTION_KEY }}
+                - identity: {}
+      no_log: true
+- import_playbook: kubernetes-encryption-configuration-verify.yml

@@ -1,0 +1,130 @@
+---
+- name: Stop the API server and verify actual removal
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check API server ownership before changing the node
+      tags: always
+      vars:
+        api_managed_paths:
+          - /etc/kubernetes/manifests/kube-apiserver.yaml
+          - /etc/kubernetes/clusterforge-kubeadm.yaml
+          - "{{ admin_kubeconfig_path }}"
+          - /root/.kube/config
+      block:
+        - name: Require a control-plane target and the kubeadm admin path
+          assert:
+            that:
+              - inventory_hostname in (groups['primary_control_plane'] + (groups['secondary_control_plane'] | default([])))
+              - admin_kubeconfig_path == '/etc/kubernetes/admin.conf'
+        - name: Check the local API server ownership receipt
+          stat:
+            path: "{{ component_state_dir }}/kube-apiserver.owned"
+          register: api_owner
+        - name: Require ownership before any control-plane deletion
+          assert:
+            that: api_owner.stat.exists and api_owner.stat.isreg
+            fail_msg: No API server ownership receipt exists; refusing to remove the control plane.
+        - name: Read the local API server ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/kube-apiserver.owned"
+          register: api_receipt
+          when: api_owner.stat.exists
+        - name: Inspect managed files without changing them
+          stat:
+            path: "{{ item }}"
+            checksum_algorithm: sha256
+          loop: "{{ api_managed_paths }}"
+          register: api_files_before
+        - name: Inspect API server workload container IDs
+          command: docker ps -aq --filter label=io.kubernetes.container.name=kube-apiserver --filter label=io.kubernetes.pod.namespace=kube-system
+          register: api_containers_before
+          changed_when: false
+        - name: Read the workload identities
+          command:
+            argv: "{{ ['docker', 'inspect'] + api_containers_before.stdout_lines }}"
+          register: api_workloads_before
+          changed_when: false
+          when: api_containers_before.stdout_lines | length > 0
+        - name: Validate the API server ownership receipt
+          assert:
+            that:
+              - receipt.format == 1
+              - receipt.files.keys() | list | sort == api_managed_paths | sort
+              - receipt.files['/etc/kubernetes/manifests/kube-apiserver.yaml'] | length == 64
+              - receipt.pod_uids | length > 0
+              - "'' not in receipt.pod_uids"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+        - name: Refuse replaced control-plane files
+          assert:
+            that:
+              - not item.stat.exists or (item.stat.isreg | default(false) and not item.stat.islnk | default(false) and item.stat.checksum | default('') == receipt.files[item.item])
+          loop: "{{ api_files_before.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+        - name: Refuse replaced or unowned API server containers
+          assert:
+            that:
+              - item.Config.Labels['io.kubernetes.pod.uid'] | default('') in receipt.pod_uids
+              - item.Config.Labels['io.kubernetes.pod.namespace'] | default('') == 'kube-system'
+              - item.Config.Labels['io.kubernetes.container.name'] | default('') == 'kube-apiserver'
+          loop: "{{ (api_workloads_before.stdout | from_json) if api_containers_before.stdout_lines | length > 0 else [] }}"
+          loop_control:
+            label: "{{ item.Id }}"
+          vars:
+            receipt: "{{ api_receipt.content | b64decode | from_json }}"
+          when: api_owner.stat.exists
+    - name: Remove API server static Pod manifest
+      file:
+        path: /etc/kubernetes/manifests/kube-apiserver.yaml
+        state: absent
+    - name: Remove only the previously checked API server container IDs
+      command:
+        argv: "{{ ['docker', 'rm', '-f'] + api_containers_before.stdout_lines }}"
+      when: api_containers_before.stdout_lines | length > 0
+      changed_when: true
+    - name: Verify API server containers are gone
+      command: docker ps -aq --filter label=io.kubernetes.container.name=kube-apiserver --filter label=io.kubernetes.pod.namespace=kube-system
+      register: api_containers_after
+      changed_when: false
+      failed_when: api_containers_after.stdout | trim != ''
+    - name: Wait for API listener removal
+      wait_for:
+        host: 127.0.0.1
+        port: 6443
+        state: stopped
+        timeout: 60
+    - name: Remove the checked kubeadm configuration and managed kubeconfig copies
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes/clusterforge-kubeadm.yaml
+        - "{{ admin_kubeconfig_path }}"
+        - /root/.kube/config
+    - name: Verify all managed files are absent
+      stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/kubernetes/manifests/kube-apiserver.yaml
+        - /etc/kubernetes/clusterforge-kubeadm.yaml
+        - "{{ admin_kubeconfig_path }}"
+        - /root/.kube/config
+      register: api_files_after
+    - assert:
+        that: api_files_after.results | selectattr('stat.exists') | list | length == 0
+    - name: Remove the API server installation marker
+      file:
+        path: "{{ component_state_dir }}/kube-apiserver.installed"
+        state: absent
+    - name: Remove the ownership receipt only after cleanup succeeds
+      file:
+        path: "{{ component_state_dir }}/kube-apiserver.owned"
+        state: absent

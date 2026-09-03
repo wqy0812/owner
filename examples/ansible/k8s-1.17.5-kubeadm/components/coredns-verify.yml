@@ -1,0 +1,35 @@
+---
+- name: Verify actual CoreDNS service deployment and endpoints
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for both DNS replicas
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ coredns_namespace }} rollout status deployment/coredns --timeout=180s
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      changed_when: false
+    - name: Read actual DNS deployment
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ coredns_namespace }} get deployment coredns -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: coredns_deployment
+      changed_when: false
+    - name: Read actual DNS endpoints
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ coredns_namespace }} get endpoints kube-dns -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: coredns_endpoints
+      changed_when: false
+    - name: Validate DNS version readiness and service endpoints
+      assert:
+        that:
+          - deployment.spec.template.spec.containers[0].image is search('[:/]1.6.5$')
+          - deployment.spec.replicas == 2
+          - deployment.status.availableReplicas == 2
+          - endpoints.subsets | length > 0
+          - endpoints.subsets[0].addresses | length == 2
+      vars:
+        deployment: "{{ coredns_deployment.stdout | from_json }}"
+        endpoints: "{{ coredns_endpoints.stdout | from_json }}"
+      run_once: true

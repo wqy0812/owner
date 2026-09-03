@@ -1,0 +1,30 @@
+---
+- name: Remove owned encryption configuration after the API server stops
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - stat:
+        path: /etc/kubernetes/manifests/kube-apiserver.yaml
+      register: apiserver_manifest
+    - stat:
+        path: "{{ component_state_dir }}/kubernetes-encryption-configuration.owned"
+      register: encryption_owner
+    - assert:
+        that:
+          - not apiserver_manifest.stat.exists
+          - encryption_config_path == '/etc/kubernetes/encryption-config.yaml'
+    - file:
+        path: "{{ encryption_config_path }}"
+        state: absent
+      when: encryption_owner.stat.exists
+    - stat:
+        path: "{{ encryption_config_path }}"
+      register: encryption_after
+    - assert:
+        that: not encryption_after.stat.exists
+    - file:
+        path: "{{ component_state_dir }}/{{ item }}"
+        state: absent
+      loop: [kubernetes-encryption-configuration.installed, kubernetes-encryption-configuration.owned]

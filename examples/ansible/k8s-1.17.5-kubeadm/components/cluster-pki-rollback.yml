@@ -1,0 +1,36 @@
+---
+- name: Remove owned PKI after the control plane has been removed
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check active control-plane manifest
+      stat:
+        path: /etc/kubernetes/manifests/kube-apiserver.yaml
+      register: apiserver_manifest
+    - name: Check ownership
+      stat:
+        path: "{{ component_state_dir }}/cluster-pki.owned"
+      register: pki_owner
+    - name: Require inactive control plane before deleting trust material
+      assert:
+        that:
+          - not apiserver_manifest.stat.exists
+          - pki_dir == '/etc/kubernetes/pki'
+    - name: Remove owned trust directory
+      file:
+        path: "{{ pki_dir }}"
+        state: absent
+      when: pki_owner.stat.exists
+    - name: Verify actual trust material is absent
+      stat:
+        path: "{{ pki_dir }}"
+      register: pki_after
+    - assert:
+        that: not pki_after.stat.exists
+    - name: Remove capability and ownership records
+      file:
+        path: "{{ component_state_dir }}/{{ item }}"
+        state: absent
+      loop: [cluster-pki.installed, cluster-pki.owned]

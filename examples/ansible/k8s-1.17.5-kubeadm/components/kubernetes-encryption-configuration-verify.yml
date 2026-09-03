@@ -1,0 +1,32 @@
+---
+- name: Verify encryption file structure permissions and configured key
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read protected encryption configuration
+      slurp:
+        src: "{{ encryption_config_path }}"
+      register: encryption_file
+      no_log: true
+    - name: Validate the actual Secret encryption provider
+      assert:
+        that:
+          - config.apiVersion == 'apiserver.config.k8s.io/v1'
+          - config.kind == 'EncryptionConfiguration'
+          - config.resources | length == 1
+          - config.resources[0].resources == ['secrets']
+          - config.resources[0].providers[0].aescbc['keys'][0].name == 'clusterforge-key-1'
+          - config.resources[0].providers[0].aescbc['keys'][0].secret == K8S_ENCRYPTION_KEY
+          - config.resources[0].providers[1].identity == {}
+      vars:
+        config: "{{ encryption_file.content | b64decode | from_yaml }}"
+      no_log: true
+    - name: Inspect encryption file permissions
+      stat:
+        path: "{{ encryption_config_path }}"
+      register: encryption_permissions
+    - assert:
+        that:
+          - encryption_permissions.stat.mode == '0600'
+          - encryption_permissions.stat.uid == 0

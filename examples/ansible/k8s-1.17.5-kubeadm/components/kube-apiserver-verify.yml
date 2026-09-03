@@ -1,0 +1,48 @@
+---
+- name: Verify every encrypted API server
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the actual API server static Pod
+      slurp:
+        src: /etc/kubernetes/manifests/kube-apiserver.yaml
+      register: api_manifest
+    - name: Require the encrypted configuration flag and host mount
+      assert:
+        that:
+          - "'--encryption-provider-config=/etc/kubernetes/encryption-config.yaml' in spec.spec.containers[0].command"
+          - spec.spec.volumes | selectattr('name', 'equalto', 'encryption-config') | list | length == 1
+          - spec.spec.containers[0].volumeMounts | selectattr('name', 'equalto', 'encryption-config') | selectattr('readOnly', 'equalto', true) | list | length == 1
+      vars:
+        spec: "{{ api_manifest.content | b64decode | from_yaml }}"
+    - name: Check API health
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} get --raw=/healthz
+      register: health
+      changed_when: false
+    - assert:
+        that: health.stdout | trim == 'ok'
+    - name: Verify a newly written Secret is encrypted in local etcd
+      shell: |
+        set -euo pipefail
+        export KUBECONFIG={{ admin_kubeconfig_path | quote }}
+        probe="clusterforge-encryption-$(date +%s)-$$"
+        created=0
+        cleanup() {
+          if [ "$created" = 1 ]; then
+            kubectl --request-timeout=20s -n kube-system delete secret "$probe" --ignore-not-found >/dev/null
+          fi
+        }
+        trap cleanup EXIT
+        test -z "$(kubectl --request-timeout=20s -n kube-system get secret "$probe" --ignore-not-found -o name)"
+        kubectl --request-timeout=20s -n kube-system create secret generic "$probe" --from-literal=probe=clusterforge-encryption-verification >/dev/null
+        created=1
+        kubectl --request-timeout=20s -n kube-system exec etcd-{{ inventory_hostname }} -- env ETCDCTL_API=3 etcdctl \
+          --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+          --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+          get "/registry/secrets/kube-system/$probe" --print-value-only |
+          python3 -c 'import sys; value=sys.stdin.buffer.read(); assert value.startswith(b"k8s:enc:aescbc:v1:"); assert b"clusterforge-encryption-verification" not in value; print("Secret ciphertext verified")'
+      args:
+        executable: /bin/bash
+      changed_when: false

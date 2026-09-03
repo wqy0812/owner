@@ -1,0 +1,68 @@
+---
+- name: Create kubeadm trust material
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require the designated certificate controller
+      assert:
+        that:
+          - inventory_hostname == groups['primary_control_plane'][0]
+          - pki_dir == '/etc/kubernetes/pki'
+    - name: Refuse to overwrite unmanaged trust material
+      shell: |
+        set -eu
+        if [ -d {{ pki_dir | quote }} ] && [ -n "$(find {{ pki_dir | quote }} -type f -print -quit)" ]; then
+          test -f {{ (component_state_dir + '/cluster-pki.owned') | quote }}
+        fi
+      changed_when: false
+    - name: Ensure private PKI directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+      loop:
+        - "{{ pki_dir }}"
+        - "{{ pki_dir }}/etcd"
+        - "{{ component_state_dir }}"
+    - name: Record ownership before creating trust material
+      copy:
+        dest: "{{ component_state_dir }}/cluster-pki.owned"
+        content: "kubeadm-pki-v1\n"
+        mode: '0600'
+    - name: Create certificate authorities without rotating existing keys
+      shell: |
+        set -eu
+        umask 077
+        prefix={{ (pki_dir + '/' + item.name) | quote }}
+        if [ -f "$prefix.crt" ] && [ -f "$prefix.key" ]; then
+          exit 0
+        fi
+        test ! -e "$prefix.crt"
+        test ! -e "$prefix.key"
+        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+          -subj {{ ('/CN=' + item.cn) | quote }} \
+          -keyout "$prefix.key" -out "$prefix.crt" \
+          -extensions v3_ca -config /etc/ssl/openssl.cnf
+        echo created
+      loop:
+        - {name: ca, cn: kubernetes}
+        - {name: front-proxy-ca, cn: front-proxy-ca}
+        - {name: etcd/ca, cn: etcd-ca}
+      register: ca_creation
+      changed_when: "'created' in ca_creation.stdout"
+    - name: Create service account signing key
+      command: "openssl genrsa -out {{ pki_dir }}/sa.key 2048"
+      args:
+        creates: "{{ pki_dir }}/sa.key"
+    - name: Set private key permissions
+      file:
+        path: "{{ pki_dir }}/{{ item }}"
+        mode: '0600'
+      loop: [ca.key, front-proxy-ca.key, etcd/ca.key, sa.key]
+    - name: Derive service account public key
+      command: "openssl rsa -in {{ pki_dir }}/sa.key -pubout -out {{ pki_dir }}/sa.pub"
+      args:
+        creates: "{{ pki_dir }}/sa.pub"
+- import_playbook: cluster-pki-verify.yml

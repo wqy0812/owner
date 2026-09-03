@@ -1,0 +1,65 @@
+---
+- name: Remove owned CoreDNS resources while the API remains available
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Verify CoreDNS ownership before any deletion
+      tags: always
+      block:
+        - name: Require the namespace used by kubeadm CoreDNS
+          assert:
+            that: coredns_namespace == 'kube-system'
+        - name: Check the local ownership receipt
+          stat:
+            path: "{{ component_state_dir }}/coredns.owned"
+          register: coredns_owner
+        - name: Require ownership on every target node
+          assert:
+            that: coredns_owner.stat.exists and coredns_owner.stat.isreg
+            fail_msg: No CoreDNS ownership receipt exists; refusing to remove existing DNS resources.
+        - name: Read the local ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/coredns.owned"
+          register: coredns_receipt
+        - name: Read current CoreDNS resource identities
+          command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get deployment/coredns service/kube-dns configmap/coredns serviceaccount/coredns clusterrole/system:coredns clusterrolebinding/system:coredns --ignore-not-found -o json
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: coredns_current
+          changed_when: false
+        - name: Refuse to delete replaced or unowned CoreDNS resources
+          assert:
+            that:
+              - receipt.format == 1
+              - receipt.resource_uids | unique | length == 6
+              - (coredns_current.stdout | from_json)['items'] | map(attribute='metadata.uid') | difference(receipt.resource_uids) | length == 0
+          vars:
+            receipt: "{{ coredns_receipt.content | b64decode | from_json }}"
+    - name: Remove CoreDNS deployment and service
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ coredns_namespace }} delete deployment/coredns service/kube-dns configmap/coredns serviceaccount/coredns --ignore-not-found --wait=true --timeout=60s
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      changed_when: true
+    - name: Remove CoreDNS role bindings
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} delete clusterrole/system:coredns clusterrolebinding/system:coredns --ignore-not-found --wait=true --timeout=60s
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      changed_when: true
+    - name: Check actual DNS resources are absent
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get deployment/coredns service/kube-dns configmap/coredns serviceaccount/coredns clusterrole/system:coredns clusterrolebinding/system:coredns --ignore-not-found -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: dns_after
+      changed_when: false
+    - assert:
+        that: (dns_after.stdout | from_json)['items'] | length == 0
+      run_once: true
+    - file:
+        path: "{{ component_state_dir }}/coredns.installed"
+        state: absent
+    - name: Remove the ownership receipt only after all resources are gone
+      file:
+        path: "{{ component_state_dir }}/coredns.owned"
+        state: absent

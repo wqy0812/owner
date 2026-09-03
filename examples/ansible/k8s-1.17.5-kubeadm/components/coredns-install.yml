@@ -1,0 +1,69 @@
+---
+- name: Reconcile CoreDNS using the installed kubeadm cluster configuration
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check CoreDNS ownership before changing cluster resources
+      tags: always
+      block:
+        - name: Require the namespace used by kubeadm CoreDNS
+          assert:
+            that: coredns_namespace == 'kube-system'
+        - name: Inspect the local ownership receipt
+          stat:
+            path: "{{ component_state_dir }}/coredns.owned"
+          register: coredns_owner
+        - name: Read the existing ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/coredns.owned"
+          register: coredns_receipt
+          when: coredns_owner.stat.exists
+        - name: Inspect existing CoreDNS resources
+          command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get deployment/coredns service/kube-dns configmap/coredns serviceaccount/coredns clusterrole/system:coredns clusterrolebinding/system:coredns --ignore-not-found -o json
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: coredns_before
+          changed_when: false
+        - name: Refuse adoption of existing CoreDNS resources
+          assert:
+            that: (coredns_before.stdout | from_json)['items'] | length == 0
+          when: not coredns_owner.stat.exists
+        - name: Match existing resources to their ownership receipt
+          assert:
+            that:
+              - receipt.format == 1
+              - receipt.resource_uids | unique | length == 6
+              - (coredns_before.stdout | from_json)['items'] | map(attribute='metadata.uid') | difference(receipt.resource_uids) | length == 0
+          vars:
+            receipt: "{{ coredns_receipt.content | b64decode | from_json }}"
+          when: coredns_owner.stat.exists
+    - name: Install CoreDNS resources
+      command: kubeadm init phase addon coredns --config /etc/kubernetes/clusterforge-kubeadm.yaml
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: coredns_reconcile
+      changed_when: "'Applied essential addon' in coredns_reconcile.stdout"
+    - name: Record CoreDNS ownership before readiness verification
+      block:
+        - name: Read the installed resource identities
+          command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get deployment/coredns service/kube-dns configmap/coredns serviceaccount/coredns clusterrole/system:coredns clusterrolebinding/system:coredns -o json
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: coredns_installed
+          changed_when: false
+        - name: Require all six installed resource identities
+          assert:
+            that: (coredns_installed.stdout | from_json)['items'] | map(attribute='metadata.uid') | unique | length == 6
+        - name: Create the private component state directory
+          file:
+            path: "{{ component_state_dir }}"
+            state: directory
+            mode: '0700'
+        - name: Write the resource ownership receipt on every target node
+          copy:
+            dest: "{{ component_state_dir }}/coredns.owned"
+            mode: '0600'
+            content: "{{ {'format': 1, 'resource_uids': (coredns_installed.stdout | from_json)['items'] | map(attribute='metadata.uid') | list} | to_json }}"
+- import_playbook: coredns-verify.yml
