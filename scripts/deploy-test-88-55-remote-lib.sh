@@ -107,20 +107,23 @@ import sys
 
 source, destination = sys.argv[1:]
 source_stat = os.stat(source)
-source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-destination_connection = sqlite3.connect(destination)
 try:
-    source_connection.backup(destination_connection)
-    integrity = destination_connection.execute("PRAGMA integrity_check").fetchall()
-    if integrity != [("ok",)]:
-        raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
-    violations = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
-    if violations:
-        raise RuntimeError(f"SQLite backup foreign key violations: {violations!r}")
-finally:
-    destination_connection.close()
-    source_connection.close()
-try:
+    source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        destination_connection = sqlite3.connect(destination)
+        try:
+            source_connection.backup(destination_connection)
+            integrity = destination_connection.execute("PRAGMA integrity_check").fetchall()
+            if integrity != [("ok",)]:
+                raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
+            violations = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(f"SQLite backup foreign key violations: {violations!r}")
+        finally:
+            destination_connection.close()
+    finally:
+        source_connection.close()
+
     os.chmod(destination, source_stat.st_mode & 0o7777)
     os.chown(destination, source_stat.st_uid, source_stat.st_gid)
 except Exception:

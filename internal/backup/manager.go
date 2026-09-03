@@ -224,8 +224,8 @@ func (m *Manager) NeedsSnapshot(ctx context.Context) (bool, int64, error) {
 	}
 	// Publication generations are monotonic during ordinary operation, but a
 	// guarded database rebuild starts a new database at a lower generation.
-	// Additive schema migrations can also advance the contract without changing
-	// the publication generation. Either mismatch therefore needs a fresh
+	// A database replacement can also change the contract. Either mismatch
+	// therefore needs a fresh
 	// recovery point before the current database can be restored through the UI.
 	return generation != latest.PublicationGeneration || schemaContract != latest.SchemaContract, generation, nil
 }

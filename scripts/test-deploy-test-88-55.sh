@@ -11,6 +11,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if removed_option_output="$("$PROJECT_ROOT/scripts/deploy-test-88-55.sh" --migrate-container-runtime 2>&1)"; then
+  echo "removed migration option unexpectedly passed" >&2
+  exit 1
+fi
+[[ "$removed_option_output" == *"unknown option: --migrate-container-runtime"* ]]
+
 database="$test_root/platform.db"
 python3 - "$database" <<'PY'
 import sqlite3
@@ -85,6 +91,32 @@ print(connection.execute("SELECT value FROM retained WHERE id=1").fetchone()[0])
 connection.close()
 PY
 )" == "kept" ]]
+
+wal_database="$test_root/source-wal.db"
+wal_backup="$test_root/backup/platform-wal.db"
+python3 - "$wal_database" <<'PY_WAL'
+import os
+import sqlite3
+import sys
+connection = sqlite3.connect(sys.argv[1])
+connection.execute("PRAGMA journal_mode=WAL")
+connection.execute("PRAGMA wal_autocheckpoint=0")
+connection.execute("CREATE TABLE retained(value TEXT)")
+connection.execute("INSERT INTO retained VALUES('committed-in-wal')")
+connection.commit()
+# Keep the committed WAL on disk so the backup must include it.
+os._exit(0)
+PY_WAL
+[[ -s "${wal_database}-wal" ]]
+clusterforge_backup_sqlite "$wal_database" "$wal_backup"
+python3 - "$wal_backup" <<'PY_WAL'
+import sqlite3
+import sys
+connection = sqlite3.connect(sys.argv[1])
+assert connection.execute("SELECT value FROM retained").fetchone() == ("committed-in-wal",)
+assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+connection.close()
+PY_WAL
 
 failed_target="$test_root/failed-target"
 mkdir "$failed_target"

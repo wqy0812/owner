@@ -138,6 +138,10 @@ for command_name in awk curl flock git grep install python3 sha256sum systemctl;
     exit 1
   }
 done
+python3 -c "import sqlite3; sqlite3.Connection.backup" >/dev/null 2>&1 || {
+  echo "Python 3.7+ with sqlite3 backup support is required" >&2
+  exit 1
+}
 test -x /opt/clusterforge/platform/clusterforge-platform
 test -f /var/lib/clusterforge/platform.db
 test -f /etc/clusterforge/platform.env
