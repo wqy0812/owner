@@ -192,7 +192,7 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
 	}
-	order := []string{"users", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
+	order := []string{"users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -231,6 +231,9 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 }
 
 func validateCatalogReferences(catalog Catalog) error {
+	if err := validateCatalogParameterDefaults(catalog); err != nil {
+		return err
+	}
 	tables := map[string]TableDump{}
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
@@ -257,6 +260,91 @@ func validateCatalogReferences(catalog Catalog) error {
 			return "", invalid(table.Name, "", column, fmt.Sprintf("Catalog %s contains an invalid %s", table.Name, column))
 		}
 		return cell.Text, nil
+	}
+	type optionCategoryRecord struct {
+		id, key, kind, parentID string
+	}
+	categoryByID := map[string]optionCategoryRecord{}
+	categoryByKey := map[string]optionCategoryRecord{}
+	optionCategories := tables["platform_option_categories"]
+	for _, row := range optionCategories.Rows {
+		id, err := requiredText(optionCategories, row, "id")
+		if err != nil {
+			return err
+		}
+		key, err := requiredText(optionCategories, row, "technical_key")
+		if err != nil {
+			return err
+		}
+		kind, err := requiredText(optionCategories, row, "category_type")
+		if err != nil {
+			return err
+		}
+		if kind != string(domain.PlatformOptionEnvironmentDimension) && kind != string(domain.PlatformOptionHostGroup) {
+			return invalid(optionCategories.Name, id, "category_type", fmt.Sprintf("Catalog option category %s has an invalid type", id))
+		}
+		if _, exists := categoryByID[id]; exists || categoryByKey[key].id != "" {
+			return invalid(optionCategories.Name, id, "technical_key", fmt.Sprintf("Catalog contains a duplicate option category %s", key))
+		}
+		parentID, err := optionalText(optionCategories, row, "parent_category_id")
+		if err != nil {
+			return err
+		}
+		record := optionCategoryRecord{id: id, key: key, kind: kind, parentID: parentID}
+		categoryByID[id], categoryByKey[key] = record, record
+	}
+	for _, category := range categoryByID {
+		if category.parentID == "" {
+			continue
+		}
+		parent, found := categoryByID[category.parentID]
+		if !found || parent.parentID != "" || parent.kind != string(domain.PlatformOptionEnvironmentDimension) || category.kind != parent.kind {
+			return invalid(optionCategories.Name, category.id, "parent_category_id", fmt.Sprintf("Catalog option category %s has an invalid parent", category.id))
+		}
+	}
+	optionValues := map[string]bool{}
+	type optionRecord struct{ id, categoryID, parentID string }
+	optionByID := map[string]optionRecord{}
+	options := tables["platform_options"]
+	for _, row := range options.Rows {
+		id, err := requiredText(options, row, "id")
+		if err != nil {
+			return err
+		}
+		categoryID, err := requiredText(options, row, "category_id")
+		if err != nil {
+			return err
+		}
+		value, err := requiredText(options, row, "technical_value")
+		if err != nil {
+			return err
+		}
+		category, found := categoryByID[categoryID]
+		if !found {
+			return invalid(options.Name, id, "category_id", fmt.Sprintf("Catalog option %s references a missing category", id))
+		}
+		key := category.key + "\x00" + value
+		if optionValues[key] {
+			return invalid(options.Name, id, "technical_value", fmt.Sprintf("Catalog contains a duplicate option value %s", value))
+		}
+		optionValues[key] = true
+		parentID, err := optionalText(options, row, "parent_option_id")
+		if err != nil {
+			return err
+		}
+		optionByID[id] = optionRecord{id: id, categoryID: categoryID, parentID: parentID}
+	}
+	for _, option := range optionByID {
+		category := categoryByID[option.categoryID]
+		if category.parentID == "" && option.parentID != "" {
+			return invalid(options.Name, option.id, "parent_option_id", fmt.Sprintf("Catalog root option %s cannot have a parent", option.id))
+		}
+		if category.parentID != "" {
+			parent, found := optionByID[option.parentID]
+			if !found || parent.categoryID != category.parentID {
+				return invalid(options.Name, option.id, "parent_option_id", fmt.Sprintf("Catalog child option %s has an invalid parent", option.id))
+			}
+		}
 	}
 
 	componentIDs := tableIDs(tables["components"])
@@ -337,6 +425,25 @@ func validateCatalogReferences(catalog Catalog) error {
 		}
 		if parentID != "" && compatibility != string(domain.CompatibilityCompatible) && compatibility != string(domain.CompatibilityBreaking) {
 			return invalid(releases.Name, id, "compatibility", fmt.Sprintf("Catalog evolution Release %s must use compatible or breaking compatibility", id))
+		}
+		constraintsRaw, err := requiredText(releases, row, "environment_constraints_json")
+		if err != nil {
+			return err
+		}
+		constraints := map[string][]string{}
+		if err := jsonUnmarshalStrict([]byte(constraintsRaw), &constraints); err != nil {
+			return invalid(releases.Name, id, "environment_constraints_json", fmt.Sprintf("Catalog Release %s has invalid environment constraints", id))
+		}
+		for categoryKey, values := range constraints {
+			category, found := categoryByKey[categoryKey]
+			if !found || category.kind != string(domain.PlatformOptionEnvironmentDimension) || len(values) == 0 {
+				return invalid(releases.Name, id, "environment_constraints_json", fmt.Sprintf("Catalog Release %s references an unknown environment dimension", id))
+			}
+			for _, value := range values {
+				if !optionValues[categoryKey+"\x00"+value] {
+					return invalid(releases.Name, id, "environment_constraints_json", fmt.Sprintf("Catalog Release %s references an unknown environment option", id))
+				}
+			}
 		}
 		releaseRecords[id] = releaseRecord{id: id, componentID: componentID, lineID: lineID, parentID: parentID, templateID: templateID, status: status, compatibility: compatibility, releasedAt: releasedAt}
 	}
@@ -431,6 +538,14 @@ func validateCatalogReferences(catalog Catalog) error {
 		if !found {
 			return invalid(actions.Name, id, "release_id", fmt.Sprintf("Catalog Action %s references missing Release %s", id, releaseID))
 		}
+		hostGroup, err := requiredText(actions, row, "host_group")
+		if err != nil {
+			return err
+		}
+		hostGroupCategory, found := categoryByKey["hostGroup"]
+		if !found || hostGroupCategory.kind != string(domain.PlatformOptionHostGroup) || !optionValues["hostGroup\x00"+hostGroup] {
+			return invalid(actions.Name, id, "host_group", fmt.Sprintf("Catalog Action %s references an unknown host group", id))
+		}
 		for _, endpoint := range []struct{ name, id string }{{"from_release_id", fromID}, {"to_release_id", toID}} {
 			if endpoint.id == "" {
 				continue
@@ -467,6 +582,7 @@ func validateCatalogReferences(catalog Catalog) error {
 		var graph struct {
 			Nodes []struct {
 				ReleaseID string `json:"releaseId"`
+				HostGroup string `json:"hostGroup"`
 			} `json:"nodes"`
 		}
 		if err := jsonUnmarshalStrict([]byte(raw), &graph); err != nil {
@@ -475,6 +591,9 @@ func validateCatalogReferences(catalog Catalog) error {
 		for _, node := range graph.Nodes {
 			if _, found := releaseRecords[node.ReleaseID]; !found {
 				return invalid(revisions.Name, "", "graph_json", fmt.Sprintf("Catalog scenario references missing Release %s", node.ReleaseID))
+			}
+			if !optionValues["hostGroup\x00"+node.HostGroup] {
+				return invalid(revisions.Name, "", "graph_json", fmt.Sprintf("Catalog scenario references unknown host group %s", node.HostGroup))
 			}
 		}
 	}

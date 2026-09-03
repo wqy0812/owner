@@ -152,8 +152,6 @@ type ComponentTestRequest struct {
 	EnvironmentID        string               `json:"environmentId"`
 	Mode                 ComponentTestMode    `json:"mode"`
 	RollbackVerification RollbackVerification `json:"rollbackVerification"`
-	RunInput             map[string]any       `json:"runInput"`
-	DependencyFixtures   map[string]any       `json:"dependencyFixtures"`
 	ExpectedPlanDigest   string               `json:"expectedPlanDigest,omitempty"`
 }
 

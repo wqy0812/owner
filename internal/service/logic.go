@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -10,34 +9,16 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-var sensitiveKey = regexp.MustCompile(`(?i)(password|passwd|secret|token|private[_-]?key|encryption[_-]?key|credential)`)
+func isSensitiveKey(key string) bool { return domain.IsSensitiveKey(key) }
 
-func isSensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	if strings.HasSuffix(normalized, "_version") {
-		return false
-	}
-	return sensitiveKey.MatchString(key)
-}
-
-// ResolveParameters applies the platform's fixed precedence order. Run input
-// may only override keys explicitly declared by the scenario node.
-func ResolveParameters(defaults, nodeValues, environment, runInput map[string]any, allowedRunInput []string) (map[string]any, error) {
+// ResolveParameters applies the three owner-controlled layers. Upstream
+// mappings are applied separately after the upstream node has completed.
+func ResolveParameters(componentFixed, scenarioValues, environmentValues map[string]any) map[string]any {
 	resolved := make(map[string]any)
-	mergeMap(resolved, defaults)
-	mergeMap(resolved, nodeValues)
-	mergeMap(resolved, environment)
-	allowed := make(map[string]struct{}, len(allowedRunInput))
-	for _, key := range allowedRunInput {
-		allowed[key] = struct{}{}
-	}
-	for key, value := range runInput {
-		if _, ok := allowed[key]; !ok {
-			return nil, fmt.Errorf("%w: run input %q was not declared by the scenario", domain.ErrInvalid, key)
-		}
-		resolved[key] = deepCopy(value)
-	}
-	return resolved, nil
+	mergeMap(resolved, componentFixed)
+	mergeMap(resolved, scenarioValues)
+	mergeMap(resolved, environmentValues)
+	return resolved
 }
 
 func mergeMap(dst, src map[string]any) {

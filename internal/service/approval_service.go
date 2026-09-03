@@ -54,7 +54,7 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 	p := a.platform
 	if user.Role != domain.RoleEnvironmentOwner {
 		base := fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
-		return domain.Run{}, actionableExistingError(base, "permission.environment_owner_required", "只有目标环境的 Environment Owner 可以审批危险作业", "返回我的工作", "/")
+		return domain.Run{}, actionableExistingError(base, "permission.environment_owner_required", "只有目标环境的环境 Owner 可以审批危险作业", "返回我的工作", "/")
 	}
 	approval, err := p.store.GetApproval(ctx, approvalID)
 	if err != nil {
@@ -70,7 +70,7 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 	}
 	if environment.OwnerID != user.ID {
 		base := fmt.Errorf("%w: approval belongs to another owner's environment", domain.ErrForbidden)
-		return run, actionableExistingError(base, "permission.environment_owner_required", "该审批属于另一位 Environment Owner 管理的环境", "查看运行详情", "/runs?selected="+run.ID)
+		return run, actionableExistingError(base, "permission.environment_owner_required", "该审批属于另一位环境 Owner 管理的环境", "查看运行详情", "/runs?selected="+run.ID)
 	}
 	if approval.Status != "pending" {
 		if approval.Status == decision && run.Status != domain.RunAwaitingApproval {

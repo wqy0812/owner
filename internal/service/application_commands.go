@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -77,6 +80,65 @@ func (s *CatalogService) SetReleaseCandidate(ctx context.Context, user domain.Us
 	}
 	return s.platform.decorateReleaseReadiness(ctx, release)
 }
+
+func (s *CatalogService) SubmitReleaseReview(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+	release, err := s.store.GetComponentRelease(ctx, id)
+	if err != nil {
+		return release, err
+	}
+	component, err := s.store.GetComponent(ctx, release.ComponentID, false)
+	if err != nil {
+		return release, err
+	}
+	if err := requireOwner(user, domain.RoleComponentOwner, component.OwnerID); err != nil {
+		return release, err
+	}
+	if release.Status != domain.ReleaseDraft {
+		return release, fmt.Errorf("%w: only a draft release can be submitted for review", domain.ErrConflict)
+	}
+	if err := s.platform.validateReleaseContract(ctx, release, false); err != nil {
+		return release, err
+	}
+	digest := componentReleaseSpecDigest(release)
+	if err := s.store.SubmitComponentReleaseReview(ctx, id, digest, release.PublicationGeneration, time.Now().UTC()); err != nil {
+		return release, err
+	}
+	s.platform.audit(ctx, user, "component_release.review_submitted", "component_release", id, map[string]any{"contractDigest": digest})
+	s.platform.hub.Publish("component_release.review_updated", map[string]any{"releaseId": id, "status": domain.ReleaseReviewPending})
+	return s.GetComponentRelease(ctx, id)
+}
+
+func (s *CatalogService) DecideReleaseReview(ctx context.Context, user domain.User, id string, approve bool, comment, expectedPreviewDigest string) (domain.ComponentRelease, error) {
+	if err := domain.ValidateRole(user, domain.RolePlatformAdmin); err != nil {
+		return domain.ComponentRelease{}, err
+	}
+	expectedPreviewDigest = strings.TrimSpace(expectedPreviewDigest)
+	if expectedPreviewDigest == "" {
+		return domain.ComponentRelease{}, fmt.Errorf("%w: expectedPreviewDigest is required; preview the release before deciding", domain.ErrInvalid)
+	}
+	preview, err := s.releaseReviewPreview(ctx, id)
+	if err != nil {
+		return domain.ComponentRelease{}, err
+	}
+	if preview.PreviewDigest != expectedPreviewDigest {
+		return preview.Release, fmt.Errorf("%w: release review preview changed; preview it again", domain.ErrConflict)
+	}
+	release := preview.Release
+	status := domain.ReleaseReviewRejected
+	if approve {
+		status = domain.ReleaseReviewApproved
+	}
+	comment = strings.TrimSpace(comment)
+	if !approve && comment == "" {
+		return release, fmt.Errorf("%w: rejection comment is required", domain.ErrInvalid)
+	}
+	if err := s.store.DecideComponentReleaseReview(ctx, id, status, user.ID, comment, release.Review.ContractDigest, time.Now().UTC()); err != nil {
+		return release, err
+	}
+	s.platform.audit(ctx, user, "component_release.review_decided", "component_release", id, map[string]any{"status": status, "comment": comment})
+	s.platform.hub.Publish("component_release.review_updated", map[string]any{"releaseId": id, "status": status})
+	return s.GetComponentRelease(ctx, id)
+}
 func (s *CatalogService) PreviewImport(ctx context.Context, user domain.User, input ComponentImportRequest) (ComponentImportPlan, error) {
 	return s.platform.PreviewComponentImport(ctx, user, input)
 }
@@ -149,6 +211,9 @@ func (s *ScenarioService) SaveGraph(ctx context.Context, user domain.User, id st
 func (s *ScenarioService) Validate(ctx context.Context, user domain.User, id string) ([]domain.ValidationIssue, error) {
 	return s.platform.ValidateScenario(ctx, user, id)
 }
+func (s *ScenarioService) ParameterOverview(ctx context.Context, user domain.User, id string) (ScenarioParameterOverview, error) {
+	return s.platform.ScenarioParameterOverview(ctx, user, id)
+}
 func (s *ScenarioService) Deprecate(ctx context.Context, user domain.User, id string) (domain.ScenarioRevision, error) {
 	return s.platform.DeprecateScenario(ctx, user, id)
 }
@@ -181,6 +246,12 @@ func (s *EnvironmentService) UpdateFacts(ctx context.Context, user domain.User, 
 func (s *EnvironmentService) UpdateVariables(ctx context.Context, user domain.User, id string, values map[string]string, reason ...string) (domain.Environment, error) {
 	return s.platform.UpdateEnvironmentVariables(ctx, user, id, values, reason...)
 }
+func (s *EnvironmentService) ParameterFields(ctx context.Context) ([]EnvironmentParameterField, error) {
+	return s.platform.EnvironmentParameterFields(ctx)
+}
+func (s *EnvironmentService) UpdateParameters(ctx context.Context, user domain.User, id string, values map[string]any, reason ...string) (domain.Environment, error) {
+	return s.platform.UpdateEnvironmentParameters(ctx, user, id, values, reason...)
+}
 func (s *EnvironmentService) UpdateCredentialRefs(ctx context.Context, user domain.User, id string, refs []domain.CredentialRef, reason ...string) (domain.Environment, error) {
 	return s.platform.UpdateCredentialRefs(ctx, user, id, refs, reason...)
 }
@@ -210,11 +281,11 @@ func (s *ExecutionService) PreviewComponentTest(ctx context.Context, user domain
 func (s *ExecutionService) StartComponentTest(ctx context.Context, user domain.User, id string, input ComponentTestRequest) (domain.Run, error) {
 	return s.platform.StartComponentTest(ctx, user, id, input)
 }
-func (s *ExecutionService) StartScenarioTest(ctx context.Context, user domain.User, id, environmentID string, input map[string]any) (domain.Run, error) {
-	return s.platform.StartScenarioTest(ctx, user, id, environmentID, input)
+func (s *ExecutionService) StartScenarioTest(ctx context.Context, user domain.User, id, environmentID string) (domain.Run, error) {
+	return s.platform.StartScenarioTest(ctx, user, id, environmentID)
 }
-func (s *ExecutionService) StartScenarioRun(ctx context.Context, user domain.User, id, environmentID string, input map[string]any) (domain.Run, error) {
-	return s.platform.StartScenarioRun(ctx, user, id, environmentID, input)
+func (s *ExecutionService) StartScenarioRun(ctx context.Context, user domain.User, id, environmentID string) (domain.Run, error) {
+	return s.platform.StartScenarioRun(ctx, user, id, environmentID)
 }
 func (s *ExecutionService) PreviewRollback(ctx context.Context, user domain.User, environmentID string) (EnvironmentRollbackPlan, error) {
 	return s.platform.PreviewEnvironmentRollback(ctx, user, environmentID)
@@ -236,15 +307,6 @@ func (s *ExecutionService) DecideApproval(ctx context.Context, user domain.User,
 }
 func (s *ExecutionService) BatchDecideApprovals(ctx context.Context, user domain.User, ids []string, decision, reason string) ([]domain.Run, error) {
 	return s.platform.BatchDecideApprovals(ctx, user, ids, decision, reason)
-}
-func (s *ExecutionService) ListInputPresets(ctx context.Context, user domain.User, resourceType, resourceID, inputContext string) ([]domain.RunInputPreset, error) {
-	return s.platform.ListRunInputPresets(ctx, user, resourceType, resourceID, inputContext)
-}
-func (s *ExecutionService) SaveInputPreset(ctx context.Context, user domain.User, input domain.RunInputPreset) (domain.RunInputPreset, error) {
-	return s.platform.SaveRunInputPreset(ctx, user, input)
-}
-func (s *ExecutionService) DeleteInputPreset(ctx context.Context, user domain.User, id string) error {
-	return s.platform.DeleteRunInputPreset(ctx, user, id)
 }
 
 func (s *ReadModelService) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {

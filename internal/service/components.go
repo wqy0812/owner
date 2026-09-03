@@ -35,9 +35,12 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
 		return p.decorateComponentReadiness(ctx, component)
 	}
+	if user.Role == domain.RolePlatformAdmin {
+		return p.decorateComponentReadiness(ctx, component)
+	}
 	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
-		if release.Status == domain.ReleaseReleased || (release.Status == domain.ReleaseDraft && release.Candidate) {
+		if release.Status == domain.ReleaseReleased || release.IsApprovedCandidate() {
 			filtered = append(filtered, release)
 		}
 	}
@@ -188,6 +191,9 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	if err := p.validateReleaseContract(ctx, patch, false); err != nil {
 		return release, err
 	}
+	if err := p.validateEnvironmentConstraintRetiredReferences(ctx, patch.EnvironmentConstraints, release.EnvironmentConstraints); err != nil {
+		return release, err
+	}
 	if err := p.store.UpdateDraftRelease(ctx, patch); err != nil {
 		return release, err
 	}
@@ -221,11 +227,14 @@ func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id
 		return release, err
 	}
 	if candidate {
+		if release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != componentReleaseSpecDigest(release) {
+			return release, fmt.Errorf("%w: component release contract must be approved before candidate sharing", domain.ErrConflict)
+		}
 		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
 			return release, err
 		}
 	}
-	if err := p.store.SetReleaseCandidate(ctx, id, candidate); err != nil {
+	if err := p.store.SetReleaseCandidate(ctx, id, candidate, release.PublicationGeneration, componentReleaseSpecDigest(release)); err != nil {
 		return release, err
 	}
 	p.audit(ctx, user, "component_release.candidate_updated", "component_release", id, map[string]any{"candidate": candidate})
@@ -419,6 +428,9 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 	if err := validateRelease(release); err != nil {
 		return err
 	}
+	if err := p.validateReleaseCatalogValues(ctx, release); err != nil {
+		return err
+	}
 	if err := p.validateReleaseMappings(ctx, release); err != nil {
 		return err
 	}
@@ -426,6 +438,22 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 		return p.validateUpgradeRollbackMappingContracts(ctx, release)
 	}
 	return nil
+}
+
+func (p *Platform) validateReleaseCatalogValues(ctx context.Context, release domain.ComponentRelease) error {
+	if err := p.validateEnvironmentConstraintsCatalog(ctx, release.EnvironmentConstraints); err != nil {
+		return err
+	}
+	for _, action := range release.Actions {
+		if err := p.validateHostGroupCatalog(ctx, action.HostGroup); err != nil {
+			return err
+		}
+	}
+	definitions, err := p.store.ListEnvironmentParameterDefinitions(ctx)
+	if err != nil {
+		return err
+	}
+	return domain.ValidateGlobalParameterBindings(release.Parameters, definitions)
 }
 
 func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {

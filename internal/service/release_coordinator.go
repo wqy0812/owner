@@ -236,6 +236,7 @@ func (c *ReleaseCoordinator) captureReleasePublicationState(ctx context.Context,
 		guards = append(guards, store.ReleasePublicationGuard{
 			ReleaseID: release.ID, PublicationGeneration: release.PublicationGeneration,
 			SpecDigest: componentReleaseSpecDigest(release), Status: release.Status, Candidate: release.Candidate,
+			ReviewStatus: release.Review.Status, ReviewContractDigest: release.Review.ContractDigest,
 		})
 	}
 	for releaseID := range missing {

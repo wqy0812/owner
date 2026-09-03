@@ -23,6 +23,8 @@ type catalogStore interface {
 	GetComponent(context.Context, string, bool) (domain.Component, error)
 	GetUser(context.Context, string) (domain.User, error)
 	ListReleaseDisplayMetadata(context.Context) (map[string]store.ReleaseDisplayMetadata, error)
+	SubmitComponentReleaseReview(context.Context, string, string, int64, time.Time) error
+	DecideComponentReleaseReview(context.Context, string, domain.ReleaseReviewStatus, string, string, string, time.Time) error
 }
 
 type scenarioStore interface {
@@ -64,6 +66,26 @@ type readModelStore interface {
 	GetNotification(context.Context, string) (domain.Notification, error)
 }
 
+type platformOptionStore interface {
+	ListPlatformOptionCategories(context.Context) ([]domain.PlatformOptionCategory, error)
+	CreatePlatformOptionCategory(context.Context, domain.PlatformOptionCategory, domain.AuditEvent) error
+	RenamePlatformOptionCategory(context.Context, string, string, domain.AuditEvent) error
+	CreatePlatformOption(context.Context, domain.PlatformOption, domain.AuditEvent) error
+	RenamePlatformOption(context.Context, string, string, domain.AuditEvent) error
+	SetPlatformOptionCategoryRetired(context.Context, string, *time.Time, domain.AuditEvent) error
+	SetPlatformOptionRetired(context.Context, string, *time.Time, domain.AuditEvent) error
+	DeletePlatformOptionCategory(context.Context, string, domain.AuditEvent) error
+	DeletePlatformOption(context.Context, string, domain.AuditEvent) error
+	ListEnvironmentParameterDefinitions(context.Context) ([]domain.EnvironmentParameterDefinition, error)
+	GetEnvironmentParameterDefinition(context.Context, string) (domain.EnvironmentParameterDefinition, error)
+	CreateEnvironmentParameterDefinition(context.Context, domain.EnvironmentParameterDefinition, domain.AuditEvent) error
+	UpdateEnvironmentParameterDefault(context.Context, string, any, domain.AuditEvent) (domain.EnvironmentParameterDefinition, error)
+	DeleteEnvironmentParameterDefinition(context.Context, string, domain.AuditEvent) error
+	ListEnvironmentVariableDefinitions(context.Context) ([]domain.EnvironmentVariableDefinition, error)
+	CreateEnvironmentVariableDefinition(context.Context, domain.EnvironmentVariableDefinition, domain.AuditEvent) error
+	DeleteEnvironmentVariableDefinition(context.Context, string, domain.AuditEvent) error
+}
+
 type IdentityService struct{ store identityStore }
 type CatalogService struct {
 	platform *Platform
@@ -85,14 +107,19 @@ type ReadModelService struct {
 	platform *Platform
 	store    readModelStore
 }
+type PlatformOptionService struct {
+	platform *Platform
+	store    platformOptionStore
+}
 
-func (p *Platform) Identity() *IdentityService        { return p.identity }
-func (p *Platform) Catalog() *CatalogService          { return p.catalog }
-func (p *Platform) Scenarios() *ScenarioService       { return p.scenarios }
-func (p *Platform) Environments() *EnvironmentService { return p.environments }
-func (p *Platform) Execution() *ExecutionService      { return p.execution }
-func (p *Platform) ReadModel() *ReadModelService      { return p.readModel }
-func (p *Platform) Releases() *ReleaseCoordinator     { return p.releaseCoordinator }
+func (p *Platform) Identity() *IdentityService              { return p.identity }
+func (p *Platform) Catalog() *CatalogService                { return p.catalog }
+func (p *Platform) Scenarios() *ScenarioService             { return p.scenarios }
+func (p *Platform) Environments() *EnvironmentService       { return p.environments }
+func (p *Platform) Execution() *ExecutionService            { return p.execution }
+func (p *Platform) ReadModel() *ReadModelService            { return p.readModel }
+func (p *Platform) Releases() *ReleaseCoordinator           { return p.releaseCoordinator }
+func (p *Platform) PlatformOptions() *PlatformOptionService { return p.platformOptions }
 
 func (s *IdentityService) ListUsers(ctx context.Context) ([]domain.User, error) {
 	return s.store.ListUsers(ctx)

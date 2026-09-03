@@ -6,7 +6,7 @@ ClusterForge 使用两级恢复来源：SQLite 快照用于完整平台恢复，
 
 平台服务必须先设置 `CLUSTERFORGE_BACKUP_ENABLED=true`；否则状态页会明确显示服务端能力未启用，创建、接入和备份入口均保持关闭。启用能力不等于已经选择仓库。
 
-Environment Owner 可在“灾备目录 → 发布目录灾备”输入允许根目录下的服务器路径。选择“创建私有仓库”时平台创建权限为 `0700` 的 bare Git 仓库及独立工作副本；当前发布目录非空且尚未选择仓库时可“接入已有备份仓库”，已配置后入口改为“更换备份仓库”。已有仓库必须包含 `catalog` 分支。允许根目录由 `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` 配置，平台拒绝 `..` 和符号链接越界。
+环境 Owner 可在“灾备目录 → 发布目录灾备”输入允许根目录下的服务器路径。选择“创建私有仓库”时平台创建权限为 `0700` 的 bare Git 仓库及独立工作副本；当前发布目录非空且尚未选择仓库时可“接入已有备份仓库”，已配置后入口改为“更换备份仓库”。已有仓库必须包含 `catalog` 分支。允许根目录由 `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` 配置，平台拒绝 `..` 和符号链接越界。
 
 当组件和场景均为空且尚未选择仓库时，页面把接入与灾难恢复合并为“从已有 Git 仓库恢复”向导：先验证并保存仓库，再选择远端恢复点、预检并确认。向导仍允许“仅接入，暂不恢复”；仓库接入与数据恢复在服务端保持为两个独立操作和审计事件。
 
@@ -33,7 +33,7 @@ fi
 远端必须禁止 force-push 和删除 `backup/*` 标签。SSH 凭据由运行 `clusterforge-platform` 与 `clusterforge-backup` 的服务账号管理，不写入 `platform.env`。
 
 配置 `/etc/clusterforge/platform.env` 后重启平台。在线备份不从
-`CLUSTERFORGE_CATALOG_REPO` 猜测目标，而只读取 Environment Owner 通过前台保存的仓库选择：
+`CLUSTERFORGE_CATALOG_REPO` 猜测目标，而只读取环境 Owner 通过前台保存的仓库选择：
 
 ```bash
 systemctl daemon-reload
@@ -41,14 +41,14 @@ systemctl restart clusterforge-platform
 ```
 
 创建或接入仓库成功后，平台启用发布后异步备份和前台立即备份。若最近一次异步备份失败或发布代次与最近恢复点不一致，
-Environment Owner 的“我的工作”和“发布目录灾备”面板都会显示告警与处置入口。
+环境 Owner 的“我的工作”和“发布目录灾备”面板都会显示告警与处置入口。
 
 ## 创建与检查恢复点
 
 平台采用两种备份入口：发布、联合发布和已发布对象废弃会在 30 秒窗口后异步触发快照；
-Environment Owner 也可在“灾备目录 → 发布目录灾备”单击“立即备份”。
+环境 Owner 也可在“灾备目录 → 发布目录灾备”单击“立即备份”。
 失败任务会保留错误并延迟重试，不会回滚已经完成的发布。没有有效仓库选择时，立即备份
-按钮也不可用。部署或数据清理前，应由 Environment Owner 在前台创建恢复点，并等待页面显示新的
+按钮也不可用。部署或数据清理前，应由环境 Owner 在前台创建恢复点，并等待页面显示新的
 `backup/*` 标签与 Git commit 后再继续。
 
 人工创建恢复点不再提供 CLI `snapshot` 命令。CLI 仅保留恢复点检查、失败 push 续传和离线恢复：
@@ -73,7 +73,7 @@ Environment Owner 也可在“灾备目录 → 发布目录灾备”单击“立
 
 ## 恢复
 
-Environment Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。页面会先显示组件和场景数量，目录非空时直接关闭恢复按钮。前台恢复仍采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
+环境 Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。页面会先显示组件和场景数量，目录非空时直接关闭恢复按钮。前台恢复仍采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
 
 空库恢复在单一 SQLite 事务中写入已发布/废弃的组件、Release、依赖、Action、场景 Revision、制品和镜像元数据。既有用户 ID 仅在名称与角色完全一致时复用；Playbook 仅在目标不存在或内容 SHA-256 完全一致时允许。ID/slug、用户属性或 Playbook 内容冲突都会整批失败，未提交的新文件会清理。成功后记录审计并异步触发新快照；Run、环境、审批、通知、Session 和既有审计历史不会从 Git 恢复。
 
@@ -105,7 +105,9 @@ clusterforge-backup restore-catalog \
 
 Catalog-only 恢复保留用户身份、组件/Release ID、依赖、动作、已发布/废弃状态、场景 Revision/DAG、Playbook 和内容身份；不会伪造 Draft、Run、审批、审计、环境 Revision 或安装回滚基线。完成校验后，仍须通过受保护部署流程停服、备份当前状态、切换数据库和 Playbook 根目录，再验证 HTTP、Schema contract、外键、资源数量和外部介质。
 
-Catalog 导入只接受当前合同；不转换历史数据库或旧参数结构。
+Catalog 导入只接受当前完整表结构，包括环境参数默认值表；不补齐旧格式缺失的表，也不转换历史数据库或旧参数结构。
+
+Catalog 恢复后首次启动会保留恢复的选项目录，并单独初始化空的环境变量字段目录，提供 `IMAGE_REGISTRY` 和 `FILE_STATION`。已有变量字段不会被覆盖；完成初始化后，管理员删除的字段也不会在后续重启时重新出现。
 
 ## 保留与失败边界
 

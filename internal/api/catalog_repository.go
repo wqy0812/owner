@@ -50,7 +50,7 @@ func (h *Handler) getCatalogRepository(w http.ResponseWriter, r *http.Request) {
 		writeData(w, http.StatusOK, catalogRepositoryStatusResponse{
 			RepositoryStatus: backup.RepositoryStatus{Branch: "catalog", RecoveryPoints: []backup.RecoveryPoint{}},
 			ReasonCode:       catalogBackupDisabledCode,
-			Reason:           "发布目录灾备未在服务端启用，请由平台管理员设置 CLUSTERFORGE_BACKUP_ENABLED=true 并重启服务。",
+			Reason:           "发布目录灾备未在服务端启用，请由平台 Owner 设置 CLUSTERFORGE_BACKUP_ENABLED=true 并重启服务。",
 		})
 		return
 	}

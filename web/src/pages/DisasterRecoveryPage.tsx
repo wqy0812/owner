@@ -69,13 +69,13 @@ function CatalogRepositoryPanel() {
       <div className="catalog-backup-policy__heading"><h3 id="catalog-backup-policy-title">备份策略</h3><p>最近一次成功恢复点才是平台承诺可恢复的版本。</p></div>
       <div className="catalog-backup-policy__grid">
         <div><strong>发布后自动备份</strong><p>组件、场景发布或废弃后，平台在 30 秒窗口内合并变更并异步备份，不阻塞发布事务。</p></div>
-        <div><strong>前台立即备份</strong><p>Environment Owner 可随时创建恢复点；只有 Git 分支和不可变标签均推送成功后才提示完成。</p></div>
+        <div><strong>前台立即备份</strong><p>环境 Owner 可随时创建恢复点；只有 Git 分支和不可变标签均推送成功后才提示完成。</p></div>
         <div><strong>完整性与范围</strong><p>校验 SQLite、外键、数据库与 Catalog/Playbook 摘要；不包含 Draft、Run 日志、凭据值和大型制品。</p></div>
       </div>
     </section>
     <RefreshNotice loading={Boolean(isRefreshing)} error={repository ? error : undefined} onRetry={reload} />
     {loading && !repository ? <LoadingBlock label="正在读取私有仓库…" /> : error && !repository ? <ErrorBlock message={error} onRetry={reload} /> : repository ? <div className="revision-preview catalog-repository-panel__body">
-      <div className="revision-diff"><GitBranch size={18} /><div><strong>{!repository.enabled ? '服务端未启用发布目录灾备' : repository.configured ? '已接入私有仓库' : '尚未配置私有仓库'}</strong><p>{!repository.enabled ? repository.reason ?? '请由平台管理员完成服务端配置后重试。' : repository.configured ? repository.path : `允许根目录：${repository.allowedRoot}`}</p>{repository.enabled && repository.configured && <p>分支：{repository.branch} · 恢复点：{repository.recoveryPoints.length} 个</p>}{repository.enabled && repository.configured && <p>最近成功：{repository.lastSuccessfulAt ? formatTime(repository.lastSuccessfulAt) : '尚无成功恢复点'} · 发布代次：{repository.backedUpGeneration}/{repository.currentGeneration}</p>}</div></div>
+      <div className="revision-diff"><GitBranch size={18} /><div><strong>{!repository.enabled ? '服务端未启用发布目录灾备' : repository.configured ? '已接入私有仓库' : '尚未配置私有仓库'}</strong><p>{!repository.enabled ? repository.reason ?? '请由平台 Owner 完成服务端配置后重试。' : repository.configured ? repository.path : `允许根目录：${repository.allowedRoot}`}</p>{repository.enabled && repository.configured && <p>分支：{repository.branch} · 恢复点：{repository.recoveryPoints.length} 个</p>}{repository.enabled && repository.configured && <p>最近成功：{repository.lastSuccessfulAt ? formatTime(repository.lastSuccessfulAt) : '尚无成功恢复点'} · 发布代次：{repository.backedUpGeneration}/{repository.currentGeneration}</p>}</div></div>
       {!repository.enabled && <div className="inline-warning"><AlertTriangle size={16} /><span>服务端能力启用前，创建、接入和备份入口保持关闭。</span></div>}
       {repository.enabled && !repository.configured && <div className="inline-warning"><AlertTriangle size={16} /><span>未通过前台选择仓库，发布后自动备份与立即备份不可用。</span></div>}
       {repository.enabled && repository.configured && repository.behind && <div className="inline-warning"><AlertTriangle size={16} /><span>恢复点落后：当前发布代次 {repository.currentGeneration}，已备份代次 {repository.backedUpGeneration}。</span></div>}

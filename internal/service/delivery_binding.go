@@ -168,6 +168,6 @@ func appendDeliveryRequirement(plan *lockedPlan, requirement DeliveryRequirement
 }
 
 func deliverySourceError(component domain.Component, release domain.ComponentRelease, item, source, actionURL string, cause error) error {
-	base := fmt.Errorf("%w: %s %s %s 的当前来源 %s 不可读（Component Owner: %s）: %v", domain.ErrConflict, component.Name, release.Version, item, source, component.OwnerID, cause)
-	return actionableExistingError(base, "delivery.source_unreadable", "内容来源不可读；请由 Component Owner 修复同一内容身份的来源地址", "更新内容来源", actionURL)
+	base := fmt.Errorf("%w: %s %s %s 的当前来源 %s 不可读（组件 Owner: %s）: %v", domain.ErrConflict, component.Name, release.Version, item, source, component.OwnerID, cause)
+	return actionableExistingError(base, "delivery.source_unreadable", "内容来源不可读；请由组件 Owner 修复同一内容身份的来源地址", "更新内容来源", actionURL)
 }

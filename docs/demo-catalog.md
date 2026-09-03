@@ -12,7 +12,7 @@
 
 | 对象 | 数量 | 当前状态 |
 | --- | ---: | --- |
-| 演示身份 | 3 | 1 个 Component Owner、1 个 Scenario Owner、1 个 Environment Owner |
+| 演示身份 | 3 | 1 个组件 Owner、1 个集群 Owner、1 个环境 Owner |
 | Component | 15 | 全部归属 `component-alice` |
 | Component Release | 15 | 全部 Released，每个 Component 1 个 Release |
 | Action | 45 | 每个 Release 均为 install / verify / rollback 3/3 |
@@ -35,9 +35,9 @@
 
 | ID | 显示名 | 角色 | 负责对象 |
 | --- | --- | --- | --- |
-| `component-alice` | 林晓 · Runtime | Component Owner | 本文 15 个 Component |
-| `scenario-carol` | 陈晨 · 集群交付 | Scenario Owner | Kubernetes 1.17.5 六节点场景 |
-| `environment-dave` | 王维 · 基础设施 | Environment Owner | 两个 Kubernetes 测试环境和危险 Run 审批 |
+| `component-alice` | 林晓 | 组件 Owner | 本文 15 个 Component |
+| `scenario-carol` | 陈晨 | 集群 Owner | Kubernetes 1.17.5 六节点场景 |
+| `environment-dave` | 王维 | 环境 Owner | 两个 Kubernetes 测试环境和危险 Run 审批 |
 
 身份切换是 Demo 会话功能，不包含密码、SSO、OIDC 或生产授权。
 
@@ -51,7 +51,7 @@
 - 发布说明均为“Ubuntu 18.04 / AMD64 六节点 Kubernetes 1.17.5 细粒度交付版本。”
 - 环境约束为 `architecture=amd64`、`deploymentMode=standard`、`hardwareProfile=general`、`ipFamily=IPv4`、`isolationRuntime=runc`。
 - 当前 Release 没有结构化参数、Release 依赖、CredentialRef 声明、介质或镜像记录。场景的 50 条边是当前执行先后关系的唯一表达。
-- 所有 Action 的 `tags=[]`、`limit=""`、`allowedParameters=[]`、`requiredCredentials=[]`、`idempotent=false`。
+- 所有 Action 的 `tags=[]`、`requiredCredentials=[]`、`idempotent=false`；执行目标只来自受治理的 `hostGroup`，不存在自由 `limit` 或 Action 运行参数白名单。
 - verify 均为 `timeout=900`、`risk=low`、`destructive=false`；rollback 也均为 `timeout=900`，除 kubelet 和 Flannel 外均为 `risk=low`、`destructive=false`。
 
 这些约束字段与环境2 r5 匹配。`operatingSystem`、`operatingSystemVersion` 和 `dockerVersion` 由托管 Playbook 自身的预检失败关闭，未写入当前 Release 约束。
@@ -96,25 +96,7 @@
 | `flannel` | Kubernetes 1.17.5 Pod 网络与 CNI 能力。 |
 | `coredns` | Kubernetes 集群 DNS 服务。 |
 
-用于手工复录的 Component 标签：
-
-| slug | tags |
-| --- | --- |
-| `host-preflight` | `legacy-category:preflight`、`legacy-kind:delivery_stage`、`legacy-requiredness:core_required` |
-| `host-bootstrap` | `legacy-category:bootstrap`、`legacy-kind:configuration`、`legacy-requiredness:core_required` |
-| `cluster-pki` | `legacy-category:security`、`legacy-kind:artifact_set`、`legacy-requiredness:core_required` |
-| `kubernetes-encryption-configuration` | `legacy-category:security`、`legacy-kind:configuration`、`legacy-requiredness:profile_required` |
-| `docker-runtime` | `legacy-category:runtime`、`legacy-kind:software`、`legacy-requiredness:profile_required` |
-| `etcd-state-store` | `legacy-category:state_store`、`legacy-kind:software`、`legacy-requiredness:core_required` |
-| `kubernetes-distribution` | `legacy-category:control_plane`、`legacy-kind:software_bundle`、`legacy-requiredness:core_required` |
-| `kube-apiserver` | `legacy-category:control_plane`、`legacy-kind:software`、`legacy-requiredness:core_required` |
-| `kube-controller-manager` | `legacy-category:control_plane`、`legacy-kind:software`、`legacy-requiredness:core_required` |
-| `kube-scheduler` | `legacy-category:control_plane`、`legacy-kind:software`、`legacy-requiredness:core_required` |
-| `kubernetes-bootstrap-rbac` | `legacy-category:control_plane`、`legacy-kind:configuration`、`legacy-requiredness:core_required` |
-| `kubelet` | `legacy-category:worker`、`legacy-kind:software`、`legacy-requiredness:core_required` |
-| `kube-proxy` | `legacy-category:network`、`legacy-kind:software`、`legacy-requiredness:profile_required` |
-| `flannel` | `legacy-category:network`、`legacy-kind:software`、`legacy-requiredness:profile_required` |
-| `coredns` | `legacy-category:dns`、`legacy-kind:software`、`legacy-requiredness:core_required` |
+Component 自由标签以平台当前读回结果为准；历史分类字段转换工具已移除。
 
 ### 3.3 Action 差异
 
@@ -154,7 +136,7 @@
 | 完整测试通过 | 2026-08-29 21:20:18（Asia/Shanghai） |
 | 发布 | 2026-08-29 21:37:35（Asia/Shanghai） |
 
-当前 Revision 没有额外 Execution Policy。所有节点的 `values={}`、`runInputs=[]`、`dependencySources=[]`，Action 均为 install。
+当前 Revision 没有额外 Execution Policy。节点使用结构化 `parameterValues` 和 `dependencySources`，不存在临时运行输入字段；Action 均为 install，主机组是由对应 Release Action 锁定的只读快照。
 
 ### 4.2 节点清单
 
@@ -258,7 +240,7 @@ CredentialRef 只保存引用字符串，不包含加密密钥实际值。
 
 这是保留原 ID、原 Scenario DAG、Action Playbook 内容及 SHA-256 的唯一完整方式。只能对 Component 和 Scenario 均为空的目标库操作；不要在当前非空测试平台上提交恢复。
 
-1. 切换到“王维 · 基础设施”，进入“灾备目录”。
+1. 切换到“王维”，进入“灾备目录”。
 2. 对空目录单击“从已有 Git 仓库恢复”，填写 `/var/lib/clusterforge/private-catalog-repositories/k8s1175-recovery.git`，单击“验证并继续恢复”。跨服务器复现时，须先把完整 bare 仓库复制到恢复目标服务端的允许根目录，再填写目标机上的实际路径。
 3. 选择 `backup/20260829T133805.356231399Z-12828`，单击“预览恢复”。
 4. 预览必须显示 15 个 Component、15 个 Release、1 个 Scenario 和 45 个 Playbook；同时核对 Commit 前缀 `158598b577d8029a`。
@@ -283,10 +265,10 @@ Git Catalog 不包含 Environment。使用“环境 → 新建环境”和各配
 
 只有在不能使用第 6.1 节恢复点时才选择此路径。手工新录入会生成新 ID、新时间戳和新内容摘要，只能复现业务结构，不能伪造原历史证据。
 
-1. 以 Component Owner 使用“批量导入”创建 15 个 Component 和 Draft；名称、slug、layer、版本、约束及 Action 按第 3 节录入。
+1. 以组件 Owner 使用“批量导入”创建 15 个 Component 和 Draft；名称、slug、layer、版本、约束及 Action 按第 3 节录入。
 2. 为每个 Draft 上传 install、verify、rollback 三个与目标版本一致的可审核 Playbook；不得用表格里的文件名代替真实文件内容和 SHA-256。
 3. 在配套环境分别完成安装验证和回退验证，读回当前合同的发布就绪度。
-4. 将所有 Draft 加入候选集。以 Scenario Owner 新建场景，按第 4.2 节加入 21 个节点，按第 4.3 节建立 50 条边。
+4. 将所有 Draft 加入候选集。以集群 Owner 新建场景，按第 4.2 节加入 21 个节点，按第 4.3 节建立 50 条边。
 5. 保存并校验 DAG，在环境2完成完整场景测试。
 6. 使用“预览候选集并发布”，确认 15 个 Release 和 Scenario Revision 原子进入 Released。
 7. 读回 15 个 Component、15 个 Released Release、45 个 Action、1 个 Released Scenario、21 个节点和 50 条边，并在“灾备目录”单击“立即备份”创建新的不可变恢复点。

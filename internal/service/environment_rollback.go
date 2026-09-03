@@ -206,7 +206,7 @@ func (p *Platform) prepareEnvironmentRollback(ctx context.Context, user domain.U
 			if err != nil {
 				return preparedEnvironmentRollback{}, err
 			}
-			rollback.Limit = sourceStep.Limit
+			rollback.HostGroup = sourceStep.Limit
 			variables := rollbackVariablesFromInstall(sourceStep.Variables, sourceRevision, *environment.Revision, release)
 			step, err := p.lockAction(component, "clean-"+sourceRun.ID+"-"+sourceStep.NodeID, release, rollback, variables)
 			if err != nil {

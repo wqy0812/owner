@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +47,12 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	if err := rejectSensitiveMap(facts, "environment fact"); err != nil {
 		return environment, err
 	}
+	if err := p.validateEnvironmentFactsCatalog(ctx, facts, true); err != nil {
+		return environment, err
+	}
+	if err := p.validateEnvironmentFactRetiredReferences(ctx, facts, nil); err != nil {
+		return environment, err
+	}
 	if strings.TrimSpace(environment.Name) == "" {
 		return environment, fmt.Errorf("%w: environment name is required", domain.ErrInvalid)
 	}
@@ -57,24 +61,24 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
-		Facts: facts, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{},
+		Facts: facts, Inventory: inventory, Variables: map[string]string{}, Parameters: map[string]any{}, CredentialRefs: []domain.CredentialRef{},
 		CreatedBy: user.ID, ChangeReason: "创建环境", CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
-	if err := p.store.CreateEnvironment(ctx, environment, revision); err != nil {
+	if err := p.store.CreateEnvironment(ctx, environment, revision, store.EnvironmentRevisionWrite{RequireCompleteFacts: true, ApplyParameterDefaults: true}); err != nil {
 		return environment, err
 	}
 	p.audit(ctx, user, "environment.created", "environment", environment.ID, map[string]any{"revisionId": revision.ID})
-	return environment, nil
+	return p.store.GetEnvironment(ctx, environment.ID, false)
 }
 
 func (p *Platform) ListEnvironments(ctx context.Context, user domain.User, includeArchived ...bool) ([]domain.Environment, error) {
-	include := len(includeArchived) > 0 && includeArchived[0] && user.Role == domain.RoleEnvironmentOwner
+	include := len(includeArchived) > 0 && includeArchived[0] && (user.Role == domain.RoleEnvironmentOwner || user.Role == domain.RolePlatformAdmin)
 	environments, err := p.store.ListEnvironments(ctx, include)
 	if err != nil {
 		return nil, err
 	}
-	if include {
+	if include && user.Role != domain.RolePlatformAdmin {
 		visible := environments[:0]
 		for _, environment := range environments {
 			if environment.ArchivedAt == nil || environment.OwnerID == user.ID {
@@ -110,8 +114,10 @@ func (p *Platform) GetEnvironmentLifecycle(ctx context.Context, user domain.User
 	if err != nil {
 		return EnvironmentLifecycle{}, err
 	}
-	if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
-		return EnvironmentLifecycle{}, err
+	if user.Role != domain.RolePlatformAdmin {
+		if err := requireOwner(user, domain.RoleEnvironmentOwner, environment.OwnerID); err != nil {
+			return EnvironmentLifecycle{}, err
+		}
 	}
 	impact, err := p.store.EnvironmentLifecycleImpact(ctx, environmentID)
 	if err != nil {
@@ -254,43 +260,16 @@ func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User,
 	}, "environment.facts_updated", firstReason(changeReason))
 }
 
-var environmentVariablePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+var environmentVariablePattern = domain.EnvironmentVariablePattern
 
 func normalizeEnvironmentVariables(variables map[string]string, refs []domain.CredentialRef) (map[string]string, error) {
-	credentialNames := make(map[string]struct{}, len(refs))
-	for _, ref := range refs {
-		credentialNames[ref.Name] = struct{}{}
-	}
-	keys := make([]string, 0, len(variables))
-	for name := range variables {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
-	normalized := make(map[string]string, len(variables))
-	for _, name := range keys {
-		if !environmentVariablePattern.MatchString(name) {
-			return nil, fmt.Errorf("%w: environment variable %q must be an uppercase identifier", domain.ErrInvalid, name)
-		}
-		if isSensitiveKey(name) {
-			return nil, fmt.Errorf("%w: sensitive environment variable %q must use a CredentialRef", domain.ErrInvalid, name)
-		}
-		if _, exists := credentialNames[name]; exists {
-			return nil, fmt.Errorf("%w: environment variable %q conflicts with a CredentialRef", domain.ErrInvalid, name)
-		}
-		value := variables[name]
-		if name == imageRegistryVariable {
-			registry, err := normalizeImageRegistry(value)
-			if err != nil {
-				return nil, err
-			}
-			value = registry
-		}
-		normalized[name] = value
-	}
-	return normalized, nil
+	return domain.NormalizeEnvironmentVariables(variables, refs)
 }
 
 func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string, changeReason ...string) (domain.Environment, error) {
+	if err := p.validateEnvironmentValues(ctx, nil, variables, nil); err != nil {
+		return domain.Environment{}, err
+	}
 	return p.updateEnvironmentRevision(ctx, user, environmentID, func(revision *domain.EnvironmentRevision) error {
 		normalized, err := normalizeEnvironmentVariables(variables, revision.CredentialRefs)
 		if err != nil {
@@ -313,29 +292,7 @@ func findSensitiveParameter(parameters map[string]any, prefix string) (string, b
 }
 
 func findSensitiveValue(value any, prefix string) (string, bool) {
-	switch values := value.(type) {
-	case map[string]any:
-		for key, child := range values {
-			path := key
-			if prefix != "" {
-				path = prefix + "." + key
-			}
-			if isSensitiveKey(key) {
-				return path, true
-			}
-			if nested, found := findSensitiveValue(child, path); found {
-				return nested, true
-			}
-		}
-	case []any:
-		for index, child := range values {
-			path := fmt.Sprintf("%s[%d]", prefix, index)
-			if nested, found := findSensitiveValue(child, path); found {
-				return nested, true
-			}
-		}
-	}
-	return "", false
+	return domain.FindSensitiveValue(value, prefix)
 }
 
 func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, environmentID string, refs []domain.CredentialRef, changeReason ...string) (domain.Environment, error) {
@@ -373,10 +330,28 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 		return environment, fmt.Errorf("%w: environment has no current revision", domain.ErrConflict)
 	}
 	revision := *environment.Revision
+	previousFacts := cloneMap(environment.Revision.Facts)
 	revision.CredentialRefs = append([]domain.CredentialRef(nil), revision.CredentialRefs...)
 	revision.Facts = cloneMap(revision.Facts)
 	revision.Variables = cloneStringMap(revision.Variables)
+	revision.Parameters = cloneMap(revision.Parameters)
 	if err := mutate(&revision); err != nil {
+		return environment, err
+	}
+	if err := p.validateEnvironmentFactsCatalog(ctx, revision.Facts, true); err != nil {
+		return environment, err
+	}
+	if err := p.validateEnvironmentFactRetiredReferences(ctx, revision.Facts, previousFacts); err != nil {
+		return environment, err
+	}
+	if err := p.validateEnvironmentInventoryCatalog(ctx, revision.Inventory); err != nil {
+		return environment, err
+	}
+	options, err := p.platformOptionLookup(ctx)
+	if err != nil {
+		return environment, err
+	}
+	if err := options.ValidateInventoryChanges(revision.Inventory, environment.Revision.Inventory); err != nil {
 		return environment, err
 	}
 	next, err := p.store.NextEnvironmentRevision(ctx, environmentID)
@@ -385,12 +360,12 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	}
 	revision.ID, revision.Revision, revision.CreatedAt = newID("environment-revision"), next, time.Now().UTC()
 	revision.CreatedBy, revision.ChangeReason = user.ID, strings.TrimSpace(changeReason)
-	if err := p.store.CreateEnvironmentRevision(ctx, revision); err != nil {
+	if err := p.store.CreateEnvironmentRevision(ctx, revision, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: environment.CurrentRevisionID, ValidateAllValues: auditAction == "environment.parameters_updated" || auditAction == "environment.variables_updated", RequireCompleteFacts: true, ApplyParameterDefaults: auditAction == "environment.parameters_updated", RequireGlobalParameters: auditAction == "environment.parameters_updated"}); err != nil {
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = revision.ID, &revision, revision.CreatedAt
 	p.audit(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next, "changeReason": revision.ChangeReason})
-	return environment, nil
+	return p.store.GetEnvironment(ctx, environment.ID, false)
 }
 
 func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.User, environmentID, revisionID, changeReason string) (domain.Environment, error) {
@@ -425,8 +400,18 @@ func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.U
 	restored.Inventory = append([]byte(nil), target.Inventory...)
 	restored.Facts = cloneMap(target.Facts)
 	restored.Variables = cloneStringMap(target.Variables)
+	restored.Parameters = cloneMap(target.Parameters)
 	restored.CredentialRefs = append([]domain.CredentialRef(nil), target.CredentialRefs...)
-	if err := p.store.CreateEnvironmentRevision(ctx, restored); err != nil {
+	// A restore reproduces an immutable historical snapshot. It may predate a
+	// newly required catalog dimension; a Run still requires a complete current
+	// revision through the normal plan gate.
+	if err := p.validateEnvironmentFactsCatalog(ctx, restored.Facts, false); err != nil {
+		return environment, err
+	}
+	if err := p.validateEnvironmentInventoryCatalog(ctx, restored.Inventory); err != nil {
+		return environment, err
+	}
+	if err := p.store.CreateEnvironmentRevision(ctx, restored, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: environment.CurrentRevisionID, RestoreSourceRevisionID: revisionID}); err != nil {
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = restored.ID, &restored, restored.CreatedAt

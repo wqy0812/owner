@@ -15,10 +15,11 @@ const (
 	RoleComponentOwner   Role = "component_owner"
 	RoleScenarioOwner    Role = "scenario_owner"
 	RoleEnvironmentOwner Role = "environment_owner"
+	RolePlatformAdmin    Role = "platform_admin"
 )
 
 func (r Role) Valid() bool {
-	return r == RoleComponentOwner || r == RoleScenarioOwner || r == RoleEnvironmentOwner
+	return r == RoleComponentOwner || r == RoleScenarioOwner || r == RoleEnvironmentOwner || r == RolePlatformAdmin
 }
 
 type User struct {
@@ -28,6 +29,55 @@ type User struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type PlatformOptionCategoryKind string
+
+const (
+	PlatformOptionEnvironmentDimension PlatformOptionCategoryKind = "environment_dimension"
+	PlatformOptionHostGroup            PlatformOptionCategoryKind = "host_group"
+)
+
+func (kind PlatformOptionCategoryKind) Valid() bool {
+	return kind == PlatformOptionEnvironmentDimension || kind == PlatformOptionHostGroup
+}
+
+type PlatformOptionUsage struct {
+	ComponentReleases    int `json:"componentReleases"`
+	ScenarioRevisions    int `json:"scenarioRevisions"`
+	EnvironmentRevisions int `json:"environmentRevisions"`
+}
+
+func (usage PlatformOptionUsage) InUse() bool {
+	return usage.ComponentReleases > 0 || usage.ScenarioRevisions > 0 || usage.EnvironmentRevisions > 0
+}
+
+type PlatformOption struct {
+	ID             string              `json:"id"`
+	CategoryID     string              `json:"categoryId"`
+	ParentOptionID string              `json:"parentOptionId,omitempty"`
+	Value          string              `json:"value"`
+	Label          string              `json:"label"`
+	SortOrder      int                 `json:"sortOrder"`
+	CreatedBy      string              `json:"createdBy"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	RetiredAt      *time.Time          `json:"retiredAt,omitempty"`
+	Usage          PlatformOptionUsage `json:"usage"`
+}
+
+type PlatformOptionCategory struct {
+	ID                  string                     `json:"id"`
+	ParentCategoryID    string                     `json:"parentCategoryId,omitempty"`
+	Key                 string                     `json:"key"`
+	Label               string                     `json:"label"`
+	Kind                PlatformOptionCategoryKind `json:"kind"`
+	EnvironmentRequired bool                       `json:"environmentRequired"`
+	SortOrder           int                        `json:"sortOrder"`
+	CreatedBy           string                     `json:"createdBy"`
+	CreatedAt           time.Time                  `json:"createdAt"`
+	RetiredAt           *time.Time                 `json:"retiredAt,omitempty"`
+	Usage               PlatformOptionUsage        `json:"usage"`
+	Options             []PlatformOption           `json:"options"`
+}
+
 type ReleaseStatus string
 
 const (
@@ -35,6 +85,24 @@ const (
 	ReleaseReleased   ReleaseStatus = "released"
 	ReleaseDeprecated ReleaseStatus = "deprecated"
 )
+
+type ReleaseReviewStatus string
+
+const (
+	ReleaseReviewNotSubmitted ReleaseReviewStatus = "not_submitted"
+	ReleaseReviewPending      ReleaseReviewStatus = "pending"
+	ReleaseReviewApproved     ReleaseReviewStatus = "approved"
+	ReleaseReviewRejected     ReleaseReviewStatus = "rejected"
+)
+
+type ReleaseReview struct {
+	Status         ReleaseReviewStatus `json:"status"`
+	ContractDigest string              `json:"contractDigest,omitempty"`
+	SubmittedAt    *time.Time          `json:"submittedAt,omitempty"`
+	ReviewedBy     string              `json:"reviewedBy,omitempty"`
+	ReviewedAt     *time.Time          `json:"reviewedAt,omitempty"`
+	Comment        string              `json:"comment,omitempty"`
+}
 
 type ComponentLayer string
 
@@ -101,6 +169,7 @@ type ComponentRelease struct {
 	// a candidate may be composed and tested by a scenario owner, then released
 	// atomically with that scenario revision.
 	Candidate              bool                  `json:"candidate"`
+	Review                 ReleaseReview         `json:"review"`
 	PublicationGeneration  int64                 `json:"-"`
 	Readiness              ReleaseReadiness      `json:"readiness"`
 	RiskLevel              RiskLevel             `json:"riskLevel"`
@@ -160,6 +229,21 @@ type ReleaseReadiness struct {
 	InstallEvidenceRunID    string             `json:"installEvidenceRunId,omitempty"`
 	RollbackEvidenceRunID   string             `json:"rollbackEvidenceRunId,omitempty"`
 	TransitionEvidenceRunID string             `json:"transitionEvidenceRunId,omitempty"`
+	RuntimeEvidence         []RuntimeEvidence  `json:"runtimeEvidence,omitempty"`
+}
+
+type RuntimeCompatibility struct {
+	Runtime string `json:"runtime"`
+	Version string `json:"version"`
+}
+
+type RuntimeEvidence struct {
+	Runtime                 string `json:"runtime"`
+	Version                 string `json:"version"`
+	InstallEvidenceRunID    string `json:"installEvidenceRunId,omitempty"`
+	RollbackEvidenceRunID   string `json:"rollbackEvidenceRunId,omitempty"`
+	TransitionEvidenceRunID string `json:"transitionEvidenceRunId,omitempty"`
+	Complete                bool   `json:"complete"`
 }
 
 type ComponentArtifact struct {
@@ -243,18 +327,85 @@ const (
 	ParameterTypeArray   ParameterType = "array"
 )
 
-type ParameterDefinition struct {
-	Name         string              `json:"name"`
-	Description  string              `json:"description"`
-	Type         ParameterType       `json:"type"`
-	Required     bool                `json:"required"`
-	DefaultValue any                 `json:"defaultValue,omitempty"`
-	Visibility   ParameterVisibility `json:"visibility"`
-	Enum         []any               `json:"enum,omitempty"`
-	MinLength    int                 `json:"minLength,omitempty"`
+type ParameterValueProvider string
+
+const (
+	ParameterProviderComponentOwner   ParameterValueProvider = "component_owner"
+	ParameterProviderScenarioOwner    ParameterValueProvider = "scenario_owner"
+	ParameterProviderEnvironmentOwner ParameterValueProvider = "environment_owner"
+	ParameterProviderUpstreamMapping  ParameterValueProvider = "upstream_mapping"
+)
+
+func (p ParameterValueProvider) Valid() bool {
+	return p == ParameterProviderComponentOwner || p == ParameterProviderScenarioOwner || p == ParameterProviderEnvironmentOwner || p == ParameterProviderUpstreamMapping
 }
 
-func (p ParameterDefinition) HasDefault() bool { return p.DefaultValue != nil }
+type EnvironmentBindingKind string
+
+const (
+	EnvironmentBindingPrivate EnvironmentBindingKind = "private"
+	EnvironmentBindingGlobal  EnvironmentBindingKind = "global"
+)
+
+type EnvironmentParameterBinding struct {
+	Kind         EnvironmentBindingKind `json:"kind"`
+	DefinitionID string                 `json:"definitionId,omitempty"`
+}
+
+type EnvironmentParameterDefinition struct {
+	ID           string        `json:"id"`
+	Key          string        `json:"key"`
+	Label        string        `json:"label"`
+	Description  string        `json:"description"`
+	Type         ParameterType `json:"type"`
+	Enum         []any         `json:"enum,omitempty"`
+	MinLength    int           `json:"minLength,omitempty"`
+	DefaultValue any           `json:"defaultValue,omitempty"`
+	CreatedBy    string        `json:"createdBy"`
+	CreatedAt    time.Time     `json:"createdAt"`
+	Usage        int           `json:"usage"`
+}
+
+type EnvironmentVariableDefinition struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Label       string    `json:"label"`
+	Description string    `json:"description"`
+	CreatedBy   string    `json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Usage       int       `json:"usage"`
+}
+
+func EnvironmentParameterValueKey(releaseID string, parameter ParameterDefinition) string {
+	if parameter.EnvironmentBinding != nil && parameter.EnvironmentBinding.Kind == EnvironmentBindingGlobal {
+		return "global:" + parameter.EnvironmentBinding.DefinitionID
+	}
+	return "release:" + releaseID + ":" + parameter.Name
+}
+
+func (b EnvironmentParameterBinding) Valid() bool {
+	return b.Kind == EnvironmentBindingPrivate || (b.Kind == EnvironmentBindingGlobal && strings.TrimSpace(b.DefinitionID) != "")
+}
+
+type ParameterDefinition struct {
+	Name               string                       `json:"name"`
+	Description        string                       `json:"description"`
+	Type               ParameterType                `json:"type"`
+	Required           bool                         `json:"required"`
+	Visibility         ParameterVisibility          `json:"visibility"`
+	Modifiable         bool                         `json:"modifiable"`
+	ValueProvider      ParameterValueProvider       `json:"valueProvider"`
+	FixedValue         any                          `json:"fixedValue,omitempty"`
+	SuggestedValue     any                          `json:"suggestedValue,omitempty"`
+	TestValue          any                          `json:"testValue,omitempty"`
+	EnvironmentBinding *EnvironmentParameterBinding `json:"environmentBinding,omitempty"`
+	Enum               []any                        `json:"enum,omitempty"`
+	MinLength          int                          `json:"minLength,omitempty"`
+}
+
+func (p ParameterDefinition) HasFixedValue() bool     { return p.FixedValue != nil }
+func (p ParameterDefinition) HasSuggestedValue() bool { return p.SuggestedValue != nil }
+func (p ParameterDefinition) HasTestValue() bool      { return p.TestValue != nil }
 
 func (p ParameterType) Valid() bool {
 	switch p {
@@ -336,9 +487,7 @@ type ActionDefinition struct {
 	Playbook            string     `json:"playbook"`
 	PlaybookSHA256      string     `json:"-"`
 	Tags                []string   `json:"tags"`
-	Limit               string     `json:"limit"`
 	HostGroup           string     `json:"hostGroup"`
-	AllowedParameters   []string   `json:"allowedParameters"`
 	RequiredCredentials []string   `json:"requiredCredentials"`
 	TimeoutSeconds      int        `json:"timeoutSeconds"`
 	RiskLevel           RiskLevel  `json:"riskLevel"`
@@ -408,8 +557,7 @@ type ScenarioNode struct {
 	ReleaseID         string            `json:"releaseId"`
 	Action            ActionKind        `json:"action"`
 	HostGroup         string            `json:"hostGroup"`
-	Values            map[string]any    `json:"values"`
-	RunInputs         []string          `json:"runInputs"`
+	ParameterValues   map[string]any    `json:"parameterValues"`
 	DependencySources map[string]string `json:"dependencySources,omitempty"`
 	Position          GraphPosition     `json:"position"`
 	Destructive       bool              `json:"destructive,omitempty"`
@@ -525,6 +673,7 @@ type EnvironmentRevision struct {
 	Facts          map[string]any    `json:"facts"`
 	Inventory      json.RawMessage   `json:"inventory"`
 	Variables      map[string]string `json:"variables"`
+	Parameters     map[string]any    `json:"parameters"`
 	CredentialRefs []CredentialRef   `json:"credentialRefs"`
 	CreatedBy      string            `json:"createdBy,omitempty"`
 	ChangeReason   string            `json:"changeReason,omitempty"`
@@ -664,20 +813,6 @@ type Run struct {
 	FinishedAt            *time.Time     `json:"finishedAt,omitempty"`
 	Steps                 []RunStep      `json:"steps,omitempty"`
 	Approval              *Approval      `json:"approval,omitempty"`
-}
-
-type RunInputPreset struct {
-	ID               string         `json:"id"`
-	CreatedBy        string         `json:"createdBy"`
-	ResourceType     string         `json:"resourceType"`
-	ResourceID       string         `json:"resourceId"`
-	Context          string         `json:"context"`
-	Name             string         `json:"name"`
-	Values           map[string]any `json:"values"`
-	DefinitionDigest string         `json:"definitionDigest"`
-	Stale            bool           `json:"stale"`
-	CreatedAt        time.Time      `json:"createdAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
 }
 
 type RunStep struct {

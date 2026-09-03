@@ -11,7 +11,7 @@ import (
 // call; keeping every business row and audit event in this transaction means a
 // failed import never exposes a partial component catalog.
 func (s *Store) CreateComponentImport(ctx context.Context, components []domain.Component, releases []domain.ComponentRelease, audits []domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}

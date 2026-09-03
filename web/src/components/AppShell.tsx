@@ -12,6 +12,7 @@ import {
   PlayCircle,
   Radio,
   ShieldCheck,
+  Settings2,
 } from 'lucide-react';
 import { Suspense, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
@@ -26,6 +27,7 @@ const links = [
   { to: '/environments', label: '环境', icon: CloudCog },
   { to: '/disaster-recovery', label: '灾备目录', icon: GitBranch, environmentOwnerOnly: true },
   { to: '/runs', label: '运行', icon: PlayCircle },
+  { to: '/platform-management', label: '平台管理', icon: Settings2, platformAdminOnly: true },
   { to: '/manual', label: '操作说明书', icon: BookOpenText },
 ];
 
@@ -58,7 +60,7 @@ export function AppShell() {
 
         <nav className="nav" id="primary-navigation" aria-label="主导航">
           <div className="nav__caption">工作台</div>
-          {links.filter((link) => !link.environmentOwnerOnly || user.role === 'environment_owner').map(({ to, label, icon: Icon, end }) => (
+          {links.filter((link) => (!link.environmentOwnerOnly || user.role === 'environment_owner') && (!link.platformAdminOnly || user.role === 'platform_admin')).map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} aria-label={label} title={label} className={({ isActive }) => `nav__link${isActive ? ' active' : ''}`}>
               <Icon size={18} />
               <span>{label}</span>
@@ -103,7 +105,7 @@ export function AppShell() {
               >
                 {users.map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
-                    {candidate.title} · {candidate.name}
+                    {ROLE_LABELS[candidate.role]} · {candidate.name}
                   </option>
                 ))}
               </select>

@@ -1,107 +1,30 @@
-export interface EnvironmentConstraintGroup {
-  key: string;
-  label: string;
-  values: string[];
-}
+import type { PlatformOptionCategory } from './domain';
 
-export interface EnvironmentConstraintOption {
-  value: string;
-  label: string;
-}
-
-export interface EnvironmentConstraintDimension {
-  key: string;
-  label: string;
-  options: EnvironmentConstraintOption[];
-}
-
+export interface EnvironmentConstraintGroup { key: string; label: string; values: string[] }
+export interface EnvironmentConstraintOption { id: string; value: string; label: string; parentOptionId?: string; retiredAt?: string }
+export interface EnvironmentConstraintDimension { id: string; key: string; label: string; parentCategoryId?: string; retiredAt?: string; options: EnvironmentConstraintOption[] }
 export type ConstraintSelection = Record<string, string[]>;
 
-export const ENVIRONMENT_CONSTRAINT_DIMENSIONS: EnvironmentConstraintDimension[] = [
-  {
-    key: 'architecture',
-    label: '架构',
-    options: [
-      { value: 'amd64', label: 'x86/amd64' },
-      { value: 'arm64', label: 'ARM/arm64' },
-    ],
-  },
-  {
-    key: 'operatingSystem',
-    label: '操作系统',
-    options: [
-      { value: 'Ubuntu', label: 'Ubuntu' },
-      { value: 'SUSE', label: 'SUSE' },
-      { value: 'Kylin', label: 'Kylin' },
-    ],
-  },
-  {
-    key: 'operatingSystemVersion',
-    label: '操作系统版本',
-    options: [
-      { value: '18.04', label: '18.04' },
-      { value: '20.04', label: '20.04' },
-      { value: '22.04', label: '22.04' },
-      { value: '24.04', label: '24.04' },
-      { value: '18.04 / 24.04', label: '18.04 / 24.04（混合）' },
-    ],
-  },
-  {
-    key: 'dockerVersion',
-    label: 'Docker 版本',
-    options: [
-      { value: '20.10.21', label: '20.10.21' },
-      { value: '20.10.24', label: '20.10.24' },
-      { value: '24.0.9', label: '24.0.9' },
-    ],
-  },
-  {
-    key: 'ipFamily',
-    label: 'IP 协议族',
-    options: [
-      { value: 'IPv4', label: 'IPv4' },
-      { value: 'IPv6', label: 'IPv6' },
-    ],
-  },
-  {
-    key: 'hardwareProfile',
-    label: '硬件类型',
-    options: [
-      { value: 'general', label: '通用主机' },
-      { value: 'gpu', label: 'GPU' },
-      { value: 'dpu', label: 'DPU' },
-      { value: 'bms', label: 'BMS' },
-    ],
-  },
-  {
-    key: 'isolationRuntime',
-    label: '容器隔离',
-    options: [
-      { value: 'runc', label: 'runc' },
-      { value: 'kata', label: 'Kata' },
-      { value: 'kata-cc', label: 'Kata CC' },
-    ],
-  },
-  {
-    key: 'deploymentMode',
-    label: '部署形态',
-    options: [
-      { value: 'standard', label: 'standard' },
-      { value: 'serverless', label: 'serverless' },
-      { value: 'ingress', label: 'ingress' },
-    ],
-  },
-];
+export function environmentConstraintDimensions(categories: PlatformOptionCategory[]): EnvironmentConstraintDimension[] {
+  return categories.filter((category) => category.kind === 'environment_dimension').map((category) => ({
+    id: category.id,
+    key: category.key,
+    label: category.label,
+    parentCategoryId: category.parentCategoryId,
+    retiredAt: category.retiredAt,
+    options: category.options.map((option) => ({ id: option.id, value: option.value, label: option.label, parentOptionId: option.parentOptionId, retiredAt: option.retiredAt })),
+  }));
+}
 
-const CONSTRAINT_LABELS: Record<string, string> = Object.fromEntries([
-  ...ENVIRONMENT_CONSTRAINT_DIMENSIONS.map((dimension) => [dimension.key, dimension.label]),
-]);
+export function activeEnvironmentConstraintDimensions(categories: PlatformOptionCategory[]): EnvironmentConstraintDimension[] {
+  return environmentConstraintDimensions(categories).filter((dimension) => !dimension.retiredAt);
+}
 
-const CONSTRAINT_ORDER = ENVIRONMENT_CONSTRAINT_DIMENSIONS.map((dimension) => dimension.key);
-
-const VALUE_LABELS: Record<string, string> = Object.fromEntries(
-  ENVIRONMENT_CONSTRAINT_DIMENSIONS.flatMap((dimension) => dimension.options.map((option) => [option.value, option.label])),
-);
+export function childOptionsForSelection(dimension: EnvironmentConstraintDimension, parent: EnvironmentConstraintDimension | undefined, selectedParentValues: string[]): EnvironmentConstraintOption[] {
+  if (!dimension.parentCategoryId || !parent) return dimension.options.filter((option) => !option.retiredAt);
+  const parentIds = new Set(parent.options.filter((option) => selectedParentValues.includes(option.value)).map((option) => option.id));
+  return dimension.options.filter((option) => !option.retiredAt && Boolean(option.parentOptionId) && parentIds.has(option.parentOptionId!));
+}
 
 function asValues(value: unknown): string[] {
   if (value == null || value === '') return [];
@@ -110,66 +33,46 @@ function asValues(value: unknown): string[] {
   return [String(value)];
 }
 
-export function formatConstraintValue(value: string) {
-  return VALUE_LABELS[value.trim()] ?? value.trim();
-}
+function unique(values: string[]) { return [...new Set(values)]; }
 
-export function environmentConstraintGroups(constraints?: Record<string, unknown> | null): EnvironmentConstraintGroup[] {
+export function environmentConstraintGroups(constraints: Record<string, unknown> | null | undefined, dimensions: EnvironmentConstraintDimension[]): EnvironmentConstraintGroup[] {
   if (!constraints) return [];
-  return Object.keys(constraints)
-    .sort((left, right) => {
-      const leftIndex = CONSTRAINT_ORDER.indexOf(left);
-      const rightIndex = CONSTRAINT_ORDER.indexOf(right);
-      if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
-      if (leftIndex === -1) return 1;
-      if (rightIndex === -1) return -1;
-      return leftIndex - rightIndex;
-    })
-    .flatMap((key) => {
-      const values = asValues(constraints[key]).map(formatConstraintValue);
-      if (!values.length) return [];
-      return [{ key, label: CONSTRAINT_LABELS[key] ?? key, values }];
-    });
+  return dimensions.flatMap((dimension) => {
+    const labels = new Map(dimension.options.map((option) => [option.value, option.label]));
+    const values = asValues(constraints[dimension.key]).map((value) => labels.get(value) ?? value);
+    return values.length ? [{ key: dimension.key, label: dimension.label, values }] : [];
+  });
 }
 
-function normalizeOptionValue(dimension: EnvironmentConstraintDimension, raw: string) {
-  const normalized = raw.trim();
-  return dimension.options.find((option) => option.value === normalized)?.value;
+export function emptyConstraintSelection(dimensions: EnvironmentConstraintDimension[]): ConstraintSelection {
+  return Object.fromEntries(dimensions.map((dimension) => [dimension.key, []]));
 }
 
-function unique(values: string[]) {
-  return [...new Set(values)];
-}
-
-export function emptyConstraintSelection(): ConstraintSelection {
-  return Object.fromEntries(ENVIRONMENT_CONSTRAINT_DIMENSIONS.map((dimension) => [dimension.key, []]));
-}
-
-export function parseConstraintSelection(constraints?: Record<string, unknown> | null): ConstraintSelection {
-  const selection = emptyConstraintSelection();
-  if (!constraints) return selection;
-  for (const dimension of ENVIRONMENT_CONSTRAINT_DIMENSIONS) {
-    const raw = constraints[dimension.key];
-    selection[dimension.key] = unique(asValues(raw).flatMap((value) => {
-      const option = normalizeOptionValue(dimension, value);
-      return option ? [option] : [];
-    }));
+export function parseConstraintSelection(constraints: Record<string, unknown> | null | undefined, dimensions: EnvironmentConstraintDimension[]): ConstraintSelection {
+  const selection = emptyConstraintSelection(dimensions);
+  for (const dimension of dimensions) {
+    const allowed = new Set(dimension.options.map((option) => option.value));
+    selection[dimension.key] = unique(asValues(constraints?.[dimension.key]).filter((value) => allowed.has(value)));
   }
   return selection;
 }
 
-export function serializeConstraintSelection(selection: ConstraintSelection): Record<string, unknown> {
-  return Object.fromEntries(
-    ENVIRONMENT_CONSTRAINT_DIMENSIONS
-      .map((dimension) => [dimension.key, unique(selection[dimension.key] ?? [])] as const)
-      .filter(([, values]) => values.length > 0),
-  );
+export function serializeConstraintSelection(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[]): Record<string, unknown> {
+  return Object.fromEntries(dimensions.map((dimension) => [dimension.key, unique(selection[dimension.key] ?? [])] as const).filter(([, values]) => values.length));
 }
 
 export function toggleConstraintValue(selection: ConstraintSelection, key: string, value: string): ConstraintSelection {
   const current = selection[key] ?? [];
-  return {
-    ...selection,
-    [key]: current.includes(value) ? current.filter((item) => item !== value) : [...current, value],
-  };
+  return { ...selection, [key]: current.includes(value) ? current.filter((item) => item !== value) : [...current, value] };
+}
+
+export function toggleHierarchicalConstraintValue(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[], key: string, value: string): ConstraintSelection {
+  let next = toggleConstraintValue(selection, key, value);
+  const dimension = dimensions.find((item) => item.key === key);
+  if (!dimension || dimension.parentCategoryId) return next;
+  for (const child of dimensions.filter((item) => item.parentCategoryId === dimension.id)) {
+	const allowed = new Set(childOptionsForSelection(child, dimension, next[key]).map((option) => option.value));
+    next = { ...next, [child.key]: (next[child.key] ?? []).filter((item) => allowed.has(item)) };
+  }
+  return next;
 }

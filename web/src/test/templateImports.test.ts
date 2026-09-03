@@ -54,7 +54,8 @@ describe('component template import', () => {
     const base = componentTemplate()[0];
     const invalid = [
       { ...base, release: { ...base.release, breaking: 'yes' } },
-      { ...base, release: { ...base.release, parameters: [{ name: 'port', description: 'port', type: 'integer', visibility: 'public', defaultValue: '6443' }] } },
+      { ...base, release: { ...base.release, parameters: [{ name: 'port', description: 'port', type: 'integer', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: '6443' }] } },
+      { ...base, release: { ...base.release, parameters: [{ name: 'options', description: 'options', type: 'object', visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner' }] } },
       { ...base, release: { ...base.release, actions: [{ name: 'install', type: 'install', playbook: 'install.yml', timeoutSeconds: 0 }], }, playbooks: [base.playbooks[0]] },
       { ...base, release: { ...base.release, actions: [{ name: 'upgrade', type: 'upgrade', playbook: 'install.yml', timeoutSeconds: 60 }], }, playbooks: [base.playbooks[0]] },
       { ...base, release: { ...base.release, actions: [{ name: 'rollback', type: 'rollback', playbook: 'install.yml', timeoutSeconds: 60, fromReleaseId: 'future', toReleaseId: 'old' }], }, playbooks: [base.playbooks[0]] },
@@ -66,11 +67,11 @@ describe('component template import', () => {
 
   it('validates public mapping sources, declared targets, and matching types', () => {
     const upstream: any = componentTemplate()[0];
-    upstream.release.parameters = [{ name: 'port', description: 'port', type: 'integer', visibility: 'public' }];
+    upstream.release.parameters = [{ name: 'port', description: 'port', type: 'integer', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: 6443 }];
     const downstream: any = structuredClone(upstream);
     downstream.component.slug = 'worker';
     downstream.component.name = 'Worker';
-    downstream.release.parameters = [{ name: 'endpoint', description: 'endpoint', type: 'string', visibility: 'internal' }];
+    downstream.release.parameters = [{ name: 'endpoint', description: 'endpoint', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }];
     downstream.release.dependencies = [{ componentSlug: 'runtime', parameterMappings: [{ upstreamParameter: 'port', targetParameter: 'endpoint' }] }];
     expect(() => parseComponentImportTemplate(JSON.stringify([upstream, downstream]))).toThrow(/类型不一致/);
     downstream.release.parameters[0].type = 'integer';
@@ -82,7 +83,7 @@ describe('scenario template import', () => {
   const template = {
     nodes: [{
       id: 'runtime', type: 'component' as const, position: { x: 10, y: 20 },
-      data: { label: 'Runtime', componentId: 'component-runtime', releaseId: 'release-runtime', action: 'install' as const, hostGroup: 'workers', values: {}, runInputs: [] },
+      data: { label: 'Runtime', componentId: 'component-runtime', releaseId: 'release-runtime', action: 'install' as const, parameterValues: {}, dependencySources: {} },
     }],
     edges: [],
   };
@@ -116,7 +117,7 @@ describe('scenario template import', () => {
     const component = {
       id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: 'component-owner-a',
       layer: 'runtime_state', tags: ['runtime', 'core'],
-      releases: [{ id: 'release-runtime', componentId: 'component-runtime', lineId: 'line-runtime', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', state: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
+      releases: [{ id: 'release-runtime', componentId: 'component-runtime', lineId: 'line-runtime', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', state: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
     } as Component;
     expect(() => validateScenarioTemplateReferences(template, [component])).toThrow(/不支持 install/);
     const verifiedTemplate: any = structuredClone(template);

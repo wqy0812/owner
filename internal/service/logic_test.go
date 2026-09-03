@@ -68,23 +68,15 @@ func TestUnreadableDeliverySourceRoutesToComponentOwner(t *testing.T) {
 	}
 }
 
-func TestResolveParametersPrecedenceAndAllowList(t *testing.T) {
-	got, err := ResolveParameters(
+func TestResolveParametersOwnerLayers(t *testing.T) {
+	got := ResolveParameters(
 		map[string]any{"version": "default", "nested": map[string]any{"a": 1, "b": 1}},
 		map[string]any{"version": "node", "nested": map[string]any{"b": 2}},
 		map[string]any{"version": "environment", "region": "cn"},
-		map[string]any{"version": "run"},
-		[]string{"version"},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{"version": "run", "region": "cn", "nested": map[string]any{"a": 1, "b": 2}}
+	want := map[string]any{"version": "environment", "region": "cn", "nested": map[string]any{"a": 1, "b": 2}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolved = %#v, want %#v", got, want)
-	}
-	if _, err := ResolveParameters(nil, nil, nil, map[string]any{"undeclared": true}, nil); err == nil {
-		t.Fatal("expected undeclared run input to fail")
 	}
 }
 
@@ -101,22 +93,13 @@ func TestRequiredCredentialsAreCheckedByDeclaredName(t *testing.T) {
 	}
 }
 
-func TestScenarioRunInputIsValidatedGloballyAndScopedPerNode(t *testing.T) {
-	nodes := []domain.ScenarioNode{
-		{ID: "control-plane", RunInputs: []string{"api_endpoint"}},
-		{ID: "workers", RunInputs: []string{"worker_count"}},
+func TestScenarioValuesOnlyAcceptScenarioOwnedParameters(t *testing.T) {
+	release := domain.ComponentRelease{Parameters: []domain.ParameterDefinition{{Name: "replicas", Type: domain.ParameterTypeInteger, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner}}}
+	if err := validateScenarioParameterValues(release, domain.ScenarioNode{ID: "node", ParameterValues: map[string]any{"replicas": 3}}); err != nil {
+		t.Fatal(err)
 	}
-	input := map[string]any{"api_endpoint": "192.0.2.1", "worker_count": float64(3)}
-	if err := validateScenarioRunInput(nodes, input); err != nil {
-		t.Fatalf("globally declared run input rejected: %v", err)
-	}
-	controlPlane := runInputForNode(nodes[0], input)
-	workers := runInputForNode(nodes[1], input)
-	if !reflect.DeepEqual(controlPlane, map[string]any{"api_endpoint": "192.0.2.1"}) || !reflect.DeepEqual(workers, map[string]any{"worker_count": float64(3)}) {
-		t.Fatalf("node run inputs control-plane=%#v workers=%#v", controlPlane, workers)
-	}
-	if err := validateScenarioRunInput(nodes, map[string]any{"undeclared": true}); err == nil {
-		t.Fatal("undeclared scenario run input was accepted")
+	if err := validateScenarioParameterValues(release, domain.ScenarioNode{ID: "node", ParameterValues: map[string]any{"undeclared": true}}); err == nil {
+		t.Fatal("undeclared scenario value was accepted")
 	}
 }
 
@@ -151,12 +134,12 @@ func TestVersionNamesContainingSecretAreNotTreatedAsCredentials(t *testing.T) {
 	}
 }
 
-func TestRequiredParameterWithDefaultIsStaticallyBound(t *testing.T) {
+func TestRequiredComponentFixedParameterIsStaticallyBound(t *testing.T) {
 	release := domain.ComponentRelease{Parameters: []domain.ParameterDefinition{
-		{Name: "endpoint", Type: domain.ParameterTypeString, Required: true, DefaultValue: "localhost", Visibility: domain.ParameterInternal, Description: "api"},
+		{Name: "endpoint", Type: domain.ParameterTypeString, Required: true, FixedValue: "localhost", Visibility: domain.ParameterInternal, Description: "api", ValueProvider: domain.ParameterProviderComponentOwner},
 	}}
 	var issues []domain.ValidationIssue
-	validateRequiredParameters(release, domain.ScenarioNode{ID: "node", Values: map[string]any{}}, &issues)
+	validateRequiredParameters(release, domain.ScenarioNode{ID: "node", ParameterValues: map[string]any{}}, &issues)
 	if len(issues) != 0 {
 		t.Fatalf("required parameter with default reported unbound: %+v", issues)
 	}
@@ -165,7 +148,7 @@ func TestRequiredParameterWithDefaultIsStaticallyBound(t *testing.T) {
 func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 	release := domain.ComponentRelease{
 		Version: "1.0.0", RiskLevel: domain.RiskLow,
-		Parameters: []domain.ParameterDefinition{{Name: "region", Description: "region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "cn"}},
+		Parameters: []domain.ParameterDefinition{{Name: "region", Description: "region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "cn", ValueProvider: domain.ParameterProviderComponentOwner}},
 		Actions:    []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60}},
 	}
 	before := componentReleaseSpecDigest(release)
@@ -189,7 +172,7 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 		t.Fatal("release definition digest did not include idempotent capability")
 	}
 	before = componentReleaseSpecDigest(release)
-	release.Parameters[0].DefaultValue = "us"
+	release.Parameters[0].FixedValue = "us"
 	if after := componentReleaseSpecDigest(release); before == after {
 		t.Fatal("release definition digest did not include parameters")
 	}
@@ -205,7 +188,7 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 
 func TestScenarioRevisionSpecDigestChangesWithGraphContent(t *testing.T) {
 	revision := domain.ScenarioRevision{
-		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: "release-runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{"region": "cn"}}}},
+		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", ReleaseID: "release-runtime-1", Action: domain.ActionInstall, HostGroup: "workers", ParameterValues: map[string]any{"region": "cn"}}}},
 	}
 	before := scenarioRevisionSpecDigest(revision)
 	revision.Graph.Nodes[0].HostGroup = "control_plane"
@@ -245,7 +228,7 @@ func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
 
 func TestIdempotentUpgradeReuseIsOnlyValidForInstall(t *testing.T) {
 	release := domain.ComponentRelease{Version: "1.0.0", Actions: []domain.ActionDefinition{{
-		Kind: domain.ActionVerify, Playbook: "verify.yml", TimeoutSeconds: 60, Idempotent: true,
+		Kind: domain.ActionVerify, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60, Idempotent: true,
 	}}}
 	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), "only valid for install") {
 		t.Fatalf("invalid idempotent capability validation=%v", err)
@@ -293,7 +276,7 @@ func TestInlineSensitiveMapsAreRejectedBeforePersistence(t *testing.T) {
 	}
 	if err := validateRelease(domain.ComponentRelease{
 		Version:    "1.0.0",
-		Parameters: []domain.ParameterDefinition{{Name: "password", Description: "bad", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "do-not-store"}},
+		Parameters: []domain.ParameterDefinition{{Name: "password", Description: "bad", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "do-not-store", ValueProvider: domain.ParameterProviderComponentOwner}},
 	}); err == nil || strings.Contains(err.Error(), "do-not-store") {
 		t.Fatalf("sensitive release parameter contract rejection=%v", err)
 	}

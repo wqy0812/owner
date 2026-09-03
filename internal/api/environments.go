@@ -125,6 +125,32 @@ func (h *Handler) updateVariables(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
 }
 
+func (h *Handler) listEnvironmentParameterFields(w http.ResponseWriter, r *http.Request) {
+	fields, err := h.platform.Environments().ParameterFields(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeItems(w, fields)
+}
+
+func (h *Handler) updateEnvironmentParameters(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Values       map[string]any `json:"values"`
+		ChangeReason string         `json:"changeReason"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	environment, err := h.platform.Environments().UpdateParameters(r.Context(), currentUser(r), r.PathValue("id"), input.Values, input.ChangeReason)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, h.environmentDTO(r, environment))
+}
+
 func (h *Handler) updateCredentialRefs(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		CredentialRefs []struct {
@@ -227,8 +253,8 @@ func environmentRevisionDTO(revision domain.EnvironmentRevision) map[string]any 
 	return map[string]any{
 		"id": revision.ID, "environmentId": revision.EnvironmentID,
 		"revision": revision.Revision, "facts": revision.Facts,
-		"hosts":     hosts,
-		"variables": revision.Variables, "credentialRefs": refs,
+		"hosts":      hosts,
+		"parameters": revision.Parameters, "variables": revision.Variables, "credentialRefs": refs,
 		"createdBy": revision.CreatedBy, "changeReason": revision.ChangeReason, "createdAt": revision.CreatedAt,
 	}
 }
@@ -266,7 +292,7 @@ func (h *Handler) environmentDTO(r *http.Request, environment domain.Environment
 }
 
 func (h *Handler) listAuditEvents(w http.ResponseWriter, r *http.Request) {
-	if currentUser(r).Role != domain.RoleEnvironmentOwner {
+	if currentUser(r).Role != domain.RoleEnvironmentOwner && currentUser(r).Role != domain.RolePlatformAdmin {
 		writeError(w, domain.ErrForbidden)
 		return
 	}

@@ -12,7 +12,7 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 		Version: "1.0.0",
 		Parameters: []domain.ParameterDefinition{{
 			Name: "root", Description: "install root", Type: domain.ParameterTypeString,
-			Required: true, DefaultValue: "/opt", Visibility: domain.ParameterPublic, MinLength: 1,
+			Required: true, FixedValue: "/opt", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner, MinLength: 1,
 		}},
 	}
 	if err := validateRelease(valid); err != nil {
@@ -21,14 +21,16 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 	for name, release := range map[string]domain.ComponentRelease{
 		"missing visibility": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString}}},
 		"duplicate": {Version: "1", Parameters: []domain.ParameterDefinition{
-			{Name: "root", Description: "a", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
-			{Name: "root", Description: "b", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
+			{Name: "root", Description: "a", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "a", ValueProvider: domain.ParameterProviderComponentOwner},
+			{Name: "root", Description: "b", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "b", ValueProvider: domain.ParameterProviderComponentOwner},
 		}},
-		"sensitive public":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "registryPassword", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic}}},
-		"unknown type":           {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: "blob", Visibility: domain.ParameterInternal}}},
-		"missing mapping target": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
+		"sensitive public":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "registryPassword", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}},
+		"unknown type":           {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: "blob", Visibility: domain.ParameterInternal, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}},
+		"missing mapping target": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}, Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
 		"duplicate dependency":   {Version: "1", ComponentID: "down", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1"}, {UpstreamComponentID: "up", UpstreamReleaseID: "up-2"}}},
-		"action unknown param":   {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}}, Actions: []domain.ActionDefinition{{Name: "install", Kind: domain.ActionInstall, Playbook: "a.yml", TimeoutSeconds: 1, AllowedParameters: []string{"missing"}}}},
+		"invalid provider":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderComponentOwner}}},
+		"scenario raw object":    {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "options", Description: "x", Type: domain.ParameterTypeObject, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner}}},
+		"environment raw array":  {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "peers", Description: "x", Type: domain.ParameterTypeArray, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}},
 	} {
 		if err := validateRelease(release); err == nil {
 			t.Fatalf("%s was accepted", name)
@@ -40,7 +42,7 @@ func TestValidateReleaseAllowsStandaloneInstallRollback(t *testing.T) {
 	base := domain.ComponentRelease{
 		Version: "1.0.0",
 		Actions: []domain.ActionDefinition{{
-			Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", TimeoutSeconds: 60,
+			Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", HostGroup: "all", TimeoutSeconds: 60,
 		}},
 	}
 	if err := validateRelease(base); err != nil {
@@ -67,7 +69,7 @@ func TestValidateReleaseRejectsRollbackSelfVerificationTagOnOtherActions(t *test
 	release := domain.ComponentRelease{
 		Version: "1.0.0",
 		Actions: []domain.ActionDefinition{{
-			Name: "verify", Kind: domain.ActionVerify, Playbook: "verify.yml", TimeoutSeconds: 60,
+			Name: "verify", Kind: domain.ActionVerify, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60,
 			Tags: []string{rollbackSelfVerifyTag},
 		}},
 	}
@@ -78,10 +80,10 @@ func TestValidateReleaseRejectsRollbackSelfVerificationTagOnOtherActions(t *test
 
 func TestMappedParameterCannotBeLocallyOverridden(t *testing.T) {
 	release := domain.ComponentRelease{
-		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal}},
+		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}},
 		Dependencies: []domain.ComponentDependency{{ID: "dep-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
 	}
-	node := domain.ScenarioNode{ID: "proxy", Values: map[string]any{"kubeRoot": "/tmp"}, RunInputs: []string{"kubeRoot"}}
+	node := domain.ScenarioNode{ID: "proxy", ParameterValues: map[string]any{"kubeRoot": "/tmp"}}
 	if conflicts := nodeOverridesMappedParameter(node, release); len(conflicts) != 1 || conflicts[0] != "kubeRoot" {
 		t.Fatalf("conflicts=%v", conflicts)
 	}
@@ -127,13 +129,13 @@ func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) 
 		ID: "rel-kubelet",
 		Parameters: []domain.ParameterDefinition{{
 			Name: "kubeInstallRoot", Description: "root", Type: domain.ParameterTypeString, Required: true,
-			DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic,
+			FixedValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner,
 		}},
 	}
 	proxy := domain.ComponentRelease{
 		ID: "rel-proxy",
 		Parameters: []domain.ParameterDefinition{{
-			Name: "kubeRoot", Description: "imported", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal,
+			Name: "kubeRoot", Description: "imported", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping,
 		}},
 		Dependencies: []domain.ComponentDependency{{
 			ID: "dep-1", UpstreamReleaseID: "rel-kubelet",
@@ -143,18 +145,18 @@ func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) 
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{
 			{ID: "kubelet", ReleaseID: "rel-kubelet"},
-			{ID: "proxy", ReleaseID: "rel-proxy", Values: map[string]any{"kubeRoot": "/should-not-win"}},
+			{ID: "proxy", ReleaseID: "rel-proxy"},
 		},
 		Edges: []domain.ScenarioEdge{{Source: "kubelet", Target: "proxy"}},
 	}
-	kubeletVars, kubeletProv, err := resolveOwnParameters(kubelet, graph.Nodes[0], nil, nil)
+	kubeletVars, kubeletProv, err := resolveOwnParameters(kubelet, graph.Nodes[0], domain.EnvironmentRevision{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kubeletVars["kubeInstallRoot"] != "/approot1/paas/kube" || kubeletProv["kubeInstallRoot"].Source != parameterSourceDefault {
+	if kubeletVars["kubeInstallRoot"] != "/approot1/paas/kube" || kubeletProv["kubeInstallRoot"].Source != parameterSourceComponentFixed {
 		t.Fatalf("kubelet vars=%#v prov=%#v", kubeletVars, kubeletProv)
 	}
-	proxyVars, proxyProv, err := resolveOwnParameters(proxy, graph.Nodes[1], nil, nil)
+	proxyVars, proxyProv, err := resolveOwnParameters(proxy, graph.Nodes[1], domain.EnvironmentRevision{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,23 +171,24 @@ func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) 
 	}
 }
 
-func TestPlannerDoesNotReadEnvironmentParameters(t *testing.T) {
+func TestPlannerReadsOnlyDeclaredEnvironmentParameters(t *testing.T) {
 	release := domain.ComponentRelease{Parameters: []domain.ParameterDefinition{
-		{Name: "region", Description: "target region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, DefaultValue: "default-region"},
+		{Name: "region", Description: "target region", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}},
 	}}
-	resolved, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, nil, nil)
+	release.ID = "release"
+	resolved, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, domain.EnvironmentRevision{Parameters: map[string]any{"release:release:region": "cn"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["region"] != "default-region" || provenance["region"].Source != parameterSourceDefault {
+	if resolved["region"] != "cn" || provenance["region"].Source != parameterSourceEnvironmentValue {
 		t.Fatalf("provenance=%#v", provenance)
 	}
 }
 
 func TestPlannerSupportsChainedPublicParameters(t *testing.T) {
-	a := domain.ComponentRelease{ID: "a", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, DefaultValue: "/a", Visibility: domain.ParameterPublic}}}
-	b := domain.ComponentRelease{ID: "b", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterPublic}}, Dependencies: []domain.ComponentDependency{{ID: "b-a", UpstreamReleaseID: "a", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
-	c := domain.ComponentRelease{ID: "c", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal}}, Dependencies: []domain.ComponentDependency{{ID: "c-b", UpstreamReleaseID: "b", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
+	a := domain.ComponentRelease{ID: "a", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, FixedValue: "/a", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner}}}
+	b := domain.ComponentRelease{ID: "b", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "b-a", UpstreamReleaseID: "a", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
+	c := domain.ComponentRelease{ID: "c", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "c-b", UpstreamReleaseID: "b", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{{ID: "a", ReleaseID: "a"}, {ID: "b", ReleaseID: "b"}, {ID: "c", ReleaseID: "c"}},
 		Edges: []domain.ScenarioEdge{{Source: "a", Target: "b"}, {Source: "b", Target: "c"}},
@@ -194,7 +197,7 @@ func TestPlannerSupportsChainedPublicParameters(t *testing.T) {
 	byNode := map[string]domain.ComponentRelease{"a": a, "b": b, "c": c}
 	for _, node := range graph.Nodes {
 		release := byNode[node.ID]
-		vars, prov, err := resolveOwnParameters(release, node, nil, nil)
+		vars, prov, err := resolveOwnParameters(release, node, domain.EnvironmentRevision{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,8 +216,8 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 	downstream := domain.ComponentRelease{
 		ID: "down",
 		Parameters: []domain.ParameterDefinition{
-			{Name: "requiredTarget", Description: "x", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal},
-			{Name: "optionalTarget", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal},
+			{Name: "requiredTarget", Description: "x", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping},
+			{Name: "optionalTarget", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping},
 		},
 		Dependencies: []domain.ComponentDependency{{
 			ID: "dep", UpstreamReleaseID: "up",
@@ -230,7 +233,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 		Nodes: []domain.ScenarioNode{{ID: "up", ReleaseID: "up"}, {ID: "down", ReleaseID: "down"}},
 		Edges: []domain.ScenarioEdge{{Source: "up", Target: "down"}},
 	}
-	vars, prov, err := resolveOwnParameters(downstream, graph.Nodes[1], nil, nil)
+	vars, prov, err := resolveOwnParameters(downstream, graph.Nodes[1], domain.EnvironmentRevision{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +243,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 	}
 
 	downstream.Dependencies[0].ParameterMappings = []domain.ParameterMapping{{UpstreamParameter: "optional", TargetParameter: "optionalTarget"}}
-	vars, prov, err = resolveOwnParameters(downstream, graph.Nodes[1], nil, nil)
+	vars, prov, err = resolveOwnParameters(downstream, graph.Nodes[1], domain.EnvironmentRevision{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,26 +252,16 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 	}
 }
 
-func TestDependencyFixturesAreRequiredAndTyped(t *testing.T) {
+func TestComponentTestUsesMappedParameterTestValue(t *testing.T) {
 	release := domain.ComponentRelease{
-		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal}},
+		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping, TestValue: "/approot1/paas/kube"}},
 		Dependencies: []domain.ComponentDependency{{ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
 	}
-	vars := map[string]any{}
-	prov := map[string]resolvedParameter{}
-	if err := applyDependencyFixtures(release, nil, vars, prov); err == nil {
-		t.Fatal("missing fixture accepted")
-	}
-	if err := applyDependencyFixtures(release, map[string]any{"other": "/x"}, vars, prov); err == nil {
-		t.Fatal("unknown fixture accepted")
-	}
-	if err := applyDependencyFixtures(release, map[string]any{"kubeRoot": 12}, vars, prov); err == nil {
-		t.Fatal("typed fixture accepted")
-	}
-	if err := applyDependencyFixtures(release, map[string]any{"kubeRoot": "/approot1/paas/kube"}, vars, prov); err != nil {
+	vars, prov, err := resolveOwnParameters(release, domain.ScenarioNode{}, domain.EnvironmentRevision{}, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if vars["kubeRoot"] != "/approot1/paas/kube" || prov["kubeRoot"].Source != parameterSourceDependencyFixture {
+	if vars["kubeRoot"] != "/approot1/paas/kube" || prov["kubeRoot"].Source != parameterSourceTestValue {
 		t.Fatalf("fixture result vars=%#v prov=%#v", vars, prov)
 	}
 }

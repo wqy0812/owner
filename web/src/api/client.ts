@@ -29,17 +29,23 @@ import type {
   EnvironmentLifecycle,
   EnvironmentRollbackPlan,
   EnvironmentRevision,
+  EnvironmentParameterDefinition,
+  EnvironmentParameterField,
+  EnvironmentVariableDefinition,
   ImpactPreview,
   Notification,
   PlaybookFile,
+  ReleaseReviewPreview,
+  PlatformOption,
+  PlatformOptionCategory,
   Run,
-  RunInputPreset,
   RunRetryPlan,
   RunStep,
   Scenario,
   ScenarioEdge,
   ScenarioNode,
   ScenarioRevision,
+  ScenarioParameterOverview,
   User,
   WorkAction,
   WorkExplanation,
@@ -281,10 +287,8 @@ function normalizeAction(raw: LooseRecord): ActionDefinition {
     type: requireEnum(raw, ACTION_TYPES, 'kind'),
     playbook: requireString(raw, 'playbook'),
     tags: optionalStringArray(raw, 'tags'),
-    limit: optionalString(raw, 'limit'),
     hostGroup: optionalString(raw, 'hostGroup'),
     timeoutSeconds: optionalNumber(raw, 'timeoutSeconds'),
-    allowedParameters: optionalStringArray(raw, 'allowedParameters'),
     requiredCredentials: optionalStringArray(raw, 'requiredCredentials'),
     riskLevel,
     destructive,
@@ -303,8 +307,13 @@ function normalizeParameter(raw: LooseRecord): import('../types/domain').Paramet
     description: requireString(raw, 'description'),
     type,
     required: optionalBoolean(raw, 'required') ?? false,
-    defaultValue: raw.defaultValue,
     visibility,
+    modifiable: optionalBoolean(raw, 'modifiable') ?? false,
+    valueProvider: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner', 'upstream_mapping'] as const, 'valueProvider'),
+    fixedValue: raw.fixedValue,
+    suggestedValue: raw.suggestedValue,
+    testValue: raw.testValue,
+    environmentBinding: optionalRecord(raw, 'environmentBinding') as import('../types/domain').EnvironmentParameterBinding | undefined,
     enum: Array.isArray(enumValues) ? enumValues : undefined,
     minLength: optionalNumber(raw, 'minLength'),
   };
@@ -370,6 +379,17 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     version: requireString(raw, 'version'),
     state,
     candidate: optionalBoolean(raw, 'candidate'),
+    review: (() => {
+      const review = requireRecord(raw.review, 'review');
+      return {
+        status: requireEnum(review, ['not_submitted', 'pending', 'approved', 'rejected'] as const, 'status'),
+        contractDigest: optionalString(review, 'contractDigest'),
+        submittedAt: optionalString(review, 'submittedAt'),
+        reviewedBy: optionalString(review, 'reviewedBy'),
+        reviewedAt: optionalString(review, 'reviewedAt'),
+        comment: optionalString(review, 'comment'),
+      };
+    })(),
     readiness: normalizeReadiness(requireRecord(raw.readiness, 'readiness')),
     compatibility: requireEnum(raw, ['not_applicable', 'compatible', 'breaking'] as const, 'compatibility'),
     releaseNotes: optionalString(raw, 'releaseNotes'),
@@ -397,6 +417,11 @@ function normalizeReadiness(raw: LooseRecord): ComponentRelease['readiness'] {
     installEvidenceRunId: optionalString(raw, 'installEvidenceRunId'),
     rollbackEvidenceRunId: optionalString(raw, 'rollbackEvidenceRunId'),
     transitionEvidenceRunId: optionalString(raw, 'transitionEvidenceRunId'),
+    runtimeEvidence: optionalRecords(raw, 'runtimeEvidence')?.map((row) => ({
+      runtime: requireString(row, 'runtime'), version: requireString(row, 'version'),
+      installEvidenceRunId: optionalString(row, 'installEvidenceRunId'), rollbackEvidenceRunId: optionalString(row, 'rollbackEvidenceRunId'),
+      transitionEvidenceRunId: optionalString(row, 'transitionEvidenceRunId'), complete: requireBoolean(row, 'complete'),
+    })) ?? [],
   };
 }
 
@@ -491,8 +516,7 @@ function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
       version: optionalString(data, 'version'),
       action: optionalEnum(data, ACTION_TYPES, 'action'),
       hostGroup: optionalString(data, 'hostGroup'),
-      values: optionalObject(data, 'values'),
-      runInputs: optionalStringArray(data, 'runInputs'),
+      parameterValues: optionalObject(data, 'parameterValues'),
       dependencySources: optionalRecord(data, 'dependencySources') as Record<string, string> | undefined,
       layer: optionalEnum(data, COMPONENT_LAYERS, 'layer'),
     },
@@ -569,6 +593,7 @@ function normalizeEnvironmentRevision(raw: LooseRecord): EnvironmentRevision {
     revision: requireNumber(raw, 'revision'),
     facts: requireRecord(raw.facts, 'facts'),
     hosts: requireRecords(raw, 'hosts').map(normalizeHost),
+    parameters: optionalRecord(raw, 'parameters') ?? {},
     variables,
     credentialRefs: requireRecords(raw, 'credentialRefs').map(normalizeCredential),
     createdBy: optionalString(raw, 'createdBy'),
@@ -845,6 +870,7 @@ function normalizeEnvironmentImportPlan(raw: LooseRecord): EnvironmentImportPlan
     nextRevision: requireNumber(raw, 'nextRevision'),
     hostCount: requireNumber(raw, 'hostCount'),
     variableCount: requireNumber(raw, 'variableCount'),
+    parameterCount: requireNumber(raw, 'parameterCount'),
     credentialRefCount: requireNumber(raw, 'credentialRefCount'),
     changes: requireStringArray(raw, 'changes'),
     warnings: requireStringArray(raw, 'warnings'),
@@ -880,8 +906,7 @@ function normalizeUser(value: unknown): User {
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
-    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner'] as const, 'role'),
-    title: optionalString(raw, 'title'),
+    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner', 'platform_admin'] as const, 'role'),
   };
 }
 
@@ -891,7 +916,7 @@ function normalizeWorkbench(value: unknown): Workbench {
   const assets = requireRecord(field(raw, 'assets'), 'workbench assets');
   return {
     generatedAt: requireString(raw, 'generatedAt'),
-    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner'] as const, 'role'),
+    role: requireEnum(raw, ['component_owner', 'scenario_owner', 'environment_owner', 'platform_admin'] as const, 'role'),
     summary: {
       critical: requireNumber(summary, 'critical'),
       actionRequired: requireNumber(summary, 'actionRequired'),
@@ -907,7 +932,7 @@ function normalizeWorkbench(value: unknown): Workbench {
       const subject = requireRecord(field(item, 'subject'), 'work item subject');
       return {
         id: requireString(item, 'id'),
-        kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact', 'catalog_backup'] as const, 'kind'),
+        kind: requireEnum(item, ['component_draft', 'component_review', 'scenario_revision', 'environment', 'run', 'upstream_impact', 'catalog_backup'] as const, 'kind'),
         priority: requireEnum(item, ['critical', 'high', 'normal', 'info'] as const, 'priority'),
         status: requireEnum(item, ['blocked', 'action_required', 'in_progress', 'attention'] as const, 'status'),
         title: requireString(item, 'title'),
@@ -980,10 +1005,8 @@ function serializeAction(action: ActionDefinition) {
     kind: action.type,
     playbook: action.playbook,
     tags: action.tags,
-    limit: action.limit,
     hostGroup: action.hostGroup,
     timeoutSeconds: action.timeoutSeconds,
-    allowedParameters: action.allowedParameters,
     requiredCredentials: action.requiredCredentials,
     riskLevel: action.riskLevel ?? (action.destructive ? 'destructive' : 'low'),
     destructive: action.destructive ?? action.riskLevel === 'destructive',
@@ -1081,6 +1104,54 @@ export const api = {
   async switchUser(userId: string) {
     return normalizeUser(unwrap(await post<unknown>('/session/switch', { userId })));
   },
+  async platformOptionCategories(signal?: AbortSignal): Promise<PlatformOptionCategory[]> {
+    return unwrapList(await get<unknown>('/platform-option-categories', signal)).map((item) => item as PlatformOptionCategory);
+  },
+  async createPlatformOptionCategory(input: { label: string; parentCategoryId?: string; environmentRequired?: boolean }): Promise<PlatformOptionCategory> {
+    return unwrap(await post<unknown>('/platform-option-categories', input)) as PlatformOptionCategory;
+  },
+  async renamePlatformOptionCategory(id: string, label: string): Promise<PlatformOptionCategory> {
+    return unwrap(await patch<unknown>(`/platform-option-categories/${id}`, { label })) as PlatformOptionCategory;
+  },
+  async setPlatformOptionCategoryRetired(id: string, retired: boolean): Promise<PlatformOptionCategory> {
+    return unwrap(await patch<unknown>(`/platform-option-categories/${id}`, { retired })) as PlatformOptionCategory;
+  },
+  async deletePlatformOptionCategory(id: string) {
+    await request<unknown>(`/platform-option-categories/${id}`, { method: 'DELETE' });
+  },
+  async createPlatformOption(categoryId: string, label: string, parentOptionId?: string): Promise<PlatformOption> {
+    return unwrap(await post<unknown>(`/platform-option-categories/${categoryId}/options`, { label, parentOptionId })) as PlatformOption;
+  },
+  async renamePlatformOption(id: string, label: string): Promise<PlatformOption> {
+    return unwrap(await patch<unknown>(`/platform-options/${id}`, { label })) as PlatformOption;
+  },
+  async setPlatformOptionRetired(id: string, retired: boolean): Promise<PlatformOption> {
+    return unwrap(await patch<unknown>(`/platform-options/${id}`, { retired })) as PlatformOption;
+  },
+  async deletePlatformOption(id: string) {
+    await request<unknown>(`/platform-options/${id}`, { method: 'DELETE' });
+  },
+  async environmentParameterDefinitions(signal?: AbortSignal): Promise<EnvironmentParameterDefinition[]> {
+    return unwrapList(await get<unknown>('/environment-parameter-definitions', signal)) as EnvironmentParameterDefinition[];
+  },
+  async createEnvironmentParameterDefinition(input: Pick<EnvironmentParameterDefinition, 'label' | 'description' | 'type' | 'enum' | 'minLength' | 'defaultValue'>): Promise<EnvironmentParameterDefinition> {
+    return unwrap(await post<unknown>('/environment-parameter-definitions', input)) as EnvironmentParameterDefinition;
+  },
+  async deleteEnvironmentParameterDefinition(id: string) {
+    await request<unknown>(`/environment-parameter-definitions/${id}`, { method: 'DELETE' });
+  },
+  async updateEnvironmentParameterDefault(id: string, defaultValue: unknown): Promise<EnvironmentParameterDefinition> {
+    return unwrap(await put<unknown>(`/environment-parameter-definitions/${id}/default`, { defaultValue: defaultValue ?? null })) as EnvironmentParameterDefinition;
+  },
+  async environmentVariableDefinitions(signal?: AbortSignal): Promise<EnvironmentVariableDefinition[]> {
+    return unwrapList(await get<unknown>('/environment-variable-definitions', signal)) as EnvironmentVariableDefinition[];
+  },
+  async createEnvironmentVariableDefinition(input: Pick<EnvironmentVariableDefinition, 'name' | 'label' | 'description'>): Promise<EnvironmentVariableDefinition> {
+    return unwrap(await post<unknown>('/environment-variable-definitions', input)) as EnvironmentVariableDefinition;
+  },
+  async deleteEnvironmentVariableDefinition(id: string) {
+    await request<unknown>(`/environment-variable-definitions/${id}`, { method: 'DELETE' });
+  },
   async workbench(signal?: AbortSignal) {
     return normalizeWorkbench(unwrap(await get<unknown>('/workbench', signal)));
   },
@@ -1177,6 +1248,26 @@ export const api = {
   async setReleaseCandidate(releaseId: string, candidate: boolean) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/candidate`, { candidate }));
   },
+  async submitReleaseReview(releaseId: string) {
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/review-submission`));
+  },
+  async previewReleaseReview(releaseId: string, signal?: AbortSignal): Promise<ReleaseReviewPreview> {
+    const raw = requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/review-preview`, signal)), 'release review preview');
+    return {
+      componentId: requireString(raw, 'componentId'), componentName: requireString(raw, 'componentName'),
+      ownerId: requireString(raw, 'ownerId'), ownerName: requireString(raw, 'ownerName'),
+      release: normalizeRelease(requireRecord(field(raw, 'release'), 'release')),
+      playbooks: requireRecords(raw, 'playbooks').map((playbook) => ({
+        actionId: requireString(playbook, 'actionId'), actionName: requireString(playbook, 'actionName'),
+        actionKind: requireEnum(playbook, ACTION_TYPES, 'actionKind'), path: requireString(playbook, 'path'),
+        filename: requireString(playbook, 'filename'), content: requireString(playbook, 'content'), sha256: requireString(playbook, 'sha256'),
+      })),
+      previewDigest: requireString(raw, 'previewDigest'),
+    };
+  },
+  async decideReleaseReview(releaseId: string, decision: 'approve' | 'reject', comment: string, expectedPreviewDigest: string) {
+    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/review-decision`, { decision, comment, expectedPreviewDigest }));
+  },
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
   },
@@ -1239,9 +1330,7 @@ export const api = {
           label: node.data.label,
           releaseId: node.data.releaseId,
           action: node.data.action,
-          hostGroup: node.data.hostGroup,
-          values: node.data.values ?? {},
-          runInputs: node.data.runInputs ?? [],
+          parameterValues: node.data.parameterValues ?? {},
           dependencySources: node.data.dependencySources ?? {},
         },
       })),
@@ -1252,6 +1341,9 @@ export const api = {
   async validateScenario(revisionId: string) {
     const result = requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/validate`)), 'scenario validation');
     return { valid: requireBoolean(result, 'valid'), errors: requireStringArray(result, 'errors') };
+  },
+  async scenarioParameterOverview(revisionId: string, signal?: AbortSignal): Promise<ScenarioParameterOverview> {
+    return unwrap(await get<unknown>(`/scenario-revisions/${revisionId}/parameter-overview`, signal)) as ScenarioParameterOverview;
   },
   async candidateReleaseSet(revisionId: string): Promise<CandidateReleaseSet> {
     const raw = requireRecord(unwrap(await get<unknown>(`/scenario-revisions/${revisionId}/candidate-release-set`)), 'candidate release set');
@@ -1271,11 +1363,11 @@ export const api = {
       })),
     };
   },
-  async testScenario(revisionId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/test-runs`, { environmentId, runInput })), 'run'));
+  async testScenario(revisionId: string, environmentId: string) {
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/test-runs`, { environmentId })), 'run'));
   },
-  async runScenario(revisionId: string, environmentId: string, runInput: Record<string, unknown> = {}) {
-    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/runs`, { environmentId, runInput })), 'run'));
+  async runScenario(revisionId: string, environmentId: string) {
+    return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/runs`, { environmentId })), 'run'));
   },
   async publishScenario(revisionId: string) {
     return normalizeRevision(requireRecord(normalizeOptionalData(await post<unknown>(`/scenario-revisions/${revisionId}/publish`)), 'scenario revision'));
@@ -1357,6 +1449,12 @@ export const api = {
   async restoreEnvironmentRevision(environmentId: string, revisionId: string, changeReason: string) {
     return normalizeEnvironment(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/revisions/${revisionId}/restore`, { changeReason })), 'environment'));
   },
+  async environmentParameterFields(signal?: AbortSignal): Promise<EnvironmentParameterField[]> {
+    return unwrapList(await get<unknown>('/environment-parameter-fields', signal)) as EnvironmentParameterField[];
+  },
+  async updateEnvironmentParameters(environmentId: string, values: Record<string, unknown>, changeReason: string) {
+    return normalizeEnvironment(requireRecord(normalizeOptionalData(await put<unknown>(`/environments/${environmentId}/parameters`, { values, changeReason })), 'environment'));
+  },
   async exportEnvironmentRevision(environmentId: string, revisionId: string, includeCredentialReferences: boolean) {
     return download(`/environments/${environmentId}/revisions/${revisionId}/export`, { includeCredentialReferences });
   },
@@ -1383,17 +1481,6 @@ export const api = {
   },
   async retryRun(id: string, expectedPlanDigest: string) {
     return normalizeRun(requireRecord(unwrap(await post<unknown>(`/runs/${id}/retry-runs`, { expectedPlanDigest })), 'run'));
-  },
-  async runInputPresets(resourceType: RunInputPreset['resourceType'], resourceId: string, context: RunInputPreset['context'], signal?: AbortSignal) {
-    const query = new URLSearchParams({ resourceType, resourceId, context });
-    return unwrapList(await get<unknown>(`/run-input-presets?${query}`, signal)) as RunInputPreset[];
-  },
-  async saveRunInputPreset(input: Omit<RunInputPreset, 'id' | 'createdBy' | 'definitionDigest' | 'stale' | 'createdAt' | 'updatedAt'> & { id?: string }) {
-    const response = input.id ? await put<unknown>(`/run-input-presets/${input.id}`, input) : await post<unknown>('/run-input-presets', input);
-    return unwrap(response) as RunInputPreset;
-  },
-  async deleteRunInputPreset(id: string) {
-    await request<unknown>(`/run-input-presets/${id}`, { method: 'DELETE' });
   },
   async approve(id: string, reason = '', deliveryDecisions: Array<Pick<DeliveryDecision, 'requirementId' | 'mode'>> = []) {
 	return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/approve`, { reason, deliveryDecisions })), 'run'));

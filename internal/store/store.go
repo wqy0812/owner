@@ -102,7 +102,7 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 }
 
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_input_presets", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "users"}
+	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "environment_variable_definitions", "environment_parameter_definitions", "platform_options", "platform_option_categories", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

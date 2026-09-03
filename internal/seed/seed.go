@@ -2,6 +2,7 @@ package seed
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,9 @@ const (
 	ComponentOwnerK8sID     = "component-bob"
 	ScenarioOwnerID         = "scenario-carol"
 	EnvironmentOwnerID      = "environment-dave"
+	PlatformAdminID         = "platform-admin"
 	seedAuditID             = "audit-demo-seeded"
+	platformCatalogAuditID  = "audit-platform-catalog-bootstrapped"
 )
 
 type Seeder struct {
@@ -33,6 +36,9 @@ func (s Seeder) Run(ctx context.Context) error {
 		now = s.Now().UTC()
 	}
 	if err := s.seedUsers(ctx, now); err != nil {
+		return err
+	}
+	if err := s.seedPlatformCatalog(ctx, now); err != nil {
 		return err
 	}
 	if err := s.seedComponents(ctx, now); err != nil {
@@ -67,9 +73,10 @@ func (s Seeder) Run(ctx context.Context) error {
 	})
 }
 
-// SeedUsers creates only the fixed demo identities used by the role switcher.
-// It intentionally leaves the component, scenario, and environment catalogs
-// empty so an operator can exercise the complete frontend authoring flow.
+// SeedUsers creates the fixed identities used by the role switcher and installs
+// the platform-owned directories once on a new database. It intentionally
+// leaves component, scenario, and environment catalogs empty so an operator can
+// exercise the complete frontend authoring flow.
 func (s Seeder) SeedUsers(ctx context.Context) error {
 	if s.Store == nil {
 		return errors.New("seed store is required")
@@ -79,47 +86,127 @@ func (s Seeder) SeedUsers(ctx context.Context) error {
 		now = s.Now().UTC()
 	}
 	for _, user := range identityUsers(now) {
-		if _, err := s.Store.GetUser(ctx, user.ID); err == nil {
-			continue
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("check seed user %s: %w", user.ID, err)
+		if err := s.ensureDemoUser(ctx, user); err != nil {
+			return err
 		}
-		if err := s.Store.UpsertUser(ctx, user); err != nil {
-			return fmt.Errorf("seed user %s: %w", user.ID, err)
+	}
+	return s.seedPlatformCatalog(ctx, now)
+}
+
+func (s Seeder) seedUsers(ctx context.Context, now time.Time) error {
+	for _, user := range demoUsers(now) {
+		if err := s.ensureDemoUser(ctx, user); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (s Seeder) seedUsers(ctx context.Context, now time.Time) error {
-	for _, user := range demoUsers(now) {
-		if _, err := s.Store.GetUser(ctx, user.ID); err == nil {
-			continue
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("check seed user %s: %w", user.ID, err)
-		}
-		if err := s.Store.UpsertUser(ctx, user); err != nil {
-			return fmt.Errorf("seed user %s: %w", user.ID, err)
-		}
+func (s Seeder) ensureDemoUser(ctx context.Context, user domain.User) error {
+	_, err := s.Store.GetUser(ctx, user.ID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("check seed user %s: %w", user.ID, err)
+	}
+	if err := s.Store.UpsertUser(ctx, user); err != nil {
+		return fmt.Errorf("seed user %s: %w", user.ID, err)
 	}
 	return nil
 }
 
 func demoUsers(now time.Time) []domain.User {
 	return []domain.User{
-		{ID: ComponentOwnerRuntimeID, Name: "林晓 · Runtime", Role: domain.RoleComponentOwner, CreatedAt: now},
-		{ID: ComponentOwnerK8sID, Name: "周工 · Kubernetes", Role: domain.RoleComponentOwner, CreatedAt: now},
-		{ID: ScenarioOwnerID, Name: "陈晨 · 集群交付", Role: domain.RoleScenarioOwner, CreatedAt: now},
-		{ID: EnvironmentOwnerID, Name: "王维 · 基础设施", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
+		{ID: ComponentOwnerRuntimeID, Name: "林晓", Role: domain.RoleComponentOwner, CreatedAt: now},
+		{ID: ComponentOwnerK8sID, Name: "周工", Role: domain.RoleComponentOwner, CreatedAt: now},
+		{ID: ScenarioOwnerID, Name: "陈晨", Role: domain.RoleScenarioOwner, CreatedAt: now},
+		{ID: EnvironmentOwnerID, Name: "王维", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
+		{ID: PlatformAdminID, Name: "赵宁", Role: domain.RolePlatformAdmin, CreatedAt: now},
 	}
 }
 
 func identityUsers(now time.Time) []domain.User {
 	return []domain.User{
-		{ID: ComponentOwnerRuntimeID, Name: "林晓 · Runtime", Role: domain.RoleComponentOwner, CreatedAt: now},
-		{ID: ScenarioOwnerID, Name: "陈晨 · 集群交付", Role: domain.RoleScenarioOwner, CreatedAt: now},
-		{ID: EnvironmentOwnerID, Name: "王维 · 基础设施", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
+		{ID: ComponentOwnerRuntimeID, Name: "林晓", Role: domain.RoleComponentOwner, CreatedAt: now},
+		{ID: ScenarioOwnerID, Name: "陈晨", Role: domain.RoleScenarioOwner, CreatedAt: now},
+		{ID: EnvironmentOwnerID, Name: "王维", Role: domain.RoleEnvironmentOwner, CreatedAt: now},
+		{ID: PlatformAdminID, Name: "赵宁", Role: domain.RolePlatformAdmin, CreatedAt: now},
 	}
+}
+
+type seededPlatformCategory struct {
+	id            string
+	key           string
+	label         string
+	kind          domain.PlatformOptionCategoryKind
+	required      bool
+	parentKey     string
+	options       []seededPlatformOption
+	optionParents map[string]string
+}
+
+type seededPlatformOption struct {
+	value string
+	label string
+}
+
+func initialPlatformCategories() []seededPlatformCategory {
+	return []seededPlatformCategory{
+		{id: "platform-category-architecture", key: "architecture", label: "架构", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"amd64", "x86/amd64"}, {"arm64", "ARM/arm64"}}},
+		{id: "platform-category-operating-system", key: "operatingSystem", label: "操作系统", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"Ubuntu", "Ubuntu"}, {"SUSE", "SUSE"}, {"Kylin", "Kylin"}}},
+		{id: "platform-category-operating-system-version", key: "operatingSystemVersion", label: "操作系统版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"18.04", "18.04"}, {"20.04", "20.04"}, {"22.04", "22.04"}, {"24.04", "24.04"}, {"18.04 / 24.04", "18.04 / 24.04（混合）"}}},
+		{id: "platform-category-container-runtime", key: "containerRuntime", label: "容器运行时", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"docker", "Docker"}, {"containerd", "containerd"}}},
+		{id: "platform-category-container-runtime-version", key: "containerRuntimeVersion", label: "运行时版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, parentKey: "containerRuntime", options: []seededPlatformOption{{"docker@20.10.21", "20.10.21"}, {"docker@20.10.24", "20.10.24"}, {"docker@24.0.9", "24.0.9"}, {"containerd@2.0.10", "2.0.10"}}, optionParents: map[string]string{"docker@20.10.21": "docker", "docker@20.10.24": "docker", "docker@24.0.9": "docker", "containerd@2.0.10": "containerd"}},
+		{id: "platform-category-ip-family", key: "ipFamily", label: "IP 协议族", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"IPv4", "IPv4"}, {"IPv6", "IPv6"}}},
+		{id: "platform-category-hardware-profile", key: "hardwareProfile", label: "硬件类型", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"general", "通用主机"}, {"gpu", "GPU"}, {"dpu", "DPU"}, {"bms", "BMS"}}},
+		{id: "platform-category-deployment-mode", key: "deploymentMode", label: "部署形态", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"standard", "standard"}, {"serverless", "serverless"}, {"ingress", "ingress"}}},
+		{id: "platform-category-host-group", key: "hostGroup", label: "主机组", kind: domain.PlatformOptionHostGroup, options: []seededPlatformOption{{"all", "all"}}},
+	}
+}
+
+func (s Seeder) seedPlatformCatalog(ctx context.Context, now time.Time) error {
+	categoryIDs := map[string]string{}
+	optionIDs := map[string]string{}
+	categories := make([]domain.PlatformOptionCategory, 0, len(initialPlatformCategories()))
+	options := []domain.PlatformOption{}
+	for categoryIndex, spec := range initialPlatformCategories() {
+		category := domain.PlatformOptionCategory{
+			ID: spec.id, Key: spec.key, Label: spec.label, Kind: spec.kind,
+			EnvironmentRequired: spec.required, SortOrder: categoryIndex,
+			CreatedBy: PlatformAdminID, CreatedAt: now,
+		}
+		category.ParentCategoryID = categoryIDs[spec.parentKey]
+		categories = append(categories, category)
+		for optionIndex, optionSpec := range spec.options {
+			optionID := "platform-option-" + stableSeedSuffix(spec.key+"\x00"+optionSpec.value)
+			option := domain.PlatformOption{
+				ID: optionID, CategoryID: spec.id,
+				Value: optionSpec.value, Label: optionSpec.label, SortOrder: optionIndex,
+				CreatedBy: PlatformAdminID, CreatedAt: now,
+			}
+			if parentValue := spec.optionParents[optionSpec.value]; parentValue != "" {
+				option.ParentOptionID = optionIDs[spec.parentKey+"\x00"+parentValue]
+			}
+			options = append(options, option)
+			optionIDs[spec.key+"\x00"+optionSpec.value] = optionID
+		}
+		categoryIDs[spec.key] = spec.id
+	}
+	variableDefinitions := []domain.EnvironmentVariableDefinition{
+		{ID: "environment-variable-image-registry", Name: "IMAGE_REGISTRY", Label: "镜像仓库", Description: "镜像拉取和推送使用的 host:port", CreatedBy: PlatformAdminID, CreatedAt: now},
+		{ID: "environment-variable-file-station", Name: "FILE_STATION", Label: "组件介质站", Description: "组件介质下载使用的 host:port", CreatedBy: PlatformAdminID, CreatedAt: now},
+	}
+	return s.Store.BootstrapPlatformCatalog(ctx, categories, options, variableDefinitions, domain.AuditEvent{
+		ID: platformCatalogAuditID, ActorID: "system", Action: "platform_option_catalog.bootstrapped",
+		ResourceType: "platform", ResourceID: "platform-option-catalog",
+		Metadata: map[string]any{"mode": "initial-only"}, CreatedAt: now,
+	})
+}
+
+func stableSeedSuffix(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", digest[:12])
 }
 
 type seededComponent struct {
@@ -232,7 +319,7 @@ func (s Seeder) seedScenarios(ctx context.Context, now time.Time) error {
 }
 
 func scenarioNode(id, name, releaseID, group string, x, y float64) domain.ScenarioNode {
-	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, Values: map[string]any{}, RunInputs: []string{}, Position: domain.GraphPosition{X: x, Y: y}}
+	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, ParameterValues: map[string]any{}, Position: domain.GraphPosition{X: x, Y: y}}
 }
 
 func (s Seeder) seedEnvironments(ctx context.Context, now time.Time) error {
@@ -254,7 +341,23 @@ func (s Seeder) createReleaseIfMissing(ctx context.Context, value domain.Compone
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err
 	}
+	// Register fixture-owned directory entries before their first reference.
+	// Identity-only startup never calls this path.
+	for _, action := range value.Actions {
+		if err := s.ensureSeedHostGroup(ctx, action.HostGroup, value.CreatedAt); err != nil {
+			return err
+		}
+	}
 	return s.Store.CreateComponentRelease(ctx, value)
+}
+
+func (s Seeder) ensureSeedHostGroup(ctx context.Context, group string, now time.Time) error {
+	if group == "" {
+		return nil
+	}
+	return s.Store.EnsurePlatformOption(ctx, "hostGroup", domain.PlatformOption{
+		ID: "platform-option-" + stableSeedSuffix("hostGroup\x00"+group), Value: group, Label: group, SortOrder: 1000, CreatedBy: PlatformAdminID, CreatedAt: now,
+	})
 }
 
 func (s Seeder) createScenarioIfMissing(ctx context.Context, scenario domain.Scenario, revision domain.ScenarioRevision) (bool, error) {
@@ -315,6 +418,17 @@ func (s Seeder) createEnvironmentIfMissing(ctx context.Context, environment doma
 		return err
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return err
+	}
+	var inventory struct{ Hosts []struct{ Groups []string } }
+	if err := json.Unmarshal(revision.Inventory, &inventory); err != nil {
+		return err
+	}
+	for _, host := range inventory.Hosts {
+		for _, group := range host.Groups {
+			if err := s.ensureSeedHostGroup(ctx, group, revision.CreatedAt); err != nil {
+				return err
+			}
+		}
 	}
 	return s.Store.CreateEnvironment(ctx, environment, revision)
 }

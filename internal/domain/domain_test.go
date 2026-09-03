@@ -82,15 +82,15 @@ func TestCredentialRefsAreRedactedForNonOwner(t *testing.T) {
 func TestParameterContractHelpers(t *testing.T) {
 	parameters := []ParameterDefinition{
 		{Name: "endpoint", Type: ParameterTypeString, Required: true},
-		{Name: "replicas", Type: ParameterTypeInteger, DefaultValue: 3},
+		{Name: "replicas", Type: ParameterTypeInteger, FixedValue: 3},
 	}
-	if got, ok := ParameterByName(parameters, "replicas"); !ok || got.DefaultValue != 3 || !got.HasDefault() {
+	if got, ok := ParameterByName(parameters, "replicas"); !ok || got.FixedValue != 3 || !got.HasFixedValue() {
 		t.Fatalf("replicas lookup=%+v ok=%v", got, ok)
 	}
 	if _, ok := ParameterByName(parameters, "missing"); ok {
 		t.Fatal("missing parameter was reported present")
 	}
-	if parameters[0].HasDefault() {
+	if parameters[0].HasFixedValue() {
 		t.Fatal("required parameter without a default reported one")
 	}
 

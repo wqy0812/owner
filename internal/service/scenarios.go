@@ -94,6 +94,10 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 	next := plan.NextRevision
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
 	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
+	source.Graph, err = p.deriveScenarioHostGroups(ctx, source.Graph)
+	if err != nil {
+		return source, err
+	}
 	if err := p.store.CreateScenarioRevisionFromSource(ctx, input.SourceRevisionID, source); err != nil {
 		return source, err
 	}
@@ -131,6 +135,9 @@ func (p *Platform) GetScenario(ctx context.Context, user domain.User, id string)
 	if user.Role == domain.RoleScenarioOwner && scenario.OwnerID == user.ID {
 		return scenario, nil
 	}
+	if user.Role == domain.RolePlatformAdmin {
+		return scenario, nil
+	}
 	filtered := make([]domain.ScenarioRevision, 0, len(scenario.Revisions))
 	for _, revision := range scenario.Revisions {
 		if revision.Status == domain.RevisionReleased {
@@ -152,17 +159,23 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 	if scenario.CurrentRevisionID != revisionID {
 		return revision, fmt.Errorf("%w: only the current scenario revision can be edited", domain.ErrConflict)
 	}
+	graph, err = p.deriveScenarioHostGroups(ctx, graph)
+	if err != nil {
+		return revision, err
+	}
 	if issues := domain.ValidateGraph(graph); len(issues) > 0 {
 		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: issues}
 	}
 	for _, node := range graph.Nodes {
-		if err := rejectSensitiveMap(node.Values, "scenario node value"); err != nil {
+		if err := rejectSensitiveMap(node.ParameterValues, "scenario node value"); err != nil {
 			return revision, err
 		}
-		for _, parameter := range node.RunInputs {
-			if isSensitiveKey(parameter) {
-				return revision, fmt.Errorf("%w: sensitive run input %q must use a CredentialRef", domain.ErrInvalid, parameter)
-			}
+		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if releaseErr != nil {
+			return revision, releaseErr
+		}
+		if valueErr := validateScenarioParameterValues(release, node); valueErr != nil {
+			return revision, valueErr
 		}
 	}
 	if err := p.store.SaveScenarioGraph(ctx, revisionID, graph); err != nil {
@@ -173,6 +186,26 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 		"scenarioId": scenario.ID, "nodes": len(graph.Nodes), "edges": len(graph.Edges),
 	})
 	return revision, nil
+}
+
+func (p *Platform) deriveScenarioHostGroups(ctx context.Context, graph domain.ScenarioGraph) (domain.ScenarioGraph, error) {
+	graph.Nodes = append([]domain.ScenarioNode(nil), graph.Nodes...)
+	for index := range graph.Nodes {
+		node := &graph.Nodes[index]
+		release, err := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if err != nil {
+			return graph, fmt.Errorf("%w: node %s release does not exist", domain.ErrInvalid, node.ID)
+		}
+		action, err := actionFor(release, node.Action)
+		if err != nil {
+			return graph, fmt.Errorf("node %s: %w", node.ID, err)
+		}
+		if err := p.validateHostGroupCatalog(ctx, action.HostGroup); err != nil {
+			return graph, fmt.Errorf("node %s: %w", node.ID, err)
+		}
+		node.HostGroup = action.HostGroup
+	}
+	return graph, nil
 }
 
 func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revisionID string) ([]domain.ValidationIssue, error) {
@@ -201,8 +234,11 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 				issues = append(issues, domain.ValidationIssue{Code: "candidate_not_ready", Message: readinessErr.Error(), NodeID: node.ID})
 			}
 		}
-		if _, actionErr := actionFor(release, node.Action); actionErr != nil {
+		action, actionErr := actionFor(release, node.Action)
+		if actionErr != nil {
 			issues = append(issues, domain.ValidationIssue{Code: "action_missing", Message: actionErr.Error(), NodeID: node.ID})
+		} else if revision.Status != domain.RevisionReleased && revision.Status != domain.RevisionDeprecated && node.HostGroup != action.HostGroup {
+			issues = append(issues, domain.ValidationIssue{Code: "host_group_not_inherited", Message: "node host group must be inherited from its component action", NodeID: node.ID})
 		}
 		validateRequiredParameters(release, node, &issues)
 		if conflicts := nodeOverridesMappedParameter(node, release); len(conflicts) > 0 {
@@ -299,12 +335,8 @@ func anyUpstreamNodeReachable(upstreamNodes []string, downstreamNode string, rea
 }
 
 func validateRequiredParameters(release domain.ComponentRelease, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {
-	mapped := domain.MappedTargets(release.Dependencies)
 	for _, parameter := range release.Parameters {
-		if !parameter.Required || parameter.HasDefault() {
-			continue
-		}
-		if _, imported := mapped[parameter.Name]; imported {
+		if !parameter.Required || parameter.ValueProvider != domain.ParameterProviderScenarioOwner {
 			continue
 		}
 		validateRequiredKey(parameter.Name, node, issues)
@@ -326,10 +358,30 @@ func sourceIssueCode(err error) string {
 }
 
 func validateRequiredKey(key string, node domain.ScenarioNode, issues *[]domain.ValidationIssue) {
-	_, inValues := node.Values[key]
-	if !inValues && !contains(node.RunInputs, key) {
+	_, inValues := node.ParameterValues[key]
+	if !inValues {
 		*issues = append(*issues, domain.ValidationIssue{Code: "required_parameter", Message: fmt.Sprintf("required parameter %q is not bound", key), NodeID: node.ID})
 	}
+}
+
+func validateScenarioParameterValues(release domain.ComponentRelease, node domain.ScenarioNode) error {
+	for name, value := range node.ParameterValues {
+		parameter, ok := domain.ParameterByName(release.Parameters, name)
+		if !ok || parameter.ValueProvider != domain.ParameterProviderScenarioOwner || !parameter.Modifiable {
+			return fmt.Errorf("%w: node %s contains unknown or non-scenario parameter %q", domain.ErrInvalid, node.ID, name)
+		}
+		if err := validateResolvedParameters([]domain.ParameterDefinition{parameter}, map[string]any{name: value}); err != nil {
+			return fmt.Errorf("node %s: %w", node.ID, err)
+		}
+	}
+	for _, parameter := range release.Parameters {
+		if parameter.ValueProvider == domain.ParameterProviderScenarioOwner && parameter.Required {
+			if _, ok := node.ParameterValues[parameter.Name]; !ok {
+				return fmt.Errorf("%w: node %s requires scenario parameter %q", domain.ErrInvalid, node.ID, parameter.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func graphReachability(graph domain.ScenarioGraph) map[string]map[string]bool {

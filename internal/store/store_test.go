@@ -33,7 +33,40 @@ func newTestStore(t *testing.T) *Store {
 			t.Fatalf("UpsertUser: %v", err)
 		}
 	}
+	seedStoreCatalog(t, s)
 	return s
+}
+
+func seedStoreCatalog(t *testing.T, s *Store) {
+	t.Helper()
+	ctx := context.Background()
+	for _, category := range []domain.PlatformOptionCategory{
+		{ID: "category-hosts", Key: "hostGroup", Label: "Host groups", Kind: domain.PlatformOptionHostGroup, CreatedBy: "component-owner-a", CreatedAt: testNow},
+		{ID: "category-architecture", Key: "architecture", Label: "Architecture", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: "component-owner-a", CreatedAt: testNow},
+	} {
+		if err := s.UpsertPlatformOptionCategory(ctx, category); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"workers", "all"} {
+		if err := s.UpsertPlatformOption(ctx, domain.PlatformOption{ID: "option-" + value, CategoryID: "category-hosts", Value: value, Label: value, CreatedBy: "component-owner-a", CreatedAt: testNow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpsertPlatformOption(ctx, domain.PlatformOption{ID: "option-amd64", CategoryID: "category-architecture", Value: "amd64", Label: "amd64", CreatedBy: "component-owner-a", CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertEnvironmentVariableDefinition(ctx, domain.EnvironmentVariableDefinition{ID: "variable-registry", Name: "IMAGE_REGISTRY", Label: "Registry", CreatedBy: "component-owner-a", CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setCandidateForTest(ctx context.Context, s *Store, id string, candidate bool) error {
+	r, err := s.GetComponentRelease(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.SetReleaseCandidate(ctx, id, candidate, r.PublicationGeneration, domain.ComponentReleaseSpecDigest(r))
 }
 
 func componentFixture(id, owner string) domain.Component {
@@ -46,17 +79,25 @@ func componentFixture(id, owner string) domain.Component {
 func releaseFixture(id, component, version string, status domain.ReleaseStatus) domain.ComponentRelease {
 	r := domain.ComponentRelease{
 		ID: id, ComponentID: component, Version: version,
+		LineID: "line-" + id, LineName: version, Compatibility: domain.CompatibilityNotApplicable,
 		Status: status, RiskLevel: domain.RiskLow, CreatedAt: testNow,
-		EnvironmentConstraints: map[string]any{"architecture": "amd64"},
+		EnvironmentConstraints: map[string]any{"architecture": []string{"amd64"}},
 		Parameters:             []domain.ParameterDefinition{},
+		Dependencies:           []domain.ComponentDependency{},
+		Artifacts:              []domain.ComponentArtifact{},
+		Images:                 []domain.ComponentImage{},
 		Actions: []domain.ActionDefinition{{
 			ID: id + "-install", Name: "install", Kind: domain.ActionInstall,
-			Playbook: "fixtures/install.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
+			Playbook: "fixtures/install.yml", Tags: []string{}, HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskLow,
 			RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}, Idempotent: true,
 		}},
 	}
 	if status == domain.ReleaseReleased {
 		r.ReleasedAt = ptr(testNow)
+	}
+	r.Review = domain.ReleaseReview{
+		Status:         domain.ReleaseReviewApproved,
+		ContractDigest: domain.ComponentReleaseSpecDigest(r),
 	}
 	return r
 }
@@ -67,6 +108,7 @@ func releasePublicationGuard(release domain.ComponentRelease) ReleasePublication
 	return ReleasePublicationGuard{
 		ReleaseID: release.ID, PublicationGeneration: release.PublicationGeneration,
 		SpecDigest: domain.ComponentReleaseSpecDigest(release), Status: release.Status, Candidate: release.Candidate,
+		ReviewStatus: release.Review.Status, ReviewContractDigest: release.Review.ContractDigest,
 	}
 }
 
@@ -262,7 +304,7 @@ func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
 	if err != nil || len(visible) != 1 || len(visible[0].Releases) != 1 || !visible[0].Releases[0].Candidate {
 		t.Fatalf("candidate visibility=%+v err=%v", visible, err)
 	}
-	if err := s.SetReleaseCandidate(ctx, release.ID, false); err != nil {
+	if err := setCandidateForTest(ctx, s, release.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	invalidated, _ := s.GetComponentRelease(ctx, release.ID)
@@ -273,7 +315,7 @@ func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
 	if err != nil || len(visible) != 0 {
 		t.Fatalf("invalidated candidate remained visible=%+v err=%v", visible, err)
 	}
-	if err := s.SetReleaseCandidate(ctx, release.ID, true); err != nil {
+	if err := setCandidateForTest(ctx, s, release.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	release, _ = s.GetComponentRelease(ctx, release.ID)
@@ -322,10 +364,10 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, revision, releaseA, releaseB)
 	guards := []ReleasePublicationGuard{releasePublicationGuard(releaseA), releasePublicationGuard(releaseB)}
 	epoch := publicationEpoch(t, s)
-	if err := s.SetReleaseCandidate(ctx, releaseB.ID, false); err != nil {
+	if err := setCandidateForTest(ctx, s, releaseB.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetReleaseCandidate(ctx, releaseB.ID, true); err != nil {
+	if err := setCandidateForTest(ctx, s, releaseB.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	err := s.PublishCandidateReleaseSet(ctx, scenarioPublicationGuard(revision), []string{releaseA.ID, releaseB.ID}, guards, evidenceRunID, epoch, testNow.Add(time.Minute))
@@ -667,7 +709,7 @@ func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 	upstream := releaseFixture("release-kubelet", "kubelet", "1.17.5", domain.ReleaseReleased)
 	upstream.Parameters = []domain.ParameterDefinition{{
 		Name: "kubeInstallRoot", Description: "kubelet install root", Type: domain.ParameterTypeString,
-		Required: true, DefaultValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, MinLength: 1,
+		Required: true, FixedValue: "/approot1/paas/kube", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner, MinLength: 1,
 	}}
 	if err := s.CreateComponentRelease(ctx, upstream); err != nil {
 		t.Fatal(err)
@@ -675,7 +717,7 @@ func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 	downstream := releaseFixture("release-kube-proxy", "kube-proxy", "1.17.5", domain.ReleaseDraft)
 	downstream.Parameters = []domain.ParameterDefinition{{
 		Name: "kubeRoot", Description: "imported kubelet root", Type: domain.ParameterTypeString,
-		Required: true, Visibility: domain.ParameterInternal,
+		Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping,
 	}}
 	downstream.Dependencies = []domain.ComponentDependency{{
 		ID: "dependency-kube-proxy-kubelet", ReleaseID: downstream.ID,
@@ -775,7 +817,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", Name: "Runtime", ReleaseID: "runtime-1", Action: domain.ActionInstall, HostGroup: "workers", Values: map[string]any{}}}, Edges: []domain.ScenarioEdge{}}
+	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "runtime", Name: "Runtime", ReleaseID: "runtime-1", Action: domain.ActionInstall, HostGroup: "workers", ParameterValues: map[string]any{}}}, Edges: []domain.ScenarioEdge{}}
 	scenario := domain.Scenario{ID: "cluster", Slug: "cluster", Name: "Cluster", OwnerID: "scenario-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 	revision := domain.ScenarioRevision{ID: "cluster-r1", ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, Graph: graph, CreatedAt: testNow}
 	if err := s.CreateScenario(ctx, scenario, revision); err != nil {
@@ -1074,5 +1116,131 @@ func TestScenarioGraphEditInvalidatesTestAndReleasedIsImmutable(t *testing.T) {
 	}
 	if err := s.SaveScenarioGraph(ctx, revision.ID, graph); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("released graph edit=%v, want conflict", err)
+	}
+}
+
+func TestPlatformCategoryCreateAndRetireSerializeHierarchyValidation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	admin := domain.User{ID: "platform-admin", Name: "Platform Admin", Role: domain.RolePlatformAdmin, CreatedAt: testNow}
+	if err := s.UpsertUser(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	audit := func(id, action, resourceType, resourceID string) domain.AuditEvent {
+		return domain.AuditEvent{ID: id, ActorID: admin.ID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Metadata: map[string]any{}, CreatedAt: testNow}
+	}
+	root := domain.PlatformOptionCategory{ID: "race-root", Key: "raceRoot", Label: "Race root", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: admin.ID, CreatedAt: testNow}
+	if err := s.CreatePlatformOptionCategory(ctx, root, audit("audit-race-root", "platform_option_category.created", "platform_option_category", root.ID)); err != nil {
+		t.Fatal(err)
+	}
+	child := domain.PlatformOptionCategory{ID: "race-child", ParentCategoryID: root.ID, Key: "raceChild", Label: "Race child", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: admin.ID, CreatedAt: testNow}
+	retiredAt := testNow.Add(time.Minute)
+	type result struct {
+		action string
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	go func() {
+		<-start
+		results <- result{action: "retire", err: s.SetPlatformOptionCategoryRetired(ctx, root.ID, &retiredAt, audit("audit-race-root-retired", "platform_option_category.retired", "platform_option_category", root.ID))}
+	}()
+	go func() {
+		<-start
+		results <- result{action: "create", err: s.CreatePlatformOptionCategory(ctx, child, audit("audit-race-child", "platform_option_category.created", "platform_option_category", child.ID))}
+	}()
+	close(start)
+	first, second := <-results, <-results
+	if first.err == nil && second.err == nil {
+		t.Fatalf("concurrent create and retire both succeeded: %+v %+v", first, second)
+	}
+	for _, outcome := range []result{first, second} {
+		if outcome.err != nil && !errors.Is(outcome.err, domain.ErrConflict) {
+			t.Fatalf("%s returned unexpected error: %v", outcome.action, outcome.err)
+		}
+	}
+	categories, err := s.ListPlatformOptionCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootRetired, activeChild bool
+	for _, category := range categories {
+		if category.ID == root.ID {
+			rootRetired = category.RetiredAt != nil
+		}
+		if category.ID == child.ID {
+			activeChild = category.RetiredAt == nil
+		}
+	}
+	if rootRetired && activeChild {
+		t.Fatalf("invalid hierarchy persisted: retired root=%v active child=%v", rootRetired, activeChild)
+	}
+}
+
+func TestPlatformOptionCreateAndRetireSerializeHierarchyValidation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	admin := domain.User{ID: "platform-admin", Name: "Platform Admin", Role: domain.RolePlatformAdmin, CreatedAt: testNow}
+	if err := s.UpsertUser(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	audit := func(id, action, resourceType, resourceID string) domain.AuditEvent {
+		return domain.AuditEvent{ID: id, ActorID: admin.ID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Metadata: map[string]any{}, CreatedAt: testNow}
+	}
+	root := domain.PlatformOptionCategory{ID: "option-race-root", Key: "optionRaceRoot", Label: "Option race root", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: admin.ID, CreatedAt: testNow}
+	childCategory := domain.PlatformOptionCategory{ID: "option-race-child-category", ParentCategoryID: root.ID, Key: "optionRaceChild", Label: "Option race child", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: admin.ID, CreatedAt: testNow}
+	if err := s.CreatePlatformOptionCategory(ctx, root, audit("audit-option-race-root", "platform_option_category.created", "platform_option_category", root.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePlatformOptionCategory(ctx, childCategory, audit("audit-option-race-child-category", "platform_option_category.created", "platform_option_category", childCategory.ID)); err != nil {
+		t.Fatal(err)
+	}
+	parent := domain.PlatformOption{ID: "option-race-parent", CategoryID: root.ID, Value: "parent", Label: "Parent", CreatedBy: admin.ID, CreatedAt: testNow}
+	if err := s.CreatePlatformOption(ctx, parent, audit("audit-option-race-parent", "platform_option.created", "platform_option", parent.ID)); err != nil {
+		t.Fatal(err)
+	}
+	child := domain.PlatformOption{ID: "option-race-child", CategoryID: childCategory.ID, ParentOptionID: parent.ID, Value: "parent@child", Label: "Child", CreatedBy: admin.ID, CreatedAt: testNow}
+	retiredAt := testNow.Add(time.Minute)
+	type result struct {
+		action string
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	go func() {
+		<-start
+		results <- result{action: "retire", err: s.SetPlatformOptionRetired(ctx, parent.ID, &retiredAt, audit("audit-option-race-parent-retired", "platform_option.retired", "platform_option", parent.ID))}
+	}()
+	go func() {
+		<-start
+		results <- result{action: "create", err: s.CreatePlatformOption(ctx, child, audit("audit-option-race-child", "platform_option.created", "platform_option", child.ID))}
+	}()
+	close(start)
+	first, second := <-results, <-results
+	if first.err == nil && second.err == nil {
+		t.Fatalf("concurrent child option create and parent retirement both succeeded: %+v %+v", first, second)
+	}
+	for _, outcome := range []result{first, second} {
+		if outcome.err != nil && !errors.Is(outcome.err, domain.ErrConflict) {
+			t.Fatalf("%s returned unexpected error: %v", outcome.action, outcome.err)
+		}
+	}
+	categories, err := s.ListPlatformOptionCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parentRetired, activeChild bool
+	for _, category := range categories {
+		for _, option := range category.Options {
+			if option.ID == parent.ID {
+				parentRetired = option.RetiredAt != nil
+			}
+			if option.ID == child.ID {
+				activeChild = option.RetiredAt == nil
+			}
+		}
+	}
+	if parentRetired && activeChild {
+		t.Fatalf("invalid option hierarchy persisted: retired parent=%v active child=%v", parentRetired, activeChild)
 	}
 }

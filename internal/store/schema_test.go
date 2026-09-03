@@ -185,13 +185,14 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 		}
 	}
 	component := componentFixture("fresh-runtime", "component-owner-a")
+	seedStoreCatalog(t, reopened)
 	if err := reopened.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
 	}
 	release := releaseFixture("fresh-runtime-1", "fresh-runtime", "1.0.0", domain.ReleaseDraft)
 	release.Parameters = []domain.ParameterDefinition{{
 		Name: "region", Description: "deploy region", Type: domain.ParameterTypeString,
-		Required: true, DefaultValue: "cn", Visibility: domain.ParameterPublic,
+		Required: true, FixedValue: "cn", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner,
 	}}
 	if err := reopened.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)

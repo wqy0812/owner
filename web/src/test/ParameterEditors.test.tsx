@@ -6,6 +6,7 @@ import { isNodeReachable } from '../pages/ScenariosPage';
 import type { Component, ComponentRelease, ParameterDefinition } from '../types/domain';
 
 const readiness: ComponentRelease['readiness'] = { status: 'ready', blockers: [] };
+const review: ComponentRelease['review'] = { status: 'approved' };
 
 const kubeletRelease: ComponentRelease = {
   id: 'release-kubelet',
@@ -15,10 +16,10 @@ const kubeletRelease: ComponentRelease = {
   compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
-  readiness,
+  readiness, review,
   parameters: [
-    { name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public' },
-    { name: 'K8S_VERSION', description: 'Kubernetes 版本', type: 'string', visibility: 'internal' },
+    { name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: '/opt/kube' },
+    { name: 'K8S_VERSION', description: 'Kubernetes 版本', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '1.17.5' },
   ],
 };
 
@@ -39,8 +40,8 @@ const proxyRelease: ComponentRelease = {
   compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
-  readiness,
-  parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
+  readiness, review,
+  parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }],
   dependencies: [{
     componentId: 'component-kubelet',
     componentName: 'kubelet',
@@ -71,26 +72,26 @@ describe('parameter contract editor', () => {
 
   it('filters public parameters and reports type mismatches', () => {
     const parameters: ParameterDefinition[] = [
-      { name: 'kubeRoot', description: 'imported root', type: 'string', visibility: 'internal' },
-      { name: 'count', description: 'replicas', type: 'integer', visibility: 'internal' },
+      { name: 'kubeRoot', description: 'imported root', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' },
+      { name: 'count', description: 'replicas', type: 'integer', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' },
     ];
-    expect(parameterContractErrors(parameters, [{
+    expect(parameterContractErrors([parameters[1]], [{
       componentId: 'component-kubelet', releaseId: 'release-kubelet',
       parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'count' }],
     }], [kubeletRelease]).join(' ')).toContain('类型不一致');
-    expect(parameterContractErrors(parameters, [{
+    expect(parameterContractErrors([parameters[0]], [{
       componentId: 'component-kubelet', releaseId: 'release-kubelet',
       parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
     }], [kubeletRelease])).toEqual([]);
-    expect(parameterContractErrors(parameters, [{
+    expect(parameterContractErrors([], [{
       componentId: '', releaseId: '',
       parameterMappings: [],
     }], [kubeletRelease])).toContain('每项依赖必须锁定一个可用的上游版本');
-    expect(parameterContractErrors(parameters, [{
+    expect(parameterContractErrors([], [{
       componentId: 'component-kubelet', releaseId: 'draft-kubelet',
       parameterMappings: [],
     }], [{ ...kubeletRelease, id: 'draft-kubelet', state: 'draft' }])).toEqual([]);
-    expect(parameterContractErrors(parameters, [{
+    expect(parameterContractErrors([], [{
       componentId: 'component-kubelet', releaseId: 'release-kubelet', parameterMappings: [],
     }, {
       componentId: 'component-kubelet', releaseId: 'release-kubelet-alt', parameterMappings: [],
@@ -99,12 +100,12 @@ describe('parameter contract editor', () => {
 
   it('lets the owner add a parameter and mark it public', async () => {
     const seen: ParameterDefinition[][] = [];
-    render(<ParameterTable parameters={[{ name: 'kubeInstallRoot', description: 'root', type: 'string', required: true, visibility: 'internal' }]} onChange={(parameters) => seen.push(parameters)} />);
+    render(<ParameterTable parameters={[{ name: 'kubeInstallRoot', description: 'root', type: 'string', required: true, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '/opt/kube' }]} onChange={(parameters) => seen.push(parameters)} />);
     expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
     await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
     expect(seen.at(-1)?.[0]?.visibility).toBe('public');
     await userEvent.click(screen.getByRole('button', { name: '新增参数' }));
-    expect(seen.at(-1)?.at(-1)).toEqual({ name: '', description: '', type: 'string', required: false, visibility: 'internal' });
+    expect(seen.at(-1)?.at(-1)).toEqual({ name: '', description: '', type: 'string', required: false, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '', enum: undefined });
   });
 
   it('lets the owner pick a component before locking one of its released versions', async () => {
@@ -116,14 +117,14 @@ describe('parameter contract editor', () => {
       ownerId: 'alice',
       layer: 'runtime_state',
       tags: ['runtime'],
-      releases: [{ id: 'release-containerd', componentId: 'component-containerd', lineId: 'line-containerd', lineName: 'containerd 2.1', compatibility: 'not_applicable', version: 'v2.1.1', state: 'released', readiness, parameters: [] }],
+      releases: [{ id: 'release-containerd', componentId: 'component-containerd', lineId: 'line-containerd', lineName: 'containerd 2.1', compatibility: 'not_applicable', version: 'v2.1.1', state: 'released', readiness, review, parameters: [] }],
     };
     const seen: ComponentRelease['dependencies'][] = [];
     const view = (dependencies: NonNullable<ComponentRelease['dependencies']>) => (
       <DependencyEditor
         dependencies={dependencies}
         components={[kubeletWithTwo, containerd]}
-        currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal' }]}
+        currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }]}
         currentComponentId="component-kube-proxy"
         onChange={(next) => seen.push(next)}
       />
@@ -150,7 +151,7 @@ describe('parameter contract editor', () => {
     render(<DependencyEditor
       dependencies={[{ componentId: 'component-kubelet', releaseId: 'release-kubelet', purpose: '', parameterMappings: [{ upstreamParameter: '', targetParameter: '' }] }]}
       components={[kubelet]}
-      currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal' }]}
+      currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }]}
       currentComponentId="component-kube-proxy"
       onChange={(dependencies) => seen.push(dependencies)}
     />);
@@ -162,7 +163,7 @@ describe('parameter contract editor', () => {
   });
 
   it('defaults the contract view to a release that has mappings', () => {
-    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', lineId: 'line-kube-proxy-new', lineName: 'kube-proxy 1.34', compatibility: 'not_applicable', version: '1.34.3', state: 'released', readiness };
+    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', lineId: 'line-kube-proxy-new', lineName: 'kube-proxy 1.34', compatibility: 'not_applicable', version: '1.34.3', state: 'released', readiness, review };
     expect(defaultContractRelease([empty, proxyRelease], empty)?.id).toBe('release-kube-proxy');
   });
 

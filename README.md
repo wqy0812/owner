@@ -7,7 +7,7 @@
 ## 能力
 
 - 组件 Owner：按 L1-L6 维护组件分类、结构化合同、不可变发布版本和当前交付证据；Draft 可共享到候选集，Playbook 支持上传和在线编辑。
-- 场景 Owner：使用 DAG 组合精确 Released/候选组件版本，完整测试后原子发布场景 Revision 与全部候选 Release。
+- 集群 Owner：使用 DAG 组合精确 Released/候选组件版本，完整测试后原子发布场景 Revision 与全部候选 Release。
 - 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，执行整集群回滚预览并单条或批量审批高风险作业。
 - 共享测试环境：单环境 FIFO 执行、日志搜索/流筛选/复制/下载、取消、审计和站内通知。
 - 当前测试目录：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
@@ -79,7 +79,9 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260901-release-lines`，包含组件发布线、线性演进和升级回退闭环证据。代码及部署脚本只接受该精确合同，不再包含前序合同迁移。只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并通过 SQLite backup API 生成经过完整性与外键检查的一致备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
+当前合同为 `clusterforge-v1-20260902-container-runtime-matrix`，包含组件发布线、参数归属治理和容器运行时兼容矩阵。服务只接受该精确合同。已完成的历史迁移和旧目录转换入口已移除；其他结构合同只能在备份后显式重建测试库。部署主机需要支持 SQLite 在线备份的 Python 3.7 或以上版本，脚本会在停服前检查。
+
+只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并生成经过完整性与外键检查的一致 SQLite 备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
 `make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
 
@@ -91,7 +93,7 @@ make build
 
 ## 当前 Kubernetes 1.17.5 测试目录
 
-当前测试环境保存 15 个细粒度已发布组件，覆盖主机预检与初始化、PKI、加密配置、Docker、etcd、Kubernetes 控制面与节点进程、Flannel 和 CoreDNS。已发布场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，包含 21 个节点和 50 条依赖边；同一 Release 通过不同 `hostGroup` 分发到控制节点或工作节点。
+当前测试环境保存细粒度已发布组件，覆盖主机预检与初始化、PKI、加密配置、Docker、etcd、Kubernetes 控制面与节点进程、Flannel 和 CoreDNS。已发布场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，包含 21 个节点和 50 条依赖边。需要同时覆盖控制节点和工作节点的组件由组件 Owner 提供独立 Release 发布线，场景只选择精确 Release 和 Action，主机组不可改写。
 
 两套环境均为 Ubuntu 测试节点，使用 `IMAGE_REGISTRY`、`FILE_STATION` 和 `K8S_ENCRYPTION_KEY` CredentialRef。组件、Release、动作、场景 DAG、Environment Revision、Inventory 和恢复点的精确值见 [测试环境资产目录](docs/demo-catalog.md)。文档中的 TCP 或 SSH 连通性证据不等于 Kubernetes 安装和收敛验收。
 
@@ -118,7 +120,7 @@ make build
 | `NEWPLATFORM_SSH_KNOWN_HOSTS` | 服务账号的 `~/.ssh/known_hosts` | Go SSH 环境检查使用的严格主机指纹文件 |
 | `NEWPLATFORM_KILL_GRACE` | `3s` | 取消后进程组强制终止宽限期 |
 | `NEWPLATFORM_MAX_LOG_BYTES` | `2097152` | 单个 Ansible step 保留的脱敏日志上限 |
-| `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 仅创建角色切换账号，目录保持为空供人工录入 |
+| `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 创建角色切换账号，并仅在新库初始化平台治理目录；组件、场景和环境目录保持为空供人工录入 |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | 单 Dockerfile 隔离构建上下文的临时根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | 构建和推送镜像所用的 Docker CLI |
 | `CLUSTERFORGE_BACKUP_ENABLED` | `false` | 启用发布/废弃后的异步 SQLite 与 Git Catalog 快照；部署环境显式设为 `true` |
@@ -126,11 +128,11 @@ make build
 | `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线备份使用前台选择 |
 | `CLUSTERFORGE_CATALOG_REMOTE` | `origin` | Catalog 推送远端 |
 | `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 所在的 fast-forward-only 分支 |
-| `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | Environment Owner 可创建或接入本地私有仓库的受控根目录 |
+| `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | 环境 Owner 可创建或接入本地私有仓库的受控根目录 |
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布合并为一次异步快照的等待窗口 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | 批准执行 Kubernetes 1.17.5 作业时必需；32 字节密钥的 base64 值，仅以 CredentialRef 注入 |
 
-Environment Owner 在环境页面维护非敏感大写环境变量；每次保存都会生成新的
+环境 Owner 在环境页面维护非敏感大写环境变量；每次保存都会生成新的
 Environment Revision。变量会以同名 Ansible extra-vars 注入组件作业，例如
 Playbook 可直接使用 `{{ IMAGE_REGISTRY }}`。变量名与组件参数或 CredentialRef
 冲突时，平台会在创建 Run 前拒绝执行。

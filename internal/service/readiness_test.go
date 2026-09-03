@@ -18,6 +18,7 @@ func readinessTestPlatform(t *testing.T) (*Platform, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	seedPlatformOptionsForServiceTest(t, database)
 	owner := domain.User{ID: "component-owner", Name: "Owner", Role: domain.RoleComponentOwner, CreatedAt: time.Now().UTC()}
 	if err := database.UpsertUser(context.Background(), owner); err != nil {
 		t.Fatal(err)
@@ -90,6 +91,85 @@ func TestClusterForgeMetadataTagsAreNotForwardedToAnsible(t *testing.T) {
 	got := actionRuntimeTags([]string{"install", rollbackSelfVerifyTag, "network"})
 	if len(got) != 2 || got[0] != "install" || got[1] != "network" {
 		t.Fatalf("runtime tags=%v", got)
+	}
+}
+
+func TestReleaseReadinessRequiresEvidenceForEveryRuntimeVersionPair(t *testing.T) {
+	ctx := context.Background()
+	platform, database := readinessTestPlatform(t)
+	environmentOwner := domain.User{ID: "environment-owner", Name: "Environment Owner", Role: domain.RoleEnvironmentOwner, CreatedAt: time.Now().UTC()}
+	if err := database.UpsertUser(ctx, environmentOwner); err != nil {
+		t.Fatal(err)
+	}
+	release := domain.ComponentRelease{
+		ID: "release-runtime-matrix", ComponentID: "component-1", LineID: "line-runtime-matrix", LineName: "Runtime matrix",
+		Version: "1.0.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow,
+		EnvironmentConstraints: map[string]any{"containerRuntime": []any{"docker"}, "containerRuntimeVersion": []any{"docker@20.10.21", "docker@24.0.9"}},
+		Parameters:             []domain.ParameterDefinition{}, CreatedAt: time.Now().UTC(),
+		Actions: []domain.ActionDefinition{
+			{ID: "install", Kind: domain.ActionInstall, Playbook: "install.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
+			{ID: "verify", Kind: domain.ActionVerify, Playbook: "verify.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
+			{ID: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", HostGroup: "test_nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
+		},
+	}
+	if err := database.CreateComponentRelease(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	release, _ = database.GetComponentRelease(ctx, release.ID)
+	digest := componentReleaseSpecDigest(release)
+	environments := map[string]domain.Environment{}
+	for _, version := range []string{"docker@20.10.21", "docker@24.0.9"} {
+		facts := completeServiceTestFacts()
+		facts["containerRuntimeVersion"] = version
+		environment, err := platform.CreateEnvironment(ctx, environmentOwner, domain.Environment{Name: "Environment " + version}, facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		environments[version] = environment
+	}
+	record := func(version, evidence string, action domain.ActionKind) {
+		environment := environments[version]
+		now := time.Now().UTC()
+		run := domain.Run{ID: "run-" + strings.ReplaceAll(version, "@", "-") + "-" + evidence, Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: environmentOwner.ID, EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID, ComponentReleaseID: release.ID, Action: action, InputSnapshot: map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence, "runtimeCompatibility": domain.RuntimeCompatibility{Runtime: "docker", Version: version}}, CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+		if err := database.CreateRun(ctx, run, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record("docker@20.10.21", "install_verify", domain.ActionInstall)
+	record("docker@20.10.21", "rollback_verify", domain.ActionRollback)
+	record("docker@24.0.9", "install_verify", domain.ActionInstall)
+	readiness, err := platform.releaseReadiness(ctx, release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Status != domain.ReadinessBlocked || len(readiness.RuntimeEvidence) != 2 || !readiness.RuntimeEvidence[0].Complete || readiness.RuntimeEvidence[1].Complete {
+		t.Fatalf("partial runtime readiness=%+v", readiness)
+	}
+	if !readinessBlockerCodes(readiness)["runtime_rollback_evidence_missing"] {
+		t.Fatalf("missing runtime rollback blocker: %+v", readiness.Blockers)
+	}
+	record("docker@24.0.9", "rollback_verify", domain.ActionRollback)
+	readiness, err = platform.releaseReadiness(ctx, release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Status != domain.ReadinessReady || len(readiness.RuntimeEvidence) != 2 || !readiness.RuntimeEvidence[0].Complete || !readiness.RuntimeEvidence[1].Complete {
+		t.Fatalf("complete runtime readiness=%+v", readiness)
+	}
+}
+
+func TestRuntimeConstraintRejectsMissingAndCrossParentVersions(t *testing.T) {
+	platform, _ := readinessTestPlatform(t)
+	ctx := context.Background()
+	for name, constraints := range map[string]map[string]any{
+		"missing version": {"containerRuntime": []any{"docker"}},
+		"cross parent":    {"containerRuntime": []any{"docker"}, "containerRuntimeVersion": []any{"containerd@2.0.10"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := platform.validateEnvironmentConstraintsCatalog(ctx, constraints); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("error=%v", err)
+			}
+		})
 	}
 }
 

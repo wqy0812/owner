@@ -32,6 +32,10 @@ func (p *Platform) ReadReleasePlaybook(ctx context.Context, user domain.User, re
 	if err != nil {
 		return PlaybookFile{}, err
 	}
+	return p.readReleasePlaybookFile(release, component, relativePath)
+}
+
+func (p *Platform) readReleasePlaybookFile(release domain.ComponentRelease, component domain.Component, relativePath string) (PlaybookFile, error) {
 	clean, resolved, err := p.resolveManagedPlaybookPath(component, release, relativePath, false)
 	if err != nil {
 		return PlaybookFile{}, err

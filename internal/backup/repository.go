@@ -54,7 +54,7 @@ type repositorySelection struct {
 
 type repositoryCommandRunner func(context.Context, string, string, ...string) (string, error)
 
-// RepositoryController owns the Environment Owner workflow for local private
+// RepositoryController owns the 环境 Owner workflow for local private
 // repositories. All user-provided paths are confined to AllowedRoot.
 type RepositoryController struct {
 	mu          sync.Mutex
@@ -264,7 +264,7 @@ func (c *RepositoryController) Connect(ctx context.Context, inputPath string) (R
 }
 
 // Snapshot creates a recovery point in the repository currently selected by
-// the Environment Owner. Holding the controller lock keeps a concurrent
+// the 环境 Owner. Holding the controller lock keeps a concurrent
 // repository reconfiguration from changing the target midway through a backup.
 func (c *RepositoryController) Snapshot(ctx context.Context, reason string) (Manifest, error) {
 	c.mu.Lock()

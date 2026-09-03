@@ -34,12 +34,21 @@ func (s *Store) GetActiveEnvironmentRun(ctx context.Context, environmentID strin
 	return result, err
 }
 
-func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r domain.EnvironmentRevision) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r domain.EnvironmentRevision, writes ...EnvironmentRevisionWrite) error {
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	requireComplete := len(writes) > 0 && writes[0].RequireCompleteFacts
+	if len(writes) > 0 {
+		if err := materializeEnvironmentParametersTx(ctx, tx, &r, writes[0]); err != nil {
+			return err
+		}
+	}
+	if err := validateEnvironmentCatalogTx(ctx, tx, r, domain.EnvironmentRevision{}, false, true, requireComplete); err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO environments(id,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, e.ID, e.Name, e.Description, e.OwnerID, r.ID, timeText(e.CreatedAt), timeText(e.UpdatedAt))
 	if err != nil {
 		return mapSQLError(err)
@@ -86,7 +95,7 @@ func insertEnvironmentLifecycleAudit(ctx context.Context, tx *sql.Tx, audit doma
 // DeleteEnvironment permanently removes only environments that have never
 // been used by a Run or image build and have no current installation baseline.
 func (s *Store) DeleteEnvironment(ctx context.Context, environmentID string, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -118,7 +127,7 @@ func (s *Store) DeleteEnvironment(ctx context.Context, environmentID string, aud
 }
 
 func (s *Store) ArchiveEnvironment(ctx context.Context, environmentID string, archivedAt time.Time, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -150,7 +159,7 @@ func (s *Store) ArchiveEnvironment(ctx context.Context, environmentID string, ar
 }
 
 func (s *Store) UnarchiveEnvironment(ctx context.Context, environmentID string, restoredAt time.Time, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -180,16 +189,49 @@ func insertEnvironmentRevision(ctx context.Context, tx *sql.Tx, r domain.Environ
 	if inventory == "" {
 		inventory = "{}"
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Variables), jsonText(r.CredentialRefs), r.CreatedBy, r.ChangeReason, timeText(r.CreatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO environment_revisions(id,environment_id,revision,facts_json,inventory_json,variables_json,parameters_json,credential_refs_json,created_by,change_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.EnvironmentID, r.Revision, jsonText(r.Facts), inventory, jsonText(r.Variables), jsonText(r.Parameters), jsonText(r.CredentialRefs), r.CreatedBy, r.ChangeReason, timeText(r.CreatedAt))
 	return mapSQLError(err)
 }
 
-func (s *Store) CreateEnvironmentRevision(ctx context.Context, r domain.EnvironmentRevision) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) CreateEnvironmentRevision(ctx context.Context, r domain.EnvironmentRevision, writes ...EnvironmentRevisionWrite) error {
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var currentID string
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(current_revision_id,'') FROM environments WHERE id=?", r.EnvironmentID).Scan(&currentID); err != nil {
+		return mapSQLError(err)
+	}
+	var write EnvironmentRevisionWrite
+	if len(writes) > 0 {
+		write = writes[0]
+	}
+	if err := materializeEnvironmentParametersTx(ctx, tx, &r, write); err != nil {
+		return err
+	}
+	if len(writes) > 0 && write.ExpectedCurrentRevisionID != currentID {
+		return fmt.Errorf("%w: environment revision changed; refresh and retry", domain.ErrConflict)
+	}
+	var previous domain.EnvironmentRevision
+	if currentID != "" {
+		previous, err = environmentRevisionTx(ctx, tx, currentID)
+		if err != nil {
+			return err
+		}
+	}
+	if write.RestoreSourceRevisionID != "" {
+		source, err := environmentRevisionTx(ctx, tx, write.RestoreSourceRevisionID)
+		if err != nil {
+			return err
+		}
+		if source.EnvironmentID != r.EnvironmentID || !sameEnvironmentSnapshot(source, r) {
+			return fmt.Errorf("%w: restore must reproduce the retained environment snapshot", domain.ErrConflict)
+		}
+	}
+	if err := validateEnvironmentCatalogTx(ctx, tx, r, previous, write.RestoreSourceRevisionID != "", write.ValidateAllValues, write.RequireCompleteFacts); err != nil {
+		return err
+	}
 	if err = insertEnvironmentRevision(ctx, tx, r); err != nil {
 		return err
 	}
@@ -326,23 +368,24 @@ func (s *Store) ListEnvironments(ctx context.Context, includeArchived ...bool) (
 
 func scanEnvironmentRevision(row scanner) (domain.EnvironmentRevision, error) {
 	var r domain.EnvironmentRevision
-	var facts, inventory, variables, refs, created string
-	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &variables, &refs, &r.CreatedBy, &r.ChangeReason, &created)
+	var facts, inventory, variables, parameters, refs, created string
+	err := row.Scan(&r.ID, &r.EnvironmentID, &r.Revision, &facts, &inventory, &variables, &parameters, &refs, &r.CreatedBy, &r.ChangeReason, &created)
 	r.Facts = decodeJSON(facts, map[string]any{})
 	r.Inventory = []byte(inventory)
 	r.Variables = decodeJSON(variables, map[string]string{})
+	r.Parameters = decodeJSON(parameters, map[string]any{})
 	r.CredentialRefs = decodeJSON(refs, []domain.CredentialRef{})
 	r.CreatedAt = parseTime(created)
 	return r, err
 }
 
 func (s *Store) GetEnvironmentRevision(ctx context.Context, id string) (domain.EnvironmentRevision, error) {
-	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE id=?`, id))
+	r, err := scanEnvironmentRevision(s.db.QueryRowContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,parameters_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListEnvironmentRevisions(ctx context.Context, environmentID string) ([]domain.EnvironmentRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,environment_id,revision,facts_json,inventory_json,variables_json,parameters_json,credential_refs_json,created_by,change_reason,created_at FROM environment_revisions WHERE environment_id=? ORDER BY revision DESC`, environmentID)
 	if err != nil {
 		return nil, err
 	}

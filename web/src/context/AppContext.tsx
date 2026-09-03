@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, eventsURL } from '../api/client';
-import type { Role, User } from '../types/domain';
+import { ROLE_LABELS, type PlatformOptionCategory, type Role, type User } from '../types/domain';
 
 export const DEMO_USERS: User[] = [
-  { id: 'component-alice', name: '林晓 · Runtime', role: 'component_owner', title: '组件 Owner A' },
-  { id: 'component-bob', name: '周工 · Kubernetes', role: 'component_owner', title: '组件 Owner B' },
-  { id: 'scenario-carol', name: '陈晨 · 集群交付', role: 'scenario_owner', title: '场景 Owner' },
-  { id: 'environment-dave', name: '王维 · 基础设施', role: 'environment_owner', title: '环境 Owner' },
+  { id: 'component-alice', name: '林晓', role: 'component_owner' },
+  { id: 'component-bob', name: '周工', role: 'component_owner' },
+  { id: 'scenario-carol', name: '陈晨', role: 'scenario_owner' },
+  { id: 'environment-dave', name: '王维', role: 'environment_owner' },
+  { id: 'platform-admin', name: '赵宁', role: 'platform_admin' },
 ];
 
 interface Toast {
@@ -16,9 +17,9 @@ interface Toast {
   message?: string;
 }
 
-export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench' | 'catalog-repository';
+export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench' | 'catalog-repository' | 'platform-options' | 'environment-parameter-definitions' | 'environment-variable-definitions' | 'environment-parameter-fields';
 
-export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench', 'catalog-repository'];
+export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench', 'catalog-repository', 'platform-options', 'environment-parameter-definitions', 'environment-variable-definitions', 'environment-parameter-fields'];
 
 type RefreshTokens = Record<RefreshTarget, number>;
 
@@ -31,6 +32,9 @@ interface AppContextValue {
   notify: (tone: Toast['tone'], title: string, message?: string) => void;
   refreshTokens: RefreshTokens;
   signalRefresh: (targets?: RefreshTarget | readonly RefreshTarget[]) => void;
+  scheduleRefresh: (targets: RefreshTarget | readonly RefreshTarget[]) => void;
+  platformOptionCategories: PlatformOptionCategory[];
+  platformOptionsLoading: boolean;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -49,6 +53,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessionReady, setSessionReady] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [platformOptionCategories, setPlatformOptionCategories] = useState<PlatformOptionCategory[]>([]);
+  const [platformOptionsLoading, setPlatformOptionsLoading] = useState(true);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [refreshTokens, setRefreshTokens] = useState<RefreshTokens>({
     components: 0,
@@ -58,9 +64,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     notifications: 0,
     workbench: 0,
     'catalog-repository': 0,
+    'platform-options': 0,
+    'environment-parameter-definitions': 0,
+    'environment-variable-definitions': 0,
+    'environment-parameter-fields': 0,
   });
   const pendingRefreshTargets = useRef(new Set<RefreshTarget>());
   const refreshTimer = useRef<number>();
+  const platformOptionsLoaded = useRef(false);
   const sessionInitialization = useRef<Promise<{ user: User; users: User[]; switched: boolean }>>();
 
   const notify = useCallback((tone: Toast['tone'], title: string, message?: string) => {
@@ -90,6 +101,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, 400);
   }, [signalRefresh]);
 
+  useEffect(() => {
+    if (!sessionReady) return;
+    const controller = new AbortController();
+    setPlatformOptionsLoading(!platformOptionsLoaded.current);
+    void api.platformOptionCategories(controller.signal)
+      .then((categories) => {
+        platformOptionsLoaded.current = true;
+        setPlatformOptionCategories(categories);
+      })
+      .catch((error) => { if (!(error instanceof DOMException && error.name === 'AbortError')) notify('error', '加载平台选项失败', displayError(error)); })
+      .finally(() => { if (!controller.signal.aborted) setPlatformOptionsLoading(false); });
+    return () => controller.abort();
+  }, [notify, refreshTokens['platform-options'], sessionReady, user.id]);
+
   const switchUser = useCallback(
     async (id: string) => {
       const fallback = users.find((item) => item.id === id);
@@ -99,7 +124,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const next = await api.switchUser(id);
         setUser({ ...fallback, ...next });
         signalRefresh();
-        notify('success', '身份已切换', `当前以${fallback.title}身份浏览。`);
+        notify('success', '身份已切换', `当前以${ROLE_LABELS[fallback.role]} · ${fallback.name}身份浏览。`);
       } catch (error) {
         notify('error', '身份切换失败', displayError(error));
       } finally {
@@ -113,7 +138,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let active = true;
     if (!sessionInitialization.current) sessionInitialization.current = (async () => {
       const availableUsers = await api.sessionUsers()
-        .then((items) => items.length ? items.map((item) => ({ ...DEMO_USERS.find((candidate) => candidate.id === item.id), ...item })) : DEMO_USERS)
+        .then((items) => items.length ? items.map((item) => { const demo = DEMO_USERS.find((candidate) => candidate.id === item.id); return { ...demo, ...item }; }) : DEMO_USERS)
         .catch(() => DEMO_USERS);
       try {
         return { user: await api.me(), users: availableUsers, switched: false };
@@ -156,6 +181,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['run.updated', () => scheduleRefresh(['components', 'runs', 'environments', 'scenarios', 'workbench'])],
       ['approval.updated', () => scheduleRefresh(['runs', 'workbench'])],
       ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
+      ['component_release.review_updated', () => scheduleRefresh(['components', 'workbench'])],
       ['component_release.deprecated', () => scheduleRefresh(['components', 'workbench'])],
       ['component_release.restored', () => scheduleRefresh(['components', 'workbench'])],
       ['component_release.deleted', () => scheduleRefresh(['components', 'workbench'])],
@@ -165,6 +191,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['environment.deleted', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.archived', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.unarchived', () => scheduleRefresh(['environments', 'workbench'])],
+      ['platform_options.updated', () => scheduleRefresh(['platform-options', 'components', 'environments', 'scenarios'])],
+      ['platform_parameters.updated', () => scheduleRefresh(['environment-parameter-definitions', 'environment-variable-definitions', 'environment-parameter-fields'])],
     ];
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {
@@ -179,8 +207,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [scheduleRefresh, sessionReady, user.id]);
 
   const value = useMemo(
-    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh }),
-    [connected, notify, refreshTokens, signalRefresh, switchUser, switching, user, users],
+    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh, scheduleRefresh, platformOptionCategories, platformOptionsLoading }),
+    [connected, notify, platformOptionCategories, platformOptionsLoading, refreshTokens, scheduleRefresh, signalRefresh, switchUser, switching, user, users],
   );
 
   return (

@@ -12,7 +12,7 @@ function document(reference?: string, declared = false): EnvironmentExportDocume
     containsCredentialReferences: declared,
     source: { environmentId: 'environment-source', environmentName: 'Source', revisionId: 'revision-source', revision: 1 },
     snapshot: {
-      facts: {}, hosts: [], variables: {},
+      facts: {}, hosts: [], parameters: {}, variables: {},
       credentialRefs: [{ name: 'SSH_KEY', kind: 'envVarRef', reference }],
     },
   };
@@ -26,10 +26,10 @@ describe('environment import credential confirmation', () => {
 });
 
 describe('environment import preview response', () => {
-  const planResponse = (warnings: unknown) => new Response(JSON.stringify({
+  const planResponse = (warnings: unknown, parameterCount: unknown = 0) => new Response(JSON.stringify({
     data: {
       planDigest: 'plan-1', targetKind: 'new', nextRevision: 1,
-      hostCount: 0, variableCount: 0, credentialRefCount: 0,
+      hostCount: 0, variableCount: 0, parameterCount, credentialRefCount: 0,
       changes: ['创建新环境'], warnings,
     },
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -43,12 +43,23 @@ describe('environment import preview response', () => {
       document: document(undefined, false),
       target: { kind: 'new', name: 'Imported Environment' },
       changeReason: '导入环境',
-    })).resolves.toMatchObject({ warnings: [] });
+    })).resolves.toMatchObject({ warnings: [], parameterCount: 0 });
 
     await expect(api.previewEnvironmentImport({
       document: document(undefined, false),
       target: { kind: 'new', name: 'Imported Environment' },
       changeReason: '导入环境',
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('validates and preserves the parameter count', async () => {
+    const input = { document: document(), target: { kind: 'new' as const, name: 'Imported' }, changeReason: 'Import settings' };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(planResponse([], 3))
+      .mockResolvedValueOnce(planResponse([], null))
+      .mockResolvedValueOnce(planResponse([], '3')));
+    await expect(api.previewEnvironmentImport(input)).resolves.toMatchObject({ parameterCount: 3 });
+    await expect(api.previewEnvironmentImport(input)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    await expect(api.previewEnvironmentImport(input)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
 });

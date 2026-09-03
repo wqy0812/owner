@@ -65,15 +65,14 @@ var openFuyaoEnvironmentPaths = map[string]string{
 	"certOutputFile":               "certificates.output_file",
 	"cert_config":                  "certificates.config_path",
 	"CERT_EXPIRY_TIME":             "certificates.expiry",
-	"addon_params":                 "addon_params",
 }
 
 var openFuyaoParameterDefs = map[string]domain.ParameterDefinition{
-	"cluster_id":        {Name: "cluster_id", Description: "集群标识", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, MinLength: 1},
-	"cluster_role":      {Name: "cluster_role", Description: "集群角色", Type: domain.ParameterTypeString, Required: false, DefaultValue: "manager", Visibility: domain.ParameterInternal, Enum: []any{"manager", "work"}},
-	"strategy":          {Name: "strategy", Description: "网络策略", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Enum: []any{"StatefulFlatNetworkStrategy", "StatelessPortMappingStrategy", "StatelessFlatNetworkStrategy"}},
-	"target_host_group": {Name: "target_host_group", Description: "目标主机组", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Enum: []any{"bootstrap_host", "management_cluster_k8smaster", "work_cluster_k8smaster", "work_cluster_k8snode"}},
-	"addon_params":      {Name: "addon_params", Description: "插件参数", Type: domain.ParameterTypeObject, Required: true, Visibility: domain.ParameterInternal},
+	"cluster_id":        {Name: "cluster_id", Description: "集群标识", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner, MinLength: 1},
+	"cluster_role":      {Name: "cluster_role", Description: "集群角色", Type: domain.ParameterTypeString, Required: false, SuggestedValue: "manager", TestValue: "manager", Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner, Enum: []any{"manager", "work"}},
+	"strategy":          {Name: "strategy", Description: "网络策略", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner, Enum: []any{"StatefulFlatNetworkStrategy", "StatelessPortMappingStrategy", "StatelessFlatNetworkStrategy"}},
+	"target_host_group": {Name: "target_host_group", Description: "目标主机组", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner, Enum: []any{"bootstrap_host", "management_cluster_k8smaster", "work_cluster_k8smaster", "work_cluster_k8snode"}},
+	"addon_params":      {Name: "addon_params", Description: "插件参数", Type: domain.ParameterTypeObject, Required: true, Visibility: domain.ParameterInternal, Modifiable: false, ValueProvider: domain.ParameterProviderComponentOwner, FixedValue: openFuyaoDefaultParameters()["addon_params"]},
 }
 
 var openFuyaoStringParameters = []string{
@@ -99,19 +98,20 @@ func init() {
 	for _, name := range openFuyaoStringParameters {
 		openFuyaoParameterDefs[name] = domain.ParameterDefinition{
 			Name: name, Description: name, Type: domain.ParameterTypeString, Required: true,
-			Visibility: domain.ParameterInternal, MinLength: 1,
+			Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner, MinLength: 1,
 		}
 	}
 	for _, name := range openFuyaoIntegerParameters {
 		openFuyaoParameterDefs[name] = domain.ParameterDefinition{
 			Name: name, Description: name, Type: domain.ParameterTypeInteger, Required: true,
-			Visibility: domain.ParameterInternal,
+			Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner,
 		}
 	}
 	for name, path := range openFuyaoEnvironmentPaths {
 		if definition, ok := openFuyaoParameterDefs[name]; ok {
 			if value, found := seedParameterValue(openFuyaoDefaultParameters(), path); found {
-				definition.DefaultValue = value
+				definition.SuggestedValue = value
+				definition.TestValue = value
 				definition.Required = false
 			}
 			openFuyaoParameterDefs[name] = definition
@@ -147,7 +147,8 @@ func openFuyaoParameterDefault(parameters []domain.ParameterDefinition, key stri
 		if parameters[i].Name != key {
 			continue
 		}
-		parameters[i].DefaultValue = value
+		parameters[i].SuggestedValue = value
+		parameters[i].TestValue = value
 		parameters[i].Required = false
 	}
 	return parameters
@@ -155,11 +156,11 @@ func openFuyaoParameterDefault(parameters []domain.ParameterDefinition, key stri
 
 func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComponent {
 	type spec struct {
-		id, slug, name, owner, group string
-		parameters                   []string
-		credentials                  []string
-		tags                         []string
-		dependencies                 []domain.ComponentDependency
+		id, slug, variant, name, owner, group string
+		parameters                            []string
+		credentials                           []string
+		tags                                  []string
+		dependencies                          []domain.ComponentDependency
 	}
 	specs := []spec{
 		{id: "component-bke-cert", slug: "bke-cert", name: "BKE Certificates", owner: ComponentOwnerRuntimeID, group: "bootstrap_host",
@@ -169,9 +170,14 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-cert", UpstreamReleaseID: "release-bke-cert-25.12", Purpose: "management cluster certificate bootstrap"}}},
 		{id: "component-bke-common", slug: "bke-common", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_PORT"}, credentials: openFuyaoRegistryCredentials, tags: []string{"image_plugin", "ins"}},
+		{id: "component-bke-common", slug: "bke-common", variant: "work", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "work_cluster_k8smaster",
+			parameters: []string{"target_host_group", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_PORT"}, credentials: openFuyaoRegistryCredentials, tags: []string{"image_plugin", "ins"}},
 		{id: "component-bke-addon", slug: "bke-addon", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "strategy", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "chart_museum_url", "helm_repo_name", "addon_params"}, credentials: openFuyaoRepositoryCredentials, tags: []string{"init"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-25.12", Purpose: "image credential provider and cluster logging"}}},
+		{id: "component-bke-addon", slug: "bke-addon", variant: "work", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "work_cluster_k8smaster",
+			parameters: []string{"target_host_group", "strategy", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "chart_museum_url", "helm_repo_name", "addon_params"}, credentials: openFuyaoRepositoryCredentials, tags: []string{"init"},
+			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-work-25.12", Purpose: "work-cluster image credential provider and cluster logging"}}},
 		{id: "component-bke-master", slug: "bke-master", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{
 				"cluster_id", "cluster_role", "target_host_group", "strategy", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS",
@@ -184,40 +190,63 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 				"bkeagent_deployer_tag", "IP_MOD_VERSION", "certOutputPath", "certOutputFile", "addon_params",
 			}, credentials: openFuyaoRegistryCredentials, tags: []string{"rcv", "ins"},
 			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-25.12", Purpose: "cluster manifests and chart repository preparation"}}},
+		{id: "component-bke-master", slug: "bke-master", variant: "work", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "work_cluster_k8smaster",
+			parameters: []string{
+				"cluster_id", "cluster_role", "target_host_group", "strategy", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS",
+				"ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_IP", "ENV_DOCKER_HARBOR_PORT", "ENV_DOCKER_HARBOR_PORJECT",
+				"ENV_FILESTATION_DOMAIN", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_FILESTATION_PREFIX", "ENV_FILESTATION_URL", "ENV_CHART_REPO_PORT",
+				"SERVICE_IP_RANGE_IPV4", "CLUSTER_IP_RANGE_IPV4", "CLUSTER_IP_RANGE_IPV6",
+				"CLUSTER_DNS_SVC_IP", "PORTMAP_HOST_PORT_MIN", "PORTMAP_HOST_PORT_MAX", "openFuyao_version", "kubernetes_version",
+				"etcd_version", "containerd_version", "calico_version", "coredns_version", "kubeproxy_version", "openstack_vlan_version",
+				"redis_operator_version", "harbor_secret_version", "pause_tag", "cluster_api_version", "bkeagent_deployer_version",
+				"bkeagent_deployer_tag", "IP_MOD_VERSION", "certOutputPath", "certOutputFile", "addon_params",
+			}, credentials: openFuyaoRegistryCredentials, tags: []string{"rcv", "ins"},
+			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-work-25.12", Purpose: "work-cluster manifests and chart repository preparation"}}},
 		{id: "component-bke-nodes", slug: "bke-nodes", name: "BKE Work Nodes", owner: ComponentOwnerK8sID, group: "work_cluster_k8snode",
 			parameters: []string{"cluster_id", "cluster_role", "target_host_group", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS", "ENV_FILESTATION_URL", "NET_IPV4_IP_LOCAL_PORT_RANGE"}, credentials: openFuyaoSSHCredentials, tags: []string{"image_plugin", "rcv", "ins"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-master", UpstreamReleaseID: "release-bke-master-25.12", Purpose: "ready work-cluster control plane"}}},
+			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-master", UpstreamReleaseID: "release-bke-master-work-25.12", Purpose: "ready work-cluster control plane"}}},
 	}
 
 	items := make([]seededComponent, 0, len(specs))
 	for _, item := range specs {
-		releaseID := "release-" + item.slug + "-25.12"
+		contractKey := item.slug
+		if item.variant != "" {
+			contractKey += "-" + item.variant
+		}
+		releaseID := "release-" + contractKey + "-25.12"
+		version := "v25.12"
+		if item.variant != "" {
+			version += "-" + item.variant
+		}
 		parameters := openFuyaoParameterDefault(openFuyaoParameters(item.parameters...), "target_host_group", item.group)
-		if item.slug == "bke-nodes" {
+		if item.slug == "bke-nodes" || (item.variant == "work" && item.slug == "bke-master") {
 			parameters = openFuyaoParameterDefault(parameters, "cluster_role", "work")
 			parameters = openFuyaoParameterDefault(parameters, "cluster_id", openFuyaoWorkClusterID)
+		} else if item.slug == "bke-master" {
+			parameters = openFuyaoParameterDefault(parameters, "cluster_role", "manager")
+			parameters = openFuyaoParameterDefault(parameters, "cluster_id", openFuyaoManagementClusterID)
 		}
 		release := domain.ComponentRelease{
-			ID: releaseID, ComponentID: item.id, Version: "v25.12", Status: domain.ReleaseReleased,
+			ID: releaseID, ComponentID: item.id, Version: version, Status: domain.ReleaseReleased,
 			ReleaseNotes: "OpenFuyao v25.12 作业快照的平台变量契约；真实介质和目标环境尚未验真。",
 			RiskLevel:    domain.RiskDestructive, EnvironmentConstraints: constraints,
 			Parameters: parameters, Dependencies: item.dependencies,
 			Actions: []domain.ActionDefinition{{
-				ID: "action-" + item.slug + "-install", ReleaseID: releaseID,
+				ID: "action-" + contractKey + "-install", ReleaseID: releaseID,
 				Name: "OpenFuyao " + item.slug + " install", Kind: domain.ActionInstall,
 				Playbook: "openfuyao/component-" + item.slug + ".platform.yml", Tags: item.tags,
-				Limit: item.group, HostGroup: item.group, RequiredCredentials: append([]string(nil), item.credentials...),
+				HostGroup: item.group, RequiredCredentials: append([]string(nil), item.credentials...),
 				TimeoutSeconds: 3600, RiskLevel: domain.RiskDestructive, Destructive: true,
 			}}, CreatedAt: now, ReleasedAt: ptr(now),
 		}
 		for i := range release.Dependencies {
-			release.Dependencies[i].ID = fmt.Sprintf("dependency-%s-%d", item.slug, i+1)
+			release.Dependencies[i].ID = fmt.Sprintf("dependency-%s-%d", contractKey, i+1)
 			release.Dependencies[i].ReleaseID = releaseID
 		}
 		if item.slug == "bke-master" {
 			release.Actions = append(release.Actions, domain.ActionDefinition{
-				ID: "action-bke-master-verify", ReleaseID: releaseID, Name: "Verify BKE cluster readiness", Kind: domain.ActionVerify,
-				Playbook: "openfuyao/component-bke-master-verify.platform.yml", Limit: item.group, HostGroup: item.group,
+				ID: "action-" + contractKey + "-verify", ReleaseID: releaseID, Name: "Verify BKE cluster readiness", Kind: domain.ActionVerify,
+				Playbook: "openfuyao/component-bke-master-verify.platform.yml", HostGroup: item.group,
 				RequiredCredentials: openFuyaoSSHCredentials, TimeoutSeconds: 300, RiskLevel: domain.RiskLow,
 			})
 		}
@@ -227,20 +256,50 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 	return items
 }
 
-func openFuyaoNode(id, name, releaseID, group, role, clusterPath string, action domain.ActionKind, x float64) domain.ScenarioNode {
-	values := map[string]any{"target_host_group": group}
-	if role != "" {
+func openFuyaoNode(id, name, releaseID, targetHostGroup, role, clusterPath string, action domain.ActionKind, x float64) domain.ScenarioNode {
+	hostGroup := openFuyaoHostGroup(releaseID)
+	values := map[string]any{"target_host_group": targetHostGroup}
+	if role != "" && openFuyaoScenarioParameterSupported(releaseID, "cluster_role") {
 		values["cluster_role"] = role
 	}
-	if clusterPath != "" {
+	if clusterPath != "" && openFuyaoScenarioParameterSupported(releaseID, "cluster_id") {
 		if value, ok := seedParameterValue(openFuyaoDefaultParameters(), clusterPath); ok {
 			values["cluster_id"] = value
 		}
 	}
 	return domain.ScenarioNode{
-		ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: group,
-		Values: values, RunInputs: []string{},
-		Position: domain.GraphPosition{X: x, Y: 100}, Destructive: action != domain.ActionVerify,
+		ID: id, Name: name, ReleaseID: releaseID, Action: action, HostGroup: hostGroup,
+		ParameterValues: values,
+		Position:        domain.GraphPosition{X: x, Y: 100}, Destructive: action != domain.ActionVerify,
+	}
+}
+
+func openFuyaoScenarioParameterSupported(releaseID, name string) bool {
+	if name == "target_host_group" {
+		return true
+	}
+	switch releaseID {
+	case "release-bke-cert-25.12", "release-bke-bootstrap-25.12":
+		return name == "cluster_id"
+	case "release-bke-master-25.12", "release-bke-master-work-25.12", "release-bke-nodes-25.12":
+		return name == "cluster_id" || name == "cluster_role"
+	default:
+		return false
+	}
+}
+
+func openFuyaoHostGroup(releaseID string) string {
+	switch releaseID {
+	case "release-bke-cert-25.12", "release-bke-bootstrap-25.12":
+		return "bootstrap_host"
+	case "release-bke-common-25.12", "release-bke-addon-25.12", "release-bke-master-25.12":
+		return "management_cluster_k8smaster"
+	case "release-bke-common-work-25.12", "release-bke-addon-work-25.12", "release-bke-master-work-25.12":
+		return "work_cluster_k8smaster"
+	case "release-bke-nodes-25.12":
+		return "work_cluster_k8snode"
+	default:
+		return ""
 	}
 }
 
@@ -262,12 +321,12 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 	}
 	workNodes := []domain.ScenarioNode{
 		openFuyaoNode("open-work-cert", "Work Cluster Certificates", "release-bke-cert-25.12", "management_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 40),
-		openFuyaoNode("open-work-common", "Work Cluster Common", "release-bke-common-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 300),
-		openFuyaoNode("open-work-addon", "Work Cluster Addons", "release-bke-addon-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 560),
-		openFuyaoNode("open-work-master", "Work Cluster Control Plane", "release-bke-master-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 820),
+		openFuyaoNode("open-work-common", "Work Cluster Common", "release-bke-common-work-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 300),
+		openFuyaoNode("open-work-addon", "Work Cluster Addons", "release-bke-addon-work-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 560),
+		openFuyaoNode("open-work-master", "Work Cluster Control Plane", "release-bke-master-work-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionInstall, 820),
 	}
 	enrollmentNodes := []domain.ScenarioNode{
-		openFuyaoNode("open-work-ready", "Verify Work Cluster", "release-bke-master-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionVerify, 40),
+		openFuyaoNode("open-work-ready", "Verify Work Cluster", "release-bke-master-work-25.12", "work_cluster_k8smaster", "work", "operation.work_cluster_id", domain.ActionVerify, 40),
 		openFuyaoNode("open-work-nodes", "Enroll Work Nodes", "release-bke-nodes-25.12", "work_cluster_k8snode", "work", "operation.work_cluster_id", domain.ActionInstall, 300),
 	}
 
@@ -355,6 +414,6 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 	}
 	sort.Slice(credentialRefs, func(i, j int) bool { return credentialRefs[i].Name < credentialRefs[j].Name })
 	environment := domain.Environment{ID: "environment-openfuyao-template", Name: "OpenFuyao Preflight Template", Description: "包含管理集群、业务控制面和业务节点的 TEST-NET 脱敏模板；不会连接真实基础设施。", OwnerID: EnvironmentOwnerID, CreatedAt: now, UpdatedAt: now}
-	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "Kylin", "ipFamily": "IPv4", "templateOnly": true}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
+	revision := domain.EnvironmentRevision{ID: "environment-openfuyao-template-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64", "operatingSystem": "Kylin", "ipFamily": "IPv4"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.invalid", "FILE_STATION": "192.0.2.70:443"}, CredentialRefs: credentialRefs, CreatedBy: EnvironmentOwnerID, ChangeReason: "初始化首版测试环境模板", CreatedAt: now}
 	return s.createEnvironmentIfMissing(ctx, environment, revision)
 }

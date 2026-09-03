@@ -202,6 +202,8 @@ func (s *Store) CanViewRun(ctx context.Context, viewer domain.User, runID string
 SELECT EXISTS (
   SELECT 1 FROM runs r
   WHERE r.id=? AND (
+	?='platform_admin'
+	OR
     r.requested_by=?
     OR (?='environment_owner' AND EXISTS (
       SELECT 1 FROM environments e WHERE e.id=r.environment_id AND e.owner_id=?
@@ -223,7 +225,7 @@ SELECT EXISTS (
       WHERE sr.id=r.scenario_revision_id AND s.owner_id=?
     ))
   )
-)`, runID, viewer.ID,
+)`, runID, viewer.Role, viewer.ID,
 		viewer.Role, viewer.ID,
 		viewer.Role, viewer.ID, viewer.ID,
 		viewer.Role, viewer.ID,
@@ -498,17 +500,26 @@ SELECT EXISTS(
 }
 
 func (s *Store) SuccessfulComponentEvidenceRunIDs(ctx context.Context, releaseID, releaseSpecDigest string) (string, string, error) {
+	return s.successfulComponentEvidenceRunIDs(ctx, releaseID, releaseSpecDigest, "", "")
+}
+
+func (s *Store) SuccessfulComponentEvidenceRunIDsForRuntime(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, string, error) {
+	return s.successfulComponentEvidenceRunIDs(ctx, releaseID, releaseSpecDigest, runtime, version)
+}
+
+func (s *Store) successfulComponentEvidenceRunIDs(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, string, error) {
 	lookup := func(evidence string) (string, error) {
 		var id string
 		err := s.db.QueryRowContext(ctx, `
 SELECT id FROM runs
 WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
   AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
+  AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
   AND CASE
     WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json, '$.componentTestEvidence') IN ('rollback_verify','rollback_self_verify')
     ELSE json_extract(input_snapshot_json, '$.componentTestEvidence')=?
   END
-ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, evidence, evidence).Scan(&id)
+ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, runtime, runtime, version, evidence, evidence).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
@@ -523,12 +534,21 @@ ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, relea
 }
 
 func (s *Store) SuccessfulComponentEvolutionEvidenceRunID(ctx context.Context, releaseID, releaseSpecDigest string) (string, error) {
+	return s.successfulComponentEvolutionEvidenceRunID(ctx, releaseID, releaseSpecDigest, "", "")
+}
+
+func (s *Store) SuccessfulComponentEvolutionEvidenceRunIDForRuntime(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, error) {
+	return s.successfulComponentEvolutionEvidenceRunID(ctx, releaseID, releaseSpecDigest, runtime, version)
+}
+
+func (s *Store) successfulComponentEvolutionEvidenceRunID(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, error) {
 	var id string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM runs
 WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
   AND json_extract(input_snapshot_json,'$.componentReleaseSpecDigest')=?
+  AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
   AND json_extract(input_snapshot_json,'$.componentTestEvidence')='evolution_round_trip'
-ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC LIMIT 1`, releaseID, releaseSpecDigest).Scan(&id)
+ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, runtime, runtime, version).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

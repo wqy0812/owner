@@ -52,7 +52,44 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	}
 
 	digest := componentReleaseSpecDigest(release)
-	if release.ParentReleaseID != "" {
+	runtimePairs, pairsErr := p.releaseRuntimeCompatibility(ctx, release)
+	if pairsErr != nil {
+		add("release_runtime_matrix_invalid", pairsErr.Error(), "contract")
+	}
+	if len(runtimePairs) > 0 {
+		for _, pair := range runtimePairs {
+			evidence := domain.RuntimeEvidence{Runtime: pair.Runtime, Version: pair.Version}
+			if release.ParentReleaseID != "" {
+				id, err := p.store.SuccessfulComponentEvolutionEvidenceRunIDForRuntime(ctx, release.ID, digest, pair.Runtime, pair.Version)
+				if err != nil {
+					return result, err
+				}
+				evidence.TransitionEvidenceRunID, evidence.Complete = id, id != ""
+				if id == "" {
+					add("runtime_evolution_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少升级闭环证据", pair.Runtime, pair.Version), "validate")
+				}
+			} else {
+				installID, rollbackID, err := p.store.SuccessfulComponentEvidenceRunIDsForRuntime(ctx, release.ID, digest, pair.Runtime, pair.Version)
+				if err != nil {
+					return result, err
+				}
+				evidence.InstallEvidenceRunID, evidence.RollbackEvidenceRunID = installID, rollbackID
+				evidence.Complete = installID != "" && rollbackID != ""
+				if installID == "" {
+					add("runtime_install_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少安装及 Verify 证据", pair.Runtime, pair.Version), "validate")
+				}
+				if rollbackID == "" {
+					add("runtime_rollback_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少回滚及验证证据", pair.Runtime, pair.Version), "validate")
+				}
+			}
+			result.RuntimeEvidence = append(result.RuntimeEvidence, evidence)
+		}
+		if len(result.RuntimeEvidence) == 1 {
+			result.InstallEvidenceRunID = result.RuntimeEvidence[0].InstallEvidenceRunID
+			result.RollbackEvidenceRunID = result.RuntimeEvidence[0].RollbackEvidenceRunID
+			result.TransitionEvidenceRunID = result.RuntimeEvidence[0].TransitionEvidenceRunID
+		}
+	} else if release.ParentReleaseID != "" {
 		transitionID, err := p.store.SuccessfulComponentEvolutionEvidenceRunID(ctx, release.ID, digest)
 		if err != nil {
 			return result, err
@@ -112,6 +149,41 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	}
 	memo[release.ID] = result
 	return result, nil
+}
+
+func (p *Platform) releaseRuntimeCompatibility(ctx context.Context, release domain.ComponentRelease) ([]domain.RuntimeCompatibility, error) {
+	lookup, err := p.platformOptionLookup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runtimeCategory, runtimeOK := lookup.Dimensions["containerRuntime"]
+	versionCategory, versionOK := lookup.Dimensions["containerRuntimeVersion"]
+	if !runtimeOK || !versionOK {
+		return nil, nil
+	}
+	runtimeValues := constraintValues(release.EnvironmentConstraints[runtimeCategory.Key])
+	versionValues := constraintValues(release.EnvironmentConstraints[versionCategory.Key])
+	if len(runtimeValues) == 0 && len(versionValues) == 0 {
+		return nil, nil
+	}
+	selected := map[string]bool{}
+	for _, value := range runtimeValues {
+		option, ok := platformCategoryOption(runtimeCategory, value)
+		if !ok {
+			return nil, fmt.Errorf("unknown container runtime %q", value)
+		}
+		selected[option.ID] = true
+	}
+	pairs := make([]domain.RuntimeCompatibility, 0, len(versionValues))
+	for _, value := range versionValues {
+		option, ok := platformCategoryOption(versionCategory, value)
+		if !ok || !selected[option.ParentOptionID] {
+			return nil, fmt.Errorf("runtime version %q is not linked to a selected runtime", value)
+		}
+		parent := lookup.OptionsByID[option.ParentOptionID]
+		pairs = append(pairs, domain.RuntimeCompatibility{Runtime: parent.Value, Version: option.Value})
+	}
+	return pairs, nil
 }
 
 func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {

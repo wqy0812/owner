@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Store) CreateScenario(ctx context.Context, sc domain.Scenario, rev domain.ScenarioRevision) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ WHERE sr.scenario_id=?`, scenarioID).Scan(&impact.RunCount); err != nil {
 // The audit event is committed in the same transaction so this destructive
 // action cannot succeed without leaving a retained record.
 func (s *Store) DeleteScenario(ctx context.Context, scenarioID string, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -89,12 +89,6 @@ WHERE sr.scenario_id=?`, scenarioID).Scan(&runs); err != nil {
 		return fmt.Errorf("%w: scenario run history must be retained", domain.ErrConflict)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-DELETE FROM run_input_presets
-WHERE resource_type='scenario_revision'
-AND resource_id IN (SELECT id FROM scenario_revisions WHERE scenario_id=?)`, scenarioID); err != nil {
-		return err
-	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM scenarios WHERE id=?`, scenarioID)
 	if err != nil {
 		return mapSQLError(err)
@@ -109,6 +103,9 @@ AND resource_id IN (SELECT id FROM scenario_revisions WHERE scenario_id=?)`, sce
 }
 
 func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRevision) error {
+	if err := validateScenarioCatalogTx(ctx, tx, r.Graph, domain.ScenarioGraph{}); err != nil {
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
 	return mapSQLError(err)
 }
@@ -122,7 +119,7 @@ func (s *Store) CreateScenarioRevision(ctx context.Context, r domain.ScenarioRev
 // slot, so cloning it first retains the immutable record as an abandoned
 // historical revision while preserving test_passed_at and its Run links.
 func (s *Store) CreateScenarioRevisionFromSource(ctx context.Context, sourceRevisionID string, r domain.ScenarioRevision) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -194,7 +191,7 @@ func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain
 	if viewer.Role == domain.RoleScenarioOwner {
 		q += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM scenario_revisions r WHERE r.scenario_id=scenarios.id AND r.status='released')`
 		args = append(args, viewer.ID)
-	} else {
+	} else if viewer.Role != domain.RolePlatformAdmin {
 		q += ` WHERE EXISTS (SELECT 1 FROM scenario_revisions r WHERE r.scenario_id=scenarios.id AND r.status='released')`
 	}
 	q += ` ORDER BY name`
@@ -223,7 +220,7 @@ func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain
 		return nil, err
 	}
 	for i := range out {
-		releasedOnly := viewer.Role != domain.RoleScenarioOwner || out[i].OwnerID != viewer.ID
+		releasedOnly := viewer.Role != domain.RolePlatformAdmin && (viewer.Role != domain.RoleScenarioOwner || out[i].OwnerID != viewer.ID)
 		out[i].Revisions, err = s.ListScenarioRevisions(ctx, out[i].ID, releasedOnly)
 		if err != nil {
 			return nil, err
@@ -324,7 +321,20 @@ func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, re
 }
 
 func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.ScenarioGraph) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), id)
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var raw string
+	if err := tx.QueryRowContext(ctx, "SELECT graph_json FROM scenario_revisions WHERE id=?", id).Scan(&raw); err != nil {
+		return mapSQLError(err)
+	}
+	previous := decodeJSON(raw, domain.ScenarioGraph{})
+	if err := validateScenarioCatalogTx(ctx, tx, g, previous); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), id)
 	if err != nil {
 		return err
 	}
@@ -332,7 +342,7 @@ func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.Scena
 	if n == 0 {
 		return fmt.Errorf("%w: released revisions are immutable", domain.ErrConflict)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from []domain.RevisionStatus, to domain.RevisionStatus, at time.Time) error {
@@ -368,7 +378,7 @@ func (s *Store) SetScenarioRevisionStatus(ctx context.Context, id string, from [
 }
 
 func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -388,7 +398,7 @@ func (s *Store) DeprecateScenarioRevision(ctx context.Context, id string, at tim
 }
 
 func (s *Store) AbandonScenarioRevision(ctx context.Context, id string, at time.Time) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return "", err
 	}

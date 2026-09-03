@@ -68,12 +68,13 @@ func maintenanceTestPlatform(t *testing.T) (*Platform, domain.User, domain.Envir
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	seedPlatformOptionsForServiceTest(t, database)
 	owner := domain.User{ID: "environment-owner", Name: "Environment Owner", Role: domain.RoleEnvironmentOwner, CreatedAt: time.Now().UTC()}
 	if err := database.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{{Name: "node-1", Address: "127.0.0.1", Port: 22, Groups: []string{"all"}}}})
-	revision := domain.EnvironmentRevision{ID: "environment-r1", EnvironmentID: "environment-1", Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.invalid:5000"}, CredentialRefs: []domain.CredentialRef{}, CreatedBy: owner.ID, ChangeReason: "创建环境", CreatedAt: time.Now().UTC()}
+	revision := domain.EnvironmentRevision{ID: "environment-r1", EnvironmentID: "environment-1", Revision: 1, Facts: completeServiceTestFacts(), Inventory: inventory, Variables: map[string]string{"IMAGE_REGISTRY": "registry.invalid:5000"}, CredentialRefs: []domain.CredentialRef{}, CreatedBy: owner.ID, ChangeReason: "创建环境", CreatedAt: time.Now().UTC()}
 	environment := domain.Environment{ID: "environment-1", Name: "Lab", OwnerID: owner.ID, CurrentRevisionID: revision.ID, Revision: &revision, CreatedAt: revision.CreatedAt, UpdatedAt: revision.CreatedAt}
 	if err := database.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)

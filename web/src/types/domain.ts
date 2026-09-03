@@ -1,10 +1,43 @@
-export type Role = 'component_owner' | 'scenario_owner' | 'environment_owner';
+export type Role = 'component_owner' | 'scenario_owner' | 'environment_owner' | 'platform_admin';
+
+export interface PlatformOptionUsage {
+  componentReleases: number;
+  scenarioRevisions: number;
+  environmentRevisions: number;
+}
+
+export interface PlatformOption {
+  id: string;
+  categoryId: string;
+  parentOptionId?: string;
+  value: string;
+  label: string;
+  retiredAt?: string;
+  sortOrder: number;
+  createdBy: string;
+  createdAt: string;
+  usage: PlatformOptionUsage;
+}
+
+export interface PlatformOptionCategory {
+  id: string;
+  key: string;
+  label: string;
+  parentCategoryId?: string;
+  kind: 'environment_dimension' | 'host_group';
+  environmentRequired: boolean;
+  retiredAt?: string;
+  sortOrder: number;
+  createdBy: string;
+  createdAt: string;
+  usage: PlatformOptionUsage;
+  options: PlatformOption[];
+}
 
 export interface User {
   id: string;
   name: string;
   role: Role;
-  title?: string;
 }
 
 export type ReleaseState = 'draft' | 'released' | 'deprecated';
@@ -12,16 +45,51 @@ export type ComponentLayer = 'host_foundation' | 'runtime_state' | 'orchestratio
 
 export type ParameterType = 'string' | 'boolean' | 'integer' | 'number' | 'object' | 'array';
 export type ParameterVisibility = 'internal' | 'public';
+export type ParameterValueProvider = 'component_owner' | 'scenario_owner' | 'environment_owner' | 'upstream_mapping';
+
+export interface EnvironmentParameterBinding {
+  kind: 'private' | 'global';
+  definitionId?: string;
+}
 
 export interface ParameterDefinition {
   name: string;
   description: string;
   type: ParameterType;
   required?: boolean;
-  defaultValue?: unknown;
   visibility: ParameterVisibility;
+  modifiable: boolean;
+  valueProvider: ParameterValueProvider;
+  fixedValue?: unknown;
+  suggestedValue?: unknown;
+  testValue?: unknown;
+  environmentBinding?: EnvironmentParameterBinding;
   enum?: unknown[];
   minLength?: number;
+}
+
+export interface EnvironmentParameterDefinition {
+  id: string;
+  key: string;
+  label: string;
+  description: string;
+  type: ParameterType;
+  enum?: unknown[];
+  minLength?: number;
+  defaultValue?: unknown;
+  usage: number;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface EnvironmentVariableDefinition {
+  id: string;
+  name: string;
+  label: string;
+  description?: string;
+  usage: number;
+  createdBy: string;
+  createdAt: string;
 }
 
 export interface ParameterMapping {
@@ -53,10 +121,8 @@ export interface ActionDefinition {
   type: 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
   playbook: string;
   tags?: string[];
-  limit?: string;
   hostGroup?: string;
   timeoutSeconds?: number;
-  allowedParameters?: string[];
   requiredCredentials?: string[];
   riskLevel?: 'low' | 'medium' | 'high' | 'destructive';
   destructive?: boolean;
@@ -79,6 +145,24 @@ export interface PlaybookFile {
   updatedAt?: string;
 }
 
+export interface ReleaseReviewPreview {
+  componentId: string;
+  componentName: string;
+  ownerId: string;
+  ownerName: string;
+  release: ComponentRelease;
+  playbooks: Array<{
+    actionId: string;
+    actionName: string;
+    actionKind: ActionDefinition['type'];
+    path: string;
+    filename: string;
+    content: string;
+    sha256: string;
+  }>;
+  previewDigest: string;
+}
+
 export interface ComponentRelease {
   id: string;
   componentId: string;
@@ -89,6 +173,14 @@ export interface ComponentRelease {
   version: string;
   state: ReleaseState;
   candidate?: boolean;
+  review: {
+    status: 'not_submitted' | 'pending' | 'approved' | 'rejected';
+    contractDigest?: string;
+    submittedAt?: string;
+    reviewedBy?: string;
+    reviewedAt?: string;
+    comment?: string;
+  };
   readiness: ReleaseReadiness;
   compatibility: 'not_applicable' | 'compatible' | 'breaking';
   releaseNotes?: string;
@@ -110,6 +202,16 @@ export interface ReleaseReadiness {
   installEvidenceRunId?: string;
   rollbackEvidenceRunId?: string;
   transitionEvidenceRunId?: string;
+  runtimeEvidence?: RuntimeEvidence[];
+}
+
+export interface RuntimeEvidence {
+  runtime: string;
+  version: string;
+  installEvidenceRunId?: string;
+  rollbackEvidenceRunId?: string;
+  transitionEvidenceRunId?: string;
+  complete: boolean;
 }
 
 export interface ComponentReleaseLine {
@@ -204,8 +306,7 @@ export interface ScenarioNodeData extends Record<string, unknown> {
   version?: string;
   action?: ActionDefinition['type'];
   hostGroup?: string;
-  values?: Record<string, unknown>;
-  runInputs?: string[];
+  parameterValues?: Record<string, unknown>;
   dependencySources?: Record<string, string>;
   layer?: ComponentLayer;
 }
@@ -275,6 +376,7 @@ export interface EnvironmentRevision {
   revision: number;
   facts: Record<string, unknown>;
   hosts: EnvironmentHost[];
+  parameters: Record<string, unknown>;
   variables: Record<string, string>;
   credentialRefs: CredentialRef[];
   createdBy?: string;
@@ -362,6 +464,7 @@ export interface EnvironmentExportDocument {
   snapshot: {
     facts: Record<string, unknown>;
     hosts: EnvironmentHost[];
+    parameters: Record<string, unknown>;
     variables: Record<string, string>;
     credentialRefs: Array<{ name: string; kind: CredentialRef['type']; reference?: string; configured?: boolean }>;
   };
@@ -375,23 +478,49 @@ export interface EnvironmentImportPlan {
   nextRevision: number;
   hostCount: number;
   variableCount: number;
+  parameterCount: number;
   credentialRefCount: number;
   changes: string[];
   warnings: string[];
 }
 
-export interface RunInputPreset {
-  id: string;
-  createdBy: string;
-  resourceType: 'component_release' | 'scenario_revision';
-  resourceId: string;
-  context: 'component_install_verify' | 'component_rollback' | 'scenario_test' | 'scenario_run';
-  name: string;
-  values: { runInput?: Record<string, unknown>; dependencyFixtures?: Record<string, unknown> };
-  definitionDigest: string;
-  stale: boolean;
-  createdAt: string;
-  updatedAt: string;
+export interface EnvironmentParameterField {
+  valueKey: string;
+  definitionId?: string;
+  label: string;
+  description: string;
+  type: ParameterType;
+  required: boolean;
+  suggestedValue?: unknown;
+  defaultValue?: unknown;
+  enum?: unknown[];
+  minLength?: number;
+  bindings: Array<{ componentId: string; componentName: string; releaseId: string; version: string; parameterName: string }>;
+}
+
+export interface ScenarioParameterOverview {
+  revisionId: string;
+  editable: boolean;
+  components: Array<{
+    componentId: string;
+    componentName: string;
+    releases: Array<{
+      releaseId: string;
+      version: string;
+      nodes: Array<{
+        nodeId: string;
+        label: string;
+        action: ActionDefinition['type'];
+        hostGroup: string;
+        parameters: ParameterDefinition[];
+        parameterValues: Record<string, unknown>;
+        completed: number;
+        required: number;
+        errors: string[];
+        staleKeys: string[];
+      }>;
+    }>;
+  }>;
 }
 
 export interface AuditEvent {
@@ -437,7 +566,7 @@ export interface WorkExplanation {
 
 export interface WorkItem {
   id: string;
-  kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact' | 'catalog_backup';
+  kind: 'component_draft' | 'component_review' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact' | 'catalog_backup';
   priority: WorkPriority;
   status: WorkStatus;
   title: string;
@@ -597,8 +726,6 @@ export interface ComponentTestRequest {
   environmentId: string;
   mode: ComponentTestMode;
   rollbackVerification?: RollbackVerification;
-  runInput?: Record<string, unknown>;
-  dependencyFixtures?: Record<string, unknown>;
   expectedPlanDigest?: string;
 }
 
@@ -725,8 +852,9 @@ export interface ImpactPreview {
 
 export const ROLE_LABELS: Record<Role, string> = {
   component_owner: '组件 Owner',
-  scenario_owner: '场景 Owner',
+  scenario_owner: '集群 Owner',
   environment_owner: '环境 Owner',
+  platform_admin: '平台 Owner',
 };
 
 export const STATUS_LABELS: Record<string, string> = {

@@ -41,7 +41,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     if (!isRecord(value) || !isRecord(value.position) || !isRecord(value.data)) throw new Error(`第 ${index + 1} 个节点结构无效。`);
     assertOnlyKeys(value, ['id', 'type', 'position', 'data'], `nodes[${index}]`);
     assertOnlyKeys(value.position, ['x', 'y'], `nodes[${index}].position`);
-    assertOnlyKeys(value.data, ['label', 'componentId', 'releaseId', 'version', 'action', 'hostGroup', 'values', 'runInputs', 'dependencySources', 'layer'], `nodes[${index}].data`);
+    assertOnlyKeys(value.data, ['label', 'componentId', 'releaseId', 'version', 'action', 'parameterValues', 'dependencySources', 'layer'], `nodes[${index}].data`);
     if (value.type !== undefined && value.type !== 'component') throw new Error(`nodes[${index}].type 必须是 component。`);
     const id = requiredString(value.id, `nodes[${index}].id`);
     if (nodeIDs.has(id)) throw new Error(`节点 ID ${id} 重复。`);
@@ -51,10 +51,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) throw new Error(`节点 ${id} 的 position 必须是有限坐标。`);
     const action = requiredString(value.data.action, `节点 ${id} 的 action`) as ActionDefinition['type'];
     if (!ACTION_TYPES.has(action)) throw new Error(`节点 ${id} 的 action ${action} 无效。`);
-    if (value.data.values !== undefined && !isRecord(value.data.values)) throw new Error(`节点 ${id} 的 values 必须是对象。`);
-    if (value.data.runInputs !== undefined && (!Array.isArray(value.data.runInputs) || value.data.runInputs.some((item) => typeof item !== 'string'))) throw new Error(`节点 ${id} 的 runInputs 必须是字符串数组。`);
-    const runInputs = (value.data.runInputs ?? []).map((item, inputIndex) => requiredString(item, `节点 ${id} 的 runInputs[${inputIndex}]`));
-    if (new Set(runInputs).size !== runInputs.length) throw new Error(`节点 ${id} 的 runInputs 不能重复。`);
+    if (value.data.parameterValues !== undefined && !isRecord(value.data.parameterValues)) throw new Error(`节点 ${id} 的 parameterValues 必须是对象。`);
     const version = value.data.version === undefined ? undefined : requiredString(value.data.version, `节点 ${id} 的 version`);
     const layer = (value.data.layer === undefined ? undefined : requiredString(value.data.layer, `节点 ${id} 的 layer`)) as Component['layer'] | undefined;
     if (layer !== undefined && !LAYERS.has(layer)) throw new Error(`节点 ${id} 的 layer 无效。`);
@@ -67,9 +64,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
         componentId: requiredString(value.data.componentId, `节点 ${id} 的 componentId`),
         releaseId: requiredString(value.data.releaseId, `节点 ${id} 的 releaseId`),
         action,
-        hostGroup: requiredString(value.data.hostGroup, `节点 ${id} 的 hostGroup`),
-        values: (value.data.values ?? {}) as Record<string, unknown>,
-        runInputs,
+        parameterValues: (value.data.parameterValues ?? {}) as Record<string, unknown>,
         dependencySources: optionalStringMap(value.data.dependencySources, `节点 ${id} 的 dependencySources`),
         ...(version === undefined ? {} : { version }),
         ...(layer === undefined ? {} : { layer }),
@@ -126,7 +121,13 @@ export function validateScenarioTemplateReferences(template: ScenarioTemplate, c
 
 export function serializeScenarioTemplate(template: ScenarioTemplate) {
   return JSON.stringify({
-    nodes: template.nodes.map(({ id, position, data }) => ({ id, type: 'component', position, data })),
+    nodes: template.nodes.map(({ id, position, data }) => ({
+      id, type: 'component', position,
+      data: {
+        label: data.label, componentId: data.componentId, releaseId: data.releaseId, version: data.version,
+        action: data.action, parameterValues: data.parameterValues ?? {}, dependencySources: data.dependencySources ?? {}, layer: data.layer,
+      },
+    })),
     edges: template.edges.map(({ id, source, target }) => ({ id, source, target })),
   }, null, 2);
 }

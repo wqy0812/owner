@@ -33,30 +33,40 @@ func relationshipTestCatalog() Catalog {
 		}
 	}
 	text := func(value string) DBCell { return DBCell{Kind: "text", Text: value} }
+	integer := func(value int64) DBCell { return DBCell{Kind: "integer", Int: value} }
+	appendRow("platform_option_categories", map[string]DBCell{
+		"id": text("category-host-group"), "technical_key": text("hostGroup"), "label": text("Host group"),
+		"category_type": text("host_group"), "environment_required": integer(0), "sort_order": integer(0),
+		"created_by": text("platform-admin"), "created_at": text("2026-09-01T00:00:00Z"),
+	})
+	appendRow("platform_options", map[string]DBCell{
+		"id": text("option-all"), "category_id": text("category-host-group"), "technical_value": text("all"), "label": text("all"),
+		"sort_order": integer(0), "created_by": text("platform-admin"), "created_at": text("2026-09-01T00:00:00Z"),
+	})
 	appendRow("components", map[string]DBCell{"id": text("component-a")})
 	appendRow("components", map[string]DBCell{"id": text("component-b")})
 	appendRow("component_release_lines", map[string]DBCell{"id": text("line-a"), "component_id": text("component-a")})
 	appendRow("component_release_lines", map[string]DBCell{"id": text("line-b"), "component_id": text("component-b")})
 	appendRow("component_releases", map[string]DBCell{
 		"id": text("release-root"), "component_id": text("component-a"), "line_id": text("line-a"),
-		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"),
+		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"), "environment_constraints_json": text("{}"),
 	})
 	appendRow("component_releases", map[string]DBCell{
 		"id": text("release-child"), "component_id": text("component-a"), "line_id": text("line-a"),
 		"parent_release_id": text("release-root"), "template_source_release_id": text("release-root"),
-		"status": text("released"), "compatibility": text("compatible"), "released_at": text("2026-09-01T01:00:00Z"),
+		"status": text("released"), "compatibility": text("compatible"), "released_at": text("2026-09-01T01:00:00Z"), "environment_constraints_json": text("{}"),
 	})
 	appendRow("component_releases", map[string]DBCell{
 		"id": text("release-b"), "component_id": text("component-b"), "line_id": text("line-b"),
-		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"),
+		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"), "environment_constraints_json": text("{}"),
 	})
 	appendRow("action_definitions", map[string]DBCell{
 		"id": text("upgrade-child"), "release_id": text("release-child"), "kind": text("upgrade"),
-		"from_release_id": text("release-root"), "to_release_id": text("release-child"),
+		"from_release_id": text("release-root"), "to_release_id": text("release-child"), "host_group": text("all"),
 	})
 	appendRow("action_definitions", map[string]DBCell{
 		"id": text("rollback-child"), "release_id": text("release-child"), "kind": text("rollback"),
-		"from_release_id": text("release-child"), "to_release_id": text("release-root"),
+		"from_release_id": text("release-child"), "to_release_id": text("release-root"), "host_group": text("all"),
 	})
 	return catalog
 }

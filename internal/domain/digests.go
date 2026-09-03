@@ -33,9 +33,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Playbook            string     `json:"playbook"`
 		PlaybookSHA256      string     `json:"playbookSha256"`
 		Tags                []string   `json:"tags"`
-		Limit               string     `json:"limit"`
 		HostGroup           string     `json:"hostGroup"`
-		AllowedParameters   []string   `json:"allowedParameters"`
 		RequiredCredentials []string   `json:"requiredCredentials"`
 		TimeoutSeconds      int        `json:"timeoutSeconds"`
 		RiskLevel           RiskLevel  `json:"riskLevel"`
@@ -48,16 +46,16 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		LineID                  string                `json:"lineId"`
 		ParentReleaseID         string                `json:"parentReleaseId"`
 		TemplateSourceReleaseID string                `json:"templateSourceReleaseId"`
-		Version                string                `json:"version"`
-		ReleaseNotes           string                `json:"releaseNotes"`
-		Compatibility          ReleaseCompatibility  `json:"compatibility"`
-		RiskLevel              RiskLevel             `json:"riskLevel"`
-		EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
-		Parameters             []ParameterDefinition `json:"parameters"`
-		Dependencies           []dependencySpec      `json:"dependencies"`
-		Actions                []actionSpec          `json:"actions"`
-		Artifacts              []artifactSpec        `json:"artifacts"`
-		Images                 []imageSpec           `json:"images"`
+		Version                 string                `json:"version"`
+		ReleaseNotes            string                `json:"releaseNotes"`
+		Compatibility           ReleaseCompatibility  `json:"compatibility"`
+		RiskLevel               RiskLevel             `json:"riskLevel"`
+		EnvironmentConstraints  map[string]any        `json:"environmentConstraints"`
+		Parameters              []ParameterDefinition `json:"parameters"`
+		Dependencies            []dependencySpec      `json:"dependencies"`
+		Actions                 []actionSpec          `json:"actions"`
+		Artifacts               []artifactSpec        `json:"artifacts"`
+		Images                  []imageSpec           `json:"images"`
 	}{
 		LineID: release.LineID, ParentReleaseID: release.ParentReleaseID, TemplateSourceReleaseID: release.TemplateSourceReleaseID,
 		Version: release.Version, ReleaseNotes: release.ReleaseNotes,
@@ -83,7 +81,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 	for _, action := range release.Actions {
 		spec.Actions = append(spec.Actions, actionSpec{
 			Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
-			Limit: action.Limit, HostGroup: action.HostGroup, AllowedParameters: action.AllowedParameters,
+			HostGroup:           action.HostGroup,
 			RequiredCredentials: action.RequiredCredentials,
 			TimeoutSeconds:      action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
 			Idempotent:    action.Idempotent,

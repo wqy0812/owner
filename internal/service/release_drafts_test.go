@@ -27,11 +27,11 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 		ID: "release-child", ComponentID: "component-1", LineID: root.LineID, LineName: root.LineName,
 		ParentReleaseID: root.ID, TemplateSourceReleaseID: root.ID,
 		Version: "2.0.0", Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityBreaking,
-		RiskLevel: domain.RiskHigh, EnvironmentConstraints: map[string]any{"architecture": "amd64"}, CreatedAt: now.Add(time.Second), ReleasedAt: &now,
+		RiskLevel: domain.RiskHigh, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}}, CreatedAt: now.Add(time.Second), ReleasedAt: &now,
 		Actions: []domain.ActionDefinition{
-			{ID: "install-child", ReleaseID: "release-child", Name: "Install", Kind: domain.ActionInstall, Playbook: "install.yml", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
-			{ID: "upgrade-child", ReleaseID: "release-child", Name: "Upgrade", Kind: domain.ActionUpgrade, Playbook: "upgrade.yml", TimeoutSeconds: 60, RiskLevel: domain.RiskHigh, FromReleaseID: root.ID, ToReleaseID: "release-child"},
-			{ID: "rollback-child", ReleaseID: "release-child", Name: "Rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", TimeoutSeconds: 60, RiskLevel: domain.RiskHigh, FromReleaseID: "release-child", ToReleaseID: root.ID},
+			{ID: "install-child", ReleaseID: "release-child", Name: "Install", Kind: domain.ActionInstall, Playbook: "install.yml", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow},
+			{ID: "upgrade-child", ReleaseID: "release-child", Name: "Upgrade", Kind: domain.ActionUpgrade, Playbook: "upgrade.yml", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskHigh, FromReleaseID: root.ID, ToReleaseID: "release-child"},
+			{ID: "rollback-child", ReleaseID: "release-child", Name: "Rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskHigh, FromReleaseID: "release-child", ToReleaseID: root.ID},
 		},
 	}
 	if err := database.CreateComponentRelease(ctx, child); err != nil {

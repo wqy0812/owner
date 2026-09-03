@@ -38,13 +38,197 @@ func TestSeedUsersKeepsOneComponentOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(users) != 3 {
-		t.Fatalf("users=%d, want three operational personas", len(users))
+	if len(users) != 4 {
+		t.Fatalf("users=%d, want four operational personas", len(users))
+	}
+	wantNames := map[string]string{
+		ComponentOwnerRuntimeID: "林晓",
+		ScenarioOwnerID:         "陈晨",
+		EnvironmentOwnerID:      "王维",
+		PlatformAdminID:         "赵宁",
 	}
 	for _, user := range users {
 		if user.ID == ComponentOwnerK8sID {
 			t.Fatal("secondary component owner must not be seeded in identities mode")
 		}
+		if user.Name != wantNames[user.ID] {
+			t.Errorf("user %s name=%q, want %q", user.ID, user.Name, wantNames[user.ID])
+		}
+	}
+}
+
+func TestSeedUsersPreservesExistingNamesAndCreationTimes(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	createdAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	canonical := map[string]domain.User{}
+	for _, user := range demoUsers(now) {
+		user.Name = "Existing " + user.ID
+		user.CreatedAt = createdAt
+		canonical[user.ID] = user
+		if err := database.UpsertUser(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seeder := Seeder{Store: database, Now: func() time.Time { return now }}
+	if err := seeder.SeedUsers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range canonical {
+		got, err := database.GetUser(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Name != want.Name {
+			t.Errorf("user %s name=%q, want %q", id, got.Name, want.Name)
+		}
+		if !got.CreatedAt.Equal(createdAt) {
+			t.Errorf("user %s createdAt=%s, want %s", id, got.CreatedAt, createdAt)
+		}
+	}
+	custom := canonical[ScenarioOwnerID]
+	custom.Name = "自定义陈晨"
+	custom.CreatedAt = createdAt
+	if err := database.UpsertUser(ctx, custom); err != nil {
+		t.Fatal(err)
+	}
+	if err := seeder.SeedUsers(ctx); err != nil {
+		t.Fatalf("idempotent seed: %v", err)
+	}
+	got, err := database.GetUser(ctx, ScenarioOwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != custom.Name {
+		t.Fatalf("custom name=%q, want preserved %q", got.Name, custom.Name)
+	}
+}
+
+func TestSeedUsersBootstrapsPlatformCatalogOnceAndPreservesAdminChanges(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "platform.db")
+	database, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	seeder := Seeder{Store: database, Now: func() time.Time { return now }}
+	if err := seeder.SeedUsers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	categories, err := database.ListPlatformOptionCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var architectureID, removableOptionID string
+	for _, category := range categories {
+		if category.Key == "architecture" {
+			architectureID = category.ID
+		}
+		if category.Key == "hardwareProfile" {
+			for _, option := range category.Options {
+				if option.Value == "general" {
+					removableOptionID = option.ID
+				}
+			}
+		}
+	}
+	if architectureID == "" || removableOptionID == "" {
+		t.Fatalf("initial platform catalog missing architecture=%q removableOption=%q", architectureID, removableOptionID)
+	}
+	audit := func(id, action, resourceType, resourceID string) domain.AuditEvent {
+		return domain.AuditEvent{ID: id, ActorID: PlatformAdminID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Metadata: map[string]any{}, CreatedAt: now}
+	}
+	if err := database.RenamePlatformOptionCategory(ctx, architectureID, "自定义架构", audit("audit-test-category-renamed", "platform_option_category.renamed", "platform_option_category", architectureID)); err != nil {
+		t.Fatal(err)
+	}
+	retiredAt := now.Add(time.Minute)
+	if err := database.SetPlatformOptionCategoryRetired(ctx, architectureID, &retiredAt, audit("audit-test-category-retired", "platform_option_category.retired", "platform_option_category", architectureID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeletePlatformOption(ctx, removableOptionID, audit("audit-test-option-deleted", "platform_option.deleted", "platform_option", removableOptionID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteEnvironmentVariableDefinition(ctx, "environment-variable-file-station", audit("audit-test-variable-deleted", "environment_variable_definition.deleted", "environment_variable_definition", "environment-variable-file-station")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	seeder = Seeder{Store: database, Now: func() time.Time { return now.Add(2 * time.Minute) }}
+	if err := seeder.SeedUsers(ctx); err != nil {
+		t.Fatalf("restart identity seed: %v", err)
+	}
+	categories, err = database.ListPlatformOptionCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, category := range categories {
+		if category.ID == architectureID && (category.Label != "自定义架构" || category.RetiredAt == nil) {
+			t.Fatalf("administrator category state was overwritten: %+v", category)
+		}
+		for _, option := range category.Options {
+			if option.ID == removableOptionID {
+				t.Fatalf("deleted platform option was restored: %+v", option)
+			}
+		}
+	}
+	definitions, err := database.ListEnvironmentVariableDefinitions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range definitions {
+		if definition.ID == "environment-variable-file-station" {
+			t.Fatalf("deleted environment variable definition was restored: %+v", definition)
+		}
+	}
+}
+
+func TestSeedUsersAdoptsExistingPlatformCatalogWithoutRewritingIt(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	admin := domain.User{ID: PlatformAdminID, Name: "平台管理员", Role: domain.RolePlatformAdmin, CreatedAt: now}
+	if err := database.UpsertUser(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	category := domain.PlatformOptionCategory{ID: "existing-category", Key: "existingDimension", Label: "现有维度", Kind: domain.PlatformOptionEnvironmentDimension, CreatedBy: admin.ID, CreatedAt: now}
+	audit := domain.AuditEvent{ID: "audit-existing-category", ActorID: admin.ID, Action: "platform_option_category.created", ResourceType: "platform_option_category", ResourceID: category.ID, Metadata: map[string]any{}, CreatedAt: now}
+	if err := database.CreatePlatformOptionCategory(ctx, category, audit); err != nil {
+		t.Fatal(err)
+	}
+	variable := domain.EnvironmentVariableDefinition{ID: "existing-variable", Name: "CUSTOM_ENDPOINT", Label: "现有地址字段", CreatedBy: admin.ID, CreatedAt: now}
+	if err := database.UpsertEnvironmentVariableDefinition(ctx, variable); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Seeder{Store: database, Now: func() time.Time { return now }}).SeedUsers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	categories, err := database.ListPlatformOptionCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(categories) != 1 || categories[0].ID != category.ID || categories[0].Label != category.Label {
+		t.Fatalf("existing catalog was rewritten: %+v", categories)
+	}
+	variables, err := database.ListEnvironmentVariableDefinitions(ctx)
+	if err != nil || len(variables) != 1 || variables[0].ID != variable.ID || variables[0].Label != variable.Label {
+		t.Fatalf("existing variable directory was rewritten: %+v %v", variables, err)
 	}
 }
 
@@ -63,8 +247,8 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 		t.Fatalf("idempotent seed: %v", err)
 	}
 	users, _ := database.ListUsers(ctx)
-	if len(users) != 4 {
-		t.Fatalf("users=%d, want four seeded personas", len(users))
+	if len(users) != 5 {
+		t.Fatalf("users=%d, want five seeded personas", len(users))
 	}
 	viewer, _ := database.GetUser(ctx, ComponentOwnerRuntimeID)
 	components, err := database.ListComponents(ctx, viewer)
@@ -112,13 +296,13 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	if err != nil || len(environments) != 2 {
 		t.Fatalf("environments=%d err=%v", len(environments), err)
 	}
-	assertTableCount(t, database, "component_releases", 37)
-	assertTableCount(t, database, "component_dependencies", 47)
-	assertTableCount(t, database, "action_definitions", 57)
+	assertTableCount(t, database, "component_releases", 54)
+	assertTableCount(t, database, "component_dependencies", 71)
+	assertTableCount(t, database, "action_definitions", 89)
 	assertTableCount(t, database, "scenarios", 5)
 	assertTableCount(t, database, "scenario_revisions", 5)
 	assertTableCount(t, database, "environment_revisions", 2)
-	assertTableCount(t, database, "audit_events", 2)
+	assertTableCount(t, database, "audit_events", 3)
 }
 
 func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing.T) {
@@ -156,6 +340,13 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	if environment.Revision.Variables["IMAGE_REGISTRY"] != "registry.example.invalid" || environment.Revision.Variables["FILE_STATION"] != "192.0.2.70:443" {
 		t.Fatalf("OpenFuyao environment variables=%+v", environment.Revision.Variables)
 	}
+	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
+	if _, err := platform.UpdateEnvironmentFacts(ctx, environmentOwner, environment.ID, map[string]any{
+		"architecture": "amd64", "operatingSystem": "Kylin", "operatingSystemVersion": "24.04",
+		"containerRuntime": "docker", "containerRuntimeVersion": "docker@24.0.9", "ipFamily": "IPv4",
+	}, "补齐当前必填事实"); err != nil {
+		t.Fatalf("complete OpenFuyao environment facts: %v", err)
+	}
 
 	scenarios := []struct {
 		revisionID, role, clusterID string
@@ -173,17 +364,22 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		if issues := domain.ValidateGraph(revision.Graph); len(issues) != 0 {
 			t.Fatalf("scenario %s graph issues=%+v", expectation.revisionID, issues)
 		}
+		for _, node := range revision.Graph.Nodes {
+			release, releaseErr := database.GetComponentRelease(ctx, node.ReleaseID)
+			if releaseErr != nil {
+				t.Fatalf("scenario %s node %s release: %v", expectation.revisionID, node.ID, releaseErr)
+			}
+			for _, action := range release.Actions {
+				if action.Kind == node.Action && action.HostGroup != node.HostGroup {
+					t.Fatalf("scenario %s node %s host group=%s, action host group=%s", expectation.revisionID, node.ID, node.HostGroup, action.HostGroup)
+				}
+			}
+		}
 		issues, err := platform.ValidateScenario(ctx, owner, expectation.revisionID)
 		if err != nil || len(issues) != 0 {
 			t.Fatalf("scenario %s dependency issues=%+v err=%v", expectation.revisionID, issues, err)
 		}
-		for _, node := range revision.Graph.Nodes {
-			if len(node.RunInputs) != 0 {
-				t.Fatalf("scenario %s node %s exposes unsafe run inputs: %v", expectation.revisionID, node.ID, node.RunInputs)
-			}
-		}
-
-		run, err := platform.StartScenarioTest(ctx, owner, expectation.revisionID, "environment-openfuyao-template", nil)
+		run, err := platform.StartScenarioTest(ctx, owner, expectation.revisionID, "environment-openfuyao-template")
 		if err != nil || run.Status != domain.RunAwaitingApproval {
 			t.Fatalf("scenario %s run=%+v err=%v", expectation.revisionID, run, err)
 		}
@@ -198,8 +394,12 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		for _, raw := range steps {
 			step := raw.(map[string]any)
 			variables := step["variables"].(map[string]any)
-			if variables["cluster_role"] != expectation.role || variables["cluster_id"] != expectation.clusterID {
-				t.Fatalf("scenario %s variables role=%v cluster=%v", expectation.revisionID, variables["cluster_role"], variables["cluster_id"])
+			releaseID := step["releaseId"].(string)
+			if openFuyaoScenarioParameterSupported(releaseID, "cluster_role") && variables["cluster_role"] != expectation.role {
+				t.Fatalf("scenario %s release %s role=%v", expectation.revisionID, releaseID, variables["cluster_role"])
+			}
+			if openFuyaoScenarioParameterSupported(releaseID, "cluster_id") && variables["cluster_id"] != expectation.clusterID {
+				t.Fatalf("scenario %s release %s cluster=%v", expectation.revisionID, releaseID, variables["cluster_id"])
 			}
 			if variables["target_host_group"] == "" {
 				t.Fatalf("scenario %s incomplete locked variables=%#v", expectation.revisionID, variables)
@@ -213,7 +413,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	}
 
 	enrollment, _ := database.GetScenarioRevision(ctx, "scenario-openfuyao-work-nodes-r1")
-	if enrollment.Graph.Nodes[0].Action != domain.ActionVerify || enrollment.Graph.Nodes[0].ReleaseID != "release-bke-master-25.12" || enrollment.Graph.Nodes[1].ReleaseID != "release-bke-nodes-25.12" {
+	if enrollment.Graph.Nodes[0].Action != domain.ActionVerify || enrollment.Graph.Nodes[0].ReleaseID != "release-bke-master-work-25.12" || enrollment.Graph.Nodes[1].ReleaseID != "release-bke-nodes-25.12" {
 		t.Fatalf("work node enrollment boundary=%+v", enrollment.Graph.Nodes)
 	}
 
@@ -221,16 +421,19 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		"ansible_ssh_pass": true, "ENV_DOCKER_SECRET_USERNAME": true, "ENV_DOCKER_SECRET_PASSWORD": true,
 		"ENV_CHART_PULL_USERNAME": true, "ENV_CHART_PULL_PASSWORD": true,
 	}
-	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
+	environmentOwner, _ = database.GetUser(ctx, EnvironmentOwnerID)
 	componentDefaults := map[string]struct{ role, group, clusterID string }{
-		"release-bke-cert-25.12":      {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
-		"release-bke-bootstrap-25.12": {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
-		"release-bke-common-25.12":    {group: "management_cluster_k8smaster"},
-		"release-bke-addon-25.12":     {group: "management_cluster_k8smaster"},
-		"release-bke-master-25.12":    {role: "manager", group: "management_cluster_k8smaster", clusterID: openFuyaoManagementClusterID},
-		"release-bke-nodes-25.12":     {role: "work", group: "work_cluster_k8snode", clusterID: openFuyaoWorkClusterID},
+		"release-bke-cert-25.12":        {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
+		"release-bke-bootstrap-25.12":   {group: "bootstrap_host", clusterID: openFuyaoManagementClusterID},
+		"release-bke-common-25.12":      {group: "management_cluster_k8smaster"},
+		"release-bke-common-work-25.12": {group: "work_cluster_k8smaster"},
+		"release-bke-addon-25.12":       {group: "management_cluster_k8smaster"},
+		"release-bke-addon-work-25.12":  {group: "work_cluster_k8smaster"},
+		"release-bke-master-25.12":      {role: "manager", group: "management_cluster_k8smaster", clusterID: openFuyaoManagementClusterID},
+		"release-bke-master-work-25.12": {role: "work", group: "work_cluster_k8smaster", clusterID: openFuyaoWorkClusterID},
+		"release-bke-nodes-25.12":       {role: "work", group: "work_cluster_k8snode", clusterID: openFuyaoWorkClusterID},
 	}
-	for _, releaseID := range []string{"release-bke-cert-25.12", "release-bke-bootstrap-25.12", "release-bke-common-25.12", "release-bke-addon-25.12", "release-bke-master-25.12", "release-bke-nodes-25.12"} {
+	for _, releaseID := range []string{"release-bke-cert-25.12", "release-bke-bootstrap-25.12", "release-bke-common-25.12", "release-bke-common-work-25.12", "release-bke-addon-25.12", "release-bke-addon-work-25.12", "release-bke-master-25.12", "release-bke-master-work-25.12", "release-bke-nodes-25.12"} {
 		release, err := database.GetComponentRelease(ctx, releaseID)
 		if err != nil {
 			t.Fatal(err)
@@ -287,19 +490,12 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		if err != nil {
 			t.Fatalf("new release %s must exist: %+v err=%v", spec.releaseID, release, err)
 		}
-		if strings.Contains(spec.releaseID, "source-6909da3") && release.Version != "source-6909da3" {
+		if strings.Contains(spec.releaseID, "source-6909da3") && !strings.HasPrefix(release.Version, "source-6909da3") {
 			t.Fatalf("unknown source version was fabricated for %s: %s", spec.releaseID, release.Version)
 		}
 	}
-	for _, releaseID := range []string{
-		"release-host-preflight-k8s-1.17.5", "release-host-bootstrap-k8s-1.17.5", "release-cluster-pki-k8s-1.17.5",
-		"release-docker-18.09.7", "release-etcd-3.3.10", "release-kubernetes-distribution-1.17.5",
-		"release-kubernetes-encryption-config-1.17.5", "release-kube-apiserver-1.17.5",
-		"release-kube-controller-manager-1.17.5", "release-kube-scheduler-1.17.5",
-		"release-kubernetes-bootstrap-rbac-1.17.5", "release-flannel-0.11.0", "release-kubelet-1.17.5",
-		"release-kube-proxy-1.17.5", "release-coredns-1.3.1", "release-node-exporter-0.18.0",
-		"release-metrics-server-0.3.1", "release-glusterfs-client-3.12.6", "release-amc-source-6909da3",
-	} {
+	for _, spec := range kubernetes1175ReleaseSpecs {
+		releaseID := spec.releaseID
 		release, err := database.GetComponentRelease(ctx, releaseID)
 		if err != nil {
 			t.Fatalf("get %s: %v", releaseID, err)
@@ -328,13 +524,13 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 				t.Fatalf("sensitive encryption key was persisted in parameters for %s", releaseID)
 			}
 		}
-		if releaseID == "release-kubelet-1.17.5" {
+		if spec.componentID == "component-kubelet" {
 			parameter, ok := domain.ParameterByName(release.Parameters, "kubeInstallRoot")
-			if !ok || parameter.Visibility != domain.ParameterPublic || parameter.DefaultValue != "/approot1/paas/kube" {
+			if !ok || parameter.Visibility != domain.ParameterPublic || parameter.FixedValue != "/approot1/paas/kube" {
 				t.Fatalf("kubelet public install root=%+v ok=%v", parameter, ok)
 			}
 		}
-		if releaseID == "release-kube-proxy-1.17.5" {
+		if spec.componentID == "component-kube-proxy" {
 			if _, ok := domain.ParameterByName(release.Parameters, "kubeRoot"); !ok {
 				t.Fatal("kube-proxy missing kubeRoot parameter")
 			}
@@ -372,26 +568,44 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		}
 	}
 	core, _ := database.GetScenarioRevision(ctx, "scenario-k8s-1.17.5-r1")
-	usage := map[string]map[string]bool{}
+	nodes := map[string]domain.ScenarioNode{}
 	for _, node := range core.Graph.Nodes {
-		if usage[node.ReleaseID] == nil {
-			usage[node.ReleaseID] = map[string]bool{}
+		nodes[node.ID] = node
+		release, err := database.GetComponentRelease(ctx, node.ReleaseID)
+		if err != nil {
+			t.Fatalf("node %s release %s: %v", node.ID, node.ReleaseID, err)
 		}
-		usage[node.ReleaseID][node.HostGroup] = true
-	}
-	for _, releaseID := range []string{"release-host-bootstrap-k8s-1.17.5", "release-docker-18.09.7", "release-kubernetes-distribution-1.17.5", "release-flannel-0.11.0", "release-kubelet-1.17.5", "release-kube-proxy-1.17.5"} {
-		if len(usage[releaseID]) != 2 {
-			t.Fatalf("release %s was not reused across control and worker host groups: %+v", releaseID, usage[releaseID])
+		matched := false
+		for _, action := range release.Actions {
+			if action.Kind == node.Action {
+				matched = true
+				if node.HostGroup != action.HostGroup {
+					t.Fatalf("node %s host group=%s, action host group=%s", node.ID, node.HostGroup, action.HostGroup)
+				}
+			}
+		}
+		if !matched {
+			t.Fatalf("node %s release %s has no %s action", node.ID, node.ReleaseID, node.Action)
 		}
 	}
-	sources := map[string]string{}
-	for _, node := range core.Graph.Nodes {
-		if node.ID == "k8s1175-proxy-master" || node.ID == "k8s1175-proxy-worker" {
-			sources[node.ID] = node.DependencySources["dependency-kube-proxy-1"]
+	for _, pair := range [][2]string{{"bootstrap-master", "bootstrap-worker"}, {"docker-master", "docker-worker"}, {"distribution-master", "distribution-worker"}, {"flannel-master", "flannel-worker"}, {"kubelet-master", "kubelet-worker"}, {"proxy-master", "proxy-worker"}} {
+		master, worker := nodes["k8s1175-"+pair[0]], nodes["k8s1175-"+pair[1]]
+		masterRelease, masterErr := database.GetComponentRelease(ctx, master.ReleaseID)
+		workerRelease, workerErr := database.GetComponentRelease(ctx, worker.ReleaseID)
+		if masterErr != nil || workerErr != nil {
+			t.Fatalf("load branch pair %v: masterErr=%v workerErr=%v", pair, masterErr, workerErr)
+		}
+		if masterRelease.ComponentID != workerRelease.ComponentID || master.ReleaseID == worker.ReleaseID || masterRelease.LineID == workerRelease.LineID {
+			t.Fatalf("component branches were not split for %v: master=%+v worker=%+v", pair, masterRelease, workerRelease)
+		}
+		if master.HostGroup != "k8smaster" || worker.HostGroup != "k8snode" {
+			t.Fatalf("component branches target the wrong groups for %v: master=%s worker=%s", pair, master.HostGroup, worker.HostGroup)
 		}
 	}
-	if sources["k8s1175-proxy-master"] != "k8s1175-kubelet-master" || sources["k8s1175-proxy-worker"] != "k8s1175-kubelet-worker" {
-		t.Fatalf("kube-proxy dependency sources=%v", sources)
+	masterSource := nodes["k8s1175-proxy-master"].DependencySources["dependency-kube-proxy-1"]
+	workerSource := nodes["k8s1175-proxy-worker"].DependencySources["dependency-kube-proxy-worker-1"]
+	if masterSource != "k8s1175-kubelet-master" || workerSource != "k8s1175-kubelet-worker" {
+		t.Fatalf("kube-proxy dependency sources: master=%s worker=%s", masterSource, workerSource)
 	}
 }
 
@@ -520,6 +734,9 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.seedUsers(ctx, now); err != nil {
 		t.Fatal(err)
 	}
+	if err := seeder.seedPlatformCatalog(ctx, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := seeder.seedComponents(ctx, now); err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +763,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 		t.Fatalf("incremental seed: %v", err)
 	}
 	assertTableCount(t, database, "components", 34)
-	assertTableCount(t, database, "component_releases", 37)
+	assertTableCount(t, database, "component_releases", 54)
 	assertTableCount(t, database, "scenarios", 5)
 	assertTableCount(t, database, "environments", 2)
 	if _, err := database.GetComponentRelease(ctx, "release-kubelet-1.17.5"); err != nil {
@@ -576,10 +793,10 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 		t.Fatalf("repeat incremental seed: %v", err)
 	}
 	assertTableCount(t, database, "components", 34)
-	assertTableCount(t, database, "component_releases", 37)
+	assertTableCount(t, database, "component_releases", 54)
 	assertTableCount(t, database, "scenarios", 5)
 	assertTableCount(t, database, "environments", 2)
-	assertTableCount(t, database, "audit_events", 2)
+	assertTableCount(t, database, "audit_events", 3)
 }
 
 func seededDatabase(t *testing.T) (context.Context, *store.Store) {

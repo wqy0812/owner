@@ -76,7 +76,7 @@ internal/service
 - Run 规划、创建、调度、执行、证据记录、回滚规划和审批各有独立对象与文件。
 - Store 层负责持久化、事务和并发状态抢占，不决定业务权限。
 - Domain 层保存跨层共享的数据结构、枚举、通用错误和纯领域校验。
-- Run 在创建时锁定组件 Release、场景 Revision、环境 Revision、运行输入和 Playbook 摘要。
+- Run 在创建时锁定组件 Release、场景 Revision、环境 Revision、解析后的结构化参数和 Playbook 摘要。
 - 同一环境中的 Run 按 FIFO 串行执行；破坏性动作先等待环境 Owner 审批。
 - SSE 只提示前端重新拉取数据，SQLite 中的状态才是最终事实来源。
 
@@ -96,7 +96,7 @@ internal/service
 
 环境连通性检查直接使用 Go SSH 客户端：严格读取 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指向的主机指纹文件，并使用 Environment Revision 中显式声明的 SSH CredentialRef 完成认证和 `true` 执行。该检查不调用 Ansible；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
 
-`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 `snapshot`。Environment Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
+`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 `snapshot`。环境 Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
 
 ### 3.2 `cmd/fss` 与 `internal/fss`
 
@@ -140,10 +140,10 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `image_builds.go` | 组件镜像构建与查询 |
 | `scenarios.go` | 场景、Revision、DAG 校验、测试和运行 |
 | `environments.go` | Inventory、Facts、变量和 CredentialRef |
+| `platform_parameters.go` | 全局环境参数字段、环境变量字段和参数所有权目录 |
 | `environment_transfer.go` | 环境 Revision 导入、导出和差异预检 |
 | `catalog_repository.go` | 私有 Catalog 仓库接入、备份和空库恢复 |
 | `runs.go` | Run 查询、审批、取消和日志 |
-| `run_input_presets.go` | 个人运行参数预设 |
 | `events.go` | SSE 事件通道 |
 | `notifications.go` | 站内通知和审计查询 |
 
@@ -156,7 +156,7 @@ Service 是业务核心，主要职责包括：
 - 校验角色和资源 Owner。
 - 管理组件 Release 与场景 Revision 的不可变生命周期。
 - 校验组件依赖、公开参数映射和场景 DAG。
-- 解析环境约束、运行输入、普通变量和 CredentialRef。
+- 解析组件固定值、节点 parameterValues、环境参数、上游映射、受治理变量和 CredentialRef。
 - 生成组件测试、回滚测试、场景测试和正式运行计划。
 - 按环境维护 FIFO Worker，恢复异常中断的 Run。
 - 执行审批、取消、通知、审计和日志脱敏。
@@ -175,7 +175,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260901-release-lines`。测试环境的一次性发布线迁移已通过受控部署完成，前序合同常量、推导逻辑和迁移测试均已删除；其他合同失败关闭，不做历史迁移、模糊兼容、双读或双写。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260902-container-runtime-matrix`；运行时代码不做历史迁移、模糊兼容、双读或双写。一次性转换工具已移除；其他合同失败关闭，测试库需要变更结构时走显式备份和重建流程。
 
 ### 3.7 `internal/ansible`
 
@@ -199,7 +199,7 @@ Seed 以幂等方式创建演示身份、组件、场景和环境：
 - `kubernetes1175.go`：Kubernetes 1.17.5 组件和场景。
 - `openfuyao.go`：保留的 OpenFuyao/BKE 脱敏 Demo 组件、场景和 TEST-NET 环境模板。
 
-`NEWPLATFORM_SEED_PROFILE=demo` 写入上述完整演示数据，包括 OpenFuyao/BKE 脱敏模板和 Kubernetes 样例；`identities` 只在空的首版数据库中写入可切换身份，供人工维护目录。`docs/demo-catalog.md` 记录的是测试平台当前业务数据，不等同于内置 Demo Seed。
+`NEWPLATFORM_SEED_PROFILE=demo` 写入上述完整演示数据，包括 OpenFuyao/BKE 脱敏模板和 Kubernetes 样例；`identities` 写入可切换身份，并只在新库创建一次平台治理目录，组件、场景和环境目录仍由人工维护。初始化审计标记持久化后，后续启动不会恢复管理员已删除的条目，也不会覆盖重命名或停用状态；已有目录第一次运行新版时只登记标记。`docs/demo-catalog.md` 记录的是测试平台当前业务数据，不等同于内置 Demo Seed。
 
 ### 3.9 `internal/ui`
 

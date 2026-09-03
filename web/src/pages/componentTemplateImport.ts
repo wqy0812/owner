@@ -128,7 +128,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
 
   const parameters = optionalArray(release.parameters, `${slug}.release.parameters`).map((raw, parameterIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${parameterIndex + 1} 个参数必须是对象。`);
-    assertOnlyKeys(raw, ['name', 'description', 'type', 'required', 'defaultValue', 'visibility', 'enum', 'minLength'], `${slug}.parameters[${parameterIndex}]`);
+    assertOnlyKeys(raw, ['name', 'description', 'type', 'required', 'visibility', 'modifiable', 'valueProvider', 'fixedValue', 'suggestedValue', 'testValue', 'environmentBinding', 'enum', 'minLength'], `${slug}.parameters[${parameterIndex}]`);
     const name = nonEmptyString(raw.name, `${slug}.parameters[${parameterIndex}].name`);
     if (isSensitiveKey(name)) throw new Error(`${slug}.${name} 必须改用 CredentialRef。`);
     const description = nonEmptyString(raw.description, `${slug}.${name}.description`);
@@ -136,6 +136,9 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     if (!PARAMETER_TYPES.has(type)) throw new Error(`${slug}.${name} 的参数类型无效。`);
     if (raw.visibility !== 'internal' && raw.visibility !== 'public') throw new Error(`${slug}.${name} 必须声明 internal 或 public。`);
     const required = optionalBoolean(raw.required, `${slug}.${name}.required`);
+    const modifiable = optionalBoolean(raw.modifiable, `${slug}.${name}.modifiable`);
+    const valueProvider = nonEmptyString(raw.valueProvider, `${slug}.${name}.valueProvider`) as ParameterDefinition['valueProvider'];
+    if (!['component_owner', 'scenario_owner', 'environment_owner', 'upstream_mapping'].includes(valueProvider)) throw new Error(`${slug}.${name}.valueProvider 无效。`);
     const enumValues = optionalArray(raw.enum, `${slug}.${name}.enum`);
     if (enumValues.some((item) => !matchesParameterType(item, type))) throw new Error(`${slug}.${name}.enum 包含与 ${type} 不匹配的值。`);
     let minLength: number | undefined;
@@ -144,15 +147,25 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
       if (type !== 'string') throw new Error(`${slug}.${name}.minLength 只适用于 string。`);
       minLength = raw.minLength;
     }
-    const hasDefault = raw.defaultValue !== undefined && raw.defaultValue !== null;
-    if (hasDefault && !matchesParameterType(raw.defaultValue, type)) throw new Error(`${slug}.${name}.defaultValue 必须匹配 ${type}。`);
-    const sensitiveDefault = hasDefault ? findSensitivePath(raw.defaultValue, name) : undefined;
-    if (sensitiveDefault) throw new Error(`${slug}.${sensitiveDefault} 的默认值必须改用 CredentialRef。`);
-    if (hasDefault && minLength && [...(raw.defaultValue as string)].length < minLength) throw new Error(`${slug}.${name}.defaultValue 短于 minLength。`);
-    if (hasDefault && enumValues.length && !enumValues.some((item) => parameterValuesEqual(item, raw.defaultValue))) throw new Error(`${slug}.${name}.defaultValue 不在 enum 中。`);
+    for (const field of ['fixedValue', 'suggestedValue', 'testValue'] as const) {
+      const value = raw[field];
+      if (value === undefined || value === null) continue;
+      if (!matchesParameterType(value, type)) throw new Error(`${slug}.${name}.${field} 必须匹配 ${type}。`);
+      if (findSensitivePath(value, name)) throw new Error(`${slug}.${name}.${field} 必须改用 CredentialRef。`);
+      if (minLength && [...(value as string)].length < minLength) throw new Error(`${slug}.${name}.${field} 短于 minLength。`);
+      if (enumValues.length && !enumValues.some((item) => parameterValuesEqual(item, value))) throw new Error(`${slug}.${name}.${field} 不在 enum 中。`);
+    }
+    if (valueProvider === 'component_owner' && (modifiable || raw.fixedValue === undefined)) throw new Error(`${slug}.${name} 的组件固定参数必须不可修改且填写 fixedValue。`);
+    if ((valueProvider === 'scenario_owner' || valueProvider === 'environment_owner') && !modifiable) throw new Error(`${slug}.${name} 的外部 Owner 参数必须允许修改。`);
+    if ((valueProvider === 'scenario_owner' || valueProvider === 'environment_owner') && (type === 'object' || type === 'array') && !enumValues.length) throw new Error(`${slug}.${name} 是结构化外部字段，必须提供受控枚举，不能编辑原始 JSON。`);
+    if (valueProvider === 'upstream_mapping' && modifiable) throw new Error(`${slug}.${name} 的上游映射参数不能人工修改。`);
+    if (valueProvider === 'environment_owner' && !isRecord(raw.environmentBinding)) throw new Error(`${slug}.${name} 必须声明 environmentBinding。`);
     return {
-      name, description, type, visibility: raw.visibility, required,
-      ...(hasDefault ? { defaultValue: raw.defaultValue } : {}),
+      name, description, type, visibility: raw.visibility, required, modifiable, valueProvider,
+      ...(raw.fixedValue === undefined ? {} : { fixedValue: raw.fixedValue }),
+      ...(raw.suggestedValue === undefined ? {} : { suggestedValue: raw.suggestedValue }),
+      ...(raw.testValue === undefined ? {} : { testValue: raw.testValue }),
+      ...(raw.environmentBinding === undefined ? {} : { environmentBinding: raw.environmentBinding as ParameterDefinition['environmentBinding'] }),
       ...(raw.enum === undefined ? {} : { enum: enumValues }),
       ...(minLength === undefined ? {} : { minLength }),
     } as ParameterDefinition;
@@ -178,7 +191,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
 
   const actions = optionalArray(release.actions, `${slug}.release.actions`).map((raw, actionIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${actionIndex + 1} 个 Action 必须是对象。`);
-    assertOnlyKeys(raw, ['name', 'type', 'playbook', 'tags', 'limit', 'hostGroup', 'timeoutSeconds', 'allowedParameters', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
+    assertOnlyKeys(raw, ['name', 'type', 'playbook', 'tags', 'hostGroup', 'timeoutSeconds', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
     const type = nonEmptyString(raw.type, `${slug}.actions[${actionIndex}].type`) as ActionDefinition['type'];
     if (!ACTION_TYPES.has(type)) throw new Error(`${slug} 的 Action 类型 ${type} 无效。`);
     if (type === 'upgrade') throw new Error(`${slug} 的导入模板不能声明显式 upgrade；请使用幂等 install，或创建后在前台绑定既有 Release ID。`);
@@ -186,8 +199,6 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     if (!PLAYBOOK_FILENAME.test(playbook)) throw new Error(`${slug} 的 Action Playbook 必须填写模板内的文件名。`);
     const name = optionalString(raw.name, `${slug}.actions[${actionIndex}].name`) ?? '';
     const tags = stringArray(raw.tags, `${slug}.${type}.tags`);
-    const allowedParameters = stringArray(raw.allowedParameters, `${slug}.${type}.allowedParameters`);
-    if (allowedParameters.some(isSensitiveKey)) throw new Error(`${slug}.${type}.allowedParameters 的敏感参数必须改用 CredentialRef。`);
     const requiredCredentials = stringArray(raw.requiredCredentials, `${slug}.${type}.requiredCredentials`);
     const timeoutSeconds = raw.timeoutSeconds === undefined ? 1800 : raw.timeoutSeconds;
     if (typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) throw new Error(`${slug}.${type}.timeoutSeconds 必须是正整数。`);
@@ -202,19 +213,14 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     if (type !== 'rollback' && (fromReleaseId || toReleaseId)) throw new Error(`${slug}.${type} 不能携带 fromReleaseId/toReleaseId。`);
     return {
       name, type, playbook, tags,
-      limit: optionalString(raw.limit, `${slug}.${type}.limit`) ?? '',
       hostGroup: optionalString(raw.hostGroup, `${slug}.${type}.hostGroup`) ?? '',
-      timeoutSeconds, allowedParameters, requiredCredentials,
+      timeoutSeconds, requiredCredentials,
       riskLevel: actionRisk, destructive, idempotent,
       ...(fromReleaseId ? { fromReleaseId } : {}),
       ...(toReleaseId ? { toReleaseId } : {}),
     };
   });
   if (new Set(actions.map((action) => action.type)).size !== actions.length) throw new Error(`${slug} 包含重复 Action 类型。`);
-  const parameterNames = new Set(parameters.map((parameter) => parameter.name));
-  for (const action of actions) {
-    for (const name of action.allowedParameters ?? []) if (!parameterNames.has(name)) throw new Error(`${slug}.${action.type} 引用了未声明参数 ${name}。`);
-  }
 
   const playbooks = optionalArray(value.playbooks, `${slug}.playbooks`).map((raw, playbookIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${playbookIndex + 1} 个 Playbook 必须是对象。`);
@@ -279,6 +285,7 @@ function validateDependencyContracts(entries: ComponentImportEntry[]) {
       for (const mapping of dependency.parameterMappings ?? []) {
         const target = targets.get(mapping.targetParameter);
         if (!target) throw new Error(`${entry.component.slug} 的映射目标 ${mapping.targetParameter} 未声明。`);
+        if (target.valueProvider !== 'upstream_mapping') throw new Error(`${entry.component.slug}.${mapping.targetParameter} 必须由 upstream_mapping 提供。`);
         if (mappedTargets.has(mapping.targetParameter)) throw new Error(`${entry.component.slug} 的参数 ${mapping.targetParameter} 被重复映射。`);
         mappedTargets.add(mapping.targetParameter);
         const source = sources.get(mapping.upstreamParameter);

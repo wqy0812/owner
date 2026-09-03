@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	parameterSourceDefault           = "default"
-	parameterSourceNodeValue         = "node_value"
-	parameterSourceRunInput          = "run_input"
+	parameterSourceComponentFixed    = "component_fixed"
+	parameterSourceScenarioValue     = "scenario_value"
+	parameterSourceEnvironmentValue  = "environment_value"
+	parameterSourceTestValue         = "test_value"
 	parameterSourceDependencyMapping = "dependency_mapping"
-	parameterSourceDependencyFixture = "dependency_fixture"
 )
 
 type resolvedParameter struct {
@@ -46,28 +46,62 @@ func validateReleaseParameters(release domain.ComponentRelease) error {
 		if isSensitiveKey(name) {
 			return fmt.Errorf("%w: sensitive parameter %q must use a CredentialRef", domain.ErrInvalid, name)
 		}
-		if parameter.HasDefault() && !matchesParameterType(parameter.DefaultValue, string(parameter.Type)) {
-			return fmt.Errorf("%w: default value for %q must be of type %s", domain.ErrInvalid, name, parameter.Type)
+		if !parameter.ValueProvider.Valid() {
+			return fmt.Errorf("%w: parameter %q has invalid valueProvider", domain.ErrInvalid, name)
+		}
+		switch parameter.ValueProvider {
+		case domain.ParameterProviderComponentOwner:
+			if parameter.Modifiable || !parameter.HasFixedValue() {
+				return fmt.Errorf("%w: component-owned parameter %q must be fixed and unmodifiable", domain.ErrInvalid, name)
+			}
+			if parameter.EnvironmentBinding != nil {
+				return fmt.Errorf("%w: component-owned parameter %q cannot have environmentBinding", domain.ErrInvalid, name)
+			}
+		case domain.ParameterProviderScenarioOwner:
+			if !parameter.Modifiable || parameter.HasFixedValue() || parameter.EnvironmentBinding != nil {
+				return fmt.Errorf("%w: scenario-owned parameter %q must be modifiable and cannot be fixed or environment-bound", domain.ErrInvalid, name)
+			}
+			if (parameter.Type == domain.ParameterTypeObject || parameter.Type == domain.ParameterTypeArray) && len(parameter.Enum) == 0 {
+				return fmt.Errorf("%w: scenario-owned structured parameter %q requires governed enum choices instead of raw JSON", domain.ErrInvalid, name)
+			}
+		case domain.ParameterProviderEnvironmentOwner:
+			if !parameter.Modifiable || parameter.HasFixedValue() || parameter.EnvironmentBinding == nil || !parameter.EnvironmentBinding.Valid() {
+				return fmt.Errorf("%w: environment-owned parameter %q requires a valid environmentBinding", domain.ErrInvalid, name)
+			}
+			if (parameter.Type == domain.ParameterTypeObject || parameter.Type == domain.ParameterTypeArray) && len(parameter.Enum) == 0 {
+				return fmt.Errorf("%w: environment-owned structured parameter %q requires governed enum choices instead of raw JSON", domain.ErrInvalid, name)
+			}
+		case domain.ParameterProviderUpstreamMapping:
+			if parameter.Modifiable || parameter.HasFixedValue() || parameter.EnvironmentBinding != nil {
+				return fmt.Errorf("%w: mapped parameter %q must be unmodifiable", domain.ErrInvalid, name)
+			}
 		}
 		if parameter.MinLength > 0 && parameter.Type != domain.ParameterTypeString {
 			return fmt.Errorf("%w: minLength is only valid for string parameter %q", domain.ErrInvalid, name)
-		}
-		if parameter.HasDefault() && parameter.MinLength > 0 {
-			text, _ := parameter.DefaultValue.(string)
-			if len([]rune(text)) < parameter.MinLength {
-				return fmt.Errorf("%w: default value for %q is shorter than minLength", domain.ErrInvalid, name)
-			}
 		}
 		for _, value := range parameter.Enum {
 			if !matchesParameterType(value, string(parameter.Type)) {
 				return fmt.Errorf("%w: enum value for %q must be of type %s", domain.ErrInvalid, name, parameter.Type)
 			}
 		}
-		if parameter.HasDefault() && len(parameter.Enum) > 0 && !containsParameterValue(parameter.Enum, parameter.DefaultValue) {
-			return fmt.Errorf("%w: default value for %q is not one of the allowed values", domain.ErrInvalid, name)
-		}
-		if err := rejectSensitiveValue(parameter.DefaultValue, name); err != nil {
-			return err
+		for label, value := range map[string]any{"fixedValue": parameter.FixedValue, "suggestedValue": parameter.SuggestedValue, "testValue": parameter.TestValue} {
+			if value == nil {
+				continue
+			}
+			if !matchesParameterType(value, string(parameter.Type)) {
+				return fmt.Errorf("%w: %s for %q must be of type %s", domain.ErrInvalid, label, name, parameter.Type)
+			}
+			if parameter.MinLength > 0 {
+				if text, ok := value.(string); ok && len([]rune(text)) < parameter.MinLength {
+					return fmt.Errorf("%w: %s for %q is shorter than minLength", domain.ErrInvalid, label, name)
+				}
+			}
+			if len(parameter.Enum) > 0 && !containsParameterValue(parameter.Enum, value) {
+				return fmt.Errorf("%w: %s for %q is not one of the allowed values", domain.ErrInvalid, label, name)
+			}
+			if err := rejectSensitiveValue(value, name); err != nil {
+				return err
+			}
 		}
 		seen[name] = parameter
 	}
@@ -89,15 +123,15 @@ func validateReleaseParameters(release domain.ComponentRelease) error {
 				return fmt.Errorf("%w: parameter %q is mapped more than once", domain.ErrInvalid, mapping.TargetParameter)
 			}
 			mappedTargets[mapping.TargetParameter] = true
-			_ = target
+			if target.ValueProvider != domain.ParameterProviderUpstreamMapping {
+				return fmt.Errorf("%w: mapping target %q must use upstream_mapping as valueProvider", domain.ErrInvalid, mapping.TargetParameter)
+			}
 		}
 	}
-
-	for _, action := range release.Actions {
-		for _, name := range action.AllowedParameters {
-			if _, ok := seen[name]; !ok {
-				return fmt.Errorf("%w: action %s allowed parameter %q is not declared", domain.ErrInvalid, action.Name, name)
-			}
+	for _, parameter := range release.Parameters {
+		_, mapped := mappedTargets[parameter.Name]
+		if parameter.ValueProvider == domain.ParameterProviderUpstreamMapping && !mapped {
+			return fmt.Errorf("%w: mapped parameter %q requires exactly one upstream mapping", domain.ErrInvalid, parameter.Name)
 		}
 	}
 	return nil
@@ -110,46 +144,37 @@ func rejectSensitiveValue(value any, label string) error {
 	return nil
 }
 
-func parameterDefaults(parameters []domain.ParameterDefinition) map[string]any {
+func parameterFixedValues(parameters []domain.ParameterDefinition) map[string]any {
 	out := map[string]any{}
 	for _, parameter := range parameters {
-		if parameter.HasDefault() {
-			out[parameter.Name] = deepCopy(parameter.DefaultValue)
+		if parameter.HasFixedValue() {
+			out[parameter.Name] = deepCopy(parameter.FixedValue)
 		}
 	}
 	return out
 }
 
 func validateResolvedParameters(parameters []domain.ParameterDefinition, resolved map[string]any) error {
-	for _, parameter := range parameters {
-		value, exists := resolved[parameter.Name]
-		if !exists {
-			if parameter.Required {
-				return fmt.Errorf("%w: required parameter %q has no resolved value", domain.ErrInvalid, parameter.Name)
-			}
-			continue
-		}
-		if !matchesParameterType(value, string(parameter.Type)) {
-			return fmt.Errorf("%w: parameter %q must be of type %s", domain.ErrInvalid, parameter.Name, parameter.Type)
-		}
-		if parameter.MinLength > 0 {
-			text, isString := value.(string)
-			if isString && len([]rune(text)) < parameter.MinLength {
-				return fmt.Errorf("%w: parameter %q must contain at least %d characters", domain.ErrInvalid, parameter.Name, parameter.MinLength)
-			}
-		}
-		if len(parameter.Enum) > 0 && !containsParameterValue(parameter.Enum, value) {
-			return fmt.Errorf("%w: parameter %q is not one of the allowed values", domain.ErrInvalid, parameter.Name)
+	return domain.ValidateResolvedParameters(parameters, resolved)
+}
+
+func equalParameterValues(left, right []any) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !parameterValuesEqual(left[index], right[index]) {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 func resolveOwnParameters(
 	release domain.ComponentRelease,
 	node domain.ScenarioNode,
-	runInput map[string]any,
-	allowedRunInput []string,
+	environment domain.EnvironmentRevision,
+	componentTest bool,
 ) (map[string]any, map[string]resolvedParameter, error) {
 	mapped := domain.MappedTargets(release.Dependencies)
 	resolved := map[string]any{}
@@ -162,28 +187,26 @@ func resolveOwnParameters(
 	}
 
 	for _, parameter := range release.Parameters {
-		if parameter.HasDefault() {
-			assign(parameter.Name, parameter.DefaultValue, parameterSourceDefault)
+		if parameter.ValueProvider == domain.ParameterProviderComponentOwner && parameter.HasFixedValue() {
+			assign(parameter.Name, parameter.FixedValue, parameterSourceComponentFixed)
+		} else if componentTest && parameter.ValueProvider != domain.ParameterProviderEnvironmentOwner && parameter.HasTestValue() {
+			assign(parameter.Name, parameter.TestValue, parameterSourceTestValue)
+		} else if parameter.ValueProvider == domain.ParameterProviderEnvironmentOwner {
+			key := domain.EnvironmentParameterValueKey(release.ID, parameter)
+			if value, ok := environment.Parameters[key]; ok {
+				assign(parameter.Name, value, parameterSourceEnvironmentValue)
+			}
 		}
 	}
-	for name, value := range node.Values {
-		if _, skip := mapped[name]; skip {
-			continue
-		}
-		assign(name, value, parameterSourceNodeValue)
-	}
-	allowed := make(map[string]struct{}, len(allowedRunInput))
-	for _, key := range allowedRunInput {
-		allowed[key] = struct{}{}
-	}
-	for name, value := range runInput {
-		if _, ok := allowed[name]; !ok {
-			return nil, nil, fmt.Errorf("%w: run input %q was not declared by the scenario", domain.ErrInvalid, name)
+	for name, value := range node.ParameterValues {
+		parameter, declared := domain.ParameterByName(release.Parameters, name)
+		if !declared || parameter.ValueProvider != domain.ParameterProviderScenarioOwner || !parameter.Modifiable {
+			return nil, nil, fmt.Errorf("%w: scenario value %q is not owned by the scenario", domain.ErrInvalid, name)
 		}
 		if _, skip := mapped[name]; skip {
-			return nil, nil, fmt.Errorf("%w: mapped parameter %q cannot be supplied as run input", domain.ErrInvalid, name)
+			return nil, nil, fmt.Errorf("%w: mapped parameter %q cannot be supplied by the scenario", domain.ErrInvalid, name)
 		}
-		assign(name, value, parameterSourceRunInput)
+		assign(name, value, parameterSourceScenarioValue)
 	}
 	return resolved, provenance, nil
 }
@@ -222,50 +245,6 @@ func applyParameterMappings(
 				Value: copied, Source: parameterSourceDependencyMapping,
 				SourceNodeID: sourceID, UpstreamParameter: mapping.UpstreamParameter, TargetParameter: mapping.TargetParameter,
 			}
-		}
-	}
-	return nil
-}
-
-func applyDependencyFixtures(release domain.ComponentRelease, fixtures map[string]any, resolved map[string]any, provenance map[string]resolvedParameter) error {
-	mapped := domain.MappedTargets(release.Dependencies)
-	if len(mapped) == 0 {
-		if len(fixtures) > 0 {
-			return fmt.Errorf("%w: dependencyFixtures are only allowed for mapped parameters", domain.ErrInvalid)
-		}
-		return nil
-	}
-	if fixtures == nil {
-		fixtures = map[string]any{}
-	}
-	for name := range fixtures {
-		if _, ok := mapped[name]; !ok {
-			return fmt.Errorf("%w: dependency fixture %q is not a mapping target", domain.ErrInvalid, name)
-		}
-	}
-	targets := make([]string, 0, len(mapped))
-	for name := range mapped {
-		targets = append(targets, name)
-	}
-	sort.Strings(targets)
-	for _, name := range targets {
-		mapping := mapped[name]
-		value, ok := fixtures[name]
-		parameter, _ := domain.ParameterByName(release.Parameters, name)
-		if !ok {
-			if parameter.Required {
-				return fmt.Errorf("%w: dependency fixture %q is required", domain.ErrInvalid, name)
-			}
-			continue
-		}
-		if !matchesParameterType(value, string(parameter.Type)) {
-			return fmt.Errorf("%w: dependency fixture %q must be of type %s", domain.ErrInvalid, name, parameter.Type)
-		}
-		copied := deepCopy(value)
-		resolved[name] = copied
-		provenance[name] = resolvedParameter{
-			Value: copied, Source: parameterSourceDependencyFixture,
-			UpstreamParameter: mapping.UpstreamParameter, TargetParameter: mapping.TargetParameter,
 		}
 	}
 	return nil
@@ -326,10 +305,7 @@ func reachableUpstreamNodes(downstreamID, upstreamReleaseID string, graph domain
 func nodeOverridesMappedParameter(node domain.ScenarioNode, release domain.ComponentRelease) []string {
 	var conflicts []string
 	for name := range domain.MappedTargets(release.Dependencies) {
-		if _, ok := node.Values[name]; ok {
-			conflicts = append(conflicts, name)
-		}
-		if contains(node.RunInputs, name) {
+		if _, ok := node.ParameterValues[name]; ok {
 			conflicts = append(conflicts, name)
 		}
 	}

@@ -174,7 +174,6 @@ rebuild_v1_db=0
 if [[ "$REBUILD_V1_DB" == true ]]; then
   rebuild_v1_db=1
 fi
-
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
   "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" <<'REMOTE_SCRIPT'
@@ -194,6 +193,7 @@ service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
 database="/var/lib/clusterforge/platform.db"
+expected_schema_contract="clusterforge-v1-20260902-container-runtime-matrix"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
@@ -282,7 +282,7 @@ source "$staged_remote_helper"
 
 active_runs="$(clusterforge_list_active_runs "$database")"
 predeploy_schema_contract="$(clusterforge_read_schema_contract "$database")"
-clusterforge_assert_schema_policy "$predeploy_schema_contract" "clusterforge-v1-20260901-release-lines" "$rebuild_v1_db"
+clusterforge_assert_schema_policy "$predeploy_schema_contract" "$expected_schema_contract" "$rebuild_v1_db"
 clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
 
 platform_env_value() {
@@ -399,14 +399,14 @@ if [[ "$backup_enabled" != "true" ]]; then
   finish_failure 1
 fi
 
-python3 - "$database" <<'PY'
+python3 - "$database" "$expected_schema_contract" <<'PY'
 import sqlite3
 import sys
 
-database = sys.argv[1]
+database, expected_schema_contract = sys.argv[1:]
 connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
 contract = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
-if contract != ("clusterforge-v1-20260901-release-lines",):
+if contract != (expected_schema_contract,):
     raise SystemExit(f"unexpected schema contract: {contract!r}")
 violations = connection.execute("PRAGMA foreign_key_check").fetchall()
 if violations:

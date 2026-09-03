@@ -47,6 +47,7 @@ type Platform struct {
 	environments            *EnvironmentService
 	execution               *ExecutionService
 	readModel               *ReadModelService
+	platformOptions         *PlatformOptionService
 	releaseCoordinator      *ReleaseCoordinator
 	planBuilder             *PlanBuilder
 	runCreator              *RunCreator
@@ -93,6 +94,7 @@ func NewPlatform(database *store.Store, runner ActionRunner, hub *EventHub) *Pla
 	platform.environments = &EnvironmentService{platform: platform, store: database}
 	platform.execution = &ExecutionService{platform: platform, store: database}
 	platform.readModel = &ReadModelService{platform: platform, store: database}
+	platform.platformOptions = &PlatformOptionService{platform: platform, store: database}
 	platform.releaseCoordinator = &ReleaseCoordinator{platform: platform, store: database}
 	platform.planBuilder = &PlanBuilder{platform: platform}
 	platform.runCreator = &RunCreator{platform: platform}
@@ -300,12 +302,20 @@ func validateRelease(release domain.ComponentRelease) error {
 		}
 		seenDependencies[dependency.UpstreamComponentID] = struct{}{}
 	}
+	seenActionKinds := map[domain.ActionKind]bool{}
 	for _, action := range release.Actions {
 		if !validActionKind(action.Kind) {
 			return fmt.Errorf("%w: invalid action kind %q", domain.ErrInvalid, action.Kind)
 		}
 		if strings.TrimSpace(action.Playbook) == "" {
 			return fmt.Errorf("%w: every action requires a kind and relative playbook", domain.ErrInvalid)
+		}
+		if seenActionKinds[action.Kind] {
+			return fmt.Errorf("%w: every release action kind must be unique", domain.ErrInvalid)
+		}
+		seenActionKinds[action.Kind] = true
+		if strings.TrimSpace(action.HostGroup) == "" {
+			return fmt.Errorf("%w: every action must select a host group", domain.ErrInvalid)
 		}
 		if action.RiskLevel != "" && !validRiskLevel(action.RiskLevel) {
 			return fmt.Errorf("%w: invalid action risk level %q", domain.ErrInvalid, action.RiskLevel)
@@ -327,11 +337,6 @@ func validateRelease(release domain.ComponentRelease) error {
 		}
 		if containsString(action.Tags, rollbackSelfVerifyTag) && (action.Kind != domain.ActionRollback || action.FromReleaseID != "" || action.ToReleaseID != "") {
 			return fmt.Errorf("%w: %s is only valid on a clean-state rollback without fromReleaseId/toReleaseId", domain.ErrInvalid, rollbackSelfVerifyTag)
-		}
-		for _, parameter := range action.AllowedParameters {
-			if isSensitiveKey(parameter) {
-				return fmt.Errorf("%w: sensitive action parameter %q must use a CredentialRef", domain.ErrInvalid, parameter)
-			}
 		}
 		seenCredentials := map[string]struct{}{}
 		for _, credential := range action.RequiredCredentials {

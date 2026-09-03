@@ -22,9 +22,7 @@ type flowNodeInput struct {
 		Label             string            `json:"label"`
 		ReleaseID         string            `json:"releaseId"`
 		Action            domain.ActionKind `json:"action"`
-		HostGroup         string            `json:"hostGroup"`
-		Values            map[string]any    `json:"values"`
-		RunInputs         []string          `json:"runInputs"`
+		ParameterValues   map[string]any    `json:"parameterValues"`
 		DependencySources map[string]string `json:"dependencySources"`
 	} `json:"data"`
 }
@@ -34,8 +32,8 @@ func (input graphInput) domain() domain.ScenarioGraph {
 	for _, flow := range input.Nodes {
 		graph.Nodes = append(graph.Nodes, domain.ScenarioNode{
 			ID: flow.ID, Name: flow.Data.Label, ReleaseID: flow.Data.ReleaseID,
-			Action: flow.Data.Action, HostGroup: flow.Data.HostGroup,
-			Values: flow.Data.Values, RunInputs: flow.Data.RunInputs,
+			Action:            flow.Data.Action,
+			ParameterValues:   flow.Data.ParameterValues,
 			DependencySources: flow.Data.DependencySources, Position: flow.Position,
 		})
 	}
@@ -160,6 +158,15 @@ func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages})
 }
 
+func (h *Handler) scenarioParameterOverview(w http.ResponseWriter, r *http.Request) {
+	overview, err := h.platform.Scenarios().ParameterOverview(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, overview)
+}
+
 func (h *Handler) candidateReleaseSet(w http.ResponseWriter, r *http.Request) {
 	set, err := h.platform.Releases().CandidateReleaseSet(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
@@ -170,12 +177,12 @@ func (h *Handler) candidateReleaseSet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
-	var input runInput
+	var input scenarioRunRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.Execution().StartScenarioTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
+	run, err := h.platform.Execution().StartScenarioTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -184,12 +191,12 @@ func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) runScenario(w http.ResponseWriter, r *http.Request) {
-	var input runInput
+	var input scenarioRunRequest
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	run, err := h.platform.Execution().StartScenarioRun(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID, input.RunInput)
+	run, err := h.platform.Execution().StartScenarioRun(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -260,7 +267,7 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	for _, node := range revision.Graph.Nodes {
 		data := map[string]any{
 			"label": node.Name, "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
-			"values": node.Values, "runInputs": node.RunInputs,
+			"parameterValues":   node.ParameterValues,
 			"dependencySources": node.DependencySources,
 		}
 		if release, ok := releases[node.ReleaseID]; ok {
@@ -282,7 +289,6 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	}
 }
 
-type runInput struct {
-	EnvironmentID string         `json:"environmentId"`
-	RunInput      map[string]any `json:"runInput"`
+type scenarioRunRequest struct {
+	EnvironmentID string `json:"environmentId"`
 }

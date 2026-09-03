@@ -27,10 +27,8 @@ type ComponentImportAction struct {
 	Type                domain.ActionKind `json:"type"`
 	Playbook            string            `json:"playbook"`
 	Tags                []string          `json:"tags"`
-	Limit               string            `json:"limit"`
 	HostGroup           string            `json:"hostGroup"`
 	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	AllowedParameters   []string          `json:"allowedParameters"`
 	RequiredCredentials []string          `json:"requiredCredentials"`
 	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
 	Destructive         bool              `json:"destructive"`
@@ -123,10 +121,8 @@ func normalizeComponentImportRequest(input ComponentImportRequest) ComponentImpo
 			action := &entry.Release.Actions[index]
 			action.Name = strings.TrimSpace(action.Name)
 			action.Playbook = strings.TrimSpace(action.Playbook)
-			action.Limit = strings.TrimSpace(action.Limit)
 			action.HostGroup = strings.TrimSpace(action.HostGroup)
 			action.Tags = normalizeStrings(action.Tags)
-			action.AllowedParameters = normalizeStrings(action.AllowedParameters)
 			action.RequiredCredentials = normalizeStrings(action.RequiredCredentials)
 		}
 		entry.Playbooks = append([]struct{ Filename, Content string }(nil), entry.Playbooks...)
@@ -215,7 +211,7 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 			if risk == "" {
 				risk = domain.RiskLow
 			}
-			actions = append(actions, domain.ActionDefinition{Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, Limit: action.Limit, HostGroup: action.HostGroup, TimeoutSeconds: timeout, AllowedParameters: action.AllowedParameters, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
+			actions = append(actions, domain.ActionDefinition{Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
 		}
 		for filename := range playbooks {
 			if !usedPlaybooks[filename] {
@@ -230,6 +226,12 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 			validationRelease.Dependencies = append(validationRelease.Dependencies, domain.ComponentDependency{UpstreamComponentID: "import-component-" + dependency.ComponentSlug, UpstreamReleaseID: "import-release-" + dependency.ComponentSlug, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings})
 		}
 		if err := validateRelease(validationRelease); err != nil {
+			return ComponentImportPlan{}, err
+		}
+		if err := p.validateReleaseCatalogValues(ctx, validationRelease); err != nil {
+			return ComponentImportPlan{}, err
+		}
+		if err := p.validateEnvironmentConstraintRetiredReferences(ctx, validationRelease.EnvironmentConstraints, nil); err != nil {
 			return ComponentImportPlan{}, err
 		}
 	}
@@ -309,7 +311,7 @@ func (p *Platform) ImportComponents(ctx context.Context, user domain.User, input
 	if input.ExpectedPlanDigest == "" || input.ExpectedPlanDigest != plan.PlanDigest {
 		return ComponentImportResult{}, fmt.Errorf("%w: component import plan changed; preview again", domain.ErrConflict)
 	}
-	prepared, err := p.prepareComponentImport(user, input, plan)
+	prepared, err := p.prepareComponentImport(ctx, user, input, plan)
 	if err != nil {
 		return ComponentImportResult{}, err
 	}
@@ -363,7 +365,7 @@ type componentImportManifest struct {
 	BatchDir   string                        `json:"-"`
 }
 
-func (p *Platform) prepareComponentImport(user domain.User, input ComponentImportRequest, plan ComponentImportPlan) (preparedComponentImport, error) {
+func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User, input ComponentImportRequest, plan ComponentImportPlan) (preparedComponentImport, error) {
 	bySlug := make(map[string]ComponentImportEntry, len(input.Entries))
 	for _, entry := range input.Entries {
 		bySlug[entry.Component.Slug] = entry
@@ -427,13 +429,16 @@ func (p *Platform) prepareComponentImport(user domain.User, input ComponentImpor
 			}
 			release.Actions = append(release.Actions, domain.ActionDefinition{
 				Name: action.Name, Kind: action.Type, Playbook: managed[action.Playbook], PlaybookSHA256: managedDigests[action.Playbook], Tags: action.Tags,
-				Limit: action.Limit, HostGroup: action.HostGroup, TimeoutSeconds: timeout,
-				AllowedParameters: action.AllowedParameters, RequiredCredentials: action.RequiredCredentials,
-				RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent,
+				HostGroup: action.HostGroup, TimeoutSeconds: timeout,
+				RequiredCredentials: action.RequiredCredentials,
+				RiskLevel:           risk, Destructive: action.Destructive, Idempotent: action.Idempotent,
 			})
 		}
 		rewriteReleaseChildren(&release)
 		if err := validateRelease(release); err != nil {
+			return preparedComponentImport{}, err
+		}
+		if err := p.validateReleaseCatalogValues(ctx, release); err != nil {
 			return preparedComponentImport{}, err
 		}
 		releases[slug] = release

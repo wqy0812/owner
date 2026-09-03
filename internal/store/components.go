@@ -49,7 +49,7 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 	if viewer.Role == domain.RoleComponentOwner {
 		query += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1)))`
 		args = append(args, viewer.ID)
-	} else {
+	} else if viewer.Role != domain.RolePlatformAdmin {
 		query += ` WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1)))`
 	}
 	query += ` ORDER BY CASE layer WHEN 'host_foundation' THEN 1 WHEN 'runtime_state' THEN 2 WHEN 'orchestration_core' THEN 3 WHEN 'cluster_service' THEN 4 WHEN 'observability_management' THEN 5 WHEN 'platform_extension' THEN 6 ELSE 7 END, name`
@@ -76,14 +76,18 @@ func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domai
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		ownerView := viewer.Role == domain.RoleComponentOwner && out[i].OwnerID == viewer.ID
-		out[i].Releases, err = s.listVisibleComponentReleases(ctx, out[i].ID, ownerView)
+	visible := make([]domain.Component, 0, len(out))
+	for _, component := range out {
+		ownerView := viewer.Role == domain.RolePlatformAdmin || (viewer.Role == domain.RoleComponentOwner && component.OwnerID == viewer.ID)
+		component.Releases, err = s.listVisibleComponentReleases(ctx, component.ID, ownerView)
 		if err != nil {
 			return nil, err
 		}
+		if ownerView || len(component.Releases) > 0 {
+			visible = append(visible, component)
+		}
 	}
-	return out, nil
+	return visible, nil
 }
 
 func (s *Store) ComponentSlugExists(ctx context.Context, slug string) (bool, error) {
@@ -93,7 +97,7 @@ func (s *Store) ComponentSlugExists(ctx context.Context, slug string) (bool, err
 }
 
 func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRelease) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -110,6 +114,9 @@ func (s *Store) CreateComponentRelease(ctx context.Context, r domain.ComponentRe
 }
 
 func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentRelease) error {
+	if err := validateReleaseCatalogTx(ctx, tx, r, nil); err != nil {
+		return err
+	}
 	if r.ParentReleaseID == "" && r.LineID == "" {
 		for _, action := range r.Actions {
 			parentID := ""
@@ -145,18 +152,25 @@ func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, r.LineID, r.ComponentID, r.LineName, timeText(r.CreatedAt)); err != nil {
 		return mapSQLError(err)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	if r.Review.Status == "" {
+		r.Review.Status = domain.ReleaseReviewNotSubmitted
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
-	return replaceReleaseChildren(ctx, tx, r)
+	if err := replaceReleaseChildren(ctx, tx, r); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE component_releases SET candidate=?,review_status=?,review_contract_digest=?,review_submitted_at=?,reviewed_by=?,reviewed_at=?,review_comment=? WHERE id=?`, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.ID)
+	return err
 }
 
 // CreateClonedComponentRelease commits the cloned Release contract, artifacts,
 // and audit record together. Managed Playbooks are prepared before this call
 // and removed by the service if the transaction fails.
 func (s *Store) CreateClonedComponentRelease(ctx context.Context, r domain.ComponentRelease, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -181,12 +195,19 @@ func (s *Store) CreateClonedComponentRelease(ctx context.Context, r domain.Compo
 }
 
 func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentRelease) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=?,risk_level=?,environment_constraints_json=?,parameters_json=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.Candidate, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
+	previous, err := getComponentRelease(ctx, tx, r.ID)
+	if err != nil {
+		return err
+	}
+	if err := validateReleaseCatalogTx(ctx, tx, r, &previous); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -218,7 +239,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.Limit, a.HostGroup, jsonText(nonNilStrings(a.AllowedParameters)), jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.HostGroup, jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -245,7 +266,7 @@ func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.Comp
 }
 
 func getComponentRelease(ctx context.Context, q queryer, id string) (domain.ComponentRelease, error) {
-	row := q.QueryRowContext(ctx, `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.id=?`, id)
+	row := q.QueryRowContext(ctx, `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.id=?`, id)
 	r, err := scanRelease(row)
 	if err != nil {
 		return r, mapSQLError(err)
@@ -300,11 +321,14 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var r domain.ComponentRelease
 	var candidate int
 	var constraints, parameters, created string
-	var parent, template, released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
+	var parent, template, submitted, reviewedBy, reviewed, released, deprecated sql.NullString
+	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.Review.Status, &r.Review.ContractDigest, &submitted, &reviewedBy, &reviewed, &r.Review.Comment, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
 	r.ParentReleaseID = parent.String
 	r.TemplateSourceReleaseID = template.String
 	r.Candidate = candidate != 0
+	r.Review.SubmittedAt = parseNullTime(submitted)
+	r.Review.ReviewedBy = reviewedBy.String
+	r.Review.ReviewedAt = parseNullTime(reviewed)
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	r.Parameters = decodeJSON(parameters, []domain.ParameterDefinition{})
 	r.CreatedAt = parseTime(created)
@@ -314,7 +338,7 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 }
 
 func (s *Store) ListComponentReleases(ctx context.Context, componentID string, releasedOnly bool) ([]domain.ComponentRelease, error) {
-	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=?`
+	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=?`
 	if releasedOnly {
 		q += ` AND r.status='released'`
 	}
@@ -363,7 +387,7 @@ func (s *Store) listVisibleComponentReleases(ctx context.Context, componentID st
 	if ownerView {
 		return s.ListComponentReleases(ctx, componentID, false)
 	}
-	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=? AND (r.status='released' OR (r.status='draft' AND r.candidate=1)) ORDER BY r.created_at DESC`
+	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=? AND (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.review_status='approved')) ORDER BY r.created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, componentID)
 	if err != nil {
 		return nil, err
@@ -391,7 +415,9 @@ func (s *Store) listVisibleComponentReleases(ctx context.Context, componentID st
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		if r.Status == domain.ReleaseReleased || r.IsApprovedCandidate() {
+			out = append(out, r)
+		}
 	}
 	return out, rows.Err()
 }
@@ -424,7 +450,7 @@ func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.Act
 }
 
 func listActions(ctx context.Context, q queryer, releaseID string) ([]domain.ActionDefinition, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,limit_pattern,host_group,allowed_parameters_json,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
 	if err != nil {
 		return nil, err
 	}
@@ -432,14 +458,13 @@ func listActions(ctx context.Context, q queryer, releaseID string) ([]domain.Act
 	var out []domain.ActionDefinition
 	for rows.Next() {
 		var a domain.ActionDefinition
-		var tags, allowed, requiredCredentials string
+		var tags, requiredCredentials string
 		var destructive, idempotent int
 		var from, to sql.NullString
-		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.Limit, &a.HostGroup, &allowed, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to); err != nil {
+		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.HostGroup, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to); err != nil {
 			return nil, err
 		}
 		a.Tags = nonNilStrings(decodeJSON(tags, []string{}))
-		a.AllowedParameters = nonNilStrings(decodeJSON(allowed, []string{}))
 		a.RequiredCredentials = nonNilStrings(decodeJSON(requiredCredentials, []string{}))
 		a.Destructive = destructive != 0
 		a.Idempotent = idempotent != 0
@@ -451,7 +476,7 @@ func listActions(ctx context.Context, q queryer, releaseID string) ([]domain.Act
 }
 
 func (s *Store) DeprecateComponentRelease(ctx context.Context, id string, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -499,7 +524,7 @@ WHERE id=?
 // Release to Draft. The checks mirror the partial unique indexes so callers
 // receive an actionable conflict instead of a raw SQLite constraint error.
 func (s *Store) RestoreDeprecatedComponentRelease(ctx context.Context, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -613,7 +638,7 @@ func (s *Store) ComponentReleaseDeletionImpact(ctx context.Context, id string) (
 // that has already been deprecated and has no retained execution or reference
 // evidence. Owned Draft content is cascaded; the audit event remains.
 func (s *Store) DeleteComponentRelease(ctx context.Context, id string, audit domain.AuditEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -641,9 +666,6 @@ func (s *Store) DeleteComponentRelease(ctx context.Context, id string, audit dom
 	if impact.ReferenceCount() > 0 {
 		return fmt.Errorf("%w: component release is still referenced", domain.ErrConflict)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM run_input_presets WHERE resource_type='component_release' AND resource_id=?`, id); err != nil {
-		return err
-	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM component_releases WHERE id=?`, id)
 	if err != nil {
 		return mapSQLError(err)
@@ -670,11 +692,12 @@ func invalidateDraftReleaseDeliveryTx(ctx context.Context, tx *sql.Tx, id string
 	if status != domain.ReleaseDraft {
 		return fmt.Errorf("%w: release is no longer a mutable draft", domain.ErrConflict)
 	}
-	return nil
+	_, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',publication_generation=publication_generation+1 WHERE id=?`, id)
+	return err
 }
 
 func (s *Store) InvalidateDraftReleaseDelivery(ctx context.Context, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -690,7 +713,7 @@ func (s *Store) InvalidateDraftReleaseDelivery(ctx context.Context, id string) e
 // publishing the staged file fails closed: an interrupted write can only make
 // old evidence inapplicable, never make changed executable content look ready.
 func (s *Store) UpdateDraftActionPlaybookDigest(ctx context.Context, releaseID, playbook, sha256 string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -704,13 +727,60 @@ func (s *Store) UpdateDraftActionPlaybookDigest(ctx context.Context, releaseID, 
 	return tx.Commit()
 }
 
-func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bool) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE component_releases SET candidate=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, candidate, id)
+func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bool, expectedGeneration int64, expectedDigest string) error {
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	release, err := getComponentRelease(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if release.PublicationGeneration != expectedGeneration || domain.ComponentReleaseSpecDigest(release) != expectedDigest ||
+		(candidate && (release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != expectedDigest)) {
+		return fmt.Errorf("%w: release or approval changed; refresh and retry", domain.ErrConflict)
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND publication_generation=?`, candidate, id, expectedGeneration)
 	if err != nil {
 		return err
 	}
 	if changed, _ := res.RowsAffected(); changed == 0 {
 		return fmt.Errorf("%w: only a draft release can change candidate state", domain.ErrConflict)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SubmitComponentReleaseReview(ctx context.Context, id, digest string, expectedGeneration int64, submittedAt time.Time) error {
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	release, err := getComponentRelease(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if release.PublicationGeneration != expectedGeneration || domain.ComponentReleaseSpecDigest(release) != digest {
+		return fmt.Errorf("%w: release changed; refresh and retry", domain.ErrConflict)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE component_releases SET review_status='pending',review_contract_digest=?,review_submitted_at=?,reviewed_by=NULL,reviewed_at=NULL,review_comment='',candidate=0,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND publication_generation=?`, digest, timeText(submittedAt), id, expectedGeneration)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: only a draft release can be submitted for review", domain.ErrConflict)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DecideComponentReleaseReview(ctx context.Context, id string, status domain.ReleaseReviewStatus, reviewer, comment, digest string, reviewedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE component_releases SET review_status=?,reviewed_by=?,reviewed_at=?,review_comment=?,candidate=0,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND review_status='pending' AND review_contract_digest=?`, status, reviewer, timeText(reviewedAt), comment, id, digest)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return fmt.Errorf("%w: release review is no longer pending for this contract", domain.ErrConflict)
 	}
 	return nil
 }

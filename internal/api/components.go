@@ -41,9 +41,7 @@ type componentActionInput struct {
 	Kind                domain.ActionKind `json:"kind"`
 	Playbook            string            `json:"playbook"`
 	Tags                []string          `json:"tags"`
-	Limit               string            `json:"limit"`
 	HostGroup           string            `json:"hostGroup"`
-	AllowedParameters   []string          `json:"allowedParameters"`
 	RequiredCredentials *[]string         `json:"requiredCredentials"`
 	TimeoutSeconds      int               `json:"timeoutSeconds"`
 	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
@@ -100,7 +98,7 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 		}
 		release.Actions = append(release.Actions, domain.ActionDefinition{
 			Name: inputAction.Name, Kind: inputAction.Kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
-			Limit: inputAction.Limit, HostGroup: inputAction.HostGroup, AllowedParameters: inputAction.AllowedParameters,
+			HostGroup:           inputAction.HostGroup,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
 			Destructive: inputAction.Destructive, Idempotent: inputAction.Idempotent,
@@ -298,6 +296,46 @@ func (h *Handler) setReleaseCandidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	release, err := h.platform.Catalog().SetReleaseCandidate(r.Context(), currentUser(r), r.PathValue("id"), input.Candidate)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
+}
+
+func (h *Handler) submitReleaseReview(w http.ResponseWriter, r *http.Request) {
+	release, err := h.platform.Catalog().SubmitReleaseReview(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
+}
+
+func (h *Handler) previewReleaseReview(w http.ResponseWriter, r *http.Request) {
+	preview, err := h.platform.Catalog().PreviewReleaseReview(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, preview)
+}
+
+func (h *Handler) decideReleaseReview(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Decision              string `json:"decision"`
+		Comment               string `json:"comment"`
+		ExpectedPreviewDigest string `json:"expectedPreviewDigest"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	if input.Decision != "approve" && input.Decision != "reject" {
+		writeError(w, fmt.Errorf("%w: decision must be approve or reject", domain.ErrInvalid))
+		return
+	}
+	release, err := h.platform.Catalog().DecideReleaseReview(r.Context(), currentUser(r), r.PathValue("id"), input.Decision == "approve", input.Comment, input.ExpectedPreviewDigest)
 	if err != nil {
 		writeError(w, err)
 		return

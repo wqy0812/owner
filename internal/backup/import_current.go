@@ -101,6 +101,9 @@ func (m *Manager) RestoreCurrentDatabase(ctx context.Context, ref, expectedPlanD
 	if err := restoreUsers(ctx, tx, catalog); err != nil {
 		return RestorePlan{}, err
 	}
+	if err := restorePlatformOptionCatalog(ctx, tx, catalog); err != nil {
+		return RestorePlan{}, err
+	}
 	if err := restoreDefinitionTables(ctx, tx, catalog, state.PublicationGeneration); err != nil {
 		return RestorePlan{}, err
 	}
@@ -213,7 +216,7 @@ func restoreUsers(ctx context.Context, tx *sql.Tx, catalog Catalog) error {
 
 func restoreDefinitionTables(ctx context.Context, tx *sql.Tx, catalog Catalog, currentGeneration int64) error {
 	tables := catalogTableMap(catalog)
-	for _, name := range []string{"components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"} {
+	for _, name := range []string{"environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"} {
 		for _, row := range tables[name].Rows {
 			if err := insertTableRow(ctx, tx, tables[name], row); err != nil {
 				if (name == "components" || name == "component_release_lines" || name == "scenarios") && strings.Contains(err.Error(), "UNIQUE constraint") {
@@ -237,6 +240,65 @@ func restoreDefinitionTables(ctx context.Context, tx *sql.Tx, catalog Catalog, c
 	nextGeneration++
 	_, err := tx.ExecContext(ctx, `UPDATE publication_state SET generation=? WHERE id=1`, nextGeneration)
 	return err
+}
+
+func restorePlatformOptionCatalog(ctx context.Context, tx *sql.Tx, catalog Catalog) error {
+	tables := catalogTableMap(catalog)
+	categories := tables["platform_option_categories"]
+	for _, row := range categories.Rows {
+		values := rowValues(row)
+		id, _ := values[columnIndex(categories.Columns, "id")].(string)
+		key, _ := values[columnIndex(categories.Columns, "technical_key")].(string)
+		label, _ := values[columnIndex(categories.Columns, "label")].(string)
+		kind, _ := values[columnIndex(categories.Columns, "category_type")].(string)
+		required, _ := values[columnIndex(categories.Columns, "environment_required")].(int64)
+		var existingID, existingKey, existingLabel, existingKind string
+		var existingRequired int64
+		err := tx.QueryRowContext(ctx, `
+SELECT id,technical_key,label,category_type,environment_required
+FROM platform_option_categories WHERE id=? OR technical_key=? OR label=? LIMIT 1`, id, key, label).Scan(
+			&existingID, &existingKey, &existingLabel, &existingKind, &existingRequired,
+		)
+		if err == nil {
+			if existingID != id || existingKey != key || existingLabel != label || existingKind != kind || existingRequired != required {
+				return &domain.CodedError{Code: "catalog_platform_option_conflict", Message: "Git Catalog option category conflicts with the target directory", Details: map[string]any{"id": id, "key": key}, Cause: domain.ErrConflict}
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err := insertTableRow(ctx, tx, categories, row); err != nil {
+			return fmt.Errorf("restore platform option categories: %w", err)
+		}
+	}
+	options := tables["platform_options"]
+	for _, row := range options.Rows {
+		values := rowValues(row)
+		id, _ := values[columnIndex(options.Columns, "id")].(string)
+		categoryID, _ := values[columnIndex(options.Columns, "category_id")].(string)
+		value, _ := values[columnIndex(options.Columns, "technical_value")].(string)
+		label, _ := values[columnIndex(options.Columns, "label")].(string)
+		var existingID, existingCategoryID, existingValue, existingLabel string
+		err := tx.QueryRowContext(ctx, `
+SELECT id,category_id,technical_value,label FROM platform_options
+WHERE id=? OR (category_id=? AND (technical_value=? OR label=?)) LIMIT 1`, id, categoryID, value, label).Scan(
+			&existingID, &existingCategoryID, &existingValue, &existingLabel,
+		)
+		if err == nil {
+			if existingID != id || existingCategoryID != categoryID || existingValue != value || existingLabel != label {
+				return &domain.CodedError{Code: "catalog_platform_option_conflict", Message: "Git Catalog option conflicts with the target directory", Details: map[string]any{"id": id, "value": value}, Cause: domain.ErrConflict}
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err := insertTableRow(ctx, tx, options, row); err != nil {
+			return fmt.Errorf("restore platform options: %w", err)
+		}
+	}
+	return nil
 }
 
 func verifyForeignKeysTx(ctx context.Context, tx *sql.Tx) error {

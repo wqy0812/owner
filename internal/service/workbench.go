@@ -18,6 +18,9 @@ var activeWorkRunStatuses = map[domain.RunStatus]bool{
 }
 
 func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+	if user.Role == domain.RolePlatformAdmin {
+		return p.platformAdminWorkbench(ctx, user)
+	}
 	components, err := p.ListComponents(ctx, user)
 	if err != nil {
 		return domain.Workbench{}, err
@@ -118,6 +121,42 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 	return workbench, nil
 }
 
+func (p *Platform) platformAdminWorkbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+	components, err := p.store.ListComponents(ctx, user)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
+	for _, component := range components {
+		for _, release := range component.Releases {
+			if release.Status != domain.ReleaseDraft || release.Review.Status != domain.ReleaseReviewPending {
+				continue
+			}
+			updatedAt := release.CreatedAt
+			if release.Review.SubmittedAt != nil {
+				updatedAt = *release.Review.SubmittedAt
+			}
+			digest := release.Review.ContractDigest
+			if len(digest) > 16 {
+				digest = digest[:16] + "…"
+			}
+			workbench.Items = append(workbench.Items, domain.WorkItem{
+				ID: "component_review:" + release.ID, Kind: "component_review", Priority: domain.WorkPriorityHigh,
+				Status: domain.WorkStatusActionRequired, Title: component.Name + " " + release.Version + " 等待合同审核",
+				Subject: domain.WorkSubject{Type: "component_release", ID: release.ID, ParentID: component.ID, Name: component.Name, Version: release.Version},
+				Reasons: []domain.WorkReason{{
+					Code: "component_release.review_pending", Message: "组件 Owner 已提交当前 Release 合同",
+					Cause: &domain.WorkCause{Kind: "review_submission", Summary: release.LineName + " · 合同摘要 " + digest, At: &updatedAt},
+				}},
+				PrimaryAction: domain.WorkAction{Label: "预览并审核", Href: "/?review=" + release.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: updatedAt,
+			})
+		}
+	}
+	sortWorkItems(workbench.Items)
+	workbench.Summary.ActionRequired = len(workbench.Items)
+	return workbench, nil
+}
+
 func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) []domain.WorkItem {
 	now := time.Now().UTC()
 	item := domain.WorkItem{
@@ -133,7 +172,7 @@ func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) [
 		return []domain.WorkItem{item}
 	}
 	if !health.Configured {
-		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.repository_unconfigured", Message: "尚未通过前台录入私有仓库，无法创建发布目录恢复点", Cause: ruleCause("自动备份和立即备份都只使用 Environment Owner 明确选择的仓库"), NextAction: workAction("录入私有仓库", item.PrimaryAction.Href)}}
+		item.Reasons = []domain.WorkReason{{Code: "catalog_backup.repository_unconfigured", Message: "尚未通过前台录入私有仓库，无法创建发布目录恢复点", Cause: ruleCause("自动备份和立即备份都只使用环境 Owner 明确选择的仓库"), NextAction: workAction("录入私有仓库", item.PrimaryAction.Href)}}
 		return []domain.WorkItem{item}
 	}
 	if health.LastError != "" {
@@ -487,7 +526,7 @@ func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.
 		if run.Status == domain.RunAwaitingApproval {
 			canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusActionRequired
-			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待 Environment Owner 审批", EvidenceRunID: run.ID, Cause: &domain.WorkCause{Kind: "approval_rule", Summary: "锁定计划包含 destructive 动作或跨站传输"}, NextAction: workAction(runActionLabel(run.Status, canApprove), runHref)}
+			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待环境 Owner 审批", EvidenceRunID: run.ID, Cause: &domain.WorkCause{Kind: "approval_rule", Summary: "锁定计划包含 destructive 动作或跨站传输"}, NextAction: workAction(runActionLabel(run.Status, canApprove), runHref)}
 		} else if failed {
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
 			reason = domain.WorkReason{Code: "run.failed", Message: valueOr(run.Error, "最近一次有效运行失败"), EvidenceRunID: run.ID, Cause: runCause(run), NextAction: workAction("查看失败运行", runHref)}

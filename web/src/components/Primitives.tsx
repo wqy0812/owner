@@ -32,7 +32,7 @@ export function PageHeader({
 
 export function LoadingBlock({ label = '加载中' }: { label?: string }) {
   return (
-    <div className="state-block">
+    <div className="state-block" role="status" aria-live="polite">
       <LoaderCircle className="spin" size={24} />
       <span>{label}</span>
     </div>

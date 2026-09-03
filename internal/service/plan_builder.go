@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
 	"time"
 
@@ -88,11 +87,8 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 	default:
 		return preparedComponentTest{}, fmt.Errorf("%w: unsupported component test mode %q", domain.ErrInvalid, input.Mode)
 	}
-	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, input.RunInput, selected.AllowedParameters)
+	variables, provenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, *environment.Revision, true)
 	if err != nil {
-		return preparedComponentTest{}, err
-	}
-	if err := applyDependencyFixtures(release, input.DependencyFixtures, variables, provenance); err != nil {
 		return preparedComponentTest{}, err
 	}
 	if err := validateResolvedParameters(release.Parameters, variables); err != nil {
@@ -151,18 +147,13 @@ func (p *Platform) prepareComponentTest(ctx context.Context, user domain.User, r
 			if !ok {
 				return preparedComponentTest{}, fmt.Errorf("%w: rollback verify target must define a verify action", domain.ErrInvalid)
 			}
-			targetVariables, _, targetErr := resolveOwnParameters(target, domain.ScenarioNode{}, input.RunInput, selected.AllowedParameters)
+			targetVariables, _, targetErr := resolveOwnParameters(target, domain.ScenarioNode{}, *environment.Revision, true)
 			if targetErr != nil {
-				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
-			}
-			targetProvenance := map[string]resolvedParameter{}
-			if targetErr = applyDependencyFixtures(target, input.DependencyFixtures, targetVariables, targetProvenance); targetErr != nil {
 				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
 			}
 			if targetErr = validateResolvedParameters(target.Parameters, targetVariables); targetErr != nil {
 				return preparedComponentTest{}, fmt.Errorf("rollback target: %w", targetErr)
 			}
-			verify.Limit = selected.Limit
 			verifyStep, stepErr := p.lockAction(component, nodeID+"-verify", target, verify, targetVariables)
 			if stepErr != nil {
 				return preparedComponentTest{}, stepErr
@@ -216,34 +207,15 @@ func (p *Platform) prepareEvolutionRoundTrip(ctx context.Context, component doma
 		return preparedComponentTest{}, fmt.Errorf("%w: evolution rollback must point from the Draft to its parent", domain.ErrInvalid)
 	}
 
-	allowed := func(actions ...domain.ActionDefinition) []string {
-		seen := map[string]bool{}
-		var values []string
-		for _, action := range actions {
-			for _, name := range action.AllowedParameters {
-				if !seen[name] {
-					seen[name] = true
-					values = append(values, name)
-				}
-			}
-		}
-		return values
-	}
-	parentVariables, parentProvenance, err := resolveOwnParameters(parent, domain.ScenarioNode{}, input.RunInput, allowed(parentInstall, parentVerify))
+	parentVariables, parentProvenance, err := resolveOwnParameters(parent, domain.ScenarioNode{}, *environment.Revision, true)
 	if err != nil {
-		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
-	}
-	if err := applyDependencyFixtures(parent, input.DependencyFixtures, parentVariables, parentProvenance); err != nil {
 		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
 	}
 	if err := validateResolvedParameters(parent.Parameters, parentVariables); err != nil {
 		return preparedComponentTest{}, fmt.Errorf("parent release: %w", err)
 	}
-	targetVariables, targetProvenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, input.RunInput, allowed(upgrade, targetVerify, rollback))
+	targetVariables, targetProvenance, err := resolveOwnParameters(release, domain.ScenarioNode{}, *environment.Revision, true)
 	if err != nil {
-		return preparedComponentTest{}, err
-	}
-	if err := applyDependencyFixtures(release, input.DependencyFixtures, targetVariables, targetProvenance); err != nil {
 		return preparedComponentTest{}, err
 	}
 	if err := validateResolvedParameters(release.Parameters, targetVariables); err != nil {
@@ -291,15 +263,15 @@ func primaryActionForComponentTest(release domain.ComponentRelease) (domain.Acti
 	return domain.ActionDefinition{}, false
 }
 
-func (p *Platform) StartScenarioTest(ctx context.Context, user domain.User, revisionID, environmentID string, runInput map[string]any) (domain.Run, error) {
-	return p.startScenario(ctx, user, revisionID, environmentID, runInput, domain.RunScenarioTest)
+func (p *Platform) StartScenarioTest(ctx context.Context, user domain.User, revisionID, environmentID string) (domain.Run, error) {
+	return p.startScenario(ctx, user, revisionID, environmentID, domain.RunScenarioTest)
 }
 
-func (p *Platform) StartScenarioRun(ctx context.Context, user domain.User, revisionID, environmentID string, runInput map[string]any) (domain.Run, error) {
-	return p.startScenario(ctx, user, revisionID, environmentID, runInput, domain.RunScenario)
+func (p *Platform) StartScenarioRun(ctx context.Context, user domain.User, revisionID, environmentID string) (domain.Run, error) {
+	return p.startScenario(ctx, user, revisionID, environmentID, domain.RunScenario)
 }
 
-func (p *Platform) startScenario(ctx context.Context, user domain.User, revisionID, environmentID string, runInput map[string]any, kind domain.RunKind) (domain.Run, error) {
+func (p *Platform) startScenario(ctx context.Context, user domain.User, revisionID, environmentID string, kind domain.RunKind) (domain.Run, error) {
 	revision, err := p.store.GetScenarioRevision(ctx, revisionID)
 	if err != nil {
 		return domain.Run{}, err
@@ -348,9 +320,6 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 	if err != nil {
 		return domain.Run{}, err
 	}
-	if err := validateScenarioRunInput(ordered, runInput); err != nil {
-		return domain.Run{}, err
-	}
 	steps := make([]lockedStep, 0, len(ordered))
 	releaseByNode := map[string]domain.ComponentRelease{}
 	resolvedByNode := map[string]map[string]any{}
@@ -375,7 +344,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if actionErr != nil {
 			return domain.Run{}, actionErr
 		}
-		variables, provenance, resolveErr := resolveOwnParameters(release, node, runInputForNode(node, runInput), node.RunInputs)
+		variables, provenance, resolveErr := resolveOwnParameters(release, node, *environment.Revision, false)
 		if resolveErr != nil {
 			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, resolveErr)
 		}
@@ -387,9 +356,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		}
 		resolvedByNode[node.ID] = variables
 		provenanceByNode[node.ID] = provenance
-		if node.HostGroup != "" {
-			action.Limit = node.HostGroup
-		}
+		action.HostGroup = node.HostGroup
 		step, stepErr := p.lockAction(component, node.ID, release, action, variables)
 		if stepErr != nil {
 			return domain.Run{}, stepErr
@@ -409,7 +376,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 					return domain.Run{}, fmt.Errorf("%w: rollback target must be a retained release of the same component", domain.ErrInvalid)
 				}
 				verifyRelease = target
-				verifyVariables, _, targetErr = resolveOwnParameters(target, node, runInputForNode(node, runInput), node.RunInputs)
+				verifyVariables, _, targetErr = resolveOwnParameters(target, node, *environment.Revision, false)
 				if targetErr != nil {
 					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, targetErr)
 				}
@@ -421,7 +388,6 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 				}
 			}
 			if verify, ok := findAction(verifyRelease, domain.ActionVerify); ok {
-				verify.Limit = action.Limit
 				verifyStep, verifyErr := p.lockAction(component, node.ID+"-verify", verifyRelease, verify, verifyVariables)
 				if verifyErr != nil {
 					return domain.Run{}, verifyErr
@@ -453,97 +419,12 @@ func findAction(release domain.ComponentRelease, kind domain.ActionKind) (domain
 }
 
 func matchesParameterType(value any, expected string) bool {
-	if value == nil {
-		return expected == "null"
-	}
-	kind := reflect.TypeOf(value).Kind()
-	switch expected {
-	case "string":
-		return kind == reflect.String
-	case "boolean":
-		return kind == reflect.Bool
-	case "object":
-		return kind == reflect.Map
-	case "array":
-		return kind == reflect.Array || kind == reflect.Slice
-	case "number":
-		return isNumericKind(kind)
-	case "integer":
-		if !isNumericKind(kind) {
-			return false
-		}
-		switch number := value.(type) {
-		case float32:
-			return math.Trunc(float64(number)) == float64(number)
-		case float64:
-			return math.Trunc(number) == number
-		default:
-			return true
-		}
-	case "null":
-		return false
-	default:
-		// Parameter types are validated when the release contract is saved.
-		return true
-	}
+	return domain.MatchesParameterType(value, expected)
 }
-
-func isNumericKind(kind reflect.Kind) bool {
-	return kind >= reflect.Int && kind <= reflect.Float64
-}
-
 func containsParameterValue(values []any, value any) bool {
-	for _, candidate := range values {
-		if parameterValuesEqual(candidate, value) {
-			return true
-		}
-	}
-	return false
+	return domain.ContainsParameterValue(values, value)
 }
-
-func parameterValuesEqual(left, right any) bool {
-	if left != nil && right != nil && isNumericKind(reflect.TypeOf(left).Kind()) && isNumericKind(reflect.TypeOf(right).Kind()) {
-		return numericValue(left) == numericValue(right)
-	}
-	return reflect.DeepEqual(left, right)
-}
-
-func numericValue(value any) float64 {
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(reflected.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return float64(reflected.Uint())
-	default:
-		return reflected.Float()
-	}
-}
-
-func validateScenarioRunInput(nodes []domain.ScenarioNode, runInput map[string]any) error {
-	allowed := map[string]struct{}{}
-	for _, node := range nodes {
-		for _, key := range node.RunInputs {
-			allowed[key] = struct{}{}
-		}
-	}
-	for key := range runInput {
-		if _, ok := allowed[key]; !ok {
-			return fmt.Errorf("%w: run input %q was not declared by the scenario", domain.ErrInvalid, key)
-		}
-	}
-	return nil
-}
-
-func runInputForNode(node domain.ScenarioNode, runInput map[string]any) map[string]any {
-	selected := map[string]any{}
-	for _, key := range node.RunInputs {
-		if value, ok := runInput[key]; ok {
-			selected[key] = value
-		}
-	}
-	return selected
-}
+func parameterValuesEqual(left, right any) bool { return domain.ParameterValuesEqual(left, right) }
 
 func validateEnvironmentConstraints(constraints, facts map[string]any) error {
 	for key, expected := range constraints {
@@ -586,7 +467,7 @@ func (b *PlanBuilder) lockAction(component domain.Component, nodeID string, rele
 		ReleaseSpecDigest: componentReleaseSpecDigest(release), ActionID: action.ID,
 		Action: action.Kind, FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,
 		Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
-		Limit: valueOr(action.Limit, action.HostGroup), Variables: cloneMap(variables),
+		Limit: action.HostGroup, Variables: cloneMap(variables),
 		RequiredCredentials: append([]string(nil), action.RequiredCredentials...), TimeoutSeconds: action.TimeoutSeconds,
 		NeedsApproval: action.NeedsApproval(),
 		RetrySafe:     action.Kind == domain.ActionInspect || action.Kind == domain.ActionPreflight || action.Kind == domain.ActionVerify || (action.Kind == domain.ActionInstall && action.Idempotent),
@@ -601,6 +482,12 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	}
 	if environment.Revision == nil {
 		return lockedPlan{}, "", false, fmt.Errorf("%w: environment revision is required", domain.ErrInvalid)
+	}
+	if err := p.validateEnvironmentFactsCatalog(ctx, environment.Revision.Facts, true); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	if err := p.validateEnvironmentInventoryCatalog(ctx, environment.Revision.Inventory); err != nil {
+		return lockedPlan{}, "", false, err
 	}
 	plan := lockedPlan{Steps: append([]lockedStep(nil), steps...)}
 	for index := range plan.Steps {

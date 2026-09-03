@@ -9,7 +9,7 @@ import (
 func (h *harness) startScenarioTest(ctx context.Context) (runDTO, error) {
 	var run runDTO
 	if err := h.scenario.data(ctx, http.MethodPost, "/api/v1/scenario-revisions/"+h.cfg.Fixture.ScenarioRevisionID+"/test-runs", map[string]any{
-		"environmentId": h.cfg.Fixture.EnvironmentID, "runInput": map[string]any{},
+		"environmentId": h.cfg.Fixture.EnvironmentID,
 	}, &run); err != nil {
 		return run, err
 	}

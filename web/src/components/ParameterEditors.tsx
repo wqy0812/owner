@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
-import type { Component, ComponentDependency, ComponentRelease, ParameterDefinition, ParameterMapping, ParameterType, ParameterVisibility } from '../types/domain';
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../api/client';
+import type { Component, ComponentDependency, ComponentRelease, EnvironmentParameterDefinition, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider, ParameterVisibility } from '../types/domain';
 
 const PARAMETER_TYPES: ParameterType[] = ['string', 'boolean', 'integer', 'number', 'object', 'array'];
 
 export function emptyParameter(): ParameterDefinition {
-  return { name: '', description: '', type: 'string', required: false, visibility: 'internal', enum: undefined };
+  return { name: '', description: '', type: 'string', required: false, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '', enum: undefined };
 }
 
 export function resolveUpstream(dependency: ComponentDependency, components: Component[] = []) {
@@ -79,6 +80,11 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
      if (/(password|secret|token|private[_-]?key|encryption[_-]?key|credential)/i.test(parameter.name) && !parameter.name.toLowerCase().endsWith('_version')) {
        errors.push(`敏感参数 ${parameter.name} 必须使用 CredentialRef`);
      }
+     if (parameter.valueProvider === 'component_owner' && (parameter.modifiable || parameter.fixedValue === undefined)) errors.push(`参数 ${parameter.name} 必须由组件固定且填写固定值`);
+     if ((parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && !parameter.modifiable) errors.push(`参数 ${parameter.name} 分配给外部 Owner 后必须允许修改`);
+     if ((parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && (parameter.type === 'object' || parameter.type === 'array') && !parameter.enum?.length) errors.push(`参数 ${parameter.name} 是结构化字段，必须提供受控枚举，不能让外部 Owner 编辑原始 JSON`);
+     if (parameter.valueProvider === 'environment_owner' && !parameter.environmentBinding) errors.push(`环境参数 ${parameter.name} 必须选择私有或全局环境字段`);
+     if (parameter.valueProvider === 'upstream_mapping' && parameter.modifiable) errors.push(`上游映射参数 ${parameter.name} 不允许人工修改`);
    }
   const mapped = new Set<string>();
   const lockedComponents = new Set<string>();
@@ -100,23 +106,44 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
       const target = parameters.find((item) => item.name === mapping.targetParameter);
       const source = upstream?.parameters?.find((item) => item.name === mapping.upstreamParameter);
       if (!target) errors.push(`映射目标 ${mapping.targetParameter} 不存在`);
+      if (target && target.valueProvider !== 'upstream_mapping') errors.push(`映射目标 ${mapping.targetParameter} 必须声明由上游映射提供`);
       if (!source || source.visibility !== 'public') errors.push(`映射来源 ${mapping.upstreamParameter} 必须是上游公开参数`);
       if (target && source && target.type !== source.type) errors.push(`${mapping.targetParameter} 与上游类型不一致`);
     }
+  }
+  for (const parameter of parameters.filter((item) => item.valueProvider === 'upstream_mapping')) {
+    if (!mapped.has(parameter.name)) errors.push(`上游映射参数 ${parameter.name} 必须存在唯一映射`);
   }
   return [...new Set(errors)];
 }
 
 export function ParameterTable({ parameters, onChange, disabled }: { parameters: ParameterDefinition[]; onChange: (parameters: ParameterDefinition[]) => void; disabled?: boolean }) {
+  const [environmentDefinitions, setEnvironmentDefinitions] = useState<EnvironmentParameterDefinition[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api.environmentParameterDefinitions(controller.signal).then(setEnvironmentDefinitions).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
   function update(index: number, patch: Partial<ParameterDefinition>) {
     onChange(parameters.map((item, current) => current === index ? { ...item, ...patch } : item));
+  }
+  function changeProvider(index: number, valueProvider: ParameterValueProvider) {
+    const parameter = parameters[index];
+    const base: ParameterDefinition = {
+      ...parameter, valueProvider,
+      modifiable: valueProvider === 'scenario_owner' || valueProvider === 'environment_owner',
+      fixedValue: undefined, suggestedValue: undefined, testValue: undefined, environmentBinding: undefined,
+    };
+    if (valueProvider === 'component_owner') base.fixedValue = parameter.fixedValue ?? (parameter.type === 'boolean' ? false : '');
+    if (valueProvider === 'environment_owner') base.environmentBinding = { kind: 'private' };
+    onChange(parameters.map((item, current) => current === index ? base : item));
   }
   return <div className="parameter-table">
     {parameters.map((parameter, index) => <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}`}>
       <div className="parameter-card__grid">
         <label><span>参数名称</span><input aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value.trim() })} /></label>
         <label className="span-2"><span>说明</span><input aria-label="参数说明" placeholder="这个参数给谁用" value={parameter.description} disabled={disabled} onChange={(event) => update(index, { description: event.target.value })} /></label>
-        <label><span>类型</span><select aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(event) => update(index, { type: event.target.value as ParameterType, defaultValue: undefined, enum: undefined, minLength: undefined })}>
+        <label><span>类型</span><select aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(event) => update(index, { type: event.target.value as ParameterType, fixedValue: undefined, suggestedValue: undefined, testValue: undefined, enum: undefined, minLength: undefined })}>
           {PARAMETER_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
         </select></label>
         <fieldset className="visibility-fieldset">
@@ -134,8 +161,13 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
             </label>
           </div>
         </fieldset>
-        <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })} /><span>运行时必须有值</span></label>
-        <label><span>默认值</span><DefaultValueEditor parameter={parameter} disabled={disabled} onChange={(defaultValue) => update(index, { defaultValue })} /></label>
+        <label><span>值的负责人</span><select aria-label="值的负责人" value={parameter.valueProvider} disabled={disabled} onChange={(event) => changeProvider(index, event.target.value as ParameterValueProvider)}><option value="component_owner">组件 Owner 固定</option><option value="scenario_owner">集群 Owner 填写</option><option value="environment_owner">环境 Owner 填写</option><option value="upstream_mapping">上游映射提供</option></select></label>
+        <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.modifiable)} disabled={disabled || parameter.valueProvider === 'component_owner' || parameter.valueProvider === 'upstream_mapping'} onChange={(event) => update(index, { modifiable: event.target.checked })} /><span>允许外部修改</span></label>
+        <label className="checkbox-field checkbox-field--inline"><input type="checkbox" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })} /><span>正式运行必须有值</span></label>
+        {parameter.valueProvider === 'component_owner' ? <label><span>Release 固定值</span><ParameterValueEditor parameter={parameter} value={parameter.fixedValue} disabled={disabled} onChange={(fixedValue) => update(index, { fixedValue })} /></label> : null}
+        {parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner' ? <label><span>建议值（不自动生效）</span><ParameterValueEditor parameter={parameter} value={parameter.suggestedValue} disabled={disabled} optional onChange={(suggestedValue) => update(index, { suggestedValue })} /></label> : null}
+        {parameter.valueProvider !== 'component_owner' ? <label><span>组件独立测试值</span><ParameterValueEditor parameter={parameter} value={parameter.testValue} disabled={disabled} optional onChange={(testValue) => update(index, { testValue })} /></label> : null}
+        {parameter.valueProvider === 'environment_owner' ? <label><span>环境字段绑定</span><select aria-label="环境字段绑定" disabled={disabled} value={parameter.environmentBinding?.kind === 'global' ? `global:${parameter.environmentBinding.definitionId ?? ''}` : 'private'} onChange={(event) => update(index, { environmentBinding: event.target.value === 'private' ? { kind: 'private' } : { kind: 'global', definitionId: event.target.value.slice(7) } })}><option value="private">组件私有字段</option>{environmentDefinitions.filter((item) => item.type === parameter.type).map((item) => <option key={item.id} value={`global:${item.id}`}>全局 · {item.label}</option>)}</select></label> : null}
         <label><span>枚举</span><input aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>
         {parameter.type === 'string' ? <label><span>最小长度</span><input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })} /></label> : <span />}
       </div>
@@ -145,16 +177,19 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
   </div>;
 }
 
-function DefaultValueEditor({ parameter, disabled, onChange }: { parameter: ParameterDefinition; disabled?: boolean; onChange: (value: unknown) => void }) {
+export function ParameterValueEditor({ parameter, value, disabled, optional, onChange }: { parameter: Pick<ParameterDefinition, 'name' | 'type' | 'enum'>; value: unknown; disabled?: boolean; optional?: boolean; onChange: (value: unknown) => void }) {
+  if (parameter.enum?.length) {
+    return <select aria-label={`${parameter.name} 的值`} value={value === undefined ? '' : JSON.stringify(value)} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? undefined : JSON.parse(event.target.value))}><option value="">{optional ? '未填写' : '请选择'}</option>{parameter.enum.map((item) => <option key={JSON.stringify(item)} value={JSON.stringify(item)}>{String(item)}</option>)}</select>;
+  }
   if (parameter.type === 'boolean') {
-    return <select aria-label="默认值" value={parameter.defaultValue === undefined ? '' : String(Boolean(parameter.defaultValue))} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value === 'true')}>
-      <option value="">无默认值</option>
+    return <select aria-label={`${parameter.name} 的值`} value={value === undefined ? '' : String(Boolean(value))} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value === 'true')}>
+      <option value="">{optional ? '未填写' : '请选择'}</option>
       <option value="true">true</option>
       <option value="false">false</option>
     </select>;
   }
   if (parameter.type === 'object' || parameter.type === 'array') {
-    return <textarea aria-label="默认值 JSON" className="code-editor code-editor--small" disabled={disabled} defaultValue={parameter.defaultValue === undefined ? '' : JSON.stringify(parameter.defaultValue)} onBlur={(event) => {
+    return <textarea key={value === undefined ? 'empty' : JSON.stringify(value)} aria-label={`${parameter.name} 的 JSON 值`} className="code-editor code-editor--small" disabled={disabled} defaultValue={value === undefined ? '' : JSON.stringify(value)} onBlur={(event) => {
       const text = event.target.value.trim();
       if (!text) { onChange(undefined); return; }
       try {
@@ -166,7 +201,7 @@ function DefaultValueEditor({ parameter, disabled, onChange }: { parameter: Para
       }
     }} />;
   }
-  return <input aria-label="默认值" placeholder="默认值" disabled={disabled} value={parameter.defaultValue === undefined || parameter.defaultValue === null ? '' : String(parameter.defaultValue)} onChange={(event) => {
+  return <input aria-label={`${parameter.name} 的值`} type={parameter.type === 'integer' || parameter.type === 'number' ? 'number' : 'text'} step={parameter.type === 'integer' ? 1 : parameter.type === 'number' ? 'any' : undefined} placeholder={optional ? '未填写' : '填写值'} disabled={disabled} value={value === undefined || value === null ? '' : String(value)} onChange={(event) => {
     const text = event.target.value;
     if (text === '') { onChange(undefined); return; }
     if (parameter.type === 'integer' || parameter.type === 'number') {
@@ -238,7 +273,7 @@ export function DependencyEditor({
                 update(index, { parameterMappings: next });
               }}>
                 <option value="">选择本组件参数</option>
-                {currentParameters.filter((item) => item.name && (item.name === mapping.targetParameter || !usedTargets.has(item.name))).map((item) => <option key={item.name} value={item.name}>{item.name} · {item.type} · {item.visibility === 'public' ? '公开' : '内部'}</option>)}
+                {currentParameters.filter((item) => item.valueProvider === 'upstream_mapping' && item.name && (item.name === mapping.targetParameter || !usedTargets.has(item.name))).map((item) => <option key={item.name} value={item.name}>{item.name} · {item.type} · {item.visibility === 'public' ? '公开' : '内部'}</option>)}
               </select></label>
               {!disabled && <button type="button" className="button button--quiet" onClick={() => update(index, { parameterMappings: (dependency.parameterMappings ?? []).filter((_, current) => current !== mappingIndex) })}>删除映射</button>}
             </div>
@@ -302,7 +337,7 @@ export function ParameterContractList({ release, components }: { release?: Compo
         const usedBy = consumers.filter((consumer) => consumer.upstreamParameter === item.name);
         return <div key={item.name} className="parameter-preview__item">
           <div><span>{item.name}</span><em className="visibility-badge visibility-badge--public">公开</em></div>
-          <small>{item.type} · {item.description}{item.defaultValue !== undefined ? ` · 默认 ${String(item.defaultValue)}` : ''}</small>
+          <small>{item.type} · {item.description} · {item.valueProvider}{item.fixedValue !== undefined ? ` · 固定 ${String(item.fixedValue)}` : ''}</small>
           {usedBy.length ? usedBy.map((consumer) => <small key={consumer.label} className="parameter-lineage">{consumer.label}</small>) : <small className="mapping-empty">尚未被下游引用</small>}
         </div>;
       }) : <div className="empty-state"><strong>没有公开参数</strong></div>}
@@ -314,7 +349,7 @@ export function ParameterContractList({ release, components }: { release?: Compo
         const source = sources.get(item.name);
         return <div key={item.name} className="parameter-preview__item">
           <div><span>{item.name}</span><em className="visibility-badge visibility-badge--internal">内部</em></div>
-          <small>{item.type} · {item.description}{item.defaultValue !== undefined ? ` · 默认 ${String(item.defaultValue)}` : ''}</small>
+          <small>{item.type} · {item.description} · {item.valueProvider}{item.fixedValue !== undefined ? ` · 固定 ${String(item.fixedValue)}` : ''}</small>
           {source ? <small className="parameter-lineage">{source.label}</small> : null}
         </div>;
       }) : <div className="empty-state"><strong>没有内部参数</strong></div>}
@@ -336,7 +371,8 @@ export function defaultFixtureValues(release?: ComponentRelease, components?: Co
     const upstream = components?.flatMap((component) => component.releases ?? []).find((item) => item.id === dependency.releaseId);
     for (const mapping of dependency.parameterMappings ?? []) {
       const source = upstream?.parameters?.find((item) => item.name === mapping.upstreamParameter);
-      if (source?.defaultValue !== undefined) values[mapping.targetParameter] = typeof source.defaultValue === 'string' ? source.defaultValue : JSON.stringify(source.defaultValue);
+      const testValue = source?.testValue ?? source?.fixedValue;
+      if (testValue !== undefined) values[mapping.targetParameter] = typeof testValue === 'string' ? testValue : JSON.stringify(testValue);
     }
   }
   return values;

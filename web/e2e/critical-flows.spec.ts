@@ -19,7 +19,7 @@ test('identity switch changes owner-specific component controls', async ({ page 
       const id = (request.postDataJSON() as { userId: keyof typeof users }).userId;
       current = users[id];
       data = current;
-    } else if (path.endsWith('/components')) data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'], latestRelease: { id: 'containerd-2', componentId: 'containerd', version: 'v2.1.1', status: 'released', readiness: { status: 'ready', blockers: [] } } }];
+    } else if (path.endsWith('/components')) data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'], latestRelease: { id: 'containerd-2', componentId: 'containerd', lineId: 'line-containerd', lineName: 'containerd', compatibility: 'not_applicable', version: 'v2.1.1', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [] }, releases: [] }];
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
   });
 
@@ -32,7 +32,7 @@ test('identity switch changes owner-specific component controls', async ({ page 
   await expect(page.getByRole('heading', { name: '场景编排' })).toBeVisible();
 });
 
-test('scenario rollback and declared run input are submitted to the API', async ({ page }) => {
+test('scenario-owned parameters are saved in the graph and runs accept only an environment', async ({ page }) => {
   let submitted: unknown;
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -43,20 +43,22 @@ test('scenario rollback and declared run input are submitted to the API', async 
     else if (path.endsWith('/components')) data = [{
       id: 'test-runtime', name: 'Test Runtime', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'],
       latestRelease: {
-        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', status: 'released', readiness: { status: 'ready', blockers: [] },
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+        id: 'test-runtime-1.1', componentId: 'test-runtime', lineId: 'line-runtime', lineName: 'Runtime', compatibility: 'not_applicable', version: 'v1.1.0', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] },
+        parameters: [{ name: 'rollback_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
+        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
       },
       releases: [{
-        id: 'test-runtime-1.1', componentId: 'test-runtime', version: 'v1.1.0', status: 'released', readiness: { status: 'ready', blockers: [] },
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml' }, { kind: 'verify', playbook: 'verify.yml' }, { kind: 'rollback', playbook: 'rollback.yml' }],
+        id: 'test-runtime-1.1', componentId: 'test-runtime', lineId: 'line-runtime', lineName: 'Runtime', compatibility: 'not_applicable', version: 'v1.1.0', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] },
+        parameters: [{ name: 'rollback_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
+        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
       }],
     }];
     else if (path.endsWith('/scenarios')) data = [{
       id: 'safe-upgrade', slug: 'safe-upgrade', name: 'Safe upgrade', ownerId: 'scenario-owner-a', currentRevisionId: 'safe-upgrade-r2',
-      currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', runInputs: ['rollback_version'] } }], edges: [] },
-      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', runInputs: ['rollback_version'] } }], edges: [] }],
+      currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', parameterValues: { rollback_version: '1.0.0' }, dependencySources: {} } }], edges: [] },
+      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', parameterValues: { rollback_version: '1.0.0' }, dependencySources: {} } }], edges: [] }],
     }];
-    else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-owner-a', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], variables: {}, credentialRefs: [] } }];
+    else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-owner-a', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], parameters: {}, variables: {}, credentialRefs: [] } }];
     else if (path.endsWith('/test-runs')) {
       submitted = request.postDataJSON();
       data = { id: 'run-1', status: 'queued', environmentId: 'test' };
@@ -65,12 +67,19 @@ test('scenario rollback and declared run input are submitted to the API', async 
   });
 
   await page.goto('/scenarios');
+  await page.getByRole('button', { name: '参数总览' }).click();
+  const overview = page.locator('.scenario-parameter-overview');
+  await expect(overview.getByText('Test Runtime')).toBeVisible();
+  await expect(overview.getByText('v1.1.0 · test-runtime-1.1')).toBeVisible();
+  await expect(overview.getByText('rollback · test_nodes')).toBeVisible();
+  await expect(overview.getByText('1/1 已完成')).toBeVisible();
+  await expect(overview.getByRole('textbox', { name: 'rollback_version 的值' })).toHaveValue('1.0.0');
+  await overview.getByRole('button', { name: '定位节点' }).click();
   await page.getByText('Rollback runtime').click();
   await expect(page.getByRole('combobox', { name: '生命周期动作' })).toHaveValue('rollback');
   await expect(page.getByRole('option', { name: 'uninstall' })).toHaveCount(0);
   await page.getByRole('button', { name: '环境测试' }).click();
   await page.getByRole('combobox', { name: '共享测试环境' }).selectOption('test');
-  await page.getByLabel('运行参数 rollback_version').fill('1.0.0');
   await page.getByRole('button', { name: '开始完整测试' }).click();
-  await expect.poll(() => submitted).toEqual({ environmentId: 'test', runInput: { rollback_version: '1.0.0' } });
+  await expect.poll(() => submitted).toEqual({ environmentId: 'test' });
 });

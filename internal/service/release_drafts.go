@@ -259,6 +259,10 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 		cleanup(true)
 		return release, err
 	}
+	if err := p.validateEnvironmentConstraintRetiredReferences(ctx, release.EnvironmentConstraints, nil); err != nil {
+		cleanup(true)
+		return release, err
+	}
 	audit := newAuditEvent(user, "component_release.draft_created", "component_release", release.ID, map[string]any{
 		"componentId": componentID, "mode": input.Mode, "lineId": release.LineID, "lineName": release.LineName,
 		"parentReleaseId": release.ParentReleaseID, "templateSourceReleaseId": release.TemplateSourceReleaseID,
