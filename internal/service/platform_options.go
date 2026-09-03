@@ -348,11 +348,7 @@ func validatePlatformOptionLabel(label string) (string, error) {
 }
 
 func (p *Platform) platformOptionLookup(ctx context.Context) (domain.CatalogOptions, error) {
-	categories, err := p.store.ListPlatformOptionCategories(ctx)
-	if err != nil {
-		return domain.CatalogOptions{}, err
-	}
-	return domain.NewCatalogOptions(categories)
+	return p.store.ReadCatalogOptions(ctx)
 }
 func platformCategoryOption(category domain.PlatformOptionCategory, value string) (domain.PlatformOption, bool) {
 	return domain.PlatformCategoryOption(category, value)

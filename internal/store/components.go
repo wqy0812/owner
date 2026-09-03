@@ -43,53 +43,6 @@ func (s *Store) GetComponent(ctx context.Context, id string, includeReleases boo
 	return c, err
 }
 
-func (s *Store) ListComponents(ctx context.Context, viewer domain.User) ([]domain.Component, error) {
-	query := `SELECT id,slug,name,description,layer,tags_json,owner_id,created_at,updated_at FROM components`
-	var args []any
-	if viewer.Role == domain.RoleComponentOwner {
-		query += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1)))`
-		args = append(args, viewer.ID)
-	} else if viewer.Role != domain.RolePlatformAdmin {
-		query += ` WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1)))`
-	}
-	query += ` ORDER BY CASE layer WHEN 'host_foundation' THEN 1 WHEN 'runtime_state' THEN 2 WHEN 'orchestration_core' THEN 3 WHEN 'cluster_service' THEN 4 WHEN 'observability_management' THEN 5 WHEN 'platform_extension' THEN 6 ELSE 7 END, name`
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.Component
-	for rows.Next() {
-		var c domain.Component
-		var cr, up, tags string
-		if err := rows.Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.Layer, &tags, &c.OwnerID, &cr, &up); err != nil {
-			return nil, err
-		}
-		c.CreatedAt = parseTime(cr)
-		c.UpdatedAt = parseTime(up)
-		c.Tags = decodeJSON(tags, []string{})
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	visible := make([]domain.Component, 0, len(out))
-	for _, component := range out {
-		ownerView := viewer.Role == domain.RolePlatformAdmin || (viewer.Role == domain.RoleComponentOwner && component.OwnerID == viewer.ID)
-		component.Releases, err = s.listVisibleComponentReleases(ctx, component.ID, ownerView)
-		if err != nil {
-			return nil, err
-		}
-		if ownerView || len(component.Releases) > 0 {
-			visible = append(visible, component)
-		}
-	}
-	return visible, nil
-}
-
 func (s *Store) ComponentSlugExists(ctx context.Context, slug string) (bool, error) {
 	var exists int
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM components WHERE slug=?)`, slug).Scan(&exists)
@@ -266,7 +219,7 @@ func (s *Store) GetComponentRelease(ctx context.Context, id string) (domain.Comp
 }
 
 func getComponentRelease(ctx context.Context, q queryer, id string) (domain.ComponentRelease, error) {
-	row := q.QueryRowContext(ctx, `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.id=?`, id)
+	row := q.QueryRowContext(ctx, releaseSelect+` WHERE r.id=?`, id)
 	r, err := scanRelease(row)
 	if err != nil {
 		return r, mapSQLError(err)
@@ -337,97 +290,9 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	return r, err
 }
 
-func (s *Store) ListComponentReleases(ctx context.Context, componentID string, releasedOnly bool) ([]domain.ComponentRelease, error) {
-	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=?`
-	if releasedOnly {
-		q += ` AND r.status='released'`
-	}
-	q += ` ORDER BY r.created_at DESC`
-	rows, err := s.db.QueryContext(ctx, q, componentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.ComponentRelease
-	for rows.Next() {
-		r, err := scanRelease(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	for i := range out {
-		out[i].Dependencies, err = s.listDependencies(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Actions, err = s.listActions(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Artifacts, err = s.ListComponentArtifacts(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Images, err = s.ListComponentImages(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) listVisibleComponentReleases(ctx context.Context, componentID string, ownerView bool) ([]domain.ComponentRelease, error) {
-	if ownerView {
-		return s.ListComponentReleases(ctx, componentID, false)
-	}
-	q := `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.component_id=? AND (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.review_status='approved')) ORDER BY r.created_at DESC`
-	rows, err := s.db.QueryContext(ctx, q, componentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.ComponentRelease
-	for rows.Next() {
-		r, scanErr := scanRelease(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		r.Dependencies, err = s.listDependencies(ctx, r.ID)
-		if err != nil {
-			return nil, err
-		}
-		r.Actions, err = s.listActions(ctx, r.ID)
-		if err != nil {
-			return nil, err
-		}
-		r.Artifacts, err = s.ListComponentArtifacts(ctx, r.ID)
-		if err != nil {
-			return nil, err
-		}
-		r.Images, err = s.ListComponentImages(ctx, r.ID)
-		if err != nil {
-			return nil, err
-		}
-		if r.Status == domain.ReleaseReleased || r.IsApprovedCandidate() {
-			out = append(out, r)
-		}
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) listDependencies(ctx context.Context, releaseID string) ([]domain.ComponentDependency, error) {
-	return listDependencies(ctx, s.db, releaseID)
-}
-
-func listDependencies(ctx context.Context, q queryer, releaseID string) ([]domain.ComponentDependency, error) {
-	rows, err := q.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id=? ORDER BY c.name`, releaseID)
+func listDependencies(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ComponentDependency, error) {
+	placeholders, args := releaseIDPlaceholders(releaseIDs)
+	rows, err := q.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id IN (`+placeholders+`) ORDER BY c.name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -445,12 +310,9 @@ func listDependencies(ctx context.Context, q queryer, releaseID string) ([]domai
 	return out, rows.Err()
 }
 
-func (s *Store) listActions(ctx context.Context, releaseID string) ([]domain.ActionDefinition, error) {
-	return listActions(ctx, s.db, releaseID)
-}
-
-func listActions(ctx context.Context, q queryer, releaseID string) ([]domain.ActionDefinition, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, releaseID)
+func listActions(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ActionDefinition, error) {
+	placeholders, args := releaseIDPlaceholders(releaseIDs)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id IN (`+placeholders+`) ORDER BY kind,name`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -26,15 +26,11 @@ export function runFailureSummary(run: Run): { title: string; detail: string; st
 }
 
 export function RunsPage() {
-  const { user, notify, refreshTokens, signalRefresh } = useApp();
+  const { user, notify, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: runs, loading, error, isRefreshing, reload } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const [filter, setFilter] = useState<'all' | 'active' | 'finished'>('all');
-  const [detail, setDetail] = useState<Run>();
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string>();
-  const [detailRetry, setDetailRetry] = useState(0);
   const [busy, setBusy] = useState<string>();
   const [actionExplanation, setActionExplanation] = useState<WorkExplanation>();
   const [batchOpen, setBatchOpen] = useState(false);
@@ -46,36 +42,23 @@ export function RunsPage() {
   const actionInFlight = useRef(false);
   const logRef = useRef<HTMLPreElement>(null);
   const selectedId = searchParams.get('selected') ?? runs?.[0]?.id;
+  const { data: detail, loading: detailLoading, error: detailError, reload: reloadDetail, setData: setDetail } = useApiData<Run | undefined>(
+    (signal) => selectedId ? api.run(selectedId, signal) : Promise.resolve(undefined),
+    [user.id, selectedId],
+    'runs',
+  );
 
   useEffect(() => {
     setActionExplanation(undefined);
     setDeliveryModes({});
   }, [selectedId]);
 
-  useEffect(() => {
-    if (!selectedId) { setDetail(undefined); setDetailError(undefined); return; }
-    const controller = new AbortController();
-    setDetailLoading(true);
-    setDetailError(undefined);
-    api.run(selectedId, controller.signal).then((run) => {
-      if (!controller.signal.aborted) setDetail(run);
-    }).catch((reason) => {
-      if (!controller.signal.aborted) {
-        setDetail(undefined);
-        setDetailError(displayError(reason));
-      }
-    }).finally(() => {
-      if (!controller.signal.aborted) setDetailLoading(false);
-    });
-    return () => controller.abort();
-  }, [detailRetry, refreshTokens.runs, selectedId]);
-
   const selectedSummary = runs?.find((run) => run.id === selectedId);
   const runWorkItem = workbench?.items.find((item) => item.subject.type === 'run' && item.subject.id === selectedId);
   useEffect(() => {
     if (!selectedSummary) return;
     setDetail((current) => current?.id === selectedSummary.id ? { ...current, ...selectedSummary } : current);
-  }, [selectedSummary]);
+  }, [selectedSummary, setDetail]);
 
   const filtered = useMemo(() => (runs ?? []).filter((run) => filter === 'all' || (filter === 'active' ? ACTIVE.has(run.status) : !ACTIVE.has(run.status))), [filter, runs]);
   const pendingApprovals = useMemo(() => (runs ?? []).filter((run) => run.status === 'awaiting_approval' && run.approval?.id), [runs]);
@@ -156,7 +139,7 @@ export function RunsPage() {
         <div className="run-cards">{filtered.map((run) => <button key={run.id} className={`run-card${selectedId === run.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: run.id })}><span className={`run-card__status run-card__status--${run.status}`}>{run.status === 'succeeded' ? <CheckCircle2 size={17} /> : run.status === 'awaiting_approval' ? <ShieldAlert size={17} /> : <CircleDashed size={17} />}</span><div><strong>{run.name ?? run.scenarioName ?? run.componentName ?? `Run ${run.id.slice(0, 8)}`}</strong><small>{run.environmentName ?? '未知环境'} · {formatTime(run.createdAt)}</small><span><StatusPill status={run.status} />{run.queuePosition ? <em>队列 #{run.queuePosition}</em> : null}</span></div><ChevronRight size={16} /></button>)}</div>
         {!filtered.length && <EmptyState title="当前筛选无运行" />}
       </aside>
-      {detailLoading && !detail ? <section className="panel"><LoadingBlock label="正在加载运行详情…" /></section> : detailError ? <section className="panel"><ErrorBlock message={detailError} onRetry={() => setDetailRetry((value) => value + 1)} /></section> : detail ? <section className="run-detail detail-stack">
+      {detailLoading && !detail ? <section className="panel"><LoadingBlock label="正在加载运行详情…" /></section> : detailError ? <section className="panel"><ErrorBlock message={detailError} onRetry={() => void reloadDetail()} /></section> : detail ? <section className="run-detail detail-stack">
         <article className="panel run-hero">
           <div><div className={`run-symbol run-symbol--${detail.status}`}><PlayCircle size={23} /></div><div><div className="eyebrow">{detail.kind?.replaceAll('_', ' ') ?? 'scenario run'} · {detail.id.slice(0, 12)}</div><h2>{detail.name ?? detail.scenarioName ?? detail.componentName}</h2><p>{detail.environmentName} · 发起人 {detail.createdByName ?? detail.createdBy ?? '—'} · {formatTime(detail.createdAt)}</p></div></div>
           <div className="run-actions"><StatusPill status={detail.status} />{ACTIVE.has(detail.status) && detail.status !== 'awaiting_approval' && <button disabled={busy === 'cancel'} className="button button--danger-soft" onClick={() => void action('cancel')}><Square size={14} /> 取消</button>}</div>

@@ -75,6 +75,7 @@ internal/service
 - Scenario 只维护 Revision/DAG/测试状态，联合发布由 `ReleaseCoordinator` 完成。
 - Run 规划、创建、调度、执行、证据记录、回滚规划和审批各有独立对象与文件。
 - Store 层负责持久化、事务和并发状态抢占，不决定业务权限。
+- Readiness 的一次读取复用一份目录定义；管理页面的历史引用统计单独读取，写入仍在事务内重新校验。
 - Domain 层保存跨层共享的数据结构、枚举、通用错误和纯领域校验。
 - Run 在创建时锁定组件 Release、场景 Revision、环境 Revision、解析后的结构化参数和 Playbook 摘要。
 - 同一环境中的 Run 按 FIFO 串行执行；破坏性动作先等待环境 Owner 审批。
@@ -96,7 +97,7 @@ internal/service
 
 环境连通性检查直接使用 Go SSH 客户端：严格读取 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指向的主机指纹文件，并使用 Environment Revision 中显式声明的 SSH CredentialRef 完成认证和 `true` 执行。该检查不调用 Ansible；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
 
-`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 `snapshot`。环境 Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
+`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 Catalog `snapshot`。独立的 `database` 子命令由 `internal/deploydb` 提供，只负责受保护部署的数据库合同读取、活动 Run 检查、一致性文件备份和完整性校验，不初始化或迁移数据库。环境 Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
 
 ### 3.2 `cmd/fss` 与 `internal/fss`
 
@@ -170,12 +171,15 @@ Service 是业务核心，主要职责包括：
 Store 基于 `modernc.org/sqlite`，包含：
 
 - `store.go`：连接、事务辅助和基础查询。
+- `component_reads.go`：组件与 Release 列表的只读查询；在同一事务快照中批量加载依赖、Action、介质和镜像，再校验候选审核摘要。
+- `catalog_validation.go`：按用途提供选项、目录定义、关系校验快照；定义读取不扫描历史资源引用，最终写入使用事务内校验。
+- `run_evidence.go`：通过快照生成列和部分索引读取匹配当前合同、运行时的成功证据，并保持回滚验证门禁语义。
 - `release_coordinator.go`：以定义代次、Release 摘要、Scenario 测试证据和全局发布纪元保护独立发布及原子联合发布事务。
 - 资源文件：组件、场景、环境、Run、事件、安装记录、镜像构建和介质查询。
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260902-container-runtime-matrix`；运行时代码不做历史迁移、模糊兼容、双读或双写。一次性转换工具已移除；其他合同失败关闭，测试库需要变更结构时走显式备份和重建流程。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260903-run-evidence-indexes`；运行时代码不做历史迁移、模糊兼容、双读或双写。一次性转换工具已移除；其他合同失败关闭，测试库需要变更结构时走显式备份和重建流程。
 
 ### 3.7 `internal/ansible`
 
@@ -184,6 +188,7 @@ Ansible 包负责把平台计划安全地转换为外部进程：
 - 将 Playbook 限制在 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 下。
 - 为每个 Run 创建隔离工作目录、Inventory 和变量文件。
 - 计算并校验 Playbook 树摘要。
+- `playbook_validation.go` 为只读目录批量检查文件，合并同一请求中的整棵目录扫描；执行计划与工作区仍独立锁定和验证摘要。
 - 解析 CredentialRef，并在子进程运行时注入敏感值。
 - 启动和取消完整进程组，处理超时与强制终止。
 - 限制日志大小，脱敏后再持久化。
@@ -221,7 +226,7 @@ web/src/
 ├── api/client.ts                    # fetch 封装、首版 DTO 映射和错误处理
 ├── components/                      # 应用外壳、版本守卫和公共编辑器
 ├── context/AppContext.tsx           # 当前用户、身份切换和全局刷新
-├── hooks/useApiData.ts              # 请求状态封装
+├── hooks/useApiData.ts              # 按查询范围隔离数据、取消请求和合并刷新
 ├── pages/                           # 按产品导航拆分的页面
 ├── test/                            # Vitest 与 Testing Library 测试
 ├── types/                           # 前端领域类型和约束辅助
@@ -344,3 +349,91 @@ make build
 6. 对数据库、Run 调度、审批、回滚、介质平移和部署脚本的修改应优先采用失败关闭策略。
 
 文档导航和维护职责参见 [文档中心](README.md)；更详细的业务模型和运行规则参见 [平台设计文档](backend-design.md)，面向平台使用者的操作流程参见 [平台操作手册](operation-manual.md)。
+
+## 10. 列表读取与刷新性能
+
+组件与 Release 的列表装配集中在 `component_reads.go`，创建和更新仍在 `components.go`。列表先读取组件与 Release，再以每批最多 256 个 Release ID 分别读取四张子表，复用详情查询的行解码逻辑。读取游标关闭后才执行下一条 SQL，因此单连接池也能完成查询。整个列表使用一个只读事务快照，避免并发编辑时混合新旧合同；候选可见性仍在子表装配完整后通过 `IsApprovedCandidate()` 校验。
+
+对于有可见 Release 的目录，列表 SELECT 数量从 `1 + 组件数 + 4 × Release 数` 降为 `2 + 4 × ceil(Release 数 / 256)`，不含事务控制语句。无组件时只有一次 SELECT；有组件但无可加载 Release 时为两次。
+
+前端 `useApiData` 在同一查询范围内保留当前请求，将请求期间到达的多个刷新信号合并为一次补拉。每次请求完成后即可显示结果，持续日志事件不会反复取消慢请求。身份或查询参数变化、手动重试仍立即取消并替换请求；卸载时取消请求，旧范围的响应不能写入新范围。运行详情页复用这一逻辑，并将用户 ID 和 Run ID 都作为查询范围。
+
+### 本机基准记录（2026-09-03）
+
+Apple M2、darwin/arm64，使用临时内存 SQLite 和合成目录，每个组件包含 3 个 Draft Release、每个 Release 包含 1 个 Action。以下为同一基准连续三次运行的中位数，仅测量 Store 列表读取，未包含 Service 的 Readiness 计算、HTTP 序列化或页面渲染。
+
+| 目录规模 | 优化前耗时 | 优化后耗时 | 耗时减少 | 优化前 / 后分配次数 |
+| --- | --- | --- | --- | --- |
+| 10 个组件 / 30 个 Release | 1.940 ms | 0.607 ms | 69% | 7,330 / 4,464 |
+| 40 个组件 / 120 个 Release | 8.371 ms | 1.770 ms | 79% | 29,231 / 17,138 |
+
+复现命令：
+
+```bash
+go test ./internal/store -run '^$' -bench '^BenchmarkListComponents$' -benchmem -count=3
+```
+
+回归覆盖跨批次完整合同、排序、单连接池、并发编辑时的快照一致性、候选审核摘要失效，以及前端连续刷新、切换查询范围、失败后补拉和卸载取消。测试只使用合成数据，不读取运行中的数据库或目标环境。
+
+### Readiness 目录定义与完整 HTTP 处理基准
+
+`readiness_evaluation.go` 管理一次列表或详情读取的目录定义复用。校验只需要选项、参数和变量定义，使用 `ReadCatalogDefinitions` 在四次 SELECT 中读取；单独读取选项使用 `ReadCatalogOptions`，只需要两次 SELECT。分类与选项分别批量读取，参数和变量的定义查询不计算历史引用次数。
+
+管理页面仍使用带引用统计的查询，并在一个事务快照内读取统计与定义。删除选项、分类或参数时仍在写事务中检查真实引用。Readiness 只在当前读取操作内复用定义，不保存进程级缓存；各根 Release 保留独立的依赖遍历状态，每次计算仍查询 Run 证据并匹配当前合同摘要。新请求读取最新定义，预览中的定义不会带入后续写入校验。
+
+2026-09-03 在上述 Store 优化基础上，使用同一 Apple M2、内存 SQLite，测量 `GET /api/v1/components` 的完整服务端处理：鉴权、列表读取、Readiness、DTO 装配及 JSON 序列化。每个组件包含 3 个 Draft，每个 Draft 包含 Install、Verify、Rollback 三个 Action；没有成功 Run，因此每个 Release 必须返回安装和回滚证据缺失两个阻断项。基准开始前会校验组件、Release 和阻断项数量，避免遗漏功能带来的虚假提速。
+
+下表为连续三次运行的中位数，优化前指已完成上一节 Store 批量读取、尚未拆分目录定义与引用统计时的状态。单次分配字节表示累计分配量，不是常驻内存。
+
+| 目录规模 | 本轮优化前 | 本轮优化后 | 耗时减少 | 单次分配字节：前 / 后 |
+| --- | --- | --- | --- | --- |
+| 10 个组件 / 30 个 Release | 25.837 ms | 2.534 ms | 90% | 9.68 MB / 0.84 MB |
+| 40 个组件 / 120 个 Release | 245.280 ms | 9.018 ms | 96% | 125.09 MB / 3.42 MB |
+
+```bash
+go test ./internal/api -run '^$' -bench '^BenchmarkComponentsHTTP$' -benchmem -count=3
+```
+
+回归检查定义读取不查询历史表、管理页面引用数与删除保护保持有效、同一次读取只加载一份定义、新请求看到目录更新、目录读取失败仍阻断，以及运行时证据新增和合同摘要变化即时生效。
+
+以上 HTTP 基准未包含网络传输、真实 Playbook 文件校验和浏览器渲染。列表响应仍包含完整 Release，Run 证据仍逐项查询；继续扩容时应测量真实请求分布，再评估列表摘要、分页或证据批量读取。
+
+### Run 证据数据结构与历史查询基准
+
+Run 快照保留为 JSON，在 `runs` 上为摘要、证据类型、运行时、运行时版本和证据时间增加五个虚拟生成列。应用只写原始字段，SQLite 自动维护生成列及索引，避免额外维护一份证据状态。成功组件测试按 Release、当前摘要、证据类型建立部分索引；指定运行时的查询使用另一个包含运行时及版本的索引。回滚验证分别读取两种合格证据的最新一条，最终只比较最多两条候选。另为活跃组件测试、Action 的 Release 外键和 RunStep 的 Run 外键补充索引。
+
+2026-09-03，Apple M2、darwin/arm64、临时内存 SQLite，测量一次指定运行时的安装与回滚证据查询。所有历史 Run 属于同一 Release；只有最新两条匹配当前摘要，其余匹配旧摘要。以下是连续三次运行的中位数，优化前为前两节优化完成、尚未增加生成列和索引时的状态。
+
+| 历史 Run 数 | 本轮优化前 | 本轮优化后 | 耗时减少 |
+| --- | --- | --- | --- |
+| 1,000 | 0.861 ms | 0.0665 ms | 92% |
+| 10,000 | 7.624 ms | 0.0668 ms | 99% |
+
+```bash
+go test ./internal/store -run '^$' -bench '^BenchmarkComponentEvidenceHistory$' -benchmem -count=3
+```
+
+这组基准只测证据定位，不包含完整 HTTP 请求、真实数据库磁盘读取或写入。新查询的单次分配从约 1.89 KB 增至 4.71 KB，索引还会增加数据库空间及写入维护成本；收益是避免逐行解析历史快照与大范围排序。执行计划回归确认使用指定索引，行为回归覆盖摘要/运行时匹配、状态转换、元数据缺失或类型错误、交付结果更新，以及 JSON 来源与生成列一致性。部署脚本使用随备份 CLI 编译的 Go SQLite 引擎，并通过临时数据库检查文件备份保留生成值和索引、纳入已提交 WAL、拒绝外键损坏且不覆盖既有文件。
+
+这次结构变更使用 `clusterforge-v1-20260903-run-evidence-indexes` 合同，旧合同数据库会被拒绝打开。上述基准与回归使用合成数据和临时库；测试环境的数据迁移与部署验收单独执行、单独记录。
+
+### 非数据库优化：只读 Playbook 检查与工作台装配
+
+组件列表和详情中的 Readiness 只需要确认 Playbook 路径、文件和执行目录可读。原先每个 Action 调用一次 `Digest`，重复读取同一目录的全部文件。现在 `Runner.ValidatePlaybooks` 为每个不同路径保留独立检查结果，在一批可见 Action 中只计算一次共享目录摘要。缺失文件、路径越界和符号链接越界仍只阻断对应 Action；共享目录读取失败会阻断所有依赖该目录的有效路径。列表未覆盖的候选依赖文件继续独立实时校验。
+
+批量检查结果只属于一次同步列表或详情读取，不存入 Runner、Platform 或数据库。下一次请求重新检查；发布验证、计划摘要和执行工作区校验继续独立运行，不复用只读结果。组件 Owner 工作台直接使用同一次 `ListComponents` 已计算的 Readiness，以纯函数装配工作项，避免再次读取文件和证据；没有有效 Readiness 的输入会返回错误。
+
+2026-09-03，Apple M2、darwin/arm64，在已完成上述数据库优化的代码上测量完整组件 HTTP 处理。临时目录包含三个共享 Playbook 和 64 个各 16 KiB 的资源文件（约 1 MiB）；每个组件三个 Draft、每个 Draft 三个 Action，均引用这三个文件。临时内存 SQLite 没有成功 Run，响应必须保留两个证据阻断项。以下为三次运行的中位数，每次测量三个请求：
+
+| 目录规模 | 优化前 | 优化后 | 耗时减少 | 单次累计分配：前 / 后 |
+| --- | --- | --- | --- | --- |
+| 10 个组件 / 30 个 Release | 155.691 ms | 4.886 ms | 97% | 210.72 MB / 3.43 MB |
+| 40 个组件 / 120 个 Release | 618.805 ms | 12.729 ms | 98% | 842.79 MB / 6.74 MB |
+
+```bash
+go test ./internal/api -run '^$' -bench '^BenchmarkComponentsHTTPWithPlaybooks$' -benchtime=3x -benchmem -count=3
+```
+
+这组基准包含真实临时文件读取、鉴权、Readiness 和响应序列化，不包含网络、浏览器渲染或 Ansible 子进程执行；操作系统可能缓存文件。独立 Playbook 路径更多时仍需逐个读取文件，因此不能直接将该比例视为测试环境端到端收益。累计分配量也不等于常驻内存。
+
+回归覆盖批量与逐项检查的完整响应一致性、整棵目录仅扫描一次、不同文件错误归属、下一请求看到文件删除、未覆盖路径实时回退，以及发布验证不继承只读缓存。工作台回归确认保留阻断项且不重复校验。本轮不变更数据库结构、SQL 或 API 合同。

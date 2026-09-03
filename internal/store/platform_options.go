@@ -82,11 +82,16 @@ func (set *platformReferenceSet) usage() domain.PlatformOptionUsage {
 }
 
 func (s *Store) ListPlatformOptionCategories(ctx context.Context) ([]domain.PlatformOptionCategory, error) {
-	index, err := loadPlatformReferenceIndex(ctx, s.db)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
-	return listPlatformOptionCategories(ctx, s.db, index)
+	defer tx.Rollback()
+	index, err := loadPlatformReferenceIndex(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	return listPlatformOptionCategories(ctx, tx, index)
 }
 
 // BootstrapPlatformCatalog installs the initial platform-owned directory once.
@@ -179,33 +184,42 @@ ORDER BY sort_order,label`)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*domain.PlatformOptionCategory, len(categories))
 	for i := range categories {
-		optionRows, err := q.QueryContext(ctx, `
+		byID[categories[i].ID] = &categories[i]
+	}
+	optionRows, err := q.QueryContext(ctx, `
 SELECT id,category_id,parent_option_id,technical_value,label,sort_order,created_by,created_at,retired_at
-FROM platform_options WHERE category_id=? ORDER BY sort_order,label`, categories[i].ID)
-		if err != nil {
+FROM platform_options ORDER BY sort_order,label`)
+	if err != nil {
+		return nil, err
+	}
+	defer optionRows.Close()
+	for optionRows.Next() {
+		var option domain.PlatformOption
+		var created string
+		var parent, retired sql.NullString
+		if err := optionRows.Scan(&option.ID, &option.CategoryID, &parent, &option.Value, &option.Label, &option.SortOrder, &option.CreatedBy, &created, &retired); err != nil {
 			return nil, err
 		}
-		for optionRows.Next() {
-			var option domain.PlatformOption
-			var created string
-			var parent, retired sql.NullString
-			if err := optionRows.Scan(&option.ID, &option.CategoryID, &parent, &option.Value, &option.Label, &option.SortOrder, &option.CreatedBy, &created, &retired); err != nil {
-				optionRows.Close()
-				return nil, err
-			}
-			option.CreatedAt = parseTime(created)
-			option.ParentOptionID = parent.String
-			if retired.Valid {
-				value := parseTime(retired.String)
-				option.RetiredAt = &value
-			}
-			option.Usage = index.options[platformOptionReferenceKey(categories[i].Key, option.Value)].usage()
-			categories[i].Options = append(categories[i].Options, option)
+		option.CreatedAt = parseTime(created)
+		option.ParentOptionID = parent.String
+		if retired.Valid {
+			value := parseTime(retired.String)
+			option.RetiredAt = &value
 		}
-		if err := optionRows.Close(); err != nil {
-			return nil, err
+		category := byID[option.CategoryID]
+		if category == nil {
+			return nil, fmt.Errorf("%w: option %s has no category", domain.ErrConflict, option.ID)
 		}
+		option.Usage = index.options[platformOptionReferenceKey(category.Key, option.Value)].usage()
+		category.Options = append(category.Options, option)
+	}
+	if err := optionRows.Err(); err != nil {
+		return nil, err
 	}
 	return categories, nil
 }
@@ -565,6 +579,10 @@ func loadPlatformReferenceIndex(ctx context.Context, q queryer) (platformReferen
 			}
 		}
 	}
+	if err := releases.Err(); err != nil {
+		releases.Close()
+		return index, err
+	}
 	if err := releases.Close(); err != nil {
 		return index, err
 	}
@@ -579,6 +597,10 @@ func loadPlatformReferenceIndex(ctx context.Context, q queryer) (platformReferen
 			return index, err
 		}
 		index.add("hostGroup", group, "component", releaseID)
+	}
+	if err := actions.Err(); err != nil {
+		actions.Close()
+		return index, err
 	}
 	if err := actions.Close(); err != nil {
 		return index, err
@@ -599,6 +621,10 @@ func loadPlatformReferenceIndex(ctx context.Context, q queryer) (platformReferen
 				index.add("hostGroup", node.HostGroup, "scenario", id)
 			}
 		}
+	}
+	if err := scenarios.Err(); err != nil {
+		scenarios.Close()
+		return index, err
 	}
 	if err := scenarios.Close(); err != nil {
 		return index, err
@@ -635,6 +661,10 @@ func loadPlatformReferenceIndex(ctx context.Context, q queryer) (platformReferen
 				}
 			}
 		}
+	}
+	if err := environments.Err(); err != nil {
+		environments.Close()
+		return index, err
 	}
 	if err := environments.Close(); err != nil {
 		return index, err

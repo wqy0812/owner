@@ -76,7 +76,7 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 	embeddedRuns := map[string]bool{}
 	switch user.Role {
 	case domain.RoleComponentOwner:
-		items, embedded, itemErr := p.componentOwnerWork(ctx, user, components, runs)
+		items, embedded, itemErr := componentOwnerWork(user, components, runs)
 		if itemErr != nil {
 			return domain.Workbench{}, itemErr
 		}
@@ -198,7 +198,9 @@ func valueOrTime(value *time.Time, fallback time.Time) time.Time {
 	return *value
 }
 
-func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, components []domain.Component, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+// Components carry the Readiness evaluated by ListComponents in this same
+// request. Formatting work items must not repeat filesystem or evidence reads.
+func componentOwnerWork(user domain.User, components []domain.Component, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
 	items := []domain.WorkItem{}
 	embedded := map[string]bool{}
 	for _, component := range components {
@@ -215,9 +217,9 @@ func (p *Platform) componentOwnerWork(ctx context.Context, user domain.User, com
 				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && snapshotString(run, "componentReleaseSpecDigest") == digest
 			})
 			reasons := []domain.WorkReason{}
-			readiness, readinessErr := p.releaseReadiness(ctx, release)
-			if readinessErr != nil {
-				return nil, nil, readinessErr
+			readiness := release.Readiness
+			if readiness.Status != domain.ReadinessReady && readiness.Status != domain.ReadinessRisky && readiness.Status != domain.ReadinessBlocked {
+				return nil, nil, fmt.Errorf("component work requires evaluated Readiness for release %s", release.ID)
 			}
 			for _, blocker := range readiness.Blockers {
 				evidenceRunID := ""

@@ -9,15 +9,19 @@ import (
 )
 
 func (s *Store) ListEnvironmentParameterDefinitions(ctx context.Context) ([]domain.EnvironmentParameterDefinition, error) {
-	return listEnvironmentParameterDefinitions(ctx, s.db)
+	return listEnvironmentParameterDefinitions(ctx, s.db, true)
 }
 
-func listEnvironmentParameterDefinitions(ctx context.Context, q queryer) ([]domain.EnvironmentParameterDefinition, error) {
+func listEnvironmentParameterDefinitions(ctx context.Context, q queryer, includeUsage bool) ([]domain.EnvironmentParameterDefinition, error) {
+	usage := `0`
+	if includeUsage {
+		usage = `(SELECT COUNT(*) FROM component_releases r,json_each(r.parameters_json) p
+   WHERE json_extract(p.value,'$.environmentBinding.definitionId')=d.id)`
+	}
 	rows, err := q.QueryContext(ctx, `
 SELECT d.id,d.technical_key,d.label,d.description,d.parameter_type,d.enum_json,d.min_length,d.created_by,d.created_at,
   COALESCE((SELECT value_json FROM environment_parameter_defaults WHERE definition_id=d.id),'null'),
-  (SELECT COUNT(*) FROM component_releases r,json_each(r.parameters_json) p
-   WHERE json_extract(p.value,'$.environmentBinding.definitionId')=d.id)
+  `+usage+`
 FROM environment_parameter_definitions d ORDER BY d.label`)
 	if err != nil {
 		return nil, err
@@ -158,13 +162,17 @@ func (s *Store) DeleteEnvironmentParameterDefinition(ctx context.Context, id str
 }
 
 func (s *Store) ListEnvironmentVariableDefinitions(ctx context.Context) ([]domain.EnvironmentVariableDefinition, error) {
-	return listEnvironmentVariableDefinitions(ctx, s.db)
+	return listEnvironmentVariableDefinitions(ctx, s.db, true)
 }
 
-func listEnvironmentVariableDefinitions(ctx context.Context, q queryer) ([]domain.EnvironmentVariableDefinition, error) {
+func listEnvironmentVariableDefinitions(ctx context.Context, q queryer, includeUsage bool) ([]domain.EnvironmentVariableDefinition, error) {
+	usage := `0`
+	if includeUsage {
+		usage = `(SELECT COUNT(*) FROM environment_revisions r,json_each(r.variables_json) v WHERE v.key=d.variable_name)`
+	}
 	rows, err := q.QueryContext(ctx, `
 SELECT d.id,d.variable_name,d.label,d.description,d.created_by,d.created_at,
-  (SELECT COUNT(*) FROM environment_revisions r,json_each(r.variables_json) v WHERE v.key=d.variable_name)
+  `+usage+`
 FROM environment_variable_definitions d ORDER BY d.variable_name`)
 	if err != nil {
 		return nil, err

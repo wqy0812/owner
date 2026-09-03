@@ -22,8 +22,9 @@ func (s *Store) ListComponentArtifacts(ctx context.Context, releaseID string) ([
 	return listComponentArtifacts(ctx, s.db, releaseID)
 }
 
-func listComponentArtifacts(ctx context.Context, q queryer, releaseID string) ([]domain.ComponentArtifact, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at FROM component_release_artifacts WHERE release_id=? ORDER BY alias`, releaseID)
+func listComponentArtifacts(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ComponentArtifact, error) {
+	placeholders, args := releaseIDPlaceholders(releaseIDs)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at FROM component_release_artifacts WHERE release_id IN (`+placeholders+`) ORDER BY alias`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -13,8 +13,9 @@ func (s *Store) ListComponentImages(ctx context.Context, releaseID string) ([]do
 	return listComponentImages(ctx, s.db, releaseID)
 }
 
-func listComponentImages(ctx context.Context, q queryer, releaseID string) ([]domain.ComponentImage, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at FROM component_release_images WHERE release_id=? ORDER BY logical_name`, releaseID)
+func listComponentImages(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ComponentImage, error) {
+	placeholders, args := releaseIDPlaceholders(releaseIDs)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at FROM component_release_images WHERE release_id IN (`+placeholders+`) ORDER BY logical_name`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -109,6 +109,21 @@ Catalog 导入只接受当前完整表结构，包括环境参数默认值表；
 
 Catalog 恢复后首次启动会保留恢复的选项目录，并单独初始化空的环境变量字段目录，提供 `IMAGE_REGISTRY` 和 `FILE_STATION`。已有变量字段不会被覆盖；完成初始化后，管理员删除的字段也不会在后续重启时重新出现。
 
+## 部署数据库检查与文件备份
+
+受保护部署使用 `clusterforge-backup database`，复用项目内置的 Go SQLite 引擎，支持当前结构中的生成列，不依赖主机 Python SQLite。该入口与 Catalog 恢复点分开：只读取指定数据库，或将一致性快照写入全新路径；不初始化源库、不迁移结构、不覆盖已有文件。
+
+```bash
+clusterforge-backup database contract --db /var/lib/clusterforge/platform.db
+clusterforge-backup database active-runs --db /var/lib/clusterforge/platform.db
+clusterforge-backup database verify --db /var/lib/clusterforge/platform.db \
+  --expected-contract clusterforge-v1-20260903-run-evidence-indexes
+clusterforge-backup database snapshot --db /var/lib/clusterforge/platform.db \
+  --target /path/to/new-backup.db
+```
+
+文件备份包含已提交 WAL，完成后检查完整性和外键，保留源文件权限与归属。部署在停服后再次检查活动 Run，再创建备份；任何检查或迁移失败都应恢复备份中的原数据库和原二进制。
+
 ## 保留与失败边界
 
 本地默认保留最近 24 小时内的全部成功快照、最近 14 个日恢复点、最近 8 个周恢复点，以及七天内的 partial 任务。Git commit 与 `backup/*` 标签不由平台自动删除。

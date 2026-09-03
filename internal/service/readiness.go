@@ -9,10 +9,11 @@ import (
 )
 
 func (p *Platform) releaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ReleaseReadiness, error) {
-	return p.releaseReadinessWithin(ctx, release, map[string]bool{}, map[string]domain.ReleaseReadiness{})
+	return newReadinessEvaluation(p).readiness(ctx, release)
 }
 
-func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.ComponentRelease, visiting map[string]bool, memo map[string]domain.ReleaseReadiness) (domain.ReleaseReadiness, error) {
+func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, release domain.ComponentRelease, visiting map[string]bool, memo map[string]domain.ReleaseReadiness) (domain.ReleaseReadiness, error) {
+	p := e.platform
 	if cached, ok := memo[release.ID]; ok {
 		return cached, nil
 	}
@@ -45,14 +46,18 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 		}
 	}
 
-	if err := p.validateReleaseContract(ctx, release, true); err != nil {
+	if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
-	} else if err := p.validateReleaseTransitionContracts(ctx, release); err != nil {
+	} else if err := p.validateReleaseTransitionContractsWithPlaybooks(ctx, release, e.validatePlaybook); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
 	}
 
 	digest := componentReleaseSpecDigest(release)
-	runtimePairs, pairsErr := p.releaseRuntimeCompatibility(ctx, release)
+	catalog, pairsErr := e.catalogDefinitions(ctx)
+	var runtimePairs []domain.RuntimeCompatibility
+	if pairsErr == nil {
+		runtimePairs, pairsErr = releaseRuntimeCompatibility(release, catalog.Options)
+	}
 	if pairsErr != nil {
 		add("release_runtime_matrix_invalid", pairsErr.Error(), "contract")
 	}
@@ -130,7 +135,7 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 				add("candidate_dependency_not_shared", fmt.Sprintf("依赖 %s 不是 Released 或共享候选", dependency.UpstreamReleaseID), "contract")
 				continue
 			}
-			upstreamReadiness, readyErr := p.releaseReadinessWithin(ctx, upstream, visiting, memo)
+			upstreamReadiness, readyErr := e.releaseReadinessWithin(ctx, upstream, visiting, memo)
 			if readyErr != nil {
 				delete(visiting, release.ID)
 				return result, readyErr
@@ -151,11 +156,7 @@ func (p *Platform) releaseReadinessWithin(ctx context.Context, release domain.Co
 	return result, nil
 }
 
-func (p *Platform) releaseRuntimeCompatibility(ctx context.Context, release domain.ComponentRelease) ([]domain.RuntimeCompatibility, error) {
-	lookup, err := p.platformOptionLookup(ctx)
-	if err != nil {
-		return nil, err
-	}
+func releaseRuntimeCompatibility(release domain.ComponentRelease, lookup domain.CatalogOptions) ([]domain.RuntimeCompatibility, error) {
 	runtimeCategory, runtimeOK := lookup.Dimensions["containerRuntime"]
 	versionCategory, versionOK := lookup.Dimensions["containerRuntimeVersion"]
 	if !runtimeOK || !versionOK {
@@ -187,6 +188,10 @@ func (p *Platform) releaseRuntimeCompatibility(ctx context.Context, release doma
 }
 
 func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {
+	return p.validateReleaseTransitionContractsWithPlaybooks(ctx, release, p.validatePlaybook)
+}
+
+func (p *Platform) validateReleaseTransitionContractsWithPlaybooks(ctx context.Context, release domain.ComponentRelease, validatePlaybook func(string) error) error {
 	var parent domain.ComponentRelease
 	if release.ParentReleaseID == "" {
 		for _, action := range release.Actions {
@@ -240,12 +245,18 @@ func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, relea
 			}
 		}
 	}
-	if digester, ok := p.runner.(digestRunner); ok {
-		for _, action := range release.Actions {
-			if _, _, err := digester.Digest(action.Playbook); err != nil {
-				return fmt.Errorf("%w: action %s playbook is not executable: %v", domain.ErrInvalid, action.Name, err)
-			}
+	for _, action := range release.Actions {
+		if err := validatePlaybook(action.Playbook); err != nil {
+			return fmt.Errorf("%w: action %s playbook is not executable: %v", domain.ErrInvalid, action.Name, err)
 		}
+	}
+	return nil
+}
+
+func (p *Platform) validatePlaybook(path string) error {
+	if digester, ok := p.runner.(digestRunner); ok {
+		_, _, err := digester.Digest(path)
+		return err
 	}
 	return nil
 }
@@ -271,12 +282,5 @@ func (p *Platform) decorateReleaseReadiness(ctx context.Context, release domain.
 }
 
 func (p *Platform) decorateComponentReadiness(ctx context.Context, component domain.Component) (domain.Component, error) {
-	for i := range component.Releases {
-		release, err := p.decorateReleaseReadiness(ctx, component.Releases[i])
-		if err != nil {
-			return component, err
-		}
-		component.Releases[i] = release
-	}
-	return component, nil
+	return newReadinessEvaluation(p).decorateComponent(ctx, component)
 }

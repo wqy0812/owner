@@ -44,6 +44,7 @@ func TestPreviousContractsAreRejected(t *testing.T) {
 		"clusterforge-v1-20260828-modular-readiness",
 		"clusterforge-v1-20260828-publication-guards",
 		"clusterforge-v1-20260829-ssh-connectivity",
+		"clusterforge-v1-20260902-container-runtime-matrix",
 	} {
 		t.Run(version, func(t *testing.T) {
 			ctx := context.Background()

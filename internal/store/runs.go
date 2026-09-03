@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -462,97 +461,6 @@ SELECT COUNT(*) FROM runs
 WHERE kind='component_test' AND component_release_id=?
   AND status IN ('awaiting_approval','queued','running')`, releaseID).Scan(&count)
 	return count > 0, err
-}
-
-func (s *Store) HasSuccessfulComponentTestAction(ctx context.Context, releaseID string, action domain.ActionKind, releaseSpecDigest string) (bool, error) {
-	var found int
-	err := s.db.QueryRowContext(ctx, `
-SELECT EXISTS(
-  SELECT 1 FROM runs
-  WHERE kind='component_test' AND component_release_id=? AND action_kind=? AND status='succeeded'
-    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
-)`, releaseID, action, releaseSpecDigest).Scan(&found)
-	return found != 0, err
-}
-
-func (s *Store) HasSuccessfulComponentInstallVerification(ctx context.Context, releaseID, releaseSpecDigest string) (bool, error) {
-	var found int
-	err := s.db.QueryRowContext(ctx, `
-SELECT EXISTS(
-  SELECT 1 FROM runs
-  WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
-    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
-    AND json_extract(input_snapshot_json, '$.componentTestEvidence')='install_verify'
-)`, releaseID, releaseSpecDigest).Scan(&found)
-	return found != 0, err
-}
-
-func (s *Store) HasSuccessfulComponentRollbackVerification(ctx context.Context, releaseID, releaseSpecDigest string) (bool, error) {
-	var found int
-	err := s.db.QueryRowContext(ctx, `
-SELECT EXISTS(
-  SELECT 1 FROM runs
-  WHERE kind='component_test' AND component_release_id=? AND action_kind='rollback' AND status='succeeded'
-    AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
-    AND json_extract(input_snapshot_json, '$.componentTestEvidence')='rollback_verify'
-)`, releaseID, releaseSpecDigest).Scan(&found)
-	return found != 0, err
-}
-
-func (s *Store) SuccessfulComponentEvidenceRunIDs(ctx context.Context, releaseID, releaseSpecDigest string) (string, string, error) {
-	return s.successfulComponentEvidenceRunIDs(ctx, releaseID, releaseSpecDigest, "", "")
-}
-
-func (s *Store) SuccessfulComponentEvidenceRunIDsForRuntime(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, string, error) {
-	return s.successfulComponentEvidenceRunIDs(ctx, releaseID, releaseSpecDigest, runtime, version)
-}
-
-func (s *Store) successfulComponentEvidenceRunIDs(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, string, error) {
-	lookup := func(evidence string) (string, error) {
-		var id string
-		err := s.db.QueryRowContext(ctx, `
-SELECT id FROM runs
-WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
-  AND json_extract(input_snapshot_json, '$.componentReleaseSpecDigest')=?
-  AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
-  AND CASE
-    WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json, '$.componentTestEvidence') IN ('rollback_verify','rollback_self_verify')
-    ELSE json_extract(input_snapshot_json, '$.componentTestEvidence')=?
-  END
-ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, runtime, runtime, version, evidence, evidence).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
-		return id, err
-	}
-	installID, err := lookup("install_verify")
-	if err != nil {
-		return "", "", err
-	}
-	rollbackID, err := lookup("rollback_verify")
-	return installID, rollbackID, err
-}
-
-func (s *Store) SuccessfulComponentEvolutionEvidenceRunID(ctx context.Context, releaseID, releaseSpecDigest string) (string, error) {
-	return s.successfulComponentEvolutionEvidenceRunID(ctx, releaseID, releaseSpecDigest, "", "")
-}
-
-func (s *Store) SuccessfulComponentEvolutionEvidenceRunIDForRuntime(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, error) {
-	return s.successfulComponentEvolutionEvidenceRunID(ctx, releaseID, releaseSpecDigest, runtime, version)
-}
-
-func (s *Store) successfulComponentEvolutionEvidenceRunID(ctx context.Context, releaseID, releaseSpecDigest, runtime, version string) (string, error) {
-	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM runs
-WHERE kind='component_test' AND component_release_id=? AND status='succeeded'
-  AND json_extract(input_snapshot_json,'$.componentReleaseSpecDigest')=?
-  AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
-  AND json_extract(input_snapshot_json,'$.componentTestEvidence')='evolution_round_trip'
-ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC LIMIT 1`, releaseID, releaseSpecDigest, runtime, runtime, version).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return id, err
 }
 
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {

@@ -16,7 +16,7 @@ import (
 
 var testNow = time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t testing.TB) *Store {
 	t.Helper()
 	s, err := Open(context.Background(), ":memory:")
 	if err != nil {
@@ -37,7 +37,7 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
-func seedStoreCatalog(t *testing.T, s *Store) {
+func seedStoreCatalog(t testing.TB, s *Store) {
 	t.Helper()
 	ctx := context.Background()
 	for _, category := range []domain.PlatformOptionCategory{

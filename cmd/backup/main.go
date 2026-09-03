@@ -24,6 +24,9 @@ func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageError()
 	}
+	if args[0] == "database" {
+		return runDatabase(ctx, args[1:])
+	}
 	baseConfig := configFromEnvironment()
 	if args[0] == "automation-snapshot" {
 		set := flag.NewFlagSet("automation-snapshot", flag.ContinueOnError)
@@ -163,5 +166,5 @@ func printResult(value any, err error) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: %s <automation-snapshot|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
+	return fmt.Errorf("usage: %s <database|automation-snapshot|resume|list|verify|restore-plan|restore-db|restore-catalog> [options]", filepath.Base(os.Args[0]))
 }

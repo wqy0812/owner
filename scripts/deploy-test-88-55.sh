@@ -132,16 +132,12 @@ scp_options=(-o BatchMode=yes -o ConnectTimeout=8 -P "$SSH_PORT")
 
 echo "==> Checking remote deployment prerequisites on $TARGET"
 ssh "${ssh_options[@]}" "$TARGET" 'set -eu
-for command_name in awk curl flock git grep install python3 sha256sum systemctl; do
+for command_name in awk curl flock git grep install sha256sum systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing remote command: $command_name" >&2
     exit 1
   }
 done
-python3 -c "import sqlite3; sqlite3.Connection.backup" >/dev/null 2>&1 || {
-  echo "Python 3.7+ with sqlite3 backup support is required" >&2
-  exit 1
-}
 test -x /opt/clusterforge/platform/clusterforge-platform
 test -f /var/lib/clusterforge/platform.db
 test -f /etc/clusterforge/platform.env
@@ -193,7 +189,7 @@ service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
 database="/var/lib/clusterforge/platform.db"
-expected_schema_contract="clusterforge-v1-20260902-container-runtime-matrix"
+expected_schema_contract="clusterforge-v1-20260903-run-evidence-indexes"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
@@ -279,6 +275,7 @@ actual_remote_helper_checksum="$(sha256sum "$staged_remote_helper" | awk '{print
 }
 # shellcheck source=deploy-test-88-55-remote-lib.sh
 source "$staged_remote_helper"
+CLUSTERFORGE_DEPLOY_DB_TOOL="$staged_backup_artifact"
 
 active_runs="$(clusterforge_list_active_runs "$database")"
 predeploy_schema_contract="$(clusterforge_read_schema_contract "$database")"
@@ -337,7 +334,7 @@ fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 backup_dir="$backup_root/$stamp"
-mkdir -p "$backup_dir"
+mkdir -p -m 0700 "$backup_dir"
 install -m 0755 "$live_binary" "$backup_dir/clusterforge-platform"
 if [[ -x "$live_backup_binary" ]]; then
   install -m 0755 "$live_backup_binary" "$backup_dir/clusterforge-backup"
@@ -350,6 +347,9 @@ done
 
 service_touched=1
 systemctl stop "$service_name"
+# Recheck after stopping: a Run may have arrived after the initial check.
+active_runs="$(clusterforge_list_active_runs "$database")"
+clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
 clusterforge_backup_sqlite "$database" "$backup_dir/platform.db"
 if [[ -f /etc/clusterforge/platform.env ]]; then
   cp -a /etc/clusterforge/platform.env "$backup_dir/platform.env"
@@ -399,19 +399,7 @@ if [[ "$backup_enabled" != "true" ]]; then
   finish_failure 1
 fi
 
-python3 - "$database" "$expected_schema_contract" <<'PY'
-import sqlite3
-import sys
-
-database, expected_schema_contract = sys.argv[1:]
-connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-contract = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
-if contract != (expected_schema_contract,):
-    raise SystemExit(f"unexpected schema contract: {contract!r}")
-violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-if violations:
-    raise SystemExit(f"foreign key violations: {violations!r}")
-PY
+"$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$database" --expected-contract "$expected_schema_contract"
 
 if [[ "$rebuild_v1_db" -eq 1 && "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
   echo "creating recovery point for rebuilt V1 database"

@@ -5,25 +5,7 @@
 # behavior can be exercised without touching a service or deployment path.
 
 clusterforge_read_schema_contract() {
-  local database="$1"
-  python3 - "$database" <<'PY'
-import sqlite3
-import sys
-
-database = sys.argv[1]
-try:
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    row = connection.execute("SELECT version FROM schema_contract WHERE id=1").fetchone()
-except sqlite3.Error:
-    print("__missing__")
-    raise SystemExit(0)
-finally:
-    try:
-        connection.close()
-    except NameError:
-        pass
-print(row[0] if row is not None else "__missing__")
-PY
+  "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database contract --db "$1"
 }
 
 clusterforge_assert_schema_policy() {
@@ -42,27 +24,7 @@ clusterforge_assert_schema_policy() {
 }
 
 clusterforge_list_active_runs() {
-  local database="$1"
-  python3 - "$database" <<'PY'
-import sqlite3
-import sys
-
-database = sys.argv[1]
-connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-try:
-    rows = connection.execute(
-        """
-        SELECT id, status, created_at
-        FROM runs
-        WHERE status IN ('running', 'queued', 'awaiting_approval')
-        ORDER BY created_at
-        """
-    ).fetchall()
-finally:
-    connection.close()
-for row in rows:
-    print("\t".join(str(value) for value in row))
-PY
+  "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database active-runs --db "$1"
 }
 
 clusterforge_assert_active_run_policy() {
@@ -98,39 +60,5 @@ clusterforge_snapshot_if_configured() {
 }
 
 clusterforge_backup_sqlite() {
-  local source="$1"
-  local destination="$2"
-  python3 - "$source" "$destination" <<'PY'
-import os
-import sqlite3
-import sys
-
-source, destination = sys.argv[1:]
-source_stat = os.stat(source)
-try:
-    source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        destination_connection = sqlite3.connect(destination)
-        try:
-            source_connection.backup(destination_connection)
-            integrity = destination_connection.execute("PRAGMA integrity_check").fetchall()
-            if integrity != [("ok",)]:
-                raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
-            violations = destination_connection.execute("PRAGMA foreign_key_check").fetchall()
-            if violations:
-                raise RuntimeError(f"SQLite backup foreign key violations: {violations!r}")
-        finally:
-            destination_connection.close()
-    finally:
-        source_connection.close()
-
-    os.chmod(destination, source_stat.st_mode & 0o7777)
-    os.chown(destination, source_stat.st_uid, source_stat.st_gid)
-except Exception:
-    try:
-        os.remove(destination)
-    except FileNotFoundError:
-        pass
-    raise
-PY
+  "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database snapshot --db "$1" --target "$2"
 }

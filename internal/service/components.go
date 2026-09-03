@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/store"
 )
 
 func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]domain.Component, error) {
@@ -18,8 +19,10 @@ func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]doma
 	if err != nil {
 		return nil, err
 	}
+	evaluation := newReadinessEvaluation(p)
+	evaluation.preparePlaybooks(components)
 	for i := range components {
-		components[i], err = p.decorateComponentReadiness(ctx, components[i])
+		components[i], err = evaluation.decorateComponent(ctx, components[i])
 		if err != nil {
 			return nil, err
 		}
@@ -425,10 +428,18 @@ func (p *Platform) DeleteRelease(ctx context.Context, user domain.User, id strin
 }
 
 func (p *Platform) validateReleaseContract(ctx context.Context, release domain.ComponentRelease, publishing bool) error {
+	return p.validateReleaseContractWithCatalog(ctx, release, publishing, p.store.ReadCatalogDefinitions)
+}
+
+func (p *Platform) validateReleaseContractWithCatalog(ctx context.Context, release domain.ComponentRelease, publishing bool, loadCatalog func(context.Context) (store.CatalogValidationSnapshot, error)) error {
 	if err := validateRelease(release); err != nil {
 		return err
 	}
-	if err := p.validateReleaseCatalogValues(ctx, release); err != nil {
+	catalog, err := loadCatalog(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateReleaseCatalogValues(release, catalog); err != nil {
 		return err
 	}
 	if err := p.validateReleaseMappings(ctx, release); err != nil {
@@ -441,19 +452,23 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 }
 
 func (p *Platform) validateReleaseCatalogValues(ctx context.Context, release domain.ComponentRelease) error {
-	if err := p.validateEnvironmentConstraintsCatalog(ctx, release.EnvironmentConstraints); err != nil {
-		return err
-	}
-	for _, action := range release.Actions {
-		if err := p.validateHostGroupCatalog(ctx, action.HostGroup); err != nil {
-			return err
-		}
-	}
-	definitions, err := p.store.ListEnvironmentParameterDefinitions(ctx)
+	catalog, err := p.store.ReadCatalogDefinitions(ctx)
 	if err != nil {
 		return err
 	}
-	return domain.ValidateGlobalParameterBindings(release.Parameters, definitions)
+	return validateReleaseCatalogValues(release, catalog)
+}
+
+func validateReleaseCatalogValues(release domain.ComponentRelease, catalog store.CatalogValidationSnapshot) error {
+	if err := catalog.Options.ValidateConstraints(release.EnvironmentConstraints); err != nil {
+		return err
+	}
+	for _, action := range release.Actions {
+		if err := catalog.Options.ValidateHostGroup(action.HostGroup); err != nil {
+			return err
+		}
+	}
+	return domain.ValidateGlobalParameterBindings(release.Parameters, catalog.Parameters)
 }
 
 func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {

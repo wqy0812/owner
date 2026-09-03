@@ -32,6 +32,31 @@ type CatalogValidationSnapshot struct {
 	Releases   []domain.ComponentRelease
 }
 
+// ReadCatalogDefinitions reads the small governance dictionary in one snapshot.
+// It deliberately omits historical reference counts and Release contracts;
+// those belong to management views and relationship validation respectively.
+func (s *Store) ReadCatalogDefinitions(ctx context.Context) (CatalogValidationSnapshot, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return CatalogValidationSnapshot{}, err
+	}
+	defer tx.Rollback()
+	return loadCatalogDefinitions(ctx, tx)
+}
+
+func (s *Store) ReadCatalogOptions(ctx context.Context) (domain.CatalogOptions, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return domain.CatalogOptions{}, err
+	}
+	defer tx.Rollback()
+	categories, err := listPlatformOptionCategories(ctx, tx, newPlatformReferenceIndex())
+	if err != nil {
+		return domain.CatalogOptions{}, err
+	}
+	return domain.NewCatalogOptions(categories)
+}
+
 func loadCatalogDefinitions(ctx context.Context, q queryer) (CatalogValidationSnapshot, error) {
 	var snapshot CatalogValidationSnapshot
 	categories, err := listPlatformOptionCategories(ctx, q, newPlatformReferenceIndex())
@@ -42,11 +67,11 @@ func loadCatalogDefinitions(ctx context.Context, q queryer) (CatalogValidationSn
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Parameters, err = listEnvironmentParameterDefinitions(ctx, q)
+	snapshot.Parameters, err = listEnvironmentParameterDefinitions(ctx, q, false)
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Variables, err = listEnvironmentVariableDefinitions(ctx, q)
+	snapshot.Variables, err = listEnvironmentVariableDefinitions(ctx, q, false)
 	return snapshot, err
 }
 

@@ -269,8 +269,8 @@ SQLite 主要表如下：
 | `scenario_revisions` | 静态 DAG | `(scenario_id, revision)` 唯一 |
 | `environments` | 环境元数据 | current Revision 指针 |
 | `environment_revisions` | 环境快照 | `(environment_id, revision)` 唯一 |
-| `runs` | 运行主记录和锁定快照 | 环境、组件/场景 Revision 外键 |
-| `run_steps` | 实际执行步骤 | Run 删除时级联 |
+| `runs` | 运行主记录和锁定快照 | 环境、组件/场景 Revision 外键；证据生成列与成功/活跃 Run 部分索引 |
+| `run_steps` | 实际执行步骤 | Run 删除时级联；Run 外键索引，保持插入顺序读取 |
 | `run_logs` | 持久日志 | 按 Run 和自增 ID 查询 |
 | `approvals` | 危险运行审批 | 每个 Run 最多一条 |
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
@@ -283,6 +283,10 @@ SQLite 主要表如下：
 | `environment_ssh_checks` | 环境 Go SSH 认证与 `true` 检查 | 与 TCP 证据独立，记录来源 Environment Revision |
 
 时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同，`environment_revisions.parameters_json` 保存环境 Owner 的结构化值；`environment_parameter_definitions` 和 `environment_variable_definitions` 保存平台治理目录。
+
+Run 的证据读取使用五个虚拟生成列：`component_spec_digest`、`component_evidence_kind`、`runtime_name`、`runtime_version` 从 `input_snapshot_json` 派生，`evidence_at` 从完成时间或创建时间派生。JSON 仍是证据元数据的唯一写入来源，生成列不能独立修改；缺失或非字符串元数据保持 NULL，避免被转换为有效证据键。成功组件测试的两个部分索引分别服务于普通证据和指定运行时的证据查询，匹配 Release、当前合同摘要和证据类型后直接取最新记录。回滚证据分别从 `rollback_verify`、`rollback_self_verify` 中取最新一条，再比较最多两条记录；`rollback_only` 不满足回滚验证门禁。时间相同时使用 Run ID 稳定排序。
+
+活跃组件测试、Action 所属 Release、RunStep 所属 Run 也有对应索引，减少历史数据增长对引用检查和子项读取的影响。索引由 SQLite 随原始行维护，不增加应用层双写。虚拟列不重复存储完整快照，但索引占用额外空间，并增加写入维护成本。生成列要求所有数据库读写工具使用 [SQLite 3.31 或以上版本](https://www.sqlite.org/gencol.html)，部署脚本使用 `clusterforge-backup database` 内置的 Go SQLite 引擎完成检查和一致性文件备份，不依赖系统 Python SQLite；结构合同变更不自动迁移或重建已有数据库。
 
 ## 6. 权限和可见性
 
@@ -671,7 +675,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260902-container-runtime-matrix` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。仓库不保留历史合同转换工具；其他合同需要通过显式备份和测试库重建流程处理。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260903-run-evidence-indexes` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。仓库不保留历史合同转换工具；其他合同需要通过显式备份和测试库重建流程处理。
 
 ### 11.1 发布目录灾备
 

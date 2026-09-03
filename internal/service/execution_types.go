@@ -16,6 +16,10 @@ type planDigestRunner interface {
 	DigestPlan([]string) (playbookSHA256 map[string]string, treeSHA256 string, err error)
 }
 
+type playbookValidationRunner interface {
+	ValidatePlaybooks([]string) map[string]error
+}
+
 type workspaceRunner interface {
 	PrepareWorkspace(expectedTreeSHA256 string) (*ansiblerunner.Workspace, error)
 	RunInWorkspace(context.Context, *ansiblerunner.Workspace, ansiblerunner.Request) (ansiblerunner.Result, error)

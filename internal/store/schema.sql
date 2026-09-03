@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260902-container-runtime-matrix');
+VALUES(1, 'clusterforge-v1-20260903-run-evidence-indexes');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -174,6 +174,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_successor
   WHERE parent_release_id IS NOT NULL
     AND (status IN ('draft', 'released') OR released_at IS NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dependencies_upstream ON component_dependencies(upstream_component_id);
+CREATE INDEX IF NOT EXISTS idx_actions_release ON action_definitions(release_id, kind, name);
 
 CREATE TABLE IF NOT EXISTS scenarios (
   id TEXT PRIMARY KEY,
@@ -259,11 +260,39 @@ CREATE TABLE IF NOT EXISTS runs (
   error_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT,
-  finished_at TEXT
+  finished_at TEXT,
+  -- Query projections are derived from the locked snapshot, never independently
+  -- written. Keep missing or non-text metadata NULL rather than coercing it.
+  component_spec_digest TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_type(input_snapshot_json,'$.componentReleaseSpecDigest')='text'
+      THEN json_extract(input_snapshot_json,'$.componentReleaseSpecDigest') END
+  ) VIRTUAL,
+  component_evidence_kind TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_type(input_snapshot_json,'$.componentTestEvidence')='text'
+      THEN json_extract(input_snapshot_json,'$.componentTestEvidence') END
+  ) VIRTUAL,
+  runtime_name TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_type(input_snapshot_json,'$.runtimeCompatibility.runtime')='text'
+      THEN json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime') END
+  ) VIRTUAL,
+  runtime_version TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_type(input_snapshot_json,'$.runtimeCompatibility.version')='text'
+      THEN json_extract(input_snapshot_json,'$.runtimeCompatibility.version') END
+  ) VIRTUAL,
+  evidence_at TEXT GENERATED ALWAYS AS (COALESCE(finished_at,created_at)) VIRTUAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_component_evidence
+ON runs(component_release_id, component_spec_digest, component_evidence_kind, evidence_at DESC, created_at DESC, id DESC)
+WHERE kind='component_test' AND status='succeeded';
+CREATE INDEX IF NOT EXISTS idx_runs_runtime_evidence
+ON runs(component_release_id, component_spec_digest, runtime_name, runtime_version, component_evidence_kind, evidence_at DESC, created_at DESC, id DESC)
+WHERE kind='component_test' AND status='succeeded';
+CREATE INDEX IF NOT EXISTS idx_runs_active_component
+ON runs(component_release_id)
+WHERE kind='component_test' AND status IN ('awaiting_approval','queued','running');
 
 CREATE TRIGGER IF NOT EXISTS runs_active_environment_insert
 BEFORE INSERT ON runs
@@ -336,6 +365,9 @@ CREATE TABLE IF NOT EXISTS run_steps (
   started_at TEXT,
   finished_at TEXT
 );
+
+-- The index retains rowid order within each Run, matching execution order.
+CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id);
 
 CREATE TABLE IF NOT EXISTS run_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

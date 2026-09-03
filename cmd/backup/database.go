@@ -1,0 +1,53 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"strings"
+
+	"codex/platform-demo/internal/deploydb"
+)
+
+func runDatabase(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("database requires contract, active-runs, snapshot, or verify")
+	}
+	set := flag.NewFlagSet("database "+args[0], flag.ContinueOnError)
+	path := set.String("db", "", "existing SQLite database path")
+	target := set.String("target", "", "new snapshot destination")
+	expected := set.String("expected-contract", "", "exact required schema contract")
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *path == "" || set.NArg() != 0 {
+		return errors.New("--db is required; positional arguments are not accepted")
+	}
+	switch args[0] {
+	case "contract":
+		contract, err := deploydb.Contract(ctx, *path)
+		if err == nil {
+			fmt.Println(contract)
+		}
+		return err
+	case "active-runs":
+		runs, err := deploydb.ActiveRuns(ctx, *path)
+		if err == nil && len(runs) > 0 {
+			fmt.Println(strings.Join(runs, "\n"))
+		}
+		return err
+	case "snapshot":
+		if *target == "" {
+			return errors.New("--target is required")
+		}
+		return deploydb.Snapshot(ctx, *path, *target)
+	case "verify":
+		if *expected == "" {
+			return errors.New("--expected-contract is required")
+		}
+		return deploydb.Verify(ctx, *path, *expected)
+	default:
+		return fmt.Errorf("unknown database command %q", args[0])
+	}
+}

@@ -138,7 +138,8 @@ func TestReleaseReadinessRequiresEvidenceForEveryRuntimeVersionPair(t *testing.T
 	record("docker@20.10.21", "install_verify", domain.ActionInstall)
 	record("docker@20.10.21", "rollback_verify", domain.ActionRollback)
 	record("docker@24.0.9", "install_verify", domain.ActionInstall)
-	readiness, err := platform.releaseReadiness(ctx, release)
+	evaluation := newReadinessEvaluation(platform)
+	readiness, err := evaluation.readiness(ctx, release)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,12 +150,19 @@ func TestReleaseReadinessRequiresEvidenceForEveryRuntimeVersionPair(t *testing.T
 		t.Fatalf("missing runtime rollback blocker: %+v", readiness.Blockers)
 	}
 	record("docker@24.0.9", "rollback_verify", domain.ActionRollback)
-	readiness, err = platform.releaseReadiness(ctx, release)
+	readiness, err = evaluation.readiness(ctx, release)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if readiness.Status != domain.ReadinessReady || len(readiness.RuntimeEvidence) != 2 || !readiness.RuntimeEvidence[0].Complete || !readiness.RuntimeEvidence[1].Complete {
 		t.Fatalf("complete runtime readiness=%+v", readiness)
+	}
+	// Reusing governance definitions must not reuse evidence for a changed
+	// contract, even when the Release ID remains the same within this read.
+	release.ReleaseNotes = "changed contract"
+	readiness, err = evaluation.readiness(ctx, release)
+	if err != nil || readiness.Status != domain.ReadinessBlocked || readiness.RuntimeEvidence[0].Complete || readiness.RuntimeEvidence[1].Complete {
+		t.Fatalf("stale evidence reused for changed contract: %+v %v", readiness, err)
 	}
 }
 

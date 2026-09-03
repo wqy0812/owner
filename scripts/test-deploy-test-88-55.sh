@@ -10,6 +10,8 @@ cleanup() {
   rm -rf "$test_root"
 }
 trap cleanup EXIT
+CLUSTERFORGE_DEPLOY_DB_TOOL="$test_root/database-tool"
+go build -o "$CLUSTERFORGE_DEPLOY_DB_TOOL" "$PROJECT_ROOT/cmd/backup"
 
 if removed_option_output="$("$PROJECT_ROOT/scripts/deploy-test-88-55.sh" --migrate-container-runtime 2>&1)"; then
   echo "removed migration option unexpectedly passed" >&2
@@ -133,5 +135,43 @@ print(connection.execute("SELECT value FROM retained WHERE id=1").fetchone()[0])
 connection.close()
 PY
 )" == "kept" ]]
+
+# Exercise the current schema through the same embedded SQLite snapshot path used
+# by deployment; both generated values and indexes must survive the snapshot.
+current_database="$test_root/current.db"
+current_backup="$test_root/backup/current.db"
+python3 - "$PROJECT_ROOT/internal/store/schema.sql" "$current_database" <<'PY_CURRENT'
+import json
+import pathlib
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[2])
+connection.executescript(pathlib.Path(sys.argv[1]).read_text())
+stamp = '2026-09-03T00:00:00Z'
+connection.execute("INSERT INTO users(id,name,role,created_at) VALUES('owner','Owner','component_owner',?)", (stamp,))
+connection.execute("INSERT INTO users(id,name,role,created_at) VALUES('environment-owner','Environment owner','environment_owner',?)", (stamp,))
+connection.execute("INSERT INTO components(id,slug,name,layer,owner_id,created_at,updated_at) VALUES('component','component','Component','runtime_state','owner',?,?)", (stamp, stamp))
+connection.execute("INSERT INTO component_release_lines(id,component_id,name,created_at) VALUES('line','component','Line',?)", (stamp,))
+connection.execute("INSERT INTO component_releases(id,component_id,line_id,version,status,compatibility,created_at) VALUES('release','component','line','1.0.0','draft','not_applicable',?)", (stamp,))
+connection.execute("INSERT INTO environments(id,name,owner_id,created_at,updated_at) VALUES('environment','Environment','environment-owner',?,?)", (stamp, stamp))
+connection.execute("INSERT INTO environment_revisions(id,environment_id,revision,created_at) VALUES('revision','environment',1,?)", (stamp,))
+snapshot = json.dumps({'componentReleaseSpecDigest': 'contract', 'componentTestEvidence': 'install_verify', 'runtimeCompatibility': {'runtime': 'runtime-a', 'version': 'version-a'}})
+connection.execute("INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,input_snapshot_json,created_at) VALUES('run','component_test','succeeded','owner','environment','revision','release',?,?)", (snapshot, stamp))
+connection.commit()
+connection.close()
+PY_CURRENT
+clusterforge_backup_sqlite "$current_database" "$current_backup"
+python3 - "$current_backup" <<'PY_VERIFY'
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+assert connection.execute("SELECT component_spec_digest,component_evidence_kind,runtime_name,runtime_version,evidence_at FROM runs WHERE id='run'").fetchone() == ('contract', 'install_verify', 'runtime-a', 'version-a', '2026-09-03T00:00:00Z')
+for name in ('idx_runs_component_evidence', 'idx_runs_runtime_evidence', 'idx_runs_active_component', 'idx_actions_release', 'idx_run_steps_run'):
+    assert connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone() == (1,)
+assert connection.execute("PRAGMA integrity_check").fetchall() == [('ok',)]
+connection.close()
+PY_VERIFY
 
 echo "deploy rebuild policy tests passed"
