@@ -253,16 +253,34 @@ func (r *Runner) runPhase(ctx context.Context, phase Phase, args []string, dir, 
 
 	stdout := &lineWriter{phase: phase, stream: StreamStdout, logs: logs}
 	stderr := &lineWriter{phase: phase, stream: StreamStderr, logs: logs}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	out, err := newPhaseOutput(localTemp, stdout)
+	if err != nil {
+		return finishPhase(phaseResult, err, logs), err
+	}
+	defer out.close()
+	errOut, err := newPhaseOutput(localTemp, stderr)
+	if err != nil {
+		return finishPhase(phaseResult, err, logs), err
+	}
+	defer errOut.close()
+	cmd.Stdout = out.writer
+	cmd.Stderr = errOut.writer
 	if err := cmd.Start(); err != nil {
 		return finishPhase(phaseResult, err, logs), err
 	}
+	processDone := make(chan struct{})
+	outDone := out.follow(processDone)
+	errDone := errOut.follow(processDone)
 	waitErr := cmd.Wait()
-	stdout.Flush()
-	stderr.Flush()
 	if ctx.Err() != nil {
 		forceKillProcessGroup(cmd.Process)
+	}
+	close(processDone)
+	outErr, stderrErr := <-outDone, <-errDone
+	stdout.Flush()
+	stderr.Flush()
+	if waitErr == nil {
+		waitErr = errors.Join(outErr, stderrErr)
 	}
 
 	if waitErr == nil {

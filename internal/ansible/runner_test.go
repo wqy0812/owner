@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,75 @@ wait
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("cancellation took too long: %v", elapsed)
+	}
+}
+
+func TestRunnerDrainsSlowLogSinkWithoutFailingSuccessfulProcess(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "site.yml"), "---\n- hosts: all\n  tasks: []\n", 0o600)
+	binary := filepath.Join(t.TempDir(), "fake-ansible-playbook")
+	writeTestFile(t, binary, `#!/bin/sh
+case "$*" in *--syntax-check*|*--list-hosts*) exit 0 ;; esac
+printf 'task output\n'
+printf 'PLAY RECAP *********************************************************************\n'
+printf 'localhost : ok=3 changed=2 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n'
+printf 'last stderr line\n' >&2
+`, 0o700)
+	runner := &Runner{AllowedRoot: root, WorkRoot: t.TempDir(), Binary: binary, KillGrace: 10 * time.Millisecond}
+	var persisted []LogEvent
+	result, err := runner.Run(context.Background(), Request{
+		Playbook: "site.yml", Inventory: []byte("[all]\nlocalhost ansible_connection=local\n"), Timeout: 5 * time.Second,
+		LogSink: func(event LogEvent) {
+			if event.Line == "task output" {
+				time.Sleep(150 * time.Millisecond)
+			}
+			persisted = append(persisted, event)
+		},
+	})
+	if err != nil || !result.Successful || result.Recap["localhost"].OK != 3 {
+		t.Fatalf("successful process with slow persistence: result=%+v error=%v", result, err)
+	}
+	var recap, stderr, finished bool
+	for _, event := range persisted {
+		recap = recap || strings.HasPrefix(event.Line, "localhost :")
+		stderr = stderr || event.Line == "last stderr line"
+		finished = finished || event.Line == "finished execute: successful"
+	}
+	if !recap || !stderr || !finished {
+		t.Fatalf("Run returned before persistence drained: recap=%v stderr=%v finished=%v", recap, stderr, finished)
+	}
+}
+
+func TestRunnerDoesNotWaitForInheritedOutputHandles(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "site.yml"), "---\n- hosts: all\n  tasks: []\n", 0o600)
+	binary := filepath.Join(t.TempDir(), "fake-ansible-playbook")
+	pidFile := filepath.Join(t.TempDir(), "helper.pid")
+	writeTestFile(t, binary, `#!/bin/sh
+case "$*" in *--syntax-check*|*--list-hosts*) exit 0 ;; esac
+sleep 10 &
+echo $! > "$HELPER_PID_FILE"
+printf 'PLAY RECAP *********************************************************************\n'
+printf 'localhost : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n'
+`, 0o700)
+	t.Cleanup(func() {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if process, err := os.FindProcess(pid); err == nil {
+					_ = process.Kill()
+				}
+			}
+		}
+	})
+	runner := &Runner{AllowedRoot: root, WorkRoot: t.TempDir(), Binary: binary, KillGrace: 10 * time.Millisecond, Env: map[string]string{"HELPER_PID_FILE": pidFile}}
+	started := time.Now()
+	result, err := runner.Run(context.Background(), Request{Playbook: "site.yml", Inventory: []byte("[all]\nlocalhost ansible_connection=local\n"), Timeout: time.Second})
+	if err != nil || !result.Successful || result.Recap["localhost"].OK != 1 {
+		t.Fatalf("inherited output handle changed foreground result: result=%+v error=%v", result, err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("waited for an idle background helper instead of the Ansible process")
 	}
 }
 
