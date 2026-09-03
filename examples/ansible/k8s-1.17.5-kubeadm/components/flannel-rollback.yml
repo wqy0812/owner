@@ -1,0 +1,161 @@
+---
+- name: Roll back Flannel
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Verify ownership before any Flannel cleanup
+      tags: always
+      block:
+        - name: Check the local ownership receipt
+          stat:
+            path: "{{ component_state_dir }}/flannel.owned"
+          register: flannel_owner
+        - name: Require an ownership receipt on every target node
+          assert:
+            that: flannel_owner.stat.exists and flannel_owner.stat.isreg
+            fail_msg: No Flannel ownership receipt exists; refusing to remove existing cluster networking.
+        - name: Read the local ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/flannel.owned"
+          register: flannel_receipt
+        - name: Read current cluster resource identities
+          command: kubectl --kubeconfig={{ admin_kubeconfig_path }} get namespace/kube-flannel clusterrole/flannel clusterrolebinding/flannel --ignore-not-found -o json
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: flannel_current
+          changed_when: false
+        - name: Refuse to delete replaced or unowned resources
+          assert:
+            that:
+              - receipt.format == 1
+              - receipt.resource_uids | length == 3
+              - (flannel_current.stdout | from_json)['items'] | map(attribute='metadata.uid') | difference(receipt.resource_uids) | length == 0
+          vars:
+            receipt: "{{ flannel_receipt.content | b64decode | from_json }}"
+        - name: Inspect the manifest before deletion
+          stat:
+            path: /etc/kubernetes/kube-flannel.yml
+            checksum_algorithm: sha256
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: flannel_manifest_identity
+        - name: Require the original manifest for retained resources
+          assert:
+            that:
+              - flannel_manifest_identity.stat.exists or (flannel_current.stdout | from_json)['items'] | length == 0
+              - not flannel_manifest_identity.stat.exists or flannel_manifest_identity.stat.checksum == receipt.manifest_sha256
+          vars:
+            receipt: "{{ flannel_receipt.content | b64decode | from_json }}"
+    - name: Check admin kubeconfig
+      stat:
+        path: "{{ admin_kubeconfig_path }}"
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: admin_kubeconfig
+
+    - name: Check Flannel manifest
+      stat:
+        path: /etc/kubernetes/kube-flannel.yml
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_manifest
+
+    - name: Request non-blocking Flannel deletion
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} delete -f /etc/kubernetes/kube-flannel.yml --ignore-not-found --wait=false
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      when: admin_kubeconfig.stat.exists and flannel_manifest.stat.exists
+      changed_when: true
+
+    - name: Remove retained Flannel workload containers
+      shell: |
+        if ! command -v docker >/dev/null 2>&1; then
+          exit 0
+        fi
+        containers="$(docker ps -aq --filter label=io.kubernetes.pod.namespace=kube-flannel)"
+        if [ -n "$containers" ]; then
+          docker rm -f $containers
+          echo changed
+        fi
+      args:
+        executable: /bin/bash
+      register: flannel_containers_removed
+      changed_when: "'changed' in flannel_containers_removed.stdout"
+
+    - name: Remove Flannel network interfaces
+      shell: |
+        changed=0
+        for link in cni0 flannel.1; do
+          if ip link show "$link" >/dev/null 2>&1; then
+            ip link delete "$link"
+            changed=1
+          fi
+        done
+        echo "changed=$changed"
+      args:
+        executable: /bin/bash
+      register: flannel_interfaces_removed
+      changed_when: "'changed=1' in flannel_interfaces_removed.stdout"
+
+    - name: Remove Flannel runtime state
+      file:
+        path: /run/flannel
+        state: absent
+
+    - name: Inspect cni0 absence
+      command: ip link show cni0
+      register: cni0_link
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect flannel.1 absence
+      command: ip link show flannel.1
+      register: flannel_link
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect retained Flannel containers
+      shell: |
+        if command -v docker >/dev/null 2>&1; then
+          docker ps -q --filter label=io.kubernetes.pod.namespace=kube-flannel
+        fi
+      args:
+        executable: /bin/bash
+      register: retained_flannel_containers
+      changed_when: false
+
+    - name: Verify Flannel cleanup
+      assert:
+        that:
+          - cni0_link.rc != 0
+          - flannel_link.rc != 0
+          - retained_flannel_containers.stdout | trim == ''
+
+    - name: Wait for owned cluster resources to disappear
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} get namespace/kube-flannel clusterrole/flannel clusterrolebinding/flannel --ignore-not-found -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_remaining
+      changed_when: false
+      until: (flannel_remaining.stdout | from_json)['items'] | length == 0
+      retries: 12
+      delay: 5
+
+    - name: Remove Flannel manifest
+      file:
+        path: /etc/kubernetes/kube-flannel.yml
+        state: absent
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+
+    - name: Remove Flannel marker
+      file:
+        path: "{{ component_state_dir }}/flannel.installed"
+        state: absent
+
+    - name: Remove the ownership receipt only after cleanup succeeds
+      file:
+        path: "{{ component_state_dir }}/flannel.owned"
+        state: absent

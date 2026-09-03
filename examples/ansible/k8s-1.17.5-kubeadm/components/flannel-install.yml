@@ -1,0 +1,303 @@
+---
+- name: Install the declared Flannel v0.22.3 network
+  hosts: all
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check Flannel ownership before changing the cluster
+      tags: always
+      block:
+        - name: Require the declared Flannel namespace
+          assert:
+            that: flannel_namespace == 'kube-flannel'
+        - name: Read local ownership status
+          stat:
+            path: "{{ component_state_dir }}/flannel.owned"
+          register: flannel_owner
+        - name: Read existing ownership receipt
+          slurp:
+            src: "{{ component_state_dir }}/flannel.owned"
+          register: flannel_receipt
+          when: flannel_owner.stat.exists
+        - name: Inspect existing Flannel resources
+          command: kubectl --kubeconfig={{ admin_kubeconfig_path }} get namespace/kube-flannel clusterrole/flannel clusterrolebinding/flannel --ignore-not-found -o json
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: flannel_before
+          changed_when: false
+        - name: Refuse adoption of existing cluster resources
+          assert:
+            that: (flannel_before.stdout | from_json)['items'] | length == 0
+          when: not flannel_owner.stat.exists
+        - name: Match existing resources with the ownership receipt
+          assert:
+            that:
+              - receipt.format == 1
+              - (flannel_before.stdout | from_json)['items'] | map(attribute='metadata.uid') | difference(receipt.resource_uids) | length == 0
+          vars:
+            receipt: "{{ flannel_receipt.content | b64decode | from_json }}"
+          when: flannel_owner.stat.exists
+        - name: Check local network interfaces before first installation
+          command: "ip link show {{ item }}"
+          loop: [cni0, flannel.1]
+          register: flannel_links_before
+          changed_when: false
+          failed_when: flannel_links_before.rc not in [0, 1]
+          when: not flannel_owner.stat.exists
+        - name: Check local runtime state before first installation
+          stat:
+            path: /run/flannel
+          register: flannel_state_before
+          when: not flannel_owner.stat.exists
+        - name: Check containers before first installation
+          command: docker ps -aq --filter label=io.kubernetes.pod.namespace=kube-flannel
+          register: flannel_containers_before
+          changed_when: false
+          when: not flannel_owner.stat.exists
+        - name: Refuse adoption of existing node networking
+          assert:
+            that:
+              - flannel_links_before.results | map(attribute='rc') | list == [1, 1]
+              - not flannel_state_before.stat.exists
+              - flannel_containers_before.stdout | trim == ''
+          when: not flannel_owner.stat.exists
+        - name: Inspect the retained manifest
+          stat:
+            path: /etc/kubernetes/kube-flannel.yml
+            checksum_algorithm: sha256
+          delegate_to: "{{ groups['primary_control_plane'][0] }}"
+          run_once: true
+          register: flannel_manifest_before
+        - name: Refuse an unmanaged manifest
+          assert:
+            that: not flannel_manifest_before.stat.exists
+          when: not flannel_owner.stat.exists
+        - name: Check the retained manifest identity
+          assert:
+            that: not flannel_manifest_before.stat.exists or flannel_manifest_before.stat.checksum == receipt.manifest_sha256
+          vars:
+            receipt: "{{ flannel_receipt.content | b64decode | from_json }}"
+          when: flannel_owner.stat.exists
+    - name: Read cluster networking configuration
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n kube-system get configmap kubeadm-config -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: kubeadm_settings
+      changed_when: false
+    - name: Read Pod CIDR from the installed cluster
+      set_fact:
+        flannel_pod_network_cidr: "{{ ((kubeadm_settings.stdout | from_json).data.ClusterConfiguration | from_yaml).networking.podSubnet }}"
+      run_once: true
+    - name: Write the version-locked Flannel manifest
+      copy:
+        dest: /etc/kubernetes/kube-flannel.yml
+        mode: '0600'
+        content: |
+          ---
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: kube-flannel
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: flannel
+            namespace: kube-flannel
+          ---
+          kind: ClusterRole
+          apiVersion: rbac.authorization.k8s.io/v1
+          metadata:
+            name: flannel
+          rules:
+            - apiGroups: ["extensions"]
+              resources: ["podsecuritypolicies"]
+              verbs: ["use"]
+              resourceNames: ["psp.flannel.unprivileged"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get"]
+            - apiGroups: [""]
+              resources: ["nodes"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["nodes/status"]
+              verbs: ["patch"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["clustercidrs"]
+              verbs: ["list", "watch"]
+          ---
+          kind: ClusterRoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1
+          metadata:
+            name: flannel
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: flannel
+          subjects:
+            - kind: ServiceAccount
+              name: flannel
+              namespace: kube-flannel
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: kube-flannel-cfg
+            namespace: kube-flannel
+            labels:
+              tier: node
+              app: flannel
+          data:
+            cni-conf.json: |
+              {
+                "name": "cbr0",
+                "cniVersion": "0.3.1",
+                "plugins": [
+                  {
+                    "type": "flannel",
+                    "delegate": {
+                      "hairpinMode": true,
+                      "isDefaultGateway": true
+                    }
+                  },
+                  {
+                    "type": "portmap",
+                    "capabilities": {
+                      "portMappings": true
+                    }
+                  }
+                ]
+              }
+            net-conf.json: |
+              {
+                "Network": "{{ flannel_pod_network_cidr }}",
+                "Backend": {"Type": "vxlan"}
+              }
+          ---
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: kube-flannel-ds
+            namespace: kube-flannel
+            labels:
+              tier: node
+              app: flannel
+              k8s-app: flannel
+          spec:
+            selector:
+              matchLabels:
+                app: flannel
+                k8s-app: flannel
+            template:
+              metadata:
+                labels:
+                  tier: node
+                  app: flannel
+                  k8s-app: flannel
+              spec:
+                hostNetwork: true
+                priorityClassName: system-node-critical
+                serviceAccountName: flannel
+                initContainers:
+                  - name: install-cni-plugin
+                    image: docker.m.daocloud.io/flannel/flannel-cni-plugin:v1.2.0
+                    command: ["cp"]
+                    args: ["-f", "/flannel", "/opt/cni/bin/flannel"]
+                    volumeMounts:
+                      - name: cni-plugin
+                        mountPath: /opt/cni/bin
+                  - name: install-cni
+                    image: docker.m.daocloud.io/flannel/flannel:v0.22.3
+                    command: ["cp"]
+                    args: ["-f", "/etc/kube-flannel/cni-conf.json", "/etc/cni/net.d/10-flannel.conflist"]
+                    volumeMounts:
+                      - name: cni
+                        mountPath: /etc/cni/net.d
+                      - name: flannel-cfg
+                        mountPath: /etc/kube-flannel/
+                containers:
+                  - name: kube-flannel
+                    image: docker.m.daocloud.io/flannel/flannel:v0.22.3
+                    command: ["/opt/bin/flanneld"]
+                    args: ["--ip-masq", "--kube-subnet-mgr"]
+                    env:
+                      - name: POD_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.name
+                      - name: POD_NAMESPACE
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.namespace
+                      - name: EVENT_QUEUE_DEPTH
+                        value: "5000"
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 50Mi
+                    securityContext:
+                      capabilities:
+                        add: ["NET_ADMIN", "NET_RAW"]
+                    volumeMounts:
+                      - name: run
+                        mountPath: /run/flannel
+                      - name: flannel-cfg
+                        mountPath: /etc/kube-flannel/
+                      - name: xtables-lock
+                        mountPath: /run/xtables.lock
+                volumes:
+                  - name: run
+                    hostPath:
+                      path: /run/flannel
+                  - name: cni-plugin
+                    hostPath:
+                      path: /opt/cni/bin
+                  - name: cni
+                    hostPath:
+                      path: /etc/cni/net.d
+                  - name: flannel-cfg
+                    configMap:
+                      name: kube-flannel-cfg
+                  - name: xtables-lock
+                    hostPath:
+                      path: /run/xtables.lock
+                      type: FileOrCreate
+                tolerations:
+                  - operator: Exists
+                    effect: NoSchedule
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+    - name: Apply Flannel
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} apply -f /etc/kubernetes/kube-flannel.yml
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_apply
+      changed_when: "'created' in flannel_apply.stdout or 'configured' in flannel_apply.stdout"
+    - name: Read the installed resource identities
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} get namespace/kube-flannel clusterrole/flannel clusterrolebinding/flannel -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_owned_resources
+      changed_when: false
+    - name: Read the installed manifest identity
+      stat:
+        path: /etc/kubernetes/kube-flannel.yml
+        checksum_algorithm: sha256
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_owned_manifest
+    - name: Create the private component state directory
+      file:
+        path: "{{ component_state_dir }}"
+        state: directory
+        mode: '0700'
+    - name: Record ownership before readiness verification
+      copy:
+        dest: "{{ component_state_dir }}/flannel.owned"
+        mode: '0600'
+        content: "{{ {'format': 1, 'resource_uids': (flannel_owned_resources.stdout | from_json)['items'] | map(attribute='metadata.uid') | list, 'manifest_sha256': flannel_owned_manifest.stat.checksum} | to_json }}"
+- import_playbook: flannel-verify.yml

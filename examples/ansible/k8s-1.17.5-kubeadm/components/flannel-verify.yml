@@ -1,0 +1,27 @@
+---
+- name: Verify Flannel image identity and ready DaemonSet
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for Flannel on registered nodes
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ flannel_namespace }} rollout status daemonset/kube-flannel-ds --timeout=180s
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      changed_when: false
+    - name: Read the live DaemonSet
+      command: kubectl --kubeconfig={{ admin_kubeconfig_path }} -n {{ flannel_namespace }} get daemonset kube-flannel-ds -o json
+      delegate_to: "{{ groups['primary_control_plane'][0] }}"
+      run_once: true
+      register: flannel_live
+      changed_when: false
+    - name: Match the live image with the declared release
+      assert:
+        that:
+          - live.spec.template.spec.containers[0].image == 'docker.m.daocloud.io/flannel/flannel:v0.22.3'
+          - live.spec.template.spec.initContainers[0].image == 'docker.m.daocloud.io/flannel/flannel-cni-plugin:v1.2.0'
+          - live.status.desiredNumberScheduled > 0
+          - live.status.numberReady == live.status.desiredNumberScheduled
+      vars:
+        live: "{{ flannel_live.stdout | from_json }}"
+      run_once: true
