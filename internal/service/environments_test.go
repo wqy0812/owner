@@ -264,7 +264,7 @@ func TestEnvironmentSSHCheckReportsMissingCredentialWithoutResolvingUnrelatedRef
 		t.Fatalf("unrelated credential check=%+v requests=%d err=%v", check, len(checker.requests), err)
 	}
 
-	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_SSH"}}, "配置 SSH 凭据"); err != nil {
+	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_SSH"}}, "配置 SSH 凭据"); err != nil {
 		t.Fatal(err)
 	}
 	check, err = platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
@@ -275,17 +275,9 @@ func TestEnvironmentSSHCheckReportsMissingCredentialWithoutResolvingUnrelatedRef
 		t.Fatalf("missing SSH credential check=%+v requests=%d", check, len(checker.requests))
 	}
 
-	t.Setenv("CLUSTERFORGE_TEST_LEGACY_SSH_PASSWORD", "legacy-secret")
-	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_LEGACY_SSH_PASSWORD"}}, "配置旧名称 SSH 凭据"); err != nil {
-		t.Fatal(err)
-	}
-	check, err = platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
-	if err != nil || check.Status != "healthy" || len(checker.requests) != 1 || checker.requests[0].Password != "legacy-secret" {
-		t.Fatalf("legacy SSH credential check=%+v requests=%+v err=%v", check, checker.requests, err)
-	}
 }
 
-func TestEnvironmentSSHCredentialNeutralNameTakesPrecedence(t *testing.T) {
+func TestEnvironmentSSHCredentialsUseOnlyCurrentNames(t *testing.T) {
 	t.Setenv("CLUSTERFORGE_TEST_NEUTRAL_SSH_PASSWORD", "neutral-secret")
 	credentials, code, message := resolveEnvironmentSSHCredentials([]domain.CredentialRef{
 		{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_LEGACY"},
@@ -298,13 +290,18 @@ func TestEnvironmentSSHCredentialNeutralNameTakesPrecedence(t *testing.T) {
 	}
 }
 
-func TestEnvironmentSSHCredentialAcceptsLegacyPrivateKeyEnvReference(t *testing.T) {
-	t.Setenv("CLUSTERFORGE_TEST_LEGACY_SSH_KEY_PATH", "/legacy/key")
-	credentials, code, message := resolveEnvironmentSSHCredentials([]domain.CredentialRef{{
-		Name: "ansible_private_key_file", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_LEGACY_SSH_KEY_PATH",
-	}})
-	if code != "" || message != "" || credentials.privateKeyPath != "/legacy/key" {
-		t.Fatalf("credentials=%+v code=%s message=%s", credentials, code, message)
+func TestEnvironmentSSHCredentialsRejectRemovedAliases(t *testing.T) {
+	for _, name := range []string{"ansible_ssh_pass", "ansible_password", "ansible_private_key_file", "ansible_ssh_private_key_file"} {
+		t.Run(name, func(t *testing.T) {
+			credentials, code, _ := resolveEnvironmentSSHCredentials([]domain.CredentialRef{{Name: name, Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_UNUSED_SSH"}})
+			if code != "ssh_credential_missing" || credentials.password != "" || credentials.privateKeyPath != "" {
+				t.Fatalf("removed alias was accepted: code=%s", code)
+			}
+		})
+	}
+	_, code, _ := resolveEnvironmentSSHCredentials([]domain.CredentialRef{{Name: "ssh_private_key", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_UNUSED_SSH"}})
+	if code != "ssh_credential_unconfigured" {
+		t.Fatalf("current key must use sshKeyPath: code=%s", code)
 	}
 }
 

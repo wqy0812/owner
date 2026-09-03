@@ -23,7 +23,7 @@ type EnvironmentSSHChecker interface {
 
 type Platform struct {
 	store             *store.Store
-	runner            Runner
+	runner            ActionRunner
 	sshChecker        EnvironmentSSHChecker
 	sshKnownHostsPath string
 	artifactDelivery  ArtifactDelivery
@@ -75,7 +75,7 @@ type environmentWorkerState struct {
 	heartbeat time.Time
 }
 
-func NewPlatform(database *store.Store, runner Runner, hub *EventHub) *Platform {
+func NewPlatform(database *store.Store, runner ActionRunner, hub *EventHub) *Platform {
 	if hub == nil {
 		hub = NewEventHub()
 	}

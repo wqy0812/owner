@@ -544,14 +544,6 @@ func (p *Platform) checkEnvironmentHealth(ctx context.Context, user domain.User,
 	return check, nil
 }
 
-var environmentSSHCredentialNames = struct {
-	password   []string
-	privateKey []string
-}{
-	password:   []string{"ssh_password", "ansible_ssh_pass", "ansible_password"},
-	privateKey: []string{"ssh_private_key", "ansible_private_key_file", "ansible_ssh_private_key_file"},
-}
-
 type environmentSSHCredentials struct {
 	password       string
 	privateKeyPath string
@@ -669,24 +661,16 @@ func sshCheckTarget(host InventoryHost, status, code, message string) domain.Env
 
 func resolveEnvironmentSSHCredentials(refs []domain.CredentialRef) (environmentSSHCredentials, string, string) {
 	var credentials environmentSSHCredentials
-	privateKeyRef := preferredCredentialRef(refs, environmentSSHCredentialNames.privateKey)
-	passwordRef := preferredCredentialRef(refs, environmentSSHCredentialNames.password)
+	privateKeyRef := namedCredentialRef(refs, "ssh_private_key")
+	passwordRef := namedCredentialRef(refs, "ssh_password")
 	if privateKeyRef == nil && passwordRef == nil {
 		return credentials, "ssh_credential_missing", "必须显式配置 ssh_private_key 或 ssh_password CredentialRef"
 	}
 	if privateKeyRef != nil {
-		switch {
-		case privateKeyRef.Kind == "sshKeyPath" && strings.TrimSpace(privateKeyRef.Reference) != "":
-			credentials.privateKeyPath = privateKeyRef.Reference
-		case privateKeyRef.Name != "ssh_private_key" && privateKeyRef.Kind == "envVarRef" && strings.TrimSpace(privateKeyRef.Reference) != "":
-			path, ok := os.LookupEnv(privateKeyRef.Reference)
-			if !ok || strings.TrimSpace(path) == "" {
-				return credentials, "ssh_credential_unconfigured", "旧名称 SSH 私钥 CredentialRef 的后端环境变量未配置"
-			}
-			credentials.privateKeyPath = path
-		default:
+		if privateKeyRef.Kind != "sshKeyPath" || strings.TrimSpace(privateKeyRef.Reference) == "" {
 			return credentials, "ssh_credential_unconfigured", "ssh_private_key 必须使用 sshKeyPath 并引用绝对路径"
 		}
+		credentials.privateKeyPath = privateKeyRef.Reference
 	}
 	if passwordRef != nil {
 		if passwordRef.Kind != "envVarRef" || strings.TrimSpace(passwordRef.Reference) == "" {
@@ -701,12 +685,10 @@ func resolveEnvironmentSSHCredentials(refs []domain.CredentialRef) (environmentS
 	return credentials, "", ""
 }
 
-func preferredCredentialRef(refs []domain.CredentialRef, names []string) *domain.CredentialRef {
-	for _, name := range names {
-		for index := range refs {
-			if refs[index].Name == name {
-				return &refs[index]
-			}
+func namedCredentialRef(refs []domain.CredentialRef, name string) *domain.CredentialRef {
+	for index := range refs {
+		if refs[index].Name == name {
+			return &refs[index]
 		}
 	}
 	return nil

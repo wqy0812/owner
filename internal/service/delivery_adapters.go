@@ -23,10 +23,6 @@ type ActionRunner interface {
 	Run(context.Context, ActionRequest) (ActionResult, error)
 }
 
-// Runner is retained as a source-compatible alias for existing tests and
-// assembly code while ActionRunner is the module port used by Platform.
-type Runner = ActionRunner
-
 type ArtifactLocation struct {
 	URL          string
 	FileStation  string

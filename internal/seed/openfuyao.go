@@ -346,6 +346,7 @@ func (s Seeder) seedOpenFuyaoEnvironment(ctx context.Context, now time.Time) err
 		map[string]any{"name": "work-node-1", "address": "192.0.2.40", "groups": []any{"work_cluster_k8snode"}, "port": 22, "user": "sysop"},
 	}})
 	credentialRefs := []domain.CredentialRef{
+		{Name: "ssh_password", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_SSH_PASSWORD", Configured: true},
 		{Name: "ansible_ssh_pass", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_SSH_PASSWORD", Configured: true},
 		{Name: "ENV_DOCKER_SECRET_USERNAME", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_REGISTRY_USERNAME", Configured: true},
 		{Name: "ENV_DOCKER_SECRET_PASSWORD", Kind: "envVarRef", Reference: "NEWPLATFORM_OPENFUYAO_REGISTRY_PASSWORD", Configured: true},

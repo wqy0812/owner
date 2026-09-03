@@ -127,7 +127,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	platform := service.NewPlatform(database, seedRunner{}, nil)
 	defer platform.Close()
 	environment, err := database.GetEnvironment(ctx, "environment-openfuyao-template", false)
-	if err != nil || environment.Revision == nil || len(environment.Revision.CredentialRefs) != 5 {
+	if err != nil || environment.Revision == nil || len(environment.Revision.CredentialRefs) != 6 {
 		t.Fatalf("OpenFuyao environment contract=%+v err=%v", environment.Revision, err)
 	}
 	var inventory struct {

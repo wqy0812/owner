@@ -577,7 +577,7 @@ export NEWPLATFORM_K8S1175_ENCRYPTION_KEY='<32 字节密钥的 base64 值>'
 
 页面在同一区域分别展示 TCP 和 SSH 结果。TCP `healthy` 只证明端口可连接；SSH `healthy` 才证明本次检查完成了主机指纹校验、身份认证、Session 创建和 `true` 执行，但仍不证明 sudo、镜像推送、介质校验或组件安装一定成功。错误会区分凭据缺失、私钥无效、认证失败、主机指纹失败、连接拒绝、网络超时、协议握手或命令执行失败等类别。仓库和文件站若未显式包含端口，会被报告为配置异常。
 
-SSH 检查要求当前 Revision 显式提供 `ssh_password`（`envVarRef`）或 `ssh_private_key`（`sshKeyPath`）；中性名称不存在时兼容 `ansible_ssh_pass`、`ansible_password`、`ansible_private_key_file` 和 `ansible_ssh_private_key_file`，旧私钥名称还接受值为绝对路径的 `envVarRef`。中性名称优先，私钥优先于密码，二者都存在时密码作为认证回退。平台不读取 SSH agent、默认私钥或 `~/.ssh/config`，暂不支持加密私钥；远端 Inventory 主机必须填写 SSH 用户。
+SSH 检查要求当前 Revision 显式提供 `ssh_password`（`envVarRef`）或 `ssh_private_key`（`sshKeyPath`）。不接受旧名称别名，私钥必须使用 `sshKeyPath`。私钥优先于密码，二者都存在时密码作为认证回退。平台不读取 SSH agent、默认私钥或 `~/.ssh/config`，暂不支持加密私钥；远端 Inventory 主机必须填写 SSH 用户。
 
 主机指纹文件由 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指定，默认是服务账号的 `~/.ssh/known_hosts`。文件缺失、主机未知或指纹变化都会失败关闭，平台不会自动接受新主机，也不会把凭据值或底层 SSH 错误原文写入检查结果。
 
