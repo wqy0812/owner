@@ -38,6 +38,12 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		p.finishRun(run, domain.RunFailed, err)
 		return
 	}
+	// Rejoin the queued evidence with the current database contract and source
+	// workspace before any delivery or target-side mutation begins.
+	if err := p.verifyLockedWorkspaceDigests(ctx, plan.Steps); err != nil {
+		p.finishRun(run, domain.RunFailed, err)
+		return
+	}
 	if err := p.mirrorRunImages(ctx, run.ID, &plan); err != nil {
 		p.finishRun(run, domain.RunFailed, err)
 		return
@@ -61,16 +67,13 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		p.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	var sharedWorkspace *ansiblerunner.Workspace
 	preparedRunner, supportsSharedWorkspace := p.runner.(workspaceRunner)
-	if supportsSharedWorkspace {
-		sharedWorkspace, err = preparedRunner.PrepareWorkspace(run.ArtifactDigest)
-		if err != nil {
-			p.finishRun(run, domain.RunFailed, err)
-			return
+	readOnlyWorkspaces := map[string]*ansiblerunner.Workspace{}
+	defer func() {
+		for _, workspace := range readOnlyWorkspaces {
+			_ = workspace.Close()
 		}
-		defer sharedWorkspace.Close()
-	}
+	}()
 
 	for _, locked := range plan.Steps {
 		if ctx.Err() != nil {
@@ -88,7 +91,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		request := ansiblerunner.Request{
 			Playbook: locked.Playbook, Inventory: inventory, Variables: variables, SecretValues: secrets,
 			Limit: locked.Limit, Tags: actionRuntimeTags(locked.Tags), Timeout: time.Duration(locked.TimeoutSeconds) * time.Second,
-			ExpectedPlaybookSHA256: locked.PlaybookDigest, ExpectedTreeSHA256: run.ArtifactDigest,
+			ExpectedPlaybookSHA256: locked.PlaybookDigest, ExpectedTreeSHA256: locked.WorkspaceDigest,
 			LogSink: func(event ansiblerunner.LogEvent) {
 				_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{
 					RunID: run.ID, StepID: step.ID, Stream: string(event.Stream), Message: event.Line, CreatedAt: event.Time,
@@ -99,7 +102,29 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		var result ansiblerunner.Result
 		var runErr error
 		if supportsSharedWorkspace {
-			result, runErr = preparedRunner.RunInWorkspace(ctx, sharedWorkspace, request)
+			readOnly := locked.Action == domain.ActionInspect || locked.Action == domain.ActionVerify
+			stepWorkspace := (*ansiblerunner.Workspace)(nil)
+			prepareErr := error(nil)
+			if readOnly {
+				stepWorkspace = readOnlyWorkspaces[locked.ReleaseID]
+			}
+			if stepWorkspace == nil {
+				stepWorkspace, prepareErr = preparedRunner.PrepareWorkspace(locked.Playbook, locked.WorkspaceDigest)
+				if prepareErr == nil && readOnly {
+					readOnlyWorkspaces[locked.ReleaseID] = stepWorkspace
+				}
+			}
+			if prepareErr != nil {
+				runErr = prepareErr
+			} else {
+				result, runErr = preparedRunner.RunInWorkspace(ctx, stepWorkspace, request)
+				if validateErr := stepWorkspace.Validate(locked.WorkspaceDigest); runErr == nil && validateErr != nil {
+					runErr = validateErr
+				}
+				if !readOnly {
+					_ = stepWorkspace.Close()
+				}
+			}
 		} else {
 			result, runErr = p.runner.Run(ctx, request)
 		}
@@ -126,7 +151,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 			}
 			return
 		}
-		if run.ArtifactDigest != "" && result.TreeSHA256 != run.ArtifactDigest {
+		if locked.WorkspaceDigest != "" && result.TreeSHA256 != locked.WorkspaceDigest {
 			step.Status, step.Summary = domain.RunFailed, "playbook tree digest changed after the run was queued"
 			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
 				log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)

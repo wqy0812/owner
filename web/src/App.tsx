@@ -7,7 +7,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then((module) =
 const DisasterRecoveryPage = lazy(() => import('./pages/DisasterRecoveryPage').then((module) => ({ default: module.DisasterRecoveryPage })));
 const EnvironmentsPage = lazy(() => import('./pages/EnvironmentsPage').then((module) => ({ default: module.EnvironmentsPage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
-const OperationManualPage = lazy(() => import('./pages/OperationManualPage').then((module) => ({ default: module.OperationManualPage })));
+const PlatformManualPage = lazy(() => import('./pages/PlatformManualPage').then((module) => ({ default: module.PlatformManualPage })));
 const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
 const ScenariosPage = lazy(() => import('./pages/ScenariosPage').then((module) => ({ default: module.ScenariosPage })));
 const PlatformManagementPage = lazy(() => import('./pages/PlatformManagementPage').then((module) => ({ default: module.PlatformManagementPage })));
@@ -28,8 +28,8 @@ export function App() {
         <Route path="runs" element={<RunsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="platform-management" element={<PlatformManagementPage />} />
-        <Route path="manual" element={<OperationManualPage />} />
-        <Route path="manual/:section" element={<OperationManualPage />} />
+        <Route path="manual" element={<PlatformManualPage />} />
+        <Route path="manual/:section" element={<PlatformManualPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

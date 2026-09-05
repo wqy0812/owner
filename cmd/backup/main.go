@@ -138,6 +138,7 @@ func configFromEnvironment() backup.Config {
 		playbookRoot = first
 	}
 	return backup.Config{
+		RunArchiveDir: os.Getenv("CLUSTERFORGE_RUN_ARCHIVE_DIR"),
 		DatabasePath:  envOr("NEWPLATFORM_DB_PATH", "./data/newplatform.db"),
 		PlaybookRoot:  strings.TrimSpace(playbookRoot),
 		BackupDir:     envOr("CLUSTERFORGE_BACKUP_DIR", "./data/catalog-backups"),

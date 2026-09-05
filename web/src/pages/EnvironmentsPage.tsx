@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
-import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { ParameterValueEditor } from '../components/ParameterEditors';
-import { missingEnvironmentValue } from '../components/EnvironmentParameterDefaultEditor';
 import { EnvironmentInventoryEditor } from '../components/EnvironmentInventoryEditor';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
@@ -52,29 +51,27 @@ function EnvironmentFactFields({ categories, facts, editable, onChange }: { cate
     const currentValue = typeof facts[dimension.key] === 'string' ? String(facts[dimension.key]) : '';
     const activeOptions = childOptionsForSelection(dimension, parent, parentValue ? [parentValue] : []);
     const currentRetired = dimension.options.find((option) => option.value === currentValue && option.retiredAt);
-    return <label key={dimension.key}><span>{dimension.label}{category?.environmentRequired ? '（必填）' : '（可选）'}</span><select aria-label={`环境事实 ${dimension.label}`} required={category?.environmentRequired} value={currentValue} disabled={!editable || Boolean(parent && !parentValue)} onChange={(event) => setFact(dimension.key, event.target.value)}><option value="">{parent && !parentValue ? `请先选择${parent.label}` : '未选择'}</option>{currentRetired ? <option value={currentRetired.value} disabled>{currentRetired.label}（已退役，只读）</option> : null}{activeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+    return <label key={dimension.key}><span>{dimension.label}{category?.environmentRequired ? '（必填）' : '（可选）'}</span><select aria-label={`适配标签 · 实际环境 ${dimension.label}`} required={category?.environmentRequired} value={currentValue} disabled={!editable || Boolean(parent && !parentValue)} onChange={(event) => setFact(dimension.key, event.target.value)}><option value="">{parent && !parentValue ? `请先选择${parent.label}` : '未选择'}</option>{currentRetired ? <option value={currentRetired.value} disabled>{currentRetired.label}（已退役，只读）</option> : null}{activeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
   })}{allDimensions.filter((dimension) => dimension.retiredAt && typeof facts[dimension.key] === 'string').map((dimension) => <label key={dimension.key}><span>{dimension.label}（已退役，只读）</span><input disabled value={dimension.options.find((option) => option.value === facts[dimension.key])?.label ?? String(facts[dimension.key])} /></label>)}</div>;
 }
 
 export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh, platformOptionCategories } = useApp();
   const hostGroupOptions = platformOptionCategories.find((category) => category.kind === 'host_group')?.options ?? [];
-  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal, user.role === 'environment_owner' || user.role === 'platform_admin'), [user.id, user.role], 'environments');
-  const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
   const { data: parameterFields } = useApiData((signal) => api.environmentParameterFields(signal), [user.id], 'environment-parameter-fields');
   const { data: variableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
   const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
   const selectedId = searchParams.get('selected') ?? '';
   const selected = useMemo(() => environments?.find((item) => item.id === selectedId) ?? environments?.[0], [environments, selectedId]);
+  const recentRunQuery = useApiData((signal) => selected ? api.runs({ environmentId: selected.id, pageSize: 4 }, signal) : Promise.resolve(undefined), [user.id, selected?.id], 'runs');
   const environmentWorkItem = workbench?.items.find((item) => item.subject.type === 'environment' && item.subject.id === selected?.id);
   const [tab, setTab] = useState<Tab>('inventory');
   const [hosts, setHosts] = useState<EnvironmentHost[]>([]);
   const [facts, setFacts] = useState<Record<string, unknown>>({});
   const [parameters, setParameters] = useState<Record<string, unknown>>({});
-  const [prefillDefaults, setPrefillDefaults] = useState(true);
   const [variables, setVariables] = useState<EnvironmentVariableRow[]>([]);
   const [credentials, setCredentials] = useState<CredentialRef[]>([]);
   const [busy, setBusy] = useState(false);
@@ -104,7 +101,6 @@ export function EnvironmentsPage() {
     setHosts(selected?.currentRevision?.hosts ?? []);
     setFacts(selected?.currentRevision?.facts ?? {});
     setParameters(selected?.currentRevision?.parameters ?? {});
-    setPrefillDefaults(true);
     setVariables(Object.entries(selected?.currentRevision?.variables ?? {}).map(([name, value]) => ({ name, value })));
     setCredentials(selected?.currentRevision?.credentialRefs ?? []);
     setHealth(selected?.healthCheck);
@@ -132,15 +128,7 @@ export function EnvironmentsPage() {
   }, [editable, searchParams, selected?.id, setSearchParams]);
 
   const baseline = selected?.currentRevision;
-  const effectiveParameters = useMemo(() => {
-    const values = { ...parameters };
-    if (!editable || !prefillDefaults || tab !== 'parameters') return values;
-    for (const field of parameterFields ?? []) {
-      if (!Object.prototype.hasOwnProperty.call(values, field.valueKey) && field.defaultValue !== undefined) values[field.valueKey] = field.defaultValue;
-    }
-    return values;
-  }, [parameters, parameterFields, editable, prefillDefaults, tab]);
-  const missingGlobalParameters = (parameterFields ?? []).filter((field) => field.definitionId && missingEnvironmentValue(effectiveParameters[field.valueKey]));
+  const effectiveParameters = parameters;
   const staleParameterKeys = parameterFields === undefined ? [] : Object.keys(effectiveParameters).filter((key) => !parameterFields.some((field) => field.valueKey === key));
   const variablesObject = Object.fromEntries(variables.map((item) => [item.name.trim(), item.value]));
   const dirtyByTab: Record<Tab, boolean> = {
@@ -181,8 +169,8 @@ export function EnvironmentsPage() {
     if (tab === 'facts') {
       try {
         const keys = new Set([...Object.keys(baseline.facts), ...Object.keys(facts)]);
-        return [...keys].filter((key) => stable(baseline.facts[key]) !== stable(facts[key])).map((key) => `环境事实 ${key}：${JSON.stringify(baseline.facts[key] ?? '（无）')} → ${JSON.stringify(facts[key] ?? '（删除）')}`);
-      } catch { return ['环境事实无法生成差异']; }
+        return [...keys].filter((key) => stable(baseline.facts[key]) !== stable(facts[key])).map((key) => `适配标签 · 实际环境 ${key}：${JSON.stringify(baseline.facts[key] ?? '（无）')} → ${JSON.stringify(facts[key] ?? '（删除）')}`);
+      } catch { return ['适配标签 · 实际环境无法生成差异']; }
     }
     if (tab === 'variables') {
       const keys = new Set([...Object.keys(baseline.variables), ...Object.keys(variablesObject)]);
@@ -202,7 +190,7 @@ export function EnvironmentsPage() {
     if (!baseline) return;
     if (tab === 'inventory') setHosts(baseline.hosts);
     if (tab === 'facts') setFacts(baseline.facts);
-    if (tab === 'parameters') { setParameters(baseline.parameters); setPrefillDefaults(false); }
+    if (tab === 'parameters') setParameters(baseline.parameters);
     if (tab === 'variables') setVariables(Object.entries(baseline.variables).map(([name, value]) => ({ name, value })));
     if (tab === 'credentials') setCredentials(baseline.credentialRefs);
   }
@@ -214,7 +202,6 @@ export function EnvironmentsPage() {
       if (tab === 'inventory') await api.updateInventory(selected.id, hosts, changeReason);
       if (tab === 'facts') await api.updateFacts(selected.id, facts, changeReason);
       if (tab === 'parameters') {
-        if (missingGlobalParameters.length) throw new Error(`请填写：${missingGlobalParameters.map((field) => field.label).join('、')}`);
         await api.updateEnvironmentParameters(selected.id, effectiveParameters, changeReason);
       }
       if (tab === 'variables') {
@@ -362,12 +349,11 @@ export function EnvironmentsPage() {
     setSearchParams({ selected: id });
   }
 
-  const environmentRuns = runs?.filter((run) => run.environmentId === selected?.id).slice(0, 4) ?? [];
+  const environmentRuns = recentRunQuery.data?.items ?? [];
   const currentFacts = selected?.currentRevision?.facts ?? {};
   const healthStale = Boolean(health && health.environmentRevisionId !== selected?.currentRevision?.id);
   const sshCheckStale = Boolean(sshCheck && sshCheck.environmentRevisionId !== selected?.currentRevision?.id);
 
-  if (location.hash === '#catalog-repository') return <Navigate to="/disaster-recovery#catalog-repository" replace />;
 
   return <div className="page">
     <PageHeader eyebrow="Execution environments" title="环境管理" description="分别查看调度占用与真实连通性；配置变更以可追溯 Revision 保存。" actions={user.role === 'environment_owner' ? <><button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入环境</button><button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建环境</button></> : undefined} />
@@ -393,7 +379,6 @@ export function EnvironmentsPage() {
           <article><Cpu size={18} /><span>架构</span><strong>{String(currentFacts.architecture ?? '—')}</strong></article>
           <article><HardDrive size={18} /><span>操作系统</span><strong>{String(currentFacts.operatingSystem ?? '—')}</strong></article>
           <article><HardDrive size={18} /><span>系统版本</span><strong>{String(currentFacts.operatingSystemVersion ?? '—')}</strong></article>
-          <article><Server size={18} /><span>容器运行时</span><strong>{currentFacts.containerRuntime ? `${String(currentFacts.containerRuntime)} ${String(currentFacts.containerRuntimeVersion ?? '')}` : String(currentFacts.dockerVersion ?? '—')}</strong></article>
           <article><Network size={18} /><span>网络栈</span><strong>{String(currentFacts.ipFamily ?? '—')}</strong></article>
           <article><Server size={18} /><span>主机</span><strong>{hosts.length}</strong></article>
         </section>
@@ -424,37 +409,34 @@ export function EnvironmentsPage() {
 
         <article className="panel environment-editor">
           <div className="tabs" role="tablist">{([
-            ['inventory', 'Inventory', <Server size={16} />], ['facts', '环境事实', <Cpu size={16} />], ['parameters', '组件环境参数', <CloudCog size={16} />], ['variables', '环境变量', <Braces size={16} />], ['credentials', '凭据引用', <KeyRound size={16} />],
+            ['inventory', 'Inventory', <Server size={16} />], ['facts', '适配标签 · 实际环境', <Cpu size={16} />], ['parameters', '组件环境参数', <CloudCog size={16} />], ['variables', '环境变量', <Braces size={16} />], ['credentials', '凭据引用', <KeyRound size={16} />],
           ] as const).map(([value, label, icon]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{icon}{label}{dirtyByTab[value] && <span className="dirty-dot" aria-label="有未保存更改" />}</button>)}</div>
           {tab === 'inventory' && <EnvironmentInventoryEditor key={`${selected.id}:${selected.currentRevision?.id}`} hosts={hosts} options={hostGroupOptions} editable={Boolean(editable)} onChange={setHosts} />}
-          {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>环境事实</h3><p>先单选容器运行时，再单选其版本；切换运行时会清空旧版本。</p></div></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable={editable} onChange={setFacts} /></div>}
-          {tab === 'parameters' && <div className="editor-section"><div className="section-title"><div><h3>组件环境参数</h3><p>平台默认值会预填，环境 Owner 可以修改；未设置默认值的全局字段必须填写。保存后记录到环境版本。</p></div></div>
+          {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>适配标签 · 实际环境</h3><p>每个分类选择一个实际值；子分类须与所选父分类对应。</p></div></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable={editable} onChange={setFacts} /></div>}
+          {tab === 'parameters' && <div className="editor-section"><div className="section-title"><div><h3>组件环境参数</h3><p>字段由组件版本定义，环境 Owner 填写实际值或采用组件建议值。保存后记录到环境版本。</p></div></div>
             <div className="scenario-parameter-fields">{(parameterFields ?? []).map((field) => {
               const value = effectiveParameters[field.valueKey];
-              const required = Boolean(field.definitionId) || field.required;
-              return <label key={field.valueKey} className={required && missingEnvironmentValue(value) ? 'field-invalid' : ''}>
+              const required = field.required;
+              return <label key={field.valueKey} className={required && (value === undefined || value === null || (typeof value === 'string' && !value.trim())) ? 'field-invalid' : ''}>
                 <span>{field.label}{required ? '（必填）' : '（可选）'}</span>
                 <small>{field.description} · 被 {field.bindings.map((binding) => `${binding.componentName} ${binding.version}`).join('、')} 使用</small>
-                <ParameterValueEditor parameter={{ name: field.label, type: field.type, enum: field.enum }} value={value ?? undefined} disabled={!editable} optional={!required} onChange={(nextValue) => setParameters((current) => { const next = { ...current }; if (nextValue === undefined && !field.definitionId) delete next[field.valueKey]; else next[field.valueKey] = nextValue ?? null; return next; })} />
-                {field.definitionId ? <small>{field.defaultValue === undefined ? '平台未设置默认值，请填写环境实际值。' : `平台默认值：${JSON.stringify(field.defaultValue)}；可按环境修改。`}</small> : null}
-                {editable && field.defaultValue !== undefined && stable(value) !== stable(field.defaultValue) ? <button type="button" className="icon-text" onClick={() => setParameters((current) => ({ ...current, [field.valueKey]: field.defaultValue }))}>采用平台默认值</button> : null}
-                {editable && !field.definitionId && value === undefined && field.suggestedValue !== undefined ? <button type="button" className="icon-text" onClick={() => setParameters((current) => ({ ...current, [field.valueKey]: field.suggestedValue }))}>采用建议值 {String(field.suggestedValue)}</button> : null}
+                <ParameterValueEditor parameter={{ name: field.label, type: field.type, enum: field.enum }} value={value ?? undefined} disabled={!editable} optional={!required} onChange={(nextValue) => setParameters((current) => { const next = { ...current }; if (nextValue === undefined) delete next[field.valueKey]; else next[field.valueKey] = nextValue ?? null; return next; })} />
+                {editable && value === undefined && field.suggestedValue !== undefined ? <button type="button" className="icon-text" onClick={() => setParameters((current) => ({ ...current, [field.valueKey]: field.suggestedValue }))}>采用建议值 {String(field.suggestedValue)}</button> : null}
               </label>;
             })}{!(parameterFields ?? []).length ? <EmptyState title="没有环境 Owner 参数" description="当前组件契约没有分配环境字段。" /> : null}</div>
-            {staleParameterKeys.length > 0 && <section aria-label="失效环境参数">
-              <h3>已从组件契约移除的参数</h3><p>这些值仍保留在当前环境中。请移除后保存新版本，历史版本不受影响。</p>
-              <div className="environment-variable-list">{staleParameterKeys.map((key) => <div key={key}><AlertTriangle size={15} /><strong title={key}>{key.split(':').at(-1)}</strong><code>{JSON.stringify(effectiveParameters[key])}</code>{editable && <button type="button" className="button button--danger-soft" aria-label={`移除失效参数 ${key}`} onClick={() => setParameters((current) => { const next = { ...current }; delete next[key]; return next; })}><Trash2 size={15} /> 移除</button>}</div>)}</div>
+            {staleParameterKeys.length > 0 && <section className="stale-parameter-notice" aria-label="失效环境参数">
+              <header><span className="stale-parameter-notice__icon"><AlertTriangle size={18} /></span><div><div className="stale-parameter-notice__title"><h3>已从组件契约移除的参数</h3><em>{staleParameterKeys.length} 项待清理</em></div><p>当前契约不再引用这些值。移除全部项目后保存为新 Revision，历史版本仍会完整保留。</p></div></header>
+              <div className="stale-parameter-list">{staleParameterKeys.map((key) => <article key={key} className="stale-parameter-item"><div><strong>{key.split(':').at(-1)}</strong><small>当前环境保留值</small></div><code>{JSON.stringify(effectiveParameters[key])}</code>{editable && <button type="button" className="button button--danger-soft" aria-label={`移除失效参数 ${key}`} onClick={() => setParameters((current) => { const next = { ...current }; delete next[key]; return next; })}><Trash2 size={14} /> 移除</button>}</article>)}</div>
             </section>}
-            {editable && missingGlobalParameters.length > 0 ? <p role="alert">请填写：{missingGlobalParameters.map((field) => field.label).join('、')}</p> : null}
           </div>}
           {tab === 'variables' && <div className="editor-section"><div className="section-title"><div><h3>组件作业环境变量</h3><p>变量键由平台 Owner 治理，环境 Owner 只选择字段并填写非敏感值。</p></div>{editable && <button className="button button--quiet" disabled={(variableDefinitions ?? []).every((definition) => variables.some((item) => item.name === definition.name))} onClick={() => setVariables((items) => [...items, { name: '', value: '' }])}><Plus size={15} /> 添加变量</button>}</div><div className="environment-variable-list">{variables.map((variable, index) => <div key={index} id={variable.name ? `environment-variable-${variable.name}` : undefined}><span className="variable-icon"><Braces size={17} /></span><select aria-label="环境变量名" value={variable.name} disabled={!editable} onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))}><option value="">请选择平台字段</option>{variable.name && !(variableDefinitions ?? []).some((definition) => definition.name === variable.name) ? <option value={variable.name}>{variable.name} · 历史字段</option> : null}{(variableDefinitions ?? []).filter((definition) => definition.name === variable.name || !variables.some((item) => item.name === definition.name)).map((definition) => <option key={definition.id} value={definition.name}>{definition.label} · {definition.name}</option>)}</select><input aria-label={`环境变量 ${variable.name || index} 的值`} value={variable.value} disabled={!editable} placeholder="非敏感字符串值" onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除环境变量 ${variable.name || index}，保存后生效`} onClick={() => setVariables((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!variables.length && <EmptyState title="尚未配置环境变量" description={editable ? '从平台字段目录选择变量。' : '环境 Owner 尚未配置环境变量。'} />}</div>}
           {tab === 'credentials' && <div className="editor-section"><div className="section-title"><div><h3>CredentialRef</h3><p>数据库和 API 只保存引用，其他角色只看到脱敏值。</p></div>{editable && <button className="button button--quiet" onClick={() => setCredentials((items) => [...items, { name: '', type: 'envVarRef', reference: '' }])}><Plus size={15} /> 添加引用</button>}</div><div className="credential-list">{credentials.map((credential, index) => <div key={`${credential.name}-${index}`}><span className="credential-icon"><LockKeyhole size={17} /></span><input aria-label="凭据名称" value={credential.name} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} /><select aria-label={`凭据 ${credential.name || index} 类型`} value={credential.type} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, type: event.target.value as CredentialRef['type'] } : item))}><option value="envVarRef">envVarRef</option><option value="sshKeyPath">sshKeyPath</option></select><input aria-label={`凭据 ${credential.name || index} 引用`} value={editable ? credential.reference ?? '' : credential.maskedReference ?? '••••••••'} disabled={!editable} placeholder={credential.type === 'envVarRef' ? 'SECRET_ENV_VAR' : '/path/to/key'} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, reference: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除凭据 ${credential.name || index}，保存后生效`} onClick={() => setCredentials((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div></div>}
-          {editable && <footer className="editor-footer"><span className={dirty ? 'editor-dirty' : ''}><LockKeyhole size={14} /> {dirty ? '当前页有未保存更改' : '当前页与已保存 Revision 一致'}</span><div>{dirty && <button className="button button--quiet" onClick={discardCurrent}>放弃本页更改</button>}<button className="button button--primary" disabled={busy || !dirty || (tab === 'parameters' && (parameterFields === undefined || missingGlobalParameters.length > 0 || staleParameterKeys.length > 0))} onClick={() => setSaveOpen(true)}><Save size={16} /> 保存新 Revision</button></div></footer>}
+          {editable && <footer className="editor-footer"><span className={dirty ? 'editor-dirty' : ''}><LockKeyhole size={14} /> {dirty ? '当前页有未保存更改' : '当前页与已保存 Revision 一致'}</span><div>{dirty && <button className="button button--quiet" onClick={discardCurrent}>放弃本页更改</button>}<button className="button button--primary" disabled={busy || !dirty || (tab === 'parameters' && (parameterFields === undefined || staleParameterKeys.length > 0))} onClick={() => setSaveOpen(true)}><Save size={16} /> 保存新 Revision</button></div></footer>}
         </article>
 
         <article className="panel revision-history"><header className="panel__header"><div><span className="panel__icon"><History size={18} /></span><div><h2>Revision 历史</h2><p>恢复旧配置时始终创建新 Revision，不覆盖历史。</p></div></div></header><div className="revision-list">{(selected.revisions ?? (selected.currentRevision ? [selected.currentRevision] : [])).map((revision) => <div key={revision.id}><span className="revision-number">r{revision.revision}</span><div><strong>{revision.changeReason || (revision.revision === 1 ? '创建环境' : '未填写变更原因')}</strong><small>{revisionActor(revision, users)} · {formatTime(revision.createdAt)}</small></div><div className="revision-actions">{revision.id === selected.currentRevision?.id ? <StatusPill status="active">当前</StatusPill> : editable && <button className="button button--quiet" disabled={anyDirty} onClick={() => setRestoreRevision(revision)}><RotateCcw size={14} /> 基于此恢复</button>}{editable && <button className="button button--quiet" onClick={() => void exportRevision(revision, false)}><Download size={14} /> 导出</button>}</div></div>)}</div></article>
 
-        <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><LockKeyhole size={18} /></span><div><h2>最近环境运行</h2><p>同一环境一次只允许一个活动 Run</p></div></div></header>{environmentRuns.length ? <div className="simple-table">{environmentRuns.map((run) => <Link key={run.id} to={`/runs?selected=${run.id}`}><div><strong>{run.name ?? run.scenarioName ?? run.componentName}</strong><small>{formatTime(run.createdAt)}</small></div><StatusPill status={run.status} /></Link>)}</div> : <EmptyState title="暂无运行记录" />}</article>
+        <article className="panel"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><LockKeyhole size={18} /></span><div><h2>最近环境运行</h2><p>同一环境一次只允许一个活动 Run</p></div></div></header><RefreshNotice loading={recentRunQuery.isRefreshing} error={recentRunQuery.error} onRetry={() => void recentRunQuery.reload()} />{environmentRuns.length ? <div className="simple-table">{environmentRuns.map((run) => <Link key={run.id} to={`/runs?selected=${run.id}`}><div><strong>{run.name}</strong><small>{formatTime(run.createdAt)}</small></div><StatusPill status={run.status} /></Link>)}</div> : recentRunQuery.loading ? <LoadingBlock label="正在读取最近运行…" /> : !recentRunQuery.error ? <EmptyState title="暂无运行记录" /> : null}</article>
       </section> : <section className="panel"><EmptyState title="没有可见环境" /></section>}
     </div>}
     {createOpen && <CreateEnvironmentModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('environments'); }} />}
@@ -590,5 +572,5 @@ function CreateEnvironmentModal({ onClose, onDone }: { onClose: () => void; onDo
       notify('success', '环境已创建', '请继续配置 Inventory 和 CredentialRef。'); onDone();
     } catch (reason) { notify('error', '创建环境失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title="新建共享环境" description="环境事实来自平台动态目录；先选择容器运行时，再选择对应版本。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable onChange={setFacts} /><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || factDimensions.some((dimension) => platformOptionCategories.find((category) => category.id === dimension.id)?.environmentRequired && !facts[dimension.key])}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
+  return <Modal title="新建共享环境" description="适配标签 · 实际环境来自平台统一目录，每个分类选择一个实际值。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable onChange={setFacts} /><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || factDimensions.some((dimension) => platformOptionCategories.find((category) => category.id === dimension.id)?.environmentRequired && !facts[dimension.key])}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
 }

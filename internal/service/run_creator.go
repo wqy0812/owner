@@ -8,7 +8,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (c *RunCreator) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedPlanDigest string) (domain.Run, error) {
+func (c *RunCreator) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedPlanDigest string, expectedScenarioDigest ...string) (domain.Run, error) {
 	p := c.platform
 	now := time.Now().UTC()
 	runID := newID("run")
@@ -39,6 +39,9 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 		if err != nil {
 			return domain.Run{}, err
 		}
+		if len(expectedScenarioDigest) > 0 && expectedScenarioDigest[0] != scenarioRevisionSpecDigest(revision) {
+			return domain.Run{}, fmt.Errorf("%w: 场景在预览后变化，请重新预览", domain.ErrConflict)
+		}
 		snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
 	}
 	redactedRefs := make([]domain.CredentialRef, 0)
@@ -46,13 +49,6 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 		redactedRefs = domain.RedactCredentialRefs(environment.Revision.CredentialRefs, false)
 	}
 	snapshot["environmentRevisionId"] = environment.CurrentRevisionID
-	if environment.Revision != nil {
-		runtime, _ := environment.Revision.Facts["containerRuntime"].(string)
-		version, _ := environment.Revision.Facts["containerRuntimeVersion"].(string)
-		if runtime != "" && version != "" {
-			snapshot["runtimeCompatibility"] = domain.RuntimeCompatibility{Runtime: runtime, Version: version}
-		}
-	}
 	snapshot["credentialRefs"] = redactedRefs
 	status := domain.RunQueued
 	var approval *domain.Approval

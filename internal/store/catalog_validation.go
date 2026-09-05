@@ -26,10 +26,9 @@ func (s *Store) beginCatalogWrite(ctx context.Context) (*sql.Tx, error) {
 }
 
 type CatalogValidationSnapshot struct {
-	Options    domain.CatalogOptions
-	Parameters []domain.EnvironmentParameterDefinition
-	Variables  []domain.EnvironmentVariableDefinition
-	Releases   []domain.ComponentRelease
+	Options   domain.CatalogOptions
+	Variables []domain.EnvironmentVariableDefinition
+	Releases  []domain.ComponentRelease
 }
 
 // ReadCatalogDefinitions reads the small governance dictionary in one snapshot.
@@ -64,10 +63,6 @@ func loadCatalogDefinitions(ctx context.Context, q queryer) (CatalogValidationSn
 		return snapshot, err
 	}
 	snapshot.Options, err = domain.NewCatalogOptions(categories)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.Parameters, err = listEnvironmentParameterDefinitions(ctx, q, false)
 	if err != nil {
 		return snapshot, err
 	}
@@ -111,7 +106,7 @@ func (s *Store) ReadCatalogValidation(ctx context.Context) (CatalogValidationSna
 }
 
 func (c CatalogValidationSnapshot) ValidateValues(values map[string]any, variables map[string]string, refs []domain.CredentialRef) error {
-	return domain.ValidateEnvironmentValues(values, variables, refs, c.Releases, c.Parameters, c.Variables)
+	return domain.ValidateEnvironmentValues(values, variables, refs, c.Releases, c.Variables)
 }
 
 func catalogWriteValidationError(err error) error {
@@ -148,7 +143,7 @@ func validateReleaseCatalogTx(ctx context.Context, tx *sql.Tx, release domain.Co
 			return catalogWriteValidationError(err)
 		}
 	}
-	return catalogWriteValidationError(domain.ValidateGlobalParameterBindings(release.Parameters, c.Parameters))
+	return catalogWriteValidationError(domain.ValidateComponentParameterAuthoring(release.Parameters))
 }
 
 func validateScenarioCatalogTx(ctx context.Context, tx *sql.Tx, graph, previous domain.ScenarioGraph) error {
@@ -180,20 +175,6 @@ type EnvironmentRevisionWrite struct {
 	RestoreSourceRevisionID   string
 	ValidateAllValues         bool
 	RequireCompleteFacts      bool
-	ApplyParameterDefaults    bool
-	RequireGlobalParameters   bool
-}
-
-func materializeEnvironmentParametersTx(ctx context.Context, tx *sql.Tx, r *domain.EnvironmentRevision, write EnvironmentRevisionWrite) error {
-	if !write.ApplyParameterDefaults || write.RestoreSourceRevisionID != "" {
-		return nil
-	}
-	c, err := loadCatalogValidation(ctx, tx)
-	if err != nil {
-		return err
-	}
-	r.Parameters, err = domain.MaterializeEnvironmentParameterDefaults(r.Parameters, c.Releases, c.Parameters, write.RequireGlobalParameters)
-	return err
 }
 
 func sameEnvironmentSnapshot(a, b domain.EnvironmentRevision) bool {

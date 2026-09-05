@@ -168,3 +168,33 @@ func TestReadinessErrorIncludesAllBlockers(t *testing.T) {
 		t.Fatalf("blocked readiness error=%v", err)
 	}
 }
+
+func TestMutualConfigurationCandidatesLockEverySourceAndRejectChangedEvidence(t *testing.T) {
+	graph, releases, _ := configurationReferenceFixture()
+	byID := map[string]domain.ComponentRelease{}
+	for key, r := range releases {
+		r.Status = domain.ReleaseDraft
+		r.Candidate = true
+		r.PublicationGeneration = 1
+		releases[key] = r
+		byID[r.ID] = r
+	}
+	stub := &releaseCoordinatorStoreStub{releases: byID}
+	coordinator := &ReleaseCoordinator{store: stub}
+	captured, guards, err := coordinator.captureReleasePublicationState(context.Background(), []string{"api-r1"})
+	if err != nil || len(captured) != 2 || len(guards) != 2 {
+		t.Fatalf("configuration closure locks: %v %v", guards, err)
+	}
+	revision := domain.ScenarioRevision{ID: "config-scenario", Status: domain.RevisionTestPassed, Graph: graph}
+	run := currentScenarioEvidence(revision, releases["api"], releases["kubelet"])
+	if current, err := coordinator.scenarioTestEvidenceCurrent(context.Background(), run, revision); err != nil || !current {
+		t.Fatalf("candidate evidence: %v %v", current, err)
+	}
+	changed := byID["kubelet-r1"]
+	changed.Parameters = append([]domain.ParameterDefinition(nil), changed.Parameters...)
+	changed.Parameters[0].SuggestedValue = "/changed"
+	stub.releases[changed.ID] = changed
+	if current, err := coordinator.scenarioTestEvidenceCurrent(context.Background(), run, revision); err != nil || current {
+		t.Fatalf("changed source accepted: %v %v", current, err)
+	}
+}

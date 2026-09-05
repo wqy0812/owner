@@ -1,4 +1,7 @@
+import type { ArchiveHealth, ArchiveInfo, CleanupItem, RetentionPolicy } from '../components/RunRetentionPanel';
+import type { ComponentUsage } from '../components/ComponentUsagePanel';
 import type {
+  ComponentSummary, EvidenceSummary, ReleaseEvidenceSummary, RunPage, RunSummary,
   ActionDefinition,
   Approval,
   AuditEvent,
@@ -29,12 +32,13 @@ import type {
   EnvironmentLifecycle,
   EnvironmentRollbackPlan,
   EnvironmentRevision,
-  EnvironmentParameterDefinition,
   EnvironmentParameterField,
   EnvironmentVariableDefinition,
   ImpactPreview,
   Notification,
   PlaybookFile,
+  PlaybookWorkspace,
+  PlaybookWorkspaceFile,
   ReleaseReviewPreview,
   PlatformOption,
   PlatformOptionCategory,
@@ -350,8 +354,10 @@ function normalizeImage(raw: LooseRecord): ComponentImage {
 }
 
 function normalizeDependency(raw: LooseRecord): ComponentDependency {
+  if (raw.kind !== undefined && raw.kind !== '' && raw.kind !== 'configuration') throw new Error('Invalid dependency kind');
   const mappings = optionalRecords(raw, 'parameterMappings') ?? [];
   return {
+    ...(raw.kind === 'configuration' ? { kind: 'configuration' as const } : {}),
     id: optionalString(raw, 'id'),
     componentId: requireString(raw, 'upstreamComponentId'),
     componentName: optionalString(raw, 'upstreamComponentName'),
@@ -400,6 +406,10 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     actions,
     artifacts: optionalRecords(raw, 'artifacts')?.map(normalizeArtifact) ?? [],
     images: optionalRecords(raw, 'images')?.map(normalizeImage) ?? [],
+    playbookFiles: optionalRecords(raw, 'playbookFiles')?.map(normalizeWorkspaceFile) ?? [],
+    playbookFileCount: optionalNumber(raw, 'playbookFileCount') ?? 0,
+    playbookTreeSha256: optionalString(raw, 'playbookTreeSha256'),
+    playbookWorkspaceRoot: optionalString(raw, 'playbookWorkspaceRoot'),
     createdAt: optionalString(raw, 'createdAt'),
     releasedAt: optionalString(raw, 'releasedAt'),
     deprecatedAt: optionalString(raw, 'deprecatedAt'),
@@ -417,11 +427,7 @@ function normalizeReadiness(raw: LooseRecord): ComponentRelease['readiness'] {
     installEvidenceRunId: optionalString(raw, 'installEvidenceRunId'),
     rollbackEvidenceRunId: optionalString(raw, 'rollbackEvidenceRunId'),
     transitionEvidenceRunId: optionalString(raw, 'transitionEvidenceRunId'),
-    runtimeEvidence: optionalRecords(raw, 'runtimeEvidence')?.map((row) => ({
-      runtime: requireString(row, 'runtime'), version: requireString(row, 'version'),
-      installEvidenceRunId: optionalString(row, 'installEvidenceRunId'), rollbackEvidenceRunId: optionalString(row, 'rollbackEvidenceRunId'),
-      transitionEvidenceRunId: optionalString(row, 'transitionEvidenceRunId'), complete: requireBoolean(row, 'complete'),
-    })) ?? [],
+
   };
 }
 
@@ -458,17 +464,41 @@ function normalizeImageBuild(raw: LooseRecord): ComponentImageBuild {
 }
 
 function normalizePlaybook(raw: LooseRecord): PlaybookFile {
+	const action = optionalRecord(raw, 'action');
   return {
     path: requireString(raw, 'path'),
     filename: requireString(raw, 'filename'),
     content: requireString(raw, 'content'),
     sha256: requireString(raw, 'sha256'),
     updatedAt: optionalString(raw, 'updatedAt'),
+		action: action ? normalizeAction(action) : undefined,
+  };
+}
+
+function normalizeWorkspaceFile(raw: LooseRecord): PlaybookWorkspaceFile {
+  return {
+    releaseId: requireString(raw, 'releaseId'),
+    path: requireString(raw, 'path'),
+    sha256: requireString(raw, 'sha256'),
+    sizeBytes: requireNumber(raw, 'sizeBytes'),
+    mediaType: requireString(raw, 'mediaType'),
+    updatedAt: optionalString(raw, 'updatedAt'),
+    editable: optionalBoolean(raw, 'editable'),
+    content: optionalString(raw, 'content'),
+  };
+}
+
+function normalizeWorkspace(raw: LooseRecord): PlaybookWorkspace {
+  return {
+    root: requireString(raw, 'root'),
+    treeSha256: requireString(raw, 'treeSha256'),
+    files: requireRecords(raw, 'files').map(normalizeWorkspaceFile),
   };
 }
 
 function normalizeComponent(raw: LooseRecord): Component {
   const releases = optionalRecords(raw, 'releases')?.map((release) => normalizeRelease(release));
+  const byId = new Map(releases?.map((release) => [release.id, release]));
   const releaseLines = optionalRecords(raw, 'releaseLines')?.map((line) => ({
     id: requireString(line, 'id'),
     componentId: requireString(line, 'componentId'),
@@ -478,10 +508,15 @@ function normalizeComponent(raw: LooseRecord): Component {
     evolutionEligible: optionalBoolean(line, 'evolutionEligible') ?? false,
     evolutionParentId: optionalString(line, 'evolutionParentId'),
     evolutionBlockedReason: optionalString(line, 'evolutionBlockedReason'),
-    releases: requireRecords(line, 'releases').map(normalizeRelease),
+    releases: requireStringArray(line, 'releaseIds').map((id) => {
+      const release = byId.get(id);
+      if (!release || release.lineId !== line.id) throw invalidResponse(200, '发布线引用了无效的 Release。');
+      return release;
+    }),
     createdAt: requireString(line, 'createdAt'),
   }));
-  const canonicalReleases = releaseLines?.flatMap((line) => line.releases) ?? releases;
+  const canonicalReleases = releases;
+  const context = optionalRecord(raw, 'readContext');
   return {
     id: requireString(raw, 'id'),
     name: requireString(raw, 'name'),
@@ -494,9 +529,26 @@ function normalizeComponent(raw: LooseRecord): Component {
     latestRelease: canonicalReleases?.[0],
     releases: canonicalReleases,
     releaseLines,
+    readContext: context ? {
+      evidence: Object.fromEntries(Object.entries(requireRecord(context.evidence, 'evidence')).map(([id, value]) => [id, normalizeEvidenceGroup(requireRecord(value, 'release evidence'))])),
+      workItems: requireRecords(context, 'workItems').map(normalizeWorkItem),
+      parameterConsumers: requireRecords(context, 'parameterConsumers').map((item) => ({ componentName: requireString(item, 'componentName'), version: optionalString(item, 'version'), upstreamParameter: requireString(item, 'upstreamParameter'), targetParameter: requireString(item, 'targetParameter'), label: requireString(item, 'label') })),
+    } : undefined,
     releaseCount: optionalNumber(raw, 'releaseCount'),
     updatedAt: optionalString(raw, 'updatedAt'),
   };
+}
+
+function normalizeEvidence(raw: LooseRecord): EvidenceSummary {
+  return { id: requireString(raw, 'id'), status: requireEnum(raw, RUN_STATUSES, 'status'), environmentId: requireString(raw, 'environmentId'), environmentName: requireString(raw, 'environmentName'), createdAt: requireString(raw, 'createdAt'), finishedAt: optionalString(raw, 'finishedAt'), matchesContract: requireBoolean(raw, 'matchesContract') };
+}
+function normalizeEvidenceGroup(raw: LooseRecord): ReleaseEvidenceSummary {
+  const optional = (key: string) => { const value = optionalRecord(raw, key); return value ? normalizeEvidence(value) : undefined; };
+  return { currentInstall: optional('currentInstall'), currentRollback: optional('currentRollback'), currentTransition: optional('currentTransition'), historicalInstall: optional('historicalInstall'), historicalRollback: optional('historicalRollback'), historicalTransition: optional('historicalTransition'), currentById: Object.fromEntries(Object.entries(requireRecord(raw.currentById, 'currentById')).map(([id, value]) => [id, normalizeEvidence(requireRecord(value, 'evidence'))])) };
+}
+function normalizeRunSummary(raw: LooseRecord): RunSummary {
+  return {
+    archiveStatus: optionalString(raw,'archiveStatus'), archivedAt: optionalString(raw,'archivedAt'), archiveSizeBytes: optionalNumber(raw,'archiveSizeBytes'), id: requireString(raw, 'id'), kind: optionalEnum(raw, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'), name: requireString(raw, 'name'), status: requireEnum(raw, RUN_STATUSES, 'status'), environmentId: requireString(raw, 'environmentId'), environmentName: requireString(raw, 'environmentName'), createdAt: requireString(raw, 'createdAt'), startedAt: optionalString(raw, 'startedAt'), finishedAt: optionalString(raw, 'finishedAt'), queuePosition: optionalNumber(raw, 'queuePosition'), approvalId: optionalString(raw, 'approvalId'), action: optionalEnum(raw, ACTION_TYPES, 'action'), componentReleaseId: optionalString(raw, 'componentReleaseId'), componentName: optionalString(raw, 'componentName'), scenarioId: optionalString(raw, 'scenarioId'), scenarioName: optionalString(raw, 'scenarioName') };
 }
 
 function normalizePosition(raw: LooseRecord): { x: number; y: number } {
@@ -524,15 +576,20 @@ function normalizeScenarioNode(raw: LooseRecord): ScenarioNode {
 }
 
 function normalizeScenarioEdge(raw: LooseRecord): ScenarioEdge {
+  const kind = optionalEnum(raw, ['dependency', 'sequence'] as const, 'kind');
+  const dependencyId = optionalString(raw, 'dependencyId');
   return {
     id: requireString(raw, 'id'),
     source: requireString(raw, 'source'),
     target: requireString(raw, 'target'),
+    ...(kind ? { kind } : {}),
+    ...(dependencyId ? { dependencyId } : {}),
   };
 }
 
 function normalizeRevision(raw: LooseRecord): ScenarioRevision {
   return {
+    environmentConstraints: optionalObject(raw, 'environmentConstraints') ?? {},
     id: requireString(raw, 'id'),
     scenarioId: requireString(raw, 'scenarioId'),
     revision: requireNumber(raw, 'revision'),
@@ -776,6 +833,7 @@ function normalizeRun(raw: LooseRecord): Run {
   const deliveryDecisions = optionalRecords(source, 'deliveryDecisions')?.map(normalizeDeliveryDecision);
   const deliveryResults = optionalRecords(source, 'deliveryResults')?.map(normalizeDeliveryResult);
   return {
+    archive: optionalObject(raw,'archive') as unknown as ArchiveInfo | undefined,
     id: requireString(source, 'id'),
     kind: optionalEnum(source, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'),
     name: optionalString(source, 'name'),
@@ -928,7 +986,11 @@ function normalizeWorkbench(value: unknown): Workbench {
       scenarios: requireNumber(assets, 'scenarios'),
       environments: requireNumber(assets, 'environments'),
     },
-    items: requireRecords(raw, 'items').map((item) => {
+    items: requireRecords(raw, 'items').map(normalizeWorkItem),
+  };
+}
+
+function normalizeWorkItem(item: LooseRecord): Workbench['items'][number] {
       const subject = requireRecord(field(item, 'subject'), 'work item subject');
       return {
         id: requireString(item, 'id'),
@@ -945,8 +1007,6 @@ function normalizeWorkbench(value: unknown): Workbench {
         secondaryActions: requireRecords(item, 'secondaryActions').map(normalizeWorkAction),
         updatedAt: requireString(item, 'updatedAt'),
       };
-    }),
-  };
 }
 
 function normalizeWorkAction(value: unknown): WorkAction {
@@ -1003,7 +1063,6 @@ function serializeAction(action: ActionDefinition) {
     id: action.id,
     name: action.name,
     kind: action.type,
-    playbook: action.playbook,
     tags: action.tags,
     hostGroup: action.hostGroup,
     timeoutSeconds: action.timeoutSeconds,
@@ -1018,6 +1077,7 @@ function serializeAction(action: ActionDefinition) {
 
 function serializeDependency(dependency: ComponentDependency) {
   return {
+    ...(dependency.kind ? { kind: dependency.kind } : {}),
     upstreamComponentId: dependency.componentId,
     upstreamReleaseId: dependency.releaseId,
     purpose: dependency.purpose,
@@ -1095,6 +1155,14 @@ function normalizeCatalogRestorePlan(value: unknown): CatalogRestorePlan {
 }
 
 export const api = {
+ async archiveHealth(signal?: AbortSignal): Promise<ArchiveHealth> { return unwrap(await get<unknown>('/run-retention',signal)) as ArchiveHealth; },
+ async saveRetention(policy: RetentionPolicy) { return put('/run-retention',policy); },
+ async archiveRuns(runIds: string[]): Promise<ArchiveInfo[]> { return unwrap(await post<unknown>('/runs/archive',{runIds})) as ArchiveInfo[]; },
+ async cleanupPreview(runIds: string[]): Promise<CleanupItem[]> { return unwrap(await post<unknown>('/runs/cleanup-preview',{runIds})) as CleanupItem[]; },
+ async cleanupRuns(runIds: string[]) { return post('/runs/cleanup',{runIds}); },
+ archiveDownloadURL(id:string) {return `/api/v1/runs/${encodeURIComponent(id)}/archive-download`;},
+
+  async componentUsage(id: string, releaseId: string, includeHistory: boolean, signal?: AbortSignal): Promise<ComponentUsage> { const raw=requireRecord(unwrap(await get<unknown>(`/components/${id}/usage?${new URLSearchParams({releaseId, includeHistory: String(includeHistory)})}`, signal)),"component usage");requireRecords(raw,"components");requireRecords(raw,"scenarios");requireNumber(raw,"componentCount");requireNumber(raw,"scenarioCount");return raw as unknown as ComponentUsage; },
   async sessionUsers() {
     return unwrapList(await get<unknown>('/session/users')).map(normalizeUser);
   },
@@ -1131,18 +1199,6 @@ export const api = {
   async deletePlatformOption(id: string) {
     await request<unknown>(`/platform-options/${id}`, { method: 'DELETE' });
   },
-  async environmentParameterDefinitions(signal?: AbortSignal): Promise<EnvironmentParameterDefinition[]> {
-    return unwrapList(await get<unknown>('/environment-parameter-definitions', signal)) as EnvironmentParameterDefinition[];
-  },
-  async createEnvironmentParameterDefinition(input: Pick<EnvironmentParameterDefinition, 'label' | 'description' | 'type' | 'enum' | 'minLength' | 'defaultValue'>): Promise<EnvironmentParameterDefinition> {
-    return unwrap(await post<unknown>('/environment-parameter-definitions', input)) as EnvironmentParameterDefinition;
-  },
-  async deleteEnvironmentParameterDefinition(id: string) {
-    await request<unknown>(`/environment-parameter-definitions/${id}`, { method: 'DELETE' });
-  },
-  async updateEnvironmentParameterDefault(id: string, defaultValue: unknown): Promise<EnvironmentParameterDefinition> {
-    return unwrap(await put<unknown>(`/environment-parameter-definitions/${id}/default`, { defaultValue: defaultValue ?? null })) as EnvironmentParameterDefinition;
-  },
   async environmentVariableDefinitions(signal?: AbortSignal): Promise<EnvironmentVariableDefinition[]> {
     return unwrapList(await get<unknown>('/environment-variable-definitions', signal)) as EnvironmentVariableDefinition[];
   },
@@ -1156,10 +1212,16 @@ export const api = {
     return normalizeWorkbench(unwrap(await get<unknown>('/workbench', signal)));
   },
   async components(signal?: AbortSignal) {
-    return unwrapList(await get<unknown>('/components', signal)).map((item) => normalizeComponent(requireRecord(item, 'component')));
+    return unwrapList(await get<unknown>('/components?view=contracts', signal)).map((item) => normalizeComponent(requireRecord(item, 'component')));
   },
-  async component(id: string) {
-    return normalizeComponent(requireRecord(unwrap(await get<unknown>(`/components/${id}`)), 'component'));
+  async componentSummaries(signal?: AbortSignal): Promise<ComponentSummary[]> {
+    return unwrapList(await get<unknown>('/components', signal)).map((value) => {
+      const raw = requireRecord(value, 'component summary');
+      return { id: requireString(raw, 'id'), name: requireString(raw, 'name'), slug: optionalString(raw, 'slug'), description: optionalString(raw, 'description'), ownerId: requireString(raw, 'ownerId'), ownerName: requireString(raw, 'ownerName'), layer: requireEnum(raw, COMPONENT_LAYERS, 'layer'), tags: requireStringArray(raw, 'tags'), releaseCount: requireNumber(raw, 'releaseCount'), defaultReleaseId: optionalString(raw, 'defaultReleaseId'), hasDraft: requireBoolean(raw, 'hasDraft'), needsAttention: requireBoolean(raw, 'needsAttention') };
+    });
+  },
+  async component(id: string, signal?: AbortSignal) {
+    return normalizeComponent(requireRecord(unwrap(await get<unknown>(`/components/${id}`, signal)), 'component'));
   },
   async createComponent(input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await post<unknown>('/components', input)), 'component'));
@@ -1215,16 +1277,50 @@ export const api = {
   async deleteImage(releaseId: string, logicalName: string) {
     await request<unknown>(`/component-releases/${releaseId}/images/${encodeURIComponent(logicalName)}`, { method: 'DELETE' });
   },
-  async playbook(releaseId: string, path: string, signal?: AbortSignal) {
-    return normalizePlaybook(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook?path=${encodeURIComponent(path)}`, signal)), 'Playbook'));
+  async playbook(releaseId: string, actionKind: ActionDefinition['type'], signal?: AbortSignal) {
+    return normalizePlaybook(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook?actionKind=${encodeURIComponent(actionKind)}`, signal)), 'Playbook'));
   },
-  async savePlaybook(releaseId: string, filename: string, content: string) {
-    return normalizePlaybook(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook`, { filename, content })), 'Playbook'));
+  async savePlaybook(releaseId: string, action: ActionDefinition, content: string, expectedSha256: string, expectedTreeSha256: string) {
+    return normalizePlaybook(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook`, { actionKind: action.type, action: serializeAction(action), content, expectedSha256, expectedTreeSha256 })), 'Playbook'));
   },
-  async uploadPlaybook(releaseId: string, file: File) {
+  async uploadPlaybook(releaseId: string, action: ActionDefinition, file: File, expectedSha256: string, expectedTreeSha256: string) {
     const form = new FormData();
     form.set('playbook', file, file.name);
+    form.set('actionKind', action.type);
+    form.set('action', JSON.stringify(serializeAction(action)));
+    form.set('expectedSha256', expectedSha256);
+    form.set('expectedTreeSha256', expectedTreeSha256);
     return normalizePlaybook(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/playbook`, form)), 'Playbook'));
+  },
+  async deleteActionPlaybook(releaseId: string, actionKind: ActionDefinition['type'], expectedSha256: string, expectedTreeSha256: string) {
+    return normalizeWorkspace(requireRecord(unwrap(await request<unknown>(`/component-releases/${releaseId}/playbook?actionKind=${encodeURIComponent(actionKind)}&expectedSha256=${encodeURIComponent(expectedSha256)}&expectedTreeSha256=${encodeURIComponent(expectedTreeSha256)}`, { method: 'DELETE' })), 'Playbook workspace'));
+  },
+  async playbookWorkspace(releaseId: string) {
+    return normalizeWorkspace(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook-workspace`)), 'Playbook workspace'));
+  },
+  async workspaceFile(releaseId: string, path: string) {
+    return normalizeWorkspaceFile(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook-workspace/file?path=${encodeURIComponent(path)}`)), 'Playbook workspace file'));
+  },
+  async saveWorkspaceFile(releaseId: string, path: string, content: string, expectedSha256: string, expectedTreeSha256?: string) {
+    return normalizeWorkspaceFile(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook-workspace/file`, { path, content, expectedSha256, expectedTreeSha256 })), 'Playbook workspace file'));
+  },
+  async uploadWorkspaceFile(releaseId: string, path: string, file: File, expectedSha256: string, expectedTreeSha256?: string) {
+    const form = new FormData();
+    form.set('path', path);
+    form.set('file', file, file.name);
+    form.set('expectedSha256', expectedSha256);
+	if (expectedTreeSha256 !== undefined) form.set('expectedTreeSha256', expectedTreeSha256);
+    return normalizeWorkspaceFile(requireRecord(unwrap(await postForm<unknown>(`/component-releases/${releaseId}/playbook-workspace/file`, form)), 'Playbook workspace file'));
+  },
+  async renameWorkspaceFile(releaseId: string, from: string, to: string, expectedSha256: string, expectedTreeSha256?: string) {
+    return normalizeWorkspace(requireRecord(unwrap(await patch<unknown>(`/component-releases/${releaseId}/playbook-workspace/file`, { from, to, expectedSha256, expectedTreeSha256 })), 'Playbook workspace'));
+  },
+  async deleteWorkspaceFile(releaseId: string, path: string, expectedSha256: string, expectedTreeSha256?: string) {
+    const tree = expectedTreeSha256 === undefined ? '' : `&expectedTreeSha256=${encodeURIComponent(expectedTreeSha256)}`;
+    return normalizeWorkspace(requireRecord(unwrap(await request<unknown>(`/component-releases/${releaseId}/playbook-workspace/file?path=${encodeURIComponent(path)}&expectedSha256=${encodeURIComponent(expectedSha256)}${tree}`, { method: 'DELETE' })), 'Playbook workspace'));
+  },
+  workspaceFileDownloadURL(releaseId: string, path: string) {
+    return `${API_ROOT}/component-releases/${releaseId}/playbook-workspace/file?path=${encodeURIComponent(path)}&download=1`;
   },
   async releaseImpact(releaseId: string, operation: 'publish' | 'deprecate' = 'deprecate'): Promise<ImpactPreview> {
     const raw = unwrap(await get<unknown>(`/component-releases/${releaseId}/impact?operation=${operation}`));
@@ -1297,7 +1393,7 @@ export const api = {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/component-releases/${releaseId}/test-runs`, input)), 'run'));
   },
   async releaseRunEvidence(releaseId: string, signal?: AbortSignal) {
-    return unwrapList(await get<unknown>(`/component-releases/${releaseId}/run-evidence`, signal)).map((item) => normalizeRun(requireRecord(item, 'run evidence')));
+    return unwrapList(await get<unknown>(`/component-releases/${releaseId}/run-evidence`, signal)).map((item) => normalizeRunSummary(requireRecord(item, 'run evidence')));
   },
   async scenarios(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/scenarios', signal)).map((item) => normalizeScenario(requireRecord(item, 'scenario')));
@@ -1320,7 +1416,7 @@ export const api = {
   async abandonScenarioRevision(revisionId: string) {
     return normalizeScenario(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/abandon`)), 'scenario'));
   },
-  async saveGraph(revisionId: string, graph: { nodes: ScenarioNode[]; edges: ScenarioEdge[] }) {
+  async saveGraph(revisionId: string, graph: { nodes: ScenarioNode[]; edges: ScenarioEdge[]; environmentConstraints?: Record<string, unknown> }) {
     const backendGraph = {
       nodes: graph.nodes.map((node) => ({
         id: node.id,
@@ -1334,9 +1430,9 @@ export const api = {
           dependencySources: node.data.dependencySources ?? {},
         },
       })),
-      edges: graph.edges,
+      edges: graph.edges.map(({ id, source, target, kind, dependencyId }) => ({ id, source, target, kind, dependencyId })),
     };
-    return normalizeRevision(requireRecord(normalizeOptionalData(await put<unknown>(`/scenario-revisions/${revisionId}/graph`, backendGraph)), 'scenario revision'));
+    return normalizeRevision(requireRecord(normalizeOptionalData(await put<unknown>(`/scenario-revisions/${revisionId}/graph`, { graph: backendGraph, environmentConstraints: graph.environmentConstraints ?? {} })), 'scenario revision'));
   },
   async validateScenario(revisionId: string) {
     const result = requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/validate`)), 'scenario validation');
@@ -1467,8 +1563,15 @@ export const api = {
   async auditEvents(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/audit-events', signal)).map((item) => normalizeAuditEvent(requireRecord(item, 'audit event')));
   },
-  async runs(signal?: AbortSignal) {
-    return unwrapList(await get<unknown>('/runs', signal)).map((item) => normalizeRun(requireRecord(item, 'run')));
+  async runs(options: { page?: number; pageSize?: number; filter?: 'all' | 'active' | 'finished'; environmentId?: string; archive?: 'unarchived' | 'archived' | 'all' } = {}, signal?: AbortSignal): Promise<RunPage> {
+    const query = new URLSearchParams({ page: String(options.page ?? 1), pageSize: String(options.pageSize ?? 50), filter: options.filter ?? 'all' });
+    query.set('archive',options.archive ?? 'unarchived');
+    if (options.environmentId) query.set('environmentId', options.environmentId);
+    const raw = requireRecord(await get<unknown>(`/runs?${query}`, signal), 'run page');
+    return { items: requireRecords(raw, 'items').map(normalizeRunSummary), page: requireNumber(raw, 'page'), pageSize: requireNumber(raw, 'pageSize'), total: requireNumber(raw, 'total') };
+  },
+  async batchApprovalCandidates(signal?: AbortSignal): Promise<RunSummary[]> {
+    return unwrapList(await get<unknown>('/approvals/batch-candidates', signal)).map((item) => normalizeRunSummary(requireRecord(item, 'approval candidate')));
   },
   async run(id: string, signal?: AbortSignal) {
     return normalizeRun(requireRecord(unwrap(await get<unknown>(`/runs/${id}`, signal)), 'run'));

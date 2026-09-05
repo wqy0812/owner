@@ -15,6 +15,7 @@ import (
 const CatalogFormatVersion = "clusterforge-catalog-v1"
 
 type Config struct {
+	RunArchiveDir string
 	DatabasePath  string
 	PlaybookRoot  string
 	BackupDir     string
@@ -77,6 +78,7 @@ const (
 )
 
 type Manifest struct {
+	Archives              []HistoryFile  `json:"archives"`
 	FormatVersion         string         `json:"formatVersion"`
 	BackupID              string         `json:"backupId"`
 	Status                ManifestStatus `json:"status"`

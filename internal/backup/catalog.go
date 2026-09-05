@@ -40,6 +40,10 @@ WHERE EXISTS (
   SELECT 1 FROM component_releases r,json_each(r.environment_constraints_json) dimension
   WHERE r.status IN ('released','deprecated') AND dimension.key=c.technical_key
 )
+OR EXISTS (
+  SELECT 1 FROM scenario_revisions sr,json_each(sr.environment_constraints_json) dimension
+  WHERE sr.status IN ('released','deprecated') AND dimension.key=c.technical_key
+)
 OR (c.category_type='host_group' AND (
   EXISTS (SELECT 1 FROM action_definitions a JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','deprecated') AND a.host_group<>'')
   OR EXISTS (
@@ -54,6 +58,10 @@ FROM platform_options o JOIN platform_option_categories c ON c.id=o.category_id
 WHERE EXISTS (
   SELECT 1 FROM component_releases r,json_each(r.environment_constraints_json) dimension,json_each(dimension.value) selected
   WHERE r.status IN ('released','deprecated') AND dimension.key=c.technical_key AND selected.value=o.technical_value
+)
+OR EXISTS (
+  SELECT 1 FROM scenario_revisions sr,json_each(sr.environment_constraints_json) dimension,json_each(dimension.value) selected
+  WHERE sr.status IN ('released','deprecated') AND dimension.key=c.technical_key AND selected.value=o.technical_value
 )
 OR (c.category_type='host_group' AND (
   EXISTS (
@@ -85,22 +93,26 @@ WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND r
 	{name: "component_release_lines", columns: []string{"id", "component_id", "name", "created_at"}, query: `
 SELECT l.id,l.component_id,l.name,l.created_at FROM component_release_lines l
 WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.line_id=l.id AND r.status IN ('released','deprecated')) ORDER BY l.component_id,l.created_at,l.id`},
-	{name: "component_releases", columns: []string{"id", "component_id", "line_id", "parent_release_id", "template_source_release_id", "version", "status", "release_notes", "compatibility", "candidate", "review_status", "review_contract_digest", "review_submitted_at", "reviewed_by", "reviewed_at", "review_comment", "publication_generation", "risk_level", "environment_constraints_json", "parameters_json", "created_at", "released_at", "deprecated_at"}, query: `
-SELECT id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,0,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at
+	{name: "component_releases", columns: []string{"id", "component_id", "line_id", "parent_release_id", "template_source_release_id", "version", "status", "release_notes", "compatibility", "candidate", "review_status", "review_contract_digest", "review_submitted_at", "reviewed_by", "reviewed_at", "review_comment", "publication_generation", "risk_level", "environment_constraints_json", "parameters_json", "playbook_tree_sha256", "playbook_workspace_root", "created_at", "released_at", "deprecated_at"}, query: `
+SELECT id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,0,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,publication_generation,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at
 FROM component_releases WHERE status IN ('released','deprecated') ORDER BY component_id,created_at,id`},
-	{name: "component_dependencies", columns: []string{"id", "release_id", "upstream_component_id", "upstream_release_id", "purpose", "parameter_mappings_json"}, query: `
-SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json FROM component_dependencies d
+	{name: "component_dependencies", columns: []string{"id", "release_id", "upstream_component_id", "upstream_release_id", "purpose", "parameter_mappings_json", "kind"}, query: `
+SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,d.kind FROM component_dependencies d
 JOIN component_releases r ON r.id=d.release_id JOIN component_releases u ON u.id=d.upstream_release_id
 WHERE r.status IN ('released','deprecated') AND u.status IN ('released','deprecated') ORDER BY d.release_id,d.upstream_component_id,d.id`},
 	{name: "action_definitions", columns: []string{"id", "release_id", "name", "kind", "playbook", "playbook_sha256", "tags_json", "host_group", "required_credentials_json", "timeout_seconds", "risk_level", "destructive", "idempotent", "from_release_id", "to_release_id"}, query: `
 SELECT a.id,a.release_id,a.name,a.kind,a.playbook,a.playbook_sha256,a.tags_json,a.host_group,a.required_credentials_json,a.timeout_seconds,a.risk_level,a.destructive,a.idempotent,a.from_release_id,a.to_release_id
 FROM action_definitions a JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','deprecated') ORDER BY a.release_id,a.kind,a.id`},
+	{name: "component_playbook_files", columns: []string{"release_id", "relative_path", "sha256", "size_bytes", "media_type", "updated_at"}, query: `
+SELECT f.release_id,f.relative_path,f.sha256,f.size_bytes,f.media_type,f.updated_at
+FROM component_playbook_files f JOIN component_releases r ON r.id=f.release_id
+WHERE r.status IN ('released','deprecated') ORDER BY f.release_id,f.relative_path`},
 	{name: "scenarios", columns: []string{"id", "slug", "name", "description", "owner_id", "current_revision_id", "created_at", "updated_at"}, query: `
 SELECT s.id,s.slug,s.name,s.description,s.owner_id,
 COALESCE((SELECT sr.id FROM scenario_revisions sr WHERE sr.scenario_id=s.id AND sr.status IN ('released','deprecated') ORDER BY CASE sr.status WHEN 'released' THEN 0 ELSE 1 END,sr.revision DESC LIMIT 1),''),
 s.created_at,s.updated_at FROM scenarios s WHERE EXISTS (SELECT 1 FROM scenario_revisions sr WHERE sr.scenario_id=s.id AND sr.status IN ('released','deprecated')) ORDER BY s.slug,s.id`},
-	{name: "scenario_revisions", columns: []string{"id", "scenario_id", "revision", "status", "publication_generation", "graph_json", "created_at", "test_passed_at", "released_at", "deprecated_at", "abandoned_at"}, query: `
-SELECT id,scenario_id,revision,status,publication_generation,graph_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at
+	{name: "scenario_revisions", columns: []string{"id", "scenario_id", "revision", "status", "publication_generation", "graph_json", "environment_constraints_json", "created_at", "test_passed_at", "released_at", "deprecated_at", "abandoned_at"}, query: `
+SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at
 FROM scenario_revisions WHERE status IN ('released','deprecated') ORDER BY scenario_id,revision,id`},
 	{name: "component_release_artifacts", columns: []string{"id", "release_id", "alias", "filename", "sha256", "size_bytes", "source_url", "source_updated_by", "source_updated_at", "created_by", "created_at"}, query: `
 SELECT a.id,a.release_id,a.alias,a.filename,a.sha256,a.size_bytes,a.source_url,a.source_updated_by,a.source_updated_at,a.created_by,a.created_at
@@ -199,13 +211,63 @@ func databaseCell(value any) (DBCell, error) {
 }
 
 func exportPlaybooks(ctx context.Context, database *sql.DB, root, destination string) ([]Playbook, error) {
+	type fileSpec struct{ relative, expected string }
+	type manifestFile struct{ path, sha string }
+	specs := []fileSpec{}
+	manifestFiles := map[string][]manifestFile{}
+	manifestTrees := map[string]string{}
 	rows, err := database.QueryContext(ctx, `
-SELECT DISTINCT a.playbook,a.playbook_sha256 FROM action_definitions a
-JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','deprecated') ORDER BY a.playbook`)
+SELECT f.release_id,f.relative_path,f.sha256,r.playbook_tree_sha256,r.playbook_workspace_root
+FROM component_playbook_files f JOIN component_releases r ON r.id=f.release_id
+WHERE r.status IN ('released','deprecated') ORDER BY f.release_id,f.relative_path`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	for rows.Next() {
+		var releaseID, workspaceRelative, expected, treeSHA, storedRoot string
+		if err := rows.Scan(&releaseID, &workspaceRelative, &expected, &treeSHA, &storedRoot); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		prefix := strings.TrimSpace(storedRoot)
+		if prefix == "" {
+			rows.Close()
+			return nil, fmt.Errorf("release workspace has files but no stored root")
+		}
+		manifestFiles[releaseID] = append(manifestFiles[releaseID], manifestFile{path: workspaceRelative, sha: expected})
+		manifestTrees[releaseID] = treeSHA
+		specs = append(specs, fileSpec{relative: filepath.ToSlash(filepath.Join(filepath.FromSlash(prefix), filepath.FromSlash(workspaceRelative))), expected: expected})
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for releaseID, files := range manifestFiles {
+		sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+		hash := sha256.New()
+		for _, file := range files {
+			_, _ = hash.Write([]byte(file.path))
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(file.sha))
+			_, _ = hash.Write([]byte{0})
+		}
+		actual := hex.EncodeToString(hash.Sum(nil))
+		if manifestTrees[releaseID] == "" || manifestTrees[releaseID] != actual {
+			return nil, fmt.Errorf("release %s workspace manifest digest is %s, expected %s", releaseID, actual, manifestTrees[releaseID])
+		}
+	}
+	var incomplete int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_releases r
+ WHERE r.status IN ('released','deprecated')
+ AND EXISTS (SELECT 1 FROM action_definitions a WHERE a.release_id=r.id)
+ AND (r.playbook_workspace_root='' OR r.playbook_tree_sha256='' OR NOT EXISTS (SELECT 1 FROM component_playbook_files f WHERE f.release_id=r.id))`).Scan(&incomplete); err != nil {
+		return nil, err
+	}
+	if incomplete > 0 {
+		return nil, fmt.Errorf("released Playbooks require a complete workspace manifest")
+	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -216,11 +278,8 @@ JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','de
 	}
 	seen := map[string]string{}
 	var playbooks []Playbook
-	for rows.Next() {
-		var relative, expected string
-		if err := rows.Scan(&relative, &expected); err != nil {
-			return nil, err
-		}
+	for _, spec := range specs {
+		relative, expected := spec.relative, spec.expected
 		clean, source, err := resolveRelative(rootAbs, relative)
 		if err != nil {
 			return nil, fmt.Errorf("export Playbook %q: %w", relative, err)
@@ -251,7 +310,7 @@ JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','de
 		playbooks = append(playbooks, Playbook{Path: filepath.ToSlash(clean), SHA256: actual, SizeBytes: int64(len(contents))})
 	}
 	sort.Slice(playbooks, func(i, j int) bool { return playbooks[i].Path < playbooks[j].Path })
-	return playbooks, rows.Err()
+	return playbooks, nil
 }
 
 func resolveRelative(rootAbs, relative string) (string, string, error) {

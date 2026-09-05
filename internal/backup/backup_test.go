@@ -53,6 +53,24 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 	}
 	digest := sha256.Sum256(playbook)
 	playbookSHA := hex.EncodeToString(digest[:])
+	template := []byte("runtime_port={{ runtime_port }}\n")
+	templatePath := filepath.Join(filepath.Dir(playbookPath), "templates", "runtime.conf.j2")
+	if err := os.MkdirAll(filepath.Dir(templatePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(templatePath, template, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	templateDigest := sha256.Sum256(template)
+	templateSHA := hex.EncodeToString(templateDigest[:])
+	treeHash := sha256.New()
+	for _, item := range []struct{ path, sha string }{{"install.yml", playbookSHA}, {"templates/runtime.conf.j2", templateSHA}} {
+		_, _ = treeHash.Write([]byte(item.path))
+		_, _ = treeHash.Write([]byte{0})
+		_, _ = treeHash.Write([]byte(item.sha))
+		_, _ = treeHash.Write([]byte{0})
+	}
+	workspaceTreeSHA := hex.EncodeToString(treeHash.Sum(nil))
 	database, err := store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -69,14 +87,18 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 		{`INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)`, []any{"platform-admin", "Platform Admin", "platform_admin", now}},
 		{`INSERT INTO platform_option_categories(id,technical_key,label,category_type,environment_required,sort_order,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)`, []any{"category-host-group", "hostGroup", "Host group", "host_group", 0, 0, "platform-admin", now}},
 		{`INSERT INTO platform_options(id,category_id,technical_value,label,sort_order,created_by,created_at) VALUES(?,?,?,?,?,?,?)`, []any{"option-runtime", "category-host-group", "runtime", "Runtime", 0, "platform-admin", now}},
+		{`INSERT INTO platform_option_categories(id,technical_key,label,category_type,environment_required,sort_order,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)`, []any{"category-region", "region", "Region", "environment_dimension", 0, 1, "platform-admin", now}},
+		{`INSERT INTO platform_options(id,category_id,technical_value,label,sort_order,created_by,created_at) VALUES(?,?,?,?,?,?,?)`, []any{"option-region-west", "category-region", "west", "West", 0, "platform-admin", now}},
 		{`INSERT INTO components(id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json) VALUES(?,?,?,?,?,?,?,?,?)`, []any{"component-runtime", "runtime", "Runtime", "runtime", "component-owner", now, now, "runtime_state", `["runtime"]`}},
 		{`INSERT INTO components(id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json) VALUES(?,?,?,?,?,?,?,?,?)`, []any{"component-host", "host", "Host", "host", "component-owner", now, now, "host_foundation", `["host"]`}},
 		{`INSERT INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, []any{"line-host-1", "component-host", "Host 1.0", now}},
 		{`INSERT INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, []any{"line-runtime-1", "component-runtime", "Runtime 1.0", now}},
 		{`INSERT INTO component_releases(id,component_id,line_id,version,status,release_notes,compatibility,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-host-1", "component-host", "line-host-1", "1.0.0", "released", "stable", "not_applicable", 0, 2, "low", `{}`, `[]`, now, now}},
-		{`INSERT INTO component_releases(id,component_id,line_id,version,status,release_notes,compatibility,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-runtime-1", "component-runtime", "line-runtime-1", "1.0.0", "released", "stable", "not_applicable", 0, 3, "low", `{}`, `[]`, now, now}},
+		{`INSERT INTO component_releases(id,component_id,line_id,version,status,release_notes,compatibility,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-runtime-1", "component-runtime", "line-runtime-1", "1.0.0", "released", "stable", "not_applicable", 0, 3, "low", `{}`, `[]`, workspaceTreeSHA, "managed/runtime/release-runtime-1/", now, now}},
 		{`INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES(?,?,?,?,?,?)`, []any{"dependency-runtime-host", "release-runtime-1", "component-host", "release-host-1", "prepared host", `[]`}},
 		{`INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"action-install", "release-runtime-1", "install", "install", "managed/runtime/release-runtime-1/install.yml", playbookSHA, `[]`, "runtime", `[]`, 1800, "low", 0, 1}},
+		{`INSERT INTO component_playbook_files(release_id,relative_path,sha256,size_bytes,media_type,updated_at) VALUES(?,?,?,?,?,?)`, []any{"release-runtime-1", "install.yml", playbookSHA, int64(len(playbook)), "application/yaml", now}},
+		{`INSERT INTO component_playbook_files(release_id,relative_path,sha256,size_bytes,media_type,updated_at) VALUES(?,?,?,?,?,?)`, []any{"release-runtime-1", "templates/runtime.conf.j2", templateSHA, int64(len(template)), "text/plain", now}},
 		{`INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, []any{"artifact-runtime", "release-runtime-1", "runtime_media", "runtime.tgz", hex.EncodeToString(artifactDigest[:]), int64(len(artifactContents)), artifactServer.URL + "/runtime.tgz", "component-owner", now, "component-owner", now}},
 		{`INSERT INTO component_release_images(id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, []any{"image-runtime", "release-runtime-1", "main", "sha256:" + strings.Repeat("b", 64), "registry.example.invalid/runtime:1.0.0", "component-owner", now, "component-owner", now}},
 		{`INSERT INTO scenarios(id,slug,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, []any{"scenario-runtime", "runtime-scenario", "Runtime Scenario", "scenario", "scenario-owner", "scenario-runtime-r1", now, now}},
@@ -89,6 +111,11 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 		if _, err := database.DB().ExecContext(ctx, statement.query, statement.args...); err != nil {
 			t.Fatalf("fixture statement %q: %v", statement.query, err)
 		}
+	}
+	// The Scenario may narrow a dimension that its components leave unrestricted.
+	// Its directory values must survive both Catalog restoration paths.
+	if _, err := database.DB().ExecContext(ctx, `UPDATE scenario_revisions SET environment_constraints_json='{"region":["west"]}' WHERE id='scenario-runtime-r1'`); err != nil {
+		t.Fatal(err)
 	}
 
 	remote := filepath.Join(root, "catalog.git")
@@ -709,5 +736,12 @@ func assertRestoredCatalog(t *testing.T, databasePath, playbookPath, expectedPla
 	}
 	if err := verifySQLite(ctx, databasePath); err != nil {
 		t.Fatal(err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(filepath.Dir(playbookPath), "templates", "runtime.conf.j2")); err != nil || !strings.Contains(string(contents), "runtime_port") {
+		t.Fatalf("restored workspace template=%q err=%v", contents, err)
+	}
+	var workspaceFiles int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_playbook_files WHERE release_id='release-runtime-1'`).Scan(&workspaceFiles); err != nil || workspaceFiles != 2 {
+		t.Fatalf("restored workspace manifest count=%d err=%v", workspaceFiles, err)
 	}
 }

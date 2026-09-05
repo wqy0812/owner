@@ -367,7 +367,7 @@ func TestPreparedWorkspaceIsSharedAcrossSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := runner.PrepareWorkspace(treeDigest)
+	workspace, err := runner.PrepareWorkspace("one.yml", treeDigest)
 	if err != nil {
 		t.Fatal(err)
 	}

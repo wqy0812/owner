@@ -159,6 +159,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     if ((valueProvider === 'scenario_owner' || valueProvider === 'environment_owner') && !modifiable) throw new Error(`${slug}.${name} 的外部 Owner 参数必须允许修改。`);
     if ((valueProvider === 'scenario_owner' || valueProvider === 'environment_owner') && (type === 'object' || type === 'array') && !enumValues.length) throw new Error(`${slug}.${name} 是结构化外部字段，必须提供受控枚举，不能编辑原始 JSON。`);
     if (valueProvider === 'upstream_mapping' && modifiable) throw new Error(`${slug}.${name} 的上游映射参数不能人工修改。`);
+    if (isRecord(raw.environmentBinding) && raw.environmentBinding.kind === 'global') throw new Error(`${slug}.${name} 使用了已停用的全局字段，请改为组件参数或上游映射。`);
     if (valueProvider === 'environment_owner' && !isRecord(raw.environmentBinding)) throw new Error(`${slug}.${name} 必须声明 environmentBinding。`);
     return {
       name, description, type, visibility: raw.visibility, required, modifiable, valueProvider,
@@ -174,7 +175,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
 
   const dependencies = optionalArray(release.dependencies, `${slug}.release.dependencies`).map((raw, dependencyIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${dependencyIndex + 1} 个依赖必须是对象。`);
-    assertOnlyKeys(raw, ['componentSlug', 'purpose', 'parameterMappings'], `${slug}.dependencies[${dependencyIndex}]`);
+    assertOnlyKeys(raw, ['componentSlug', 'purpose', 'parameterMappings', 'kind'], `${slug}.dependencies[${dependencyIndex}]`);
     const componentSlug = nonEmptyString(raw.componentSlug, `${slug}.dependencies[${dependencyIndex}].componentSlug`);
     const parameterMappings = optionalArray(raw.parameterMappings, `${slug}.${componentSlug}.parameterMappings`).map((mapping, mappingIndex) => {
       if (!isRecord(mapping)) throw new Error(`${slug}.${componentSlug} 的第 ${mappingIndex + 1} 个参数映射必须是对象。`);
@@ -185,7 +186,9 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
       return { upstreamParameter, targetParameter };
     });
     const purpose = optionalString(raw.purpose, `${slug}.${componentSlug}.purpose`) ?? '';
-    return { componentSlug, purpose, parameterMappings };
+    if (raw.kind !== undefined && raw.kind !== '' && raw.kind !== 'configuration') throw new Error(`${slug} 的引用方式无效。`);
+    if (raw.kind === 'configuration' && !parameterMappings.length) throw new Error(`${slug} 的配置引用必须指定参数。`);
+    return { componentSlug, purpose, parameterMappings, ...(raw.kind === 'configuration' ? { kind: 'configuration' as const } : {}) };
   });
   if (new Set(dependencies.map((item) => item.componentSlug)).size !== dependencies.length) throw new Error(`${slug} 包含重复组件依赖。`);
 
@@ -266,7 +269,7 @@ function validateDependencyGraph(entries: ComponentImportEntry[]) {
       if (dependency.componentSlug === entry.component.slug) throw new Error(`${entry.component.slug} 不能依赖自身。`);
     }
   }
-  const remaining = new Map(entries.map((entry) => [entry.component.slug, new Set((entry.release.dependencies ?? []).map((dependency) => dependency.componentSlug))]));
+  const remaining = new Map(entries.map((entry) => [entry.component.slug, new Set((entry.release.dependencies ?? []).filter((dependency) => dependency.kind !== 'configuration').map((dependency) => dependency.componentSlug))]));
   while (remaining.size) {
     const ready = [...remaining].filter(([, dependencies]) => [...dependencies].every((slug) => !remaining.has(slug))).map(([slug]) => slug);
     if (!ready.length) throw new Error('组件依赖存在环，无法确定 Release 创建顺序。');

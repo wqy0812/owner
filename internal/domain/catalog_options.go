@@ -107,7 +107,7 @@ func (lookup CatalogOptions) ValidateConstraints(constraints map[string]any) err
 		parent := lookup.CategoriesByID[category.ParentCategoryID]
 		parentValues := ConstraintValues(constraints[parent.Key])
 		if len(parentValues) > 0 && len(childValues) == 0 {
-			return fmt.Errorf("%w: environment dimension %q requires at least one version from %q", ErrInvalid, parent.Key, key)
+			return fmt.Errorf("%w: environment dimension %q requires at least one child option from %q", ErrInvalid, parent.Key, key)
 		}
 		selectedParents := map[string]bool{}
 		for _, value := range parentValues {
@@ -125,7 +125,7 @@ func (lookup CatalogOptions) ValidateConstraints(constraints map[string]any) err
 		}
 		for id := range selectedParents {
 			if !coveredParents[id] {
-				return fmt.Errorf("%w: each selected option in %q requires at least one version", ErrInvalid, parent.Key)
+				return fmt.Errorf("%w: each selected option in %q requires at least one child option", ErrInvalid, parent.Key)
 			}
 		}
 	}
@@ -188,7 +188,7 @@ func (lookup CatalogOptions) ValidateFacts(facts map[string]any, requireComplete
 		child, _ := PlatformCategoryOption(category, childValue)
 		selectedParent, _ := PlatformCategoryOption(parent, parentValue)
 		if child.ParentOptionID == "" || child.ParentOptionID != selectedParent.ID {
-			return fmt.Errorf("%w: environment runtime version does not belong to selected runtime", ErrInvalid)
+			return fmt.Errorf("%w: environment child option does not belong to selected parent option", ErrInvalid)
 		}
 	}
 	if requireComplete {

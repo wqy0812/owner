@@ -17,6 +17,7 @@ import (
 )
 
 type ComponentImportDependency struct {
+	Kind              string                    `json:"kind,omitempty"`
 	ComponentSlug     string                    `json:"componentSlug"`
 	Purpose           string                    `json:"purpose"`
 	ParameterMappings []domain.ParameterMapping `json:"parameterMappings"`
@@ -223,7 +224,10 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 			validationRelease.RiskLevel = domain.RiskLow
 		}
 		for _, dependency := range entry.Release.Dependencies {
-			validationRelease.Dependencies = append(validationRelease.Dependencies, domain.ComponentDependency{UpstreamComponentID: "import-component-" + dependency.ComponentSlug, UpstreamReleaseID: "import-release-" + dependency.ComponentSlug, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings})
+			validationRelease.Dependencies = append(validationRelease.Dependencies, domain.ComponentDependency{UpstreamComponentID: "import-component-" + dependency.ComponentSlug, UpstreamReleaseID: "import-release-" + dependency.ComponentSlug, Kind: dependency.Kind, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings})
+		}
+		if err := domain.ValidateComponentParameterAuthoring(validationRelease.Parameters); err != nil {
+			return ComponentImportPlan{}, err
 		}
 		if err := validateRelease(validationRelease); err != nil {
 			return ComponentImportPlan{}, err
@@ -261,8 +265,10 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 					return ComponentImportPlan{}, fmt.Errorf("%w: invalid parameter mapping from %s to %s", domain.ErrInvalid, dependency.ComponentSlug, slug)
 				}
 			}
-			indegree[slug]++
-			adjacency[dependency.ComponentSlug] = append(adjacency[dependency.ComponentSlug], slug)
+			if dependency.Kind != domain.DependencyConfiguration {
+				indegree[slug]++
+				adjacency[dependency.ComponentSlug] = append(adjacency[dependency.ComponentSlug], slug)
+			}
 		}
 	}
 	queue := make([]string, 0)
@@ -287,6 +293,9 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 	}
 	if len(order) != len(bySlug) {
 		return ComponentImportPlan{}, fmt.Errorf("%w: component dependency graph contains a cycle", domain.ErrInvalid)
+	}
+	if err := validateImportedParameterReferences(bySlug); err != nil {
+		return ComponentImportPlan{}, err
 	}
 	plan := ComponentImportPlan{Order: order}
 	for _, slug := range order {
@@ -354,6 +363,9 @@ type componentImportFile struct {
 type componentImportManifestFile struct {
 	ComponentSlug string `json:"componentSlug"`
 	ReleaseID     string `json:"releaseId"`
+	LineName      string `json:"lineName"`
+	Version       string `json:"version"`
+	WorkspaceRoot string `json:"workspaceRoot"`
 	RelativePath  string `json:"relativePath"`
 	Promoted      bool   `json:"-"`
 }
@@ -394,6 +406,7 @@ func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User,
 			release.RiskLevel = domain.RiskLow
 		}
 		release.LineID = newID("release-line")
+		release.PlaybookWorkspaceRoot = generatedManagedReleasePrefix(component, release)
 		components[slug], releases[slug] = component, release
 		prepared.Components = append(prepared.Components, component)
 		prepared.Result.CompletedComponents = append(prepared.Result.CompletedComponents, slug)
@@ -405,18 +418,12 @@ func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User,
 			upstreamComponent, upstreamRelease := components[dependency.ComponentSlug], releases[dependency.ComponentSlug]
 			release.Dependencies = append(release.Dependencies, domain.ComponentDependency{
 				UpstreamComponentID: upstreamComponent.ID, UpstreamReleaseID: upstreamRelease.ID,
-				Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings,
+				Kind: dependency.Kind, Purpose: dependency.Purpose, ParameterMappings: dependency.ParameterMappings,
 			})
 		}
-		managed := make(map[string]string, len(entry.Playbooks))
-		managedDigests := make(map[string]string, len(entry.Playbooks))
+		playbookContents := make(map[string]string, len(entry.Playbooks))
 		for _, playbook := range entry.Playbooks {
-			relative := managedReleasePrefix(components[slug], release) + playbook.Filename
-			managed[playbook.Filename] = relative
-			digest := sha256.Sum256([]byte(playbook.Content))
-			managedDigests[playbook.Filename] = hex.EncodeToString(digest[:])
-			prepared.Files = append(prepared.Files, componentImportFile{Component: components[slug], Release: release, RelativePath: relative, Content: playbook.Content})
-			prepared.Result.SavedPlaybooks = append(prepared.Result.SavedPlaybooks, slug+"/"+playbook.Filename)
+			playbookContents[playbook.Filename] = playbook.Content
 		}
 		for _, action := range entry.Release.Actions {
 			timeout := action.TimeoutSeconds
@@ -427,13 +434,25 @@ func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User,
 			if risk == "" {
 				risk = domain.RiskLow
 			}
+			contents := playbookContents[action.Playbook]
+			digest := sha256.Sum256([]byte(contents))
+			sha := hex.EncodeToString(digest[:])
+			relative, pathErr := actionPlaybookPath(components[slug], release, action.Type)
+			if pathErr != nil {
+				return preparedComponentImport{}, pathErr
+			}
+			workspacePath := string(action.Type) + ".yml"
+			prepared.Files = append(prepared.Files, componentImportFile{Component: components[slug], Release: release, RelativePath: relative, Content: contents})
+			prepared.Result.SavedPlaybooks = append(prepared.Result.SavedPlaybooks, slug+"/"+workspacePath)
+			release.PlaybookFiles = append(release.PlaybookFiles, domain.ComponentPlaybookFile{ReleaseID: release.ID, Path: workspacePath, SHA256: sha, SizeBytes: int64(len([]byte(contents))), MediaType: "application/yaml", UpdatedAt: now})
 			release.Actions = append(release.Actions, domain.ActionDefinition{
-				Name: action.Name, Kind: action.Type, Playbook: managed[action.Playbook], PlaybookSHA256: managedDigests[action.Playbook], Tags: action.Tags,
+				Name: action.Name, Kind: action.Type, Playbook: relative, PlaybookSHA256: sha, Tags: action.Tags,
 				HostGroup: action.HostGroup, TimeoutSeconds: timeout,
 				RequiredCredentials: action.RequiredCredentials,
 				RiskLevel:           risk, Destructive: action.Destructive, Idempotent: action.Idempotent,
 			})
 		}
+		release.PlaybookTreeSHA256 = workspaceTreeSHA(release.PlaybookFiles)
 		rewriteReleaseChildren(&release)
 		if err := validateRelease(release); err != nil {
 			return preparedComponentImport{}, err
@@ -536,7 +555,7 @@ func (p *Platform) stageComponentImportFiles(files []componentImportFile) (compo
 		if err := writeSyncedFile(stagedPath, []byte(item.Content), 0o640); err != nil {
 			return cleanup(fmt.Errorf("stage Playbook %s: %w", clean, err))
 		}
-		manifest.Files = append(manifest.Files, componentImportManifestFile{ComponentSlug: item.Component.Slug, ReleaseID: item.Release.ID, RelativePath: clean})
+		manifest.Files = append(manifest.Files, componentImportManifestFile{ComponentSlug: item.Component.Slug, ReleaseID: item.Release.ID, LineName: item.Release.LineName, Version: item.Release.Version, WorkspaceRoot: managedReleasePrefix(item.Component, item.Release), RelativePath: clean})
 		if !releases[item.Release.ID] {
 			releases[item.Release.ID] = true
 			manifest.ReleaseIDs = append(manifest.ReleaseIDs, item.Release.ID)
@@ -559,7 +578,7 @@ func (p *Platform) promoteComponentImportFiles(manifest componentImportManifest)
 	for index := range manifest.Files {
 		item := &manifest.Files[index]
 		component := domain.Component{Slug: item.ComponentSlug}
-		release := domain.ComponentRelease{ID: item.ReleaseID}
+		release := domain.ComponentRelease{ID: item.ReleaseID, LineName: item.LineName, Version: item.Version, PlaybookWorkspaceRoot: item.WorkspaceRoot}
 		clean, target, err := p.resolveManagedPlaybookWriteTarget(component, release, item.RelativePath, true)
 		if err != nil {
 			return err
@@ -586,7 +605,7 @@ func (p *Platform) cleanupComponentImportManifest(manifest componentImportManife
 				continue
 			}
 			component := domain.Component{Slug: item.ComponentSlug}
-			release := domain.ComponentRelease{ID: item.ReleaseID}
+			release := domain.ComponentRelease{ID: item.ReleaseID, LineName: item.LineName, Version: item.Version, PlaybookWorkspaceRoot: item.WorkspaceRoot}
 			_, target, err := p.resolveManagedPlaybookWriteTarget(component, release, item.RelativePath, false)
 			if err != nil {
 				if os.IsNotExist(err) {

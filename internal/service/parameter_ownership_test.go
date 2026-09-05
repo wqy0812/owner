@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -123,12 +124,8 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 	ctx := context.Background()
 	platform, database := readinessTestPlatform(t)
 	admin := domain.User{ID: seed.PlatformAdminID, Name: "Platform Admin", Role: domain.RolePlatformAdmin}
-	definition, err := platform.PlatformOptions().CreateEnvironmentParameterDefinition(ctx, admin, domain.EnvironmentParameterDefinition{
-		Label: "Deployment region", Description: "target deployment region", Type: domain.ParameterTypeString, Enum: []any{"cn", "us"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	definition := domain.EnvironmentParameterDefinition{ID: "legacy-region", CreatedBy: admin.ID, Key: "legacy_region", Label: "Deployment region", Description: "target deployment region", Type: domain.ParameterTypeString, Enum: []any{"cn", "us"}, CreatedAt: time.Now().UTC()}
+
 	now := time.Now().UTC()
 	release := domain.ComponentRelease{
 		ID: "release-environment-parameter", ComponentID: "component-1", LineID: "line-environment", LineName: "Environment",
@@ -137,7 +134,7 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 		Parameters: []domain.ParameterDefinition{{
 			Name: "region", Description: definition.Description, Type: definition.Type, Required: true,
 			Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderEnvironmentOwner,
-			EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingGlobal, DefinitionID: definition.ID}, Enum: definition.Enum,
+			EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}, Enum: definition.Enum,
 		}},
 	}
 	if err := database.CreateComponentRelease(ctx, release); err != nil {
@@ -151,7 +148,7 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "global:" + definition.ID
+	key := domain.EnvironmentParameterValueKey(release.ID, release.Parameters[0])
 	updated, err := platform.UpdateEnvironmentParameters(ctx, owner, environment.ID, map[string]any{key: "cn"}, "configure region")
 	if err != nil {
 		t.Fatal(err)
@@ -238,5 +235,46 @@ func TestRemovedDraftEnvironmentParameterCanBeClearedWithoutChangingHistory(t *t
 	}
 	if retained.Parameters[key] != "small" {
 		t.Fatalf("historical values changed: %v", retained.Parameters)
+	}
+}
+
+func TestRetiredGlobalBindingsCannotBeEditedClonedOrImported(t *testing.T) {
+	ctx := context.Background()
+	p, db := readinessTestPlatform(t)
+	owner := domain.User{ID: "component-owner", Role: domain.RoleComponentOwner}
+	now := time.Now().UTC()
+	param := domain.ParameterDefinition{Name: "root", Description: "Root", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: "global"}}
+	r := domain.ComponentRelease{ID: "legacy-draft", ComponentID: "component-1", LineID: "legacy-line", LineName: "Legacy", Version: "legacy-1", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, Parameters: []domain.ParameterDefinition{param}, CreatedAt: now}
+	valid := r
+	valid.Parameters = nil
+	if err := db.CreateComponentRelease(ctx, valid); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(r.Parameters)
+	if _, err := db.DB().Exec("UPDATE component_releases SET parameters_json=? WHERE id=?", string(raw), r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpdateReleaseContract(ctx, owner, r.ID, r.Parameters, nil); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("draft edit: %v", err)
+	}
+	if _, err := db.DB().Exec(`UPDATE component_releases SET status='released',released_at=? WHERE id=?`, now.Format(time.RFC3339Nano), r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PreviewReleaseDraft(ctx, owner, r.ComponentID, ReleaseDraftRequest{Mode: ReleaseDraftNewLine, LineName: "Next", Version: "2", ReleaseNotes: "Clone", TemplateSourceReleaseID: r.ID}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("clone: %v", err)
+	}
+	entry := ComponentImportEntry{}
+	entry.Component.Name, entry.Component.Slug, entry.Component.Layer, entry.Component.Tags = "Import", "retired-import", domain.LayerRuntimeState, []string{"runtime"}
+	entry.Release.Version, entry.Release.LineName, entry.Release.ReleaseNotes, entry.Release.Parameters = "1", "Import", "Import", []domain.ParameterDefinition{param}
+	if _, err := p.PreviewComponentImport(ctx, owner, ComponentImportRequest{Entries: []ComponentImportEntry{entry}}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("import: %v", err)
+	}
+	retained, err := db.GetComponentRelease(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := resolveOwnParameters(retained, domain.ScenarioNode{}, domain.EnvironmentRevision{Parameters: map[string]any{"global:retired": "/retained"}}, false)
+	if !errors.Is(err, domain.ErrInvalid) || len(resolved) != 0 {
+		t.Fatalf("unsupported binding resolution: %v %v", resolved, err)
 	}
 }

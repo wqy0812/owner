@@ -306,7 +306,7 @@ func openFuyaoHostGroup(releaseID string) string {
 func chainEdges(prefix string, nodes []domain.ScenarioNode) []domain.ScenarioEdge {
 	edges := make([]domain.ScenarioEdge, 0, len(nodes)-1)
 	for i := 0; i+1 < len(nodes); i++ {
-		edges = append(edges, domain.ScenarioEdge{ID: fmt.Sprintf("%s-edge-%d", prefix, i+1), Source: nodes[i].ID, Target: nodes[i+1].ID})
+		edges = append(edges, domain.ScenarioEdge{Kind: domain.ScenarioEdgeSequence, ID: fmt.Sprintf("%s-edge-%d", prefix, i+1), Source: nodes[i].ID, Target: nodes[i+1].ID})
 	}
 	return edges
 }
@@ -336,15 +336,15 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 	}{
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao", Slug: "openfuyao-management-cluster", Name: "OpenFuyao Management Cluster Build", Description: "构建 OpenFuyao 管理集群；包含恢复步骤，执行前必须审批。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: "scenario-openfuyao", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: managerNodes, Edges: chainEdges("open-manager", managerNodes)}, CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: "scenario-openfuyao", Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"Kylin"}, "ipFamily": []any{"IPv4"}}, Graph: domain.ScenarioGraph{Nodes: managerNodes, Edges: chainEdges("open-manager", managerNodes)}, CreatedAt: now},
 		},
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao-work-cluster", Slug: "openfuyao-work-cluster", Name: "OpenFuyao Work Cluster Build", Description: "独立构建业务集群控制面，不自动纳管工作节点。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-cluster-r1", ScenarioID: "scenario-openfuyao-work-cluster", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: workNodes, Edges: chainEdges("open-work", workNodes)}, CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-cluster-r1", ScenarioID: "scenario-openfuyao-work-cluster", Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"Kylin"}, "ipFamily": []any{"IPv4"}}, Graph: domain.ScenarioGraph{Nodes: workNodes, Edges: chainEdges("open-work", workNodes)}, CreatedAt: now},
 		},
 		{
 			scenario: domain.Scenario{ID: "scenario-openfuyao-work-nodes", Slug: "openfuyao-work-node-enrollment", Name: "OpenFuyao Work Node Enrollment", Description: "先只读确认业务集群就绪，再独立纳管工作节点。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
-			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-nodes-r1", ScenarioID: "scenario-openfuyao-work-nodes", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: enrollmentNodes, Edges: chainEdges("open-enroll", enrollmentNodes)}, CreatedAt: now},
+			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-work-nodes-r1", ScenarioID: "scenario-openfuyao-work-nodes", Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"Kylin"}, "ipFamily": []any{"IPv4"}}, Graph: domain.ScenarioGraph{Nodes: enrollmentNodes, Edges: chainEdges("open-enroll", enrollmentNodes)}, CreatedAt: now},
 		},
 	}
 	for _, definition := range definitions {

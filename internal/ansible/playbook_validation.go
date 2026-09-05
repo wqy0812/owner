@@ -13,34 +13,27 @@ func (r *Runner) ValidatePlaybooks(playbooks []string) map[string]error {
 
 func (r *Runner) validatePlaybooks(playbooks []string, treeDigest func(string) (string, error)) map[string]error {
 	results := make(map[string]error, len(playbooks))
-	var root string
-	valid := false
+	roots := map[string][]string{}
 	for _, relative := range playbooks {
 		if _, checked := results[relative]; checked {
 			continue
 		}
-		resolvedRoot, playbook, _, err := r.resolvePlaybook(relative)
-		if err == nil {
-			if root == "" {
-				root = resolvedRoot
-			} else if root != resolvedRoot {
-				err = fmt.Errorf("%w: playbooks resolved to different executable trees", ErrArtifactChanged)
-			}
-		}
+		resolvedRoot, playbook, clean, err := r.resolvePlaybook(relative)
 		if err == nil {
 			if _, digestErr := FileDigest(playbook); digestErr != nil {
 				err = fmt.Errorf("digest playbook: %w", digestErr)
 			}
 		}
 		results[relative] = err
-		valid = valid || err == nil
+		if err == nil {
+			root := workspaceRoot(resolvedRoot, playbook, clean)
+			roots[root] = append(roots[root], relative)
+		}
 	}
-	if valid {
+	for root, relatives := range roots {
 		if _, err := treeDigest(root); err != nil {
-			for relative, existing := range results {
-				if existing == nil {
-					results[relative] = fmt.Errorf("digest allowed tree: %w", err)
-				}
+			for _, relative := range relatives {
+				results[relative] = fmt.Errorf("digest executable workspace: %w", err)
 			}
 		}
 	}

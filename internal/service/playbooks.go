@@ -15,14 +15,13 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-const MaxPlaybookBytes = 1 << 20
-
 type PlaybookFile struct {
-	Path      string `json:"path"`
-	Filename  string `json:"filename"`
-	Content   string `json:"content"`
-	SHA256    string `json:"sha256"`
-	UpdatedAt string `json:"updatedAt,omitempty"`
+	Path      string                   `json:"path"`
+	Filename  string                   `json:"filename"`
+	Content   string                   `json:"content"`
+	SHA256    string                   `json:"sha256"`
+	UpdatedAt string                   `json:"updatedAt,omitempty"`
+	Action    *domain.ActionDefinition `json:"action,omitempty"`
 }
 
 var managedPlaybookFilename = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:yml|yaml)$`)
@@ -31,6 +30,17 @@ func (p *Platform) ReadReleasePlaybook(ctx context.Context, user domain.User, re
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, false)
 	if err != nil {
 		return PlaybookFile{}, err
+	}
+	if strings.HasPrefix(filepath.ToSlash(relativePath), managedReleasePrefix(component, release)) {
+		workspacePath := strings.TrimPrefix(filepath.ToSlash(relativePath), managedReleasePrefix(component, release))
+		file, contents, err := p.ReadReleaseWorkspaceFile(ctx, user, releaseID, workspacePath)
+		if err != nil {
+			return PlaybookFile{}, err
+		}
+		if !file.Editable {
+			return PlaybookFile{}, fmt.Errorf("%w: Playbook entrypoint must be UTF-8 text no larger than 1 MiB", domain.ErrInvalid)
+		}
+		return PlaybookFile{Path: relativePath, Filename: filepath.Base(relativePath), Content: string(contents), SHA256: file.SHA256, UpdatedAt: file.UpdatedAt.UTC().Format(time.RFC3339Nano)}, nil
 	}
 	return p.readReleasePlaybookFile(release, component, relativePath)
 }
@@ -58,13 +68,30 @@ func (p *Platform) readReleasePlaybookFile(release domain.ComponentRelease, comp
 }
 
 func (p *Platform) SaveReleasePlaybook(ctx context.Context, user domain.User, releaseID string, filename string, contents []byte) (PlaybookFile, error) {
+	filename = filepath.Base(strings.TrimSpace(filename))
+	if !managedPlaybookFilename.MatchString(filename) {
+		return PlaybookFile{}, fmt.Errorf("%w: playbook filename must end in .yml or .yaml and contain only letters, digits, dots, dashes, and underscores", domain.ErrInvalid)
+	}
+	kind := domain.ActionKind(strings.TrimSuffix(strings.TrimSuffix(filename, ".yaml"), ".yml"))
+	return p.SaveReleaseActionPlaybook(ctx, user, releaseID, kind, contents)
+}
+
+func (p *Platform) SaveReleaseActionPlaybook(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, contents []byte) (PlaybookFile, error) {
+	return p.SaveReleaseActionPlaybookConditional(ctx, user, releaseID, kind, contents, nil)
+}
+
+func (p *Platform) SaveReleaseActionPlaybookConditional(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, contents []byte, expectedSHA256 *string) (PlaybookFile, error) {
+	return p.SaveReleaseActionPlaybookWithExpectation(ctx, user, releaseID, kind, contents, expectedSHA256, nil)
+}
+
+func (p *Platform) SaveReleaseActionPlaybookWithExpectation(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (PlaybookFile, error) {
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return PlaybookFile{}, err
 	}
-	filename = filepath.Base(strings.TrimSpace(filename))
-	if !managedPlaybookFilename.MatchString(filename) {
-		return PlaybookFile{}, fmt.Errorf("%w: playbook filename must end in .yml or .yaml and contain only letters, digits, dots, dashes, and underscores", domain.ErrInvalid)
+	path, err := actionPlaybookPath(component, release, kind)
+	if err != nil {
+		return PlaybookFile{}, err
 	}
 	if len(contents) == 0 || len(contents) > MaxPlaybookBytes {
 		return PlaybookFile{}, fmt.Errorf("%w: playbook must contain 1 byte to 1 MiB", domain.ErrInvalid)
@@ -72,67 +99,37 @@ func (p *Platform) SaveReleasePlaybook(ctx context.Context, user domain.User, re
 	if !utf8.Valid(contents) || strings.ContainsRune(string(contents), 0) {
 		return PlaybookFile{}, fmt.Errorf("%w: playbook must be UTF-8 text without NUL bytes", domain.ErrInvalid)
 	}
-	relative := managedReleasePrefix(component, release) + filename
-	clean, resolved, err := p.resolveManagedPlaybookPath(component, release, relative, true)
+	file, err := p.SaveReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, string(kind)+".yml", contents, expectedSHA256, expectedTreeSHA256)
 	if err != nil {
 		return PlaybookFile{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(resolved), 0o750); err != nil {
-		return PlaybookFile{}, fmt.Errorf("create managed playbook directory: %w", err)
+	if err := p.store.SetDraftActionPlaybook(ctx, releaseID, kind, path, file.SHA256); err != nil {
+		return PlaybookFile{}, err
 	}
-	rootPath, err := filepath.Abs(p.playbookRoot)
-	if err != nil {
-		return PlaybookFile{}, fmt.Errorf("resolve playbook root: %w", err)
-	}
-	root, err := filepath.EvalSymlinks(rootPath)
-	if err != nil {
-		return PlaybookFile{}, fmt.Errorf("resolve playbook root: %w", err)
-	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(resolved))
-	if err != nil {
-		return PlaybookFile{}, fmt.Errorf("resolve managed playbook directory: %w", err)
-	}
-	if rel, relErr := filepath.Rel(root, parent); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return PlaybookFile{}, fmt.Errorf("%w: managed Playbook directory escapes the allowed root", domain.ErrInvalid)
-	}
-	resolved = filepath.Join(parent, filepath.Base(resolved))
-	temporary, err := os.CreateTemp(filepath.Dir(resolved), ".playbook-*.tmp")
-	if err != nil {
-		return PlaybookFile{}, fmt.Errorf("stage playbook: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o640); err != nil {
-		_ = temporary.Close()
-		return PlaybookFile{}, fmt.Errorf("set playbook permissions: %w", err)
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		_ = temporary.Close()
-		return PlaybookFile{}, fmt.Errorf("write playbook: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return PlaybookFile{}, fmt.Errorf("sync playbook: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return PlaybookFile{}, fmt.Errorf("close playbook: %w", err)
-	}
-	digest := sha256.Sum256(contents)
-	playbookSHA256 := hex.EncodeToString(digest[:])
-	// Change the persisted content identity before exposing the staged file.
-	// If publication is interrupted, readiness fails closed against the new
-	// digest instead of accepting evidence for the previous executable bytes.
-	if err := p.store.UpdateDraftActionPlaybookDigest(ctx, release.ID, clean, playbookSHA256); err != nil {
-		return PlaybookFile{}, fmt.Errorf("update Playbook content identity: %w", err)
-	}
-	if err := os.Rename(temporaryPath, resolved); err != nil {
-		return PlaybookFile{}, fmt.Errorf("publish playbook: %w", err)
-	}
-	info, _ := os.Stat(resolved)
-	result := playbookFile(clean, contents, info)
+	result := PlaybookFile{Path: path, Filename: string(kind) + ".yml", Content: string(contents), SHA256: file.SHA256, UpdatedAt: file.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 	p.audit(ctx, user, "component_playbook.saved", "component_release", release.ID, map[string]any{
 		"path": result.Path, "sha256": result.SHA256, "size": len(contents),
 	})
+	return result, nil
+}
+
+// SaveReleaseActionAtomic persists the complete Action and its entrypoint as
+// one catalog mutation. Filesystem publication is compensated on transaction
+// failure and protected across process exit by a durable recovery marker;
+// the SQLite manifest, Action row, and marker removal share one transaction.
+func (p *Platform) SaveReleaseActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (PlaybookFile, error) {
+	if len(contents) == 0 || len(contents) > MaxPlaybookBytes {
+		return PlaybookFile{}, fmt.Errorf("%w: playbook must contain 1 byte to 1 MiB", domain.ErrInvalid)
+	}
+	if !utf8.Valid(contents) || strings.ContainsRune(string(contents), 0) {
+		return PlaybookFile{}, fmt.Errorf("%w: playbook must be UTF-8 text without NUL bytes", domain.ErrInvalid)
+	}
+	file, persistedAction, err := p.saveReleaseWorkspaceActionAtomic(ctx, user, releaseID, action, contents, expectedSHA256, expectedTreeSHA256)
+	if err != nil {
+		return PlaybookFile{}, err
+	}
+	result := PlaybookFile{Path: persistedAction.Playbook, Filename: string(persistedAction.Kind) + ".yml", Content: string(contents), SHA256: file.SHA256, UpdatedAt: file.UpdatedAt.UTC().Format(time.RFC3339Nano), Action: &persistedAction}
+	p.audit(ctx, user, "component_action.saved", "component_release", releaseID, map[string]any{"actionId": persistedAction.ID, "kind": persistedAction.Kind, "path": result.Path, "sha256": result.SHA256, "size": len(contents)})
 	return result, nil
 }
 
@@ -215,10 +212,6 @@ func (p *Platform) resolveManagedPlaybookPath(component domain.Component, releas
 	return clean, resolved, nil
 }
 
-func managedReleasePrefix(component domain.Component, release domain.ComponentRelease) string {
-	return "managed/" + component.Slug + "/" + release.ID + "/"
-}
-
 func (p *Platform) removeManagedReleasePlaybooks(component domain.Component, release domain.ComponentRelease) error {
 	if strings.TrimSpace(p.playbookRoot) == "" {
 		return nil
@@ -278,39 +271,38 @@ func (p *Platform) resolveManagedPlaybookWriteTarget(component domain.Component,
 }
 
 func (p *Platform) copyManagedPlaybooksForClone(component domain.Component, sourceID string, target *domain.ComponentRelease) (componentImportManifest, error) {
-	sourceRelease := *target
-	sourceRelease.ID = sourceID
-	sourcePrefix, targetPrefix := managedReleasePrefix(component, sourceRelease), managedReleasePrefix(component, *target)
-	files := make([]componentImportFile, 0)
-	createdTargets := map[string]bool{}
+	persistedSource, err := p.store.GetComponentRelease(context.Background(), sourceID)
+	if err != nil {
+		return componentImportManifest{}, err
+	}
+	if len(persistedSource.Actions) == 0 && len(persistedSource.PlaybookFiles) == 0 {
+		return componentImportManifest{}, nil
+	}
+	if err := p.validateWorkspaceManifest(context.Background(), persistedSource); err != nil {
+		return componentImportManifest{}, err
+	}
+	sourceDirectory, err := p.workspaceDirectory(component, persistedSource, false)
+	if err != nil {
+		return componentImportManifest{}, err
+	}
+	files := make([]componentImportFile, 0, len(persistedSource.PlaybookFiles))
+	target.PlaybookFiles = make([]domain.ComponentPlaybookFile, 0, len(persistedSource.PlaybookFiles))
+	for _, file := range persistedSource.PlaybookFiles {
+		contents, err := os.ReadFile(filepath.Join(sourceDirectory, filepath.FromSlash(file.Path)))
+		if err != nil {
+			return componentImportManifest{}, fmt.Errorf("read source workspace file %s: %w", file.Path, err)
+		}
+		files = append(files, componentImportFile{Component: component, Release: *target, RelativePath: managedReleasePrefix(component, *target) + file.Path, Content: string(contents)})
+		file.ReleaseID, file.UpdatedAt = target.ID, time.Now().UTC()
+		target.PlaybookFiles = append(target.PlaybookFiles, file)
+	}
+	target.PlaybookTreeSHA256 = workspaceTreeSHA(target.PlaybookFiles)
 	for index := range target.Actions {
-		path := filepath.ToSlash(filepath.Clean(target.Actions[index].Playbook))
-		if !strings.HasPrefix(path, sourcePrefix) {
-			continue
-		}
-		filename := strings.TrimPrefix(path, sourcePrefix)
-		if filename == "" || strings.Contains(filename, "/") || !managedPlaybookFilename.MatchString(filename) {
-			return componentImportManifest{}, fmt.Errorf("%w: managed Playbook path is invalid", domain.ErrInvalid)
-		}
-		_, sourcePath, err := p.resolveManagedPlaybookPath(component, sourceRelease, path, false)
+		path, err := actionPlaybookPath(component, *target, target.Actions[index].Kind)
 		if err != nil {
 			return componentImportManifest{}, err
 		}
-		contents, err := os.ReadFile(sourcePath)
-		if err != nil {
-			return componentImportManifest{}, fmt.Errorf("read source managed Playbook: %w", err)
-		}
-		if len(contents) == 0 || len(contents) > MaxPlaybookBytes || !utf8.Valid(contents) {
-			return componentImportManifest{}, fmt.Errorf("%w: source managed Playbook is not valid", domain.ErrInvalid)
-		}
-		targetRelative := targetPrefix + filename
-		if createdTargets[targetRelative] {
-			target.Actions[index].Playbook = targetRelative
-			continue
-		}
-		files = append(files, componentImportFile{Component: component, Release: *target, RelativePath: targetRelative, Content: string(contents)})
-		createdTargets[targetRelative] = true
-		target.Actions[index].Playbook = targetRelative
+		target.Actions[index].Playbook = path
 	}
 	manifest, err := p.stageComponentImportFiles(files)
 	if err != nil {

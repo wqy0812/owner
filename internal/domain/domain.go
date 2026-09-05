@@ -168,20 +168,24 @@ type ComponentRelease struct {
 	// Candidate is an explicit component-owner handoff. A ready Draft marked as
 	// a candidate may be composed and tested by a scenario owner, then released
 	// atomically with that scenario revision.
-	Candidate              bool                  `json:"candidate"`
-	Review                 ReleaseReview         `json:"review"`
-	PublicationGeneration  int64                 `json:"-"`
-	Readiness              ReleaseReadiness      `json:"readiness"`
-	RiskLevel              RiskLevel             `json:"riskLevel"`
-	EnvironmentConstraints map[string]any        `json:"environmentConstraints"`
-	Parameters             []ParameterDefinition `json:"parameters"`
-	Dependencies           []ComponentDependency `json:"dependencies"`
-	Actions                []ActionDefinition    `json:"actions"`
-	Artifacts              []ComponentArtifact   `json:"artifacts"`
-	Images                 []ComponentImage      `json:"images"`
-	CreatedAt              time.Time             `json:"createdAt"`
-	ReleasedAt             *time.Time            `json:"releasedAt,omitempty"`
-	DeprecatedAt           *time.Time            `json:"deprecatedAt,omitempty"`
+	Candidate              bool                    `json:"candidate"`
+	Review                 ReleaseReview           `json:"review"`
+	PublicationGeneration  int64                   `json:"-"`
+	Readiness              ReleaseReadiness        `json:"readiness"`
+	RiskLevel              RiskLevel               `json:"riskLevel"`
+	EnvironmentConstraints map[string]any          `json:"environmentConstraints"`
+	Parameters             []ParameterDefinition   `json:"parameters"`
+	Dependencies           []ComponentDependency   `json:"dependencies"`
+	Actions                []ActionDefinition      `json:"actions"`
+	PlaybookFiles          []ComponentPlaybookFile `json:"playbookFiles,omitempty"`
+	PlaybookFileCount      int                     `json:"playbookFileCount"`
+	PlaybookTreeSHA256     string                  `json:"playbookTreeSha256"`
+	PlaybookWorkspaceRoot  string                  `json:"playbookWorkspaceRoot"`
+	Artifacts              []ComponentArtifact     `json:"artifacts"`
+	Images                 []ComponentImage        `json:"images"`
+	CreatedAt              time.Time               `json:"createdAt"`
+	ReleasedAt             *time.Time              `json:"releasedAt,omitempty"`
+	DeprecatedAt           *time.Time              `json:"deprecatedAt,omitempty"`
 }
 
 type ReleaseCompatibility string
@@ -229,21 +233,6 @@ type ReleaseReadiness struct {
 	InstallEvidenceRunID    string             `json:"installEvidenceRunId,omitempty"`
 	RollbackEvidenceRunID   string             `json:"rollbackEvidenceRunId,omitempty"`
 	TransitionEvidenceRunID string             `json:"transitionEvidenceRunId,omitempty"`
-	RuntimeEvidence         []RuntimeEvidence  `json:"runtimeEvidence,omitempty"`
-}
-
-type RuntimeCompatibility struct {
-	Runtime string `json:"runtime"`
-	Version string `json:"version"`
-}
-
-type RuntimeEvidence struct {
-	Runtime                 string `json:"runtime"`
-	Version                 string `json:"version"`
-	InstallEvidenceRunID    string `json:"installEvidenceRunId,omitempty"`
-	RollbackEvidenceRunID   string `json:"rollbackEvidenceRunId,omitempty"`
-	TransitionEvidenceRunID string `json:"transitionEvidenceRunId,omitempty"`
-	Complete                bool   `json:"complete"`
 }
 
 type ComponentArtifact struct {
@@ -344,12 +333,10 @@ type EnvironmentBindingKind string
 
 const (
 	EnvironmentBindingPrivate EnvironmentBindingKind = "private"
-	EnvironmentBindingGlobal  EnvironmentBindingKind = "global"
 )
 
 type EnvironmentParameterBinding struct {
-	Kind         EnvironmentBindingKind `json:"kind"`
-	DefinitionID string                 `json:"definitionId,omitempty"`
+	Kind EnvironmentBindingKind `json:"kind"`
 }
 
 type EnvironmentParameterDefinition struct {
@@ -377,14 +364,11 @@ type EnvironmentVariableDefinition struct {
 }
 
 func EnvironmentParameterValueKey(releaseID string, parameter ParameterDefinition) string {
-	if parameter.EnvironmentBinding != nil && parameter.EnvironmentBinding.Kind == EnvironmentBindingGlobal {
-		return "global:" + parameter.EnvironmentBinding.DefinitionID
-	}
 	return "release:" + releaseID + ":" + parameter.Name
 }
 
 func (b EnvironmentParameterBinding) Valid() bool {
-	return b.Kind == EnvironmentBindingPrivate || (b.Kind == EnvironmentBindingGlobal && strings.TrimSpace(b.DefinitionID) != "")
+	return b.Kind == EnvironmentBindingPrivate
 }
 
 type ParameterDefinition struct {
@@ -455,7 +439,11 @@ type ParameterMapping struct {
 	TargetParameter   string `json:"targetParameter"`
 }
 
+const DependencyConfiguration = "configuration"
+
+// Empty kind retains the historical execution dependency and its digest.
 type ComponentDependency struct {
+	Kind                  string             `json:"kind,omitempty"`
 	ID                    string             `json:"id"`
 	ReleaseID             string             `json:"releaseId"`
 	UpstreamComponentID   string             `json:"upstreamComponentId"`
@@ -497,6 +485,18 @@ type ActionDefinition struct {
 	ToReleaseID         string     `json:"toReleaseId,omitempty"`
 }
 
+// ComponentPlaybookFile is one file in a Release-scoped Ansible workspace.
+// Contents remain on disk; SQLite stores only the immutable identity used by
+// review, execution and Catalog backup/restore.
+type ComponentPlaybookFile struct {
+	ReleaseID string    `json:"releaseId"`
+	Path      string    `json:"path"`
+	SHA256    string    `json:"sha256"`
+	SizeBytes int64     `json:"sizeBytes"`
+	MediaType string    `json:"mediaType"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 func (a ActionDefinition) NeedsApproval() bool {
 	if a.Destructive || a.RiskLevel == RiskDestructive || a.Kind == ActionRollback {
 		return true
@@ -533,17 +533,18 @@ type Scenario struct {
 }
 
 type ScenarioRevision struct {
-	ID                    string         `json:"id"`
-	ScenarioID            string         `json:"scenarioId"`
-	Revision              int            `json:"revision"`
-	Status                RevisionStatus `json:"status"`
-	PublicationGeneration int64          `json:"-"`
-	Graph                 ScenarioGraph  `json:"graph"`
-	CreatedAt             time.Time      `json:"createdAt"`
-	TestPassedAt          *time.Time     `json:"testPassedAt,omitempty"`
-	ReleasedAt            *time.Time     `json:"releasedAt,omitempty"`
-	DeprecatedAt          *time.Time     `json:"deprecatedAt,omitempty"`
-	AbandonedAt           *time.Time     `json:"abandonedAt,omitempty"`
+	ID                     string         `json:"id"`
+	ScenarioID             string         `json:"scenarioId"`
+	Revision               int            `json:"revision"`
+	Status                 RevisionStatus `json:"status"`
+	PublicationGeneration  int64          `json:"-"`
+	Graph                  ScenarioGraph  `json:"graph"`
+	EnvironmentConstraints map[string]any `json:"environmentConstraints"`
+	CreatedAt              time.Time      `json:"createdAt"`
+	TestPassedAt           *time.Time     `json:"testPassedAt,omitempty"`
+	ReleasedAt             *time.Time     `json:"releasedAt,omitempty"`
+	DeprecatedAt           *time.Time     `json:"deprecatedAt,omitempty"`
+	AbandonedAt            *time.Time     `json:"abandonedAt,omitempty"`
 }
 
 type ScenarioGraph struct {
@@ -569,9 +570,22 @@ type GraphPosition struct {
 }
 
 type ScenarioEdge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
+	ID           string           `json:"id"`
+	Source       string           `json:"source"`
+	Target       string           `json:"target"`
+	Kind         ScenarioEdgeKind `json:"kind"`
+	DependencyID string           `json:"dependencyId,omitempty"`
+}
+
+type ScenarioEdgeKind string
+
+const (
+	ScenarioEdgeDependency ScenarioEdgeKind = "dependency"
+	ScenarioEdgeSequence   ScenarioEdgeKind = "sequence"
+)
+
+func (kind ScenarioEdgeKind) Valid() bool {
+	return kind == ScenarioEdgeDependency || kind == ScenarioEdgeSequence
 }
 
 type ValidationIssue struct {
@@ -611,11 +625,21 @@ func ValidateGraph(g ScenarioGraph) []ValidationIssue {
 		indegree[id] = 0
 	}
 	edgeIDs := map[string]bool{}
+	edgePairs := map[string]bool{}
 	for _, e := range g.Edges {
 		if e.ID != "" && edgeIDs[e.ID] {
 			issues = append(issues, ValidationIssue{Code: "duplicate_edge", Message: "duplicate edge id"})
 		}
 		edgeIDs[e.ID] = true
+		if !e.Kind.Valid() {
+			issues = append(issues, ValidationIssue{Code: "invalid_edge_kind", Message: "edge kind must be dependency or sequence"})
+		}
+		if e.Kind == ScenarioEdgeDependency && strings.TrimSpace(e.DependencyID) == "" {
+			issues = append(issues, ValidationIssue{Code: "missing_edge_dependency", Message: "dependency edge must identify its Release dependency"})
+		}
+		if e.Kind == ScenarioEdgeSequence && strings.TrimSpace(e.DependencyID) != "" {
+			issues = append(issues, ValidationIssue{Code: "unexpected_edge_dependency", Message: "sequence edge cannot identify a Release dependency"})
+		}
 		if _, ok := nodes[e.Source]; !ok {
 			issues = append(issues, ValidationIssue{Code: "missing_edge_source", Message: "edge source does not exist", NodeID: e.Source})
 			continue
@@ -624,6 +648,15 @@ func ValidateGraph(g ScenarioGraph) []ValidationIssue {
 			issues = append(issues, ValidationIssue{Code: "missing_edge_target", Message: "edge target does not exist", NodeID: e.Target})
 			continue
 		}
+		if e.Source == e.Target {
+			issues = append(issues, ValidationIssue{Code: "self_edge", Message: "edge cannot connect a node to itself", NodeID: e.Source})
+			continue
+		}
+		pair := e.Source + "\x00" + e.Target
+		if edgePairs[pair] {
+			issues = append(issues, ValidationIssue{Code: "duplicate_edge_pair", Message: "duplicate edge endpoints are not allowed", NodeID: e.Target})
+		}
+		edgePairs[pair] = true
 		adj[e.Source] = append(adj[e.Source], e.Target)
 		indegree[e.Target]++
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -136,7 +135,6 @@ func (s *PlatformOptionService) CreateOption(ctx context.Context, actor domain.U
 	if target.ParentCategoryID == "" && parentOptionID != "" {
 		return domain.PlatformOption{}, fmt.Errorf("%w: root category option cannot have a parent", domain.ErrInvalid)
 	}
-	parentValue := ""
 	if target.ParentCategoryID != "" {
 		validParent := false
 		for _, category := range categories {
@@ -144,7 +142,6 @@ func (s *PlatformOptionService) CreateOption(ctx context.Context, actor domain.U
 				for _, option := range category.Options {
 					if option.ID == parentOptionID && option.RetiredAt == nil {
 						validParent = true
-						parentValue = option.Value
 					}
 				}
 			}
@@ -165,17 +162,6 @@ func (s *PlatformOptionService) CreateOption(ctx context.Context, actor domain.U
 	}
 	now := time.Now().UTC()
 	technicalValue := generatedPlatformTechnicalValue(prefix)
-	if target.Key == "containerRuntime" {
-		technicalValue = strings.ToLower(label)
-		if !platformRuntimeTokenPattern.MatchString(technicalValue) {
-			return domain.PlatformOption{}, fmt.Errorf("%w: container runtime name must use letters, numbers, dot, underscore or hyphen", domain.ErrInvalid)
-		}
-	} else if target.Key == "containerRuntimeVersion" {
-		if !platformRuntimeTokenPattern.MatchString(label) {
-			return domain.PlatformOption{}, fmt.Errorf("%w: runtime version must use letters, numbers, dot, underscore, plus or hyphen", domain.ErrInvalid)
-		}
-		technicalValue = parentValue + "@" + label
-	}
 	option := domain.PlatformOption{
 		ID:             newID("platform-option"),
 		CategoryID:     target.ID,
@@ -195,8 +181,6 @@ func (s *PlatformOptionService) CreateOption(ctx context.Context, actor domain.U
 	s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": target.ID, "optionId": option.ID, "action": "created"})
 	return option, nil
 }
-
-var platformRuntimeTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._+-]+$`)
 
 func (s *PlatformOptionService) SetCategoryRetired(ctx context.Context, actor domain.User, id string, retired bool) (domain.PlatformOptionCategory, error) {
 	if err := domain.ValidateRole(actor, domain.RolePlatformAdmin); err != nil {

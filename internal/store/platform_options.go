@@ -605,15 +605,21 @@ func loadPlatformReferenceIndex(ctx context.Context, q queryer) (platformReferen
 	if err := actions.Close(); err != nil {
 		return index, err
 	}
-	scenarios, err := q.QueryContext(ctx, `SELECT id,graph_json FROM scenario_revisions`)
+	scenarios, err := q.QueryContext(ctx, `SELECT id,graph_json,environment_constraints_json FROM scenario_revisions`)
 	if err != nil {
 		return index, err
 	}
 	for scenarios.Next() {
+		var constraintsRaw string
 		var id, raw string
-		if err := scenarios.Scan(&id, &raw); err != nil {
+		if err := scenarios.Scan(&id, &raw, &constraintsRaw); err != nil {
 			scenarios.Close()
 			return index, err
+		}
+		for key, rawValues := range decodeJSON(constraintsRaw, map[string]any{}) {
+			for _, value := range domain.ConstraintValues(rawValues) {
+				index.add(key, value, "scenario", id)
+			}
 		}
 		graph := decodeJSON(raw, domain.ScenarioGraph{})
 		for _, node := range graph.Nodes {

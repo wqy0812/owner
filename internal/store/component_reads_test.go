@@ -66,8 +66,8 @@ func TestComponentListBatchesPreserveCompleteContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.count != 10 { // components + releases + two batches of four child tables
-		t.Fatalf("queries=%d, want 10 for 258 releases", q.count)
+	if q.count != 12 { // components + releases + two batches of five child tables
+		t.Fatalf("queries=%d, want 12 for 258 releases", q.count)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)

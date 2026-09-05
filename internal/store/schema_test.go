@@ -45,6 +45,9 @@ func TestPreviousContractsAreRejected(t *testing.T) {
 		"clusterforge-v1-20260828-publication-guards",
 		"clusterforge-v1-20260829-ssh-connectivity",
 		"clusterforge-v1-20260902-container-runtime-matrix",
+		"clusterforge-v1-20260903-run-evidence-indexes",
+		"clusterforge-v1-20260904-playbook-workspaces",
+		"clusterforge-v1-20260905-playbook-workspace-integrity",
 	} {
 		t.Run(version, func(t *testing.T) {
 			ctx := context.Background()
@@ -115,6 +118,10 @@ func TestFreshDatabaseCreatesParameterContractAndRepeatStartupIsIdempotent(t *te
 	var playbookDigestColumn int
 	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('action_definitions') WHERE name='playbook_sha256'`).Scan(&playbookDigestColumn); err != nil || playbookDigestColumn != 1 {
 		t.Fatalf("action_definitions.playbook_sha256 column count=%d err=%v", playbookDigestColumn, err)
+	}
+	var actionMutationTable int
+	if err := first.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='playbook_action_mutations'`).Scan(&actionMutationTable); err != nil || actionMutationTable != 1 {
+		t.Fatalf("playbook_action_mutations table count=%d err=%v", actionMutationTable, err)
 	}
 	for table, column := range map[string]string{
 		"components":            "category",

@@ -221,7 +221,7 @@ func kubernetes1175CoreGraph(prefix string) domain.ScenarioGraph {
 	}
 	edges := make([]domain.ScenarioEdge, 0, len(edgePairs))
 	for i, pair := range edgePairs {
-		edges = append(edges, domain.ScenarioEdge{ID: fmt.Sprintf("%sedge-%02d", prefix, i+1), Source: prefix + pair[0], Target: prefix + pair[1]})
+		edges = append(edges, domain.ScenarioEdge{Kind: domain.ScenarioEdgeSequence, ID: fmt.Sprintf("%sedge-%02d", prefix, i+1), Source: prefix + pair[0], Target: prefix + pair[1]})
 	}
 	return domain.ScenarioGraph{Nodes: nodes, Edges: edges}
 }
@@ -229,7 +229,7 @@ func kubernetes1175CoreGraph(prefix string) domain.ScenarioGraph {
 func (s Seeder) seedKubernetes1175Scenarios(ctx context.Context, now time.Time) error {
 	coreGraph := kubernetes1175CoreGraph("k8s1175-")
 	core := domain.Scenario{ID: "scenario-k8s-1.17.5", Slug: "kubernetes-1-17-5-cluster-build", Name: "Kubernetes 1.17.5 Cluster Build", Description: "按最小逻辑组件编排的 Kubernetes 1.17.5 核心集群 DAG。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
-	coreRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-r1", ScenarioID: core.ID, Revision: 1, Status: domain.RevisionDraft, Graph: coreGraph, CreatedAt: now}
+	coreRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-r1", ScenarioID: core.ID, Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"SUSE"}, "ipFamily": []any{"IPv4"}}, Graph: coreGraph, CreatedAt: now}
 	if _, err := s.createScenarioIfMissing(ctx, core, coreRevision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 core scenario: %w", err)
 	}
@@ -267,10 +267,10 @@ func (s Seeder) seedKubernetes1175Scenarios(ctx context.Context, now time.Time) 
 		{"apiserver", "prometheus-access"}, {"apiserver", "autoscaling-rbac"},
 	}
 	for i, pair := range optionalEdges {
-		extendedGraph.Edges = append(extendedGraph.Edges, domain.ScenarioEdge{ID: fmt.Sprintf("k8s1175-ext-optional-edge-%02d", i+1), Source: "k8s1175-ext-" + pair[0], Target: "k8s1175-ext-" + pair[1]})
+		extendedGraph.Edges = append(extendedGraph.Edges, domain.ScenarioEdge{Kind: domain.ScenarioEdgeSequence, ID: fmt.Sprintf("k8s1175-ext-optional-edge-%02d", i+1), Source: "k8s1175-ext-" + pair[0], Target: "k8s1175-ext-" + pair[1]})
 	}
 	extended := domain.Scenario{ID: "scenario-k8s-1.17.5-extended", Slug: "kubernetes-1-17-5-extended-cluster-build", Name: "Kubernetes 1.17.5 Extended Cluster Build", Description: "完整包含核心 DAG，并追加源快照中具有真实任务入口的附加能力。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now}
-	extendedRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-extended-r1", ScenarioID: extended.ID, Revision: 1, Status: domain.RevisionDraft, Graph: extendedGraph, CreatedAt: now}
+	extendedRevision := domain.ScenarioRevision{ID: "scenario-k8s-1.17.5-extended-r1", ScenarioID: extended.ID, Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"SUSE"}, "ipFamily": []any{"IPv4"}}, Graph: extendedGraph, CreatedAt: now}
 	if _, err := s.createScenarioIfMissing(ctx, extended, extendedRevision); err != nil {
 		return fmt.Errorf("seed Kubernetes 1.17.5 extended scenario: %w", err)
 	}

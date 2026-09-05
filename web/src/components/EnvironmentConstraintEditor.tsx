@@ -4,8 +4,10 @@ import { activeEnvironmentConstraintDimensions, childOptionsForSelection, enviro
 export function EnvironmentConstraintEditor({
   value,
   onChange,
+  title = "支持范围",
 }: {
   value: ConstraintSelection;
+  title?: string;
   onChange: (next: ConstraintSelection) => void;
 }) {
   const { platformOptionCategories, platformOptionsLoading } = useApp();
@@ -18,8 +20,8 @@ export function EnvironmentConstraintEditor({
   }
   return (
     <fieldset className="constraint-editor">
-      <legend>适配环境</legend>
-      <p>选择该版本可安装的环境。某个维度不选，表示不限制该维度。</p>
+      <legend>适配标签 · {title}</legend>
+      <p>{title === "场景支持范围" ? "选择场景支持的环境范围；组件有限制的分类必须补选，草稿可暂存缺项。" : "选择该版本可安装的环境。某个维度不选，表示不限制该维度。"}</p>
       <div className="constraint-editor__grid">
         {platformOptionsLoading ? <span>正在加载环境维度…</span> : dimensions.map((dimension) => {
           const selected = value[dimension.key] ?? [];

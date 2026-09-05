@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -26,7 +27,7 @@ func (s *Store) UpdateRunDeliveryResults(ctx context.Context, runID string, resu
 }
 
 func (s *Store) CreateRun(ctx context.Context, r domain.Run, approval *domain.Approval) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -43,6 +44,12 @@ SELECT EXISTS(
 		if active != 0 {
 			return fmt.Errorf("%w: environment has an active run", domain.ErrConflict)
 		}
+	}
+	if err := validateNewRunReferences(ctx, tx, r); err != nil {
+		return err
+	}
+	if err := validateRunAdaptationTx(ctx, tx, r); err != nil {
+		return err
 	}
 	if err := validateRunReleaseLifecycle(ctx, tx, r); err != nil {
 		return err
@@ -132,7 +139,7 @@ func (s *Store) CountScenarioRunsForComponentRelease(ctx context.Context, releas
 	var count int
 	err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(DISTINCT runs.id)
-FROM runs
+FROM retained_run_history runs
 JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
 WHERE runs.scenario_revision_id IS NOT NULL
   AND runs.kind IN ('scenario_test','scenario_run')
@@ -199,7 +206,7 @@ func (s *Store) CanViewRun(ctx context.Context, viewer domain.User, runID string
 	var visible int
 	err := s.db.QueryRowContext(ctx, `
 SELECT EXISTS (
-  SELECT 1 FROM runs r
+  SELECT 1 FROM retained_run_history r
   WHERE r.id=? AND (
 	?='platform_admin'
 	OR
@@ -233,30 +240,8 @@ SELECT EXISTS (
 }
 
 func (s *Store) ListRuns(ctx context.Context, viewer domain.User) ([]domain.Run, error) {
-	q := runSelect
-	args := []any{}
-	switch viewer.Role {
-	case domain.RoleEnvironmentOwner:
-		q += ` WHERE EXISTS (SELECT 1 FROM environments e WHERE e.id=runs.environment_id AND e.owner_id=?)`
-		args = append(args, viewer.ID)
-	case domain.RoleComponentOwner:
-		q += ` WHERE requested_by=?
-OR EXISTS (
-  SELECT 1 FROM component_releases cr JOIN components c ON c.id=cr.component_id
-  WHERE cr.id=runs.component_release_id AND c.owner_id=?
-)
-OR EXISTS (
-  SELECT 1 FROM json_each(runs.input_snapshot_json, '$.steps') locked_step
-  JOIN component_releases cr ON cr.id=json_extract(locked_step.value, '$.releaseId')
-  JOIN components c ON c.id=cr.component_id
-  WHERE c.owner_id=?
-)`
-		args = append(args, viewer.ID, viewer.ID, viewer.ID)
-	case domain.RoleScenarioOwner:
-		q += ` WHERE requested_by=? OR EXISTS (SELECT 1 FROM scenario_revisions sr JOIN scenarios s ON s.id=sr.scenario_id WHERE sr.id=runs.scenario_revision_id AND s.owner_id=?)`
-		args = append(args, viewer.ID, viewer.ID)
-	}
-	q += ` ORDER BY created_at DESC`
+	where, args := runVisibility(viewer)
+	q := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE ` + where + ` ORDER BY created_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -303,6 +288,43 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id string, from []domain.Ru
 		args = append(args, v)
 	}
 	q := fmt.Sprintf(`UPDATE runs SET status=?,error_text=?,started_at=COALESCE(?,started_at),finished_at=COALESCE(?,finished_at) WHERE id=? AND status IN (%s)`, ph)
+	// Publish Run success and its scenario evidence in one write boundary.
+	// Observers must never see success while the revision is still Testing.
+	if to == domain.RunSucceeded {
+		tx, err := s.beginCatalogWrite(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		res, err := tx.ExecContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("%w: invalid run transition", domain.ErrConflict)
+		}
+		run, err := getRunRecord(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if run.Kind == domain.RunScenarioTest {
+			revision, err := getScenarioRevision(ctx, tx, run.ScenarioRevisionID)
+			if err != nil {
+				return err
+			}
+			if revision.Status == domain.RevisionTesting {
+				if _, evidenceErr := scenarioTestEvidenceMatches(ctx, tx, run, revision); evidenceErr != nil {
+					_, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='draft',test_passed_at=NULL WHERE id=?`, revision.ID)
+				} else {
+					_, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='test_passed',test_passed_at=? WHERE id=?`, timeText(at), revision.ID)
+				}
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return tx.Commit()
+	}
 	res, err := s.execWithBusyRetry(ctx, q, args...)
 	if err != nil {
 		return err
@@ -612,7 +634,7 @@ func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, deci
 	if decision != "approved" && decision != "rejected" {
 		return domain.ErrInvalid
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -638,6 +660,9 @@ func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, deci
 	query := `UPDATE runs SET status=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
 	arguments := []any{runStatus, decision, timeText(at), runID}
 	if snapshot != nil {
+		if err := validateNewRunReferences(ctx, tx, domain.Run{ID: runID, InputSnapshot: snapshot}); err != nil {
+			return err
+		}
 		query = `UPDATE runs SET status=?,input_snapshot_json=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
 		arguments = []any{runStatus, jsonText(snapshot), decision, timeText(at), runID}
 	}

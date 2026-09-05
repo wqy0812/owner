@@ -44,7 +44,7 @@ func TestIndexedEvidenceMatchesSnapshotQueries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, runtime := range []string{"", "runtime-a", "runtime-b", "absent"} {
+	for _, runtime := range []string{""} {
 		for _, digest := range []string{"current", "old", "absent"} {
 			for _, evidence := range []string{"install_verify", "rollback_verify", "evolution_round_trip"} {
 				var expected string
@@ -56,7 +56,7 @@ ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC,id DESC LIMIT 1`,
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					t.Fatal(err)
 				}
-				actual, err := s.lookupComponentEvidence(ctx, "history-release", digest, runtime, "version-a", evidence)
+				actual, err := s.lookupComponentEvidence(ctx, "history-release", digest, evidence)
 				if err != nil || actual != expected {
 					t.Fatalf("%s/%s/%s: got %q, want %q, err=%v", runtime, digest, evidence, actual, expected, err)
 				}
@@ -73,7 +73,7 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 	if err := s.CreateRun(ctx, run, nil); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "runtime-a", "version-a", "install_verify"); err != nil || id != "" {
+	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "install_verify"); err != nil || id != "" {
 		t.Fatalf("running evidence=%q %v", id, err)
 	}
 	if err := s.UpdateRunDeliveryResults(ctx, run.ID, []string{"delivered"}); err != nil {
@@ -82,7 +82,7 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 	if err := s.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{domain.RunRunning}, domain.RunSucceeded, "", testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "runtime-a", "version-a", "install_verify"); err != nil || id != run.ID {
+	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "install_verify"); err != nil || id != run.ID {
 		t.Fatalf("completed evidence=%q %v", id, err)
 	}
 	if _, err := s.DB().ExecContext(ctx, `UPDATE runs SET component_spec_digest='forged' WHERE id=?`, run.ID); err == nil {
@@ -94,15 +94,15 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 		if _, err := s.DB().ExecContext(ctx, `UPDATE runs SET input_snapshot_json=? WHERE id=?`, snapshot, run.ID); err != nil {
 			t.Fatal(err)
 		}
-		var digest, evidence, runtime, version sql.NullString
-		if err := s.DB().QueryRowContext(ctx, `SELECT component_spec_digest,component_evidence_kind,runtime_name,runtime_version FROM runs WHERE id=?`, run.ID).Scan(&digest, &evidence, &runtime, &version); err != nil {
+		var digest, evidence sql.NullString
+		if err := s.DB().QueryRowContext(ctx, `SELECT component_spec_digest,component_evidence_kind FROM runs WHERE id=?`, run.ID).Scan(&digest, &evidence); err != nil {
 			t.Fatal(err)
 		}
-		if digest.Valid || evidence.Valid || runtime.Valid || version.Valid {
+		if digest.Valid || evidence.Valid {
 			t.Fatal("malformed or missing metadata was converted to a string")
 		}
 	}
-	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "runtime-a", "version-a", "install_verify"); err != nil || id != "" {
+	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "install_verify"); err != nil || id != "" {
 		t.Fatalf("stale indexed evidence=%q %v", id, err)
 	}
 }
@@ -133,13 +133,10 @@ func TestRunEvidenceQueriesUseSearchIndexes(t *testing.T) {
 			t.Fatalf("unexpected plan:\n%s", plan.String())
 		}
 	}
-	for _, runtime := range []string{"", "runtime-a"} {
+	for range []int{0} {
 		index := "idx_runs_component_evidence"
-		if runtime != "" {
-			index = "idx_runs_runtime_evidence"
-		}
 		for _, evidence := range []string{"install_verify", "rollback_verify", "evolution_round_trip"} {
-			query, args := componentEvidenceQuery("history-release", "current", runtime, "version-a", evidence)
+			query, args := componentEvidenceQuery("history-release", "current", evidence)
 			check(query, args, index, evidence != "rollback_verify")
 		}
 	}
@@ -160,7 +157,7 @@ func evidenceHistoryStore(t testing.TB, count int) *Store {
 		t.Fatal(err)
 	}
 	e := domain.Environment{ID: "history-environment", Name: "History", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
-	er := domain.EnvironmentRevision{ID: "history-environment-r1", EnvironmentID: e.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), CreatedAt: testNow}
+	er := domain.EnvironmentRevision{ID: "history-environment-r1", EnvironmentID: e.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: json.RawMessage(`{"hosts":[]}`), CreatedAt: testNow}
 	if err := s.CreateEnvironment(ctx, e, er); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +199,7 @@ func BenchmarkComponentEvidenceHistory(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				install, rollback, err := s.SuccessfulComponentEvidenceRunIDsForRuntime(ctx, "history-release", "current-contract", "runtime-a", "version-a")
+				install, rollback, err := s.SuccessfulComponentEvidenceRunIDs(ctx, "history-release", "current-contract")
 				if err != nil || install != fmt.Sprintf("history-%06d", count-2) || rollback != fmt.Sprintf("history-%06d", count-1) {
 					b.Fatalf("evidence=%s/%s err=%v", install, rollback, err)
 				}

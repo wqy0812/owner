@@ -98,6 +98,15 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 	if err != nil {
 		return source, err
 	}
+	releaseByNode := map[string]domain.ComponentRelease{}
+	for _, node := range source.Graph.Nodes {
+		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if releaseErr != nil {
+			return source, releaseErr
+		}
+		releaseByNode[node.ID] = release
+	}
+	source.Graph, _ = normalizeScenarioGraph(source.Graph, releaseByNode)
 	if err := p.store.CreateScenarioRevisionFromSource(ctx, input.SourceRevisionID, source); err != nil {
 		return source, err
 	}
@@ -151,7 +160,7 @@ func (p *Platform) GetScenario(ctx context.Context, user domain.User, id string)
 	return scenario, nil
 }
 
-func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph) (domain.ScenarioRevision, error) {
+func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph, constraints ...map[string]any) (domain.ScenarioRevision, error) {
 	revision, scenario, err := p.ownedScenarioRevision(ctx, user, revisionID)
 	if err != nil {
 		return revision, err
@@ -166,6 +175,7 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 	if issues := domain.ValidateGraph(graph); len(issues) > 0 {
 		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: issues}
 	}
+	releaseByNode := map[string]domain.ComponentRelease{}
 	for _, node := range graph.Nodes {
 		if err := rejectSensitiveMap(node.ParameterValues, "scenario node value"); err != nil {
 			return revision, err
@@ -177,11 +187,21 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 		if valueErr := validateScenarioParameterValues(release, node); valueErr != nil {
 			return revision, valueErr
 		}
+		releaseByNode[node.ID] = release
 	}
-	if err := p.store.SaveScenarioGraph(ctx, revisionID, graph); err != nil {
+	graph, _ = normalizeScenarioGraph(graph, releaseByNode)
+	graphIssues := append(domain.ValidateGraph(graph), scenarioSequenceDependencyIssues(graph)...)
+	graphIssues = append(graphIssues, scenarioSequenceTopologyIssues(graph)...)
+	if len(graphIssues) > 0 {
+		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: graphIssues}
+	}
+	if err := p.store.SaveScenarioGraph(ctx, revisionID, graph, constraints...); err != nil {
 		return revision, err
 	}
 	revision.Graph, revision.Status, revision.TestPassedAt = graph, domain.RevisionDraft, nil
+	if len(constraints) > 0 {
+		revision.EnvironmentConstraints = constraints[0]
+	}
 	p.audit(ctx, user, "scenario_revision.graph_updated", "scenario_revision", revisionID, map[string]any{
 		"scenarioId": scenario.ID, "nodes": len(graph.Nodes), "edges": len(graph.Edges),
 	})
@@ -213,12 +233,11 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 	if err != nil {
 		return nil, err
 	}
-	issues := append([]domain.ValidationIssue(nil), domain.ValidateGraph(revision.Graph)...)
 	if len(revision.Graph.Nodes) == 0 {
-		return issues, nil
+		return domain.ValidateGraph(revision.Graph), nil
 	}
 
-	nodesByRelease := map[string][]string{}
+	issues := make([]domain.ValidationIssue, 0)
 	releaseByNode := map[string]domain.ComponentRelease{}
 	for _, node := range revision.Graph.Nodes {
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
@@ -246,65 +265,38 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 				Code: "mapped_parameter_overridden", Message: fmt.Sprintf("mapped parameters cannot also be set locally: %s", strings.Join(conflicts, ", ")), NodeID: node.ID,
 			})
 		}
-		nodesByRelease[release.ID] = append(nodesByRelease[release.ID], node.ID)
 		releaseByNode[node.ID] = release
 	}
-
-	reachable := graphReachability(revision.Graph)
-	if revision.Status != domain.RevisionReleased {
-		for _, edge := range revision.Graph.Edges {
-			source, sourceOK := releaseByNode[edge.Source]
-			target, targetOK := releaseByNode[edge.Target]
-			if !sourceOK || !targetOK || source.ID == target.ID || !target.Candidate {
-				continue
-			}
-			targetNode := findScenarioNode(revision.Graph.Nodes, edge.Target)
-			if targetNode.Action == domain.ActionVerify {
-				continue
-			}
-			declared := false
-			for _, dependency := range target.Dependencies {
-				if dependency.UpstreamReleaseID == source.ID {
-					declared = true
-					break
-				}
-			}
-			if !declared {
-				issues = append(issues, domain.ValidationIssue{Code: "undeclared_dependency_edge", Message: fmt.Sprintf("hard edge from %s must also be declared in the target Release contract", edge.Source), NodeID: edge.Target})
-			}
+	for _, node := range revision.Graph.Nodes {
+		if release, ok := releaseByNode[node.ID]; ok {
+			issues = append(issues, domain.ScenarioAdaptationIssues(revision.EnvironmentConstraints, release.EnvironmentConstraints, node.ID, node.Name, true)...)
 		}
 	}
-	for _, node := range revision.Graph.Nodes {
+	normalizedGraph, dependencyIssues := normalizeScenarioGraph(revision.Graph, releaseByNode)
+	issues = append(issues, domain.ValidateGraph(normalizedGraph)...)
+	issues = append(issues, scenarioSequenceDependencyIssues(normalizedGraph)...)
+	issues = append(issues, scenarioSequenceTopologyIssues(normalizedGraph)...)
+	issues = append(issues, dependencyIssues...)
+	for _, node := range normalizedGraph.Nodes {
 		release, ok := releaseByNode[node.ID]
 		if !ok {
 			continue
 		}
-		// A verify node observes a release that is expected to exist already. Its
-		// install-time dependencies do not need to be rebuilt unless this node
-		// actually imports mapped parameters.
-		skipInstallDependencies := node.Action == domain.ActionVerify && !releaseNeedsImportedParameters(release)
-		if skipInstallDependencies {
-			continue
-		}
-		for _, dependency := range release.Dependencies {
-			upstreamNodes := nodesByRelease[dependency.UpstreamReleaseID]
-			if len(upstreamNodes) == 0 {
-				issues = append(issues, domain.ValidationIssue{
-					Code: "missing_dependency_node", Message: "locked upstream component release is absent from the graph", NodeID: node.ID,
-				})
-				continue
-			}
-			if !anyUpstreamNodeReachable(upstreamNodes, node.ID, reachable) {
-				issues = append(issues, domain.ValidationIssue{
-					Code: "dependency_order", Message: "upstream component must precede the dependent node", NodeID: node.ID,
-				})
-			}
+		for _, dependency := range scenarioDependenciesForNode(node, release) {
 			if len(dependency.ParameterMappings) == 0 {
 				continue
 			}
-			if _, sourceErr := selectDependencySource(node, dependency, revision.Graph, releaseByNode, reachable); sourceErr != nil {
+			if node.DependencySources[dependency.ID] == "" {
+				continue
+			}
+			if _, sourceErr := selectDependencySource(node, dependency, normalizedGraph, releaseByNode); sourceErr != nil {
 				issues = append(issues, domain.ValidationIssue{Code: sourceIssueCode(sourceErr), Message: sourceErr.Error(), NodeID: node.ID})
 			}
+		}
+	}
+	if len(dependencyIssues) == 0 {
+		if _, err := scenarioParameterSources(normalizedGraph, releaseByNode); err != nil {
+			issues = append(issues, domain.ValidationIssue{Code: "parameter_reference_invalid", Message: err.Error()})
 		}
 	}
 	sort.SliceStable(issues, func(i, j int) bool {
@@ -314,15 +306,6 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		return issues[i].NodeID < issues[j].NodeID
 	})
 	return issues, nil
-}
-
-func findScenarioNode(nodes []domain.ScenarioNode, id string) domain.ScenarioNode {
-	for _, node := range nodes {
-		if node.ID == id {
-			return node
-		}
-	}
-	return domain.ScenarioNode{}
 }
 
 func anyUpstreamNodeReachable(upstreamNodes []string, downstreamNode string, reachable map[string]map[string]bool) bool {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 
 	"codex/platform-demo/internal/domain"
@@ -316,21 +317,30 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		base := &domain.ValidationError{Message: "scenario validation failed", Details: issues}
 		return domain.Run{}, actionableExistingError(base, "scenario.graph_invalid", "当前 DAG 或锁定 Release 未通过校验", "检查场景问题", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=inspect", scenario.ID, revision.ID))
 	}
-	ordered, err := topologicalNodes(revision.Graph)
-	if err != nil {
-		return domain.Run{}, err
-	}
-	steps := make([]lockedStep, 0, len(ordered))
 	releaseByNode := map[string]domain.ComponentRelease{}
-	resolvedByNode := map[string]map[string]any{}
-	provenanceByNode := map[string]map[string]resolvedParameter{}
-	for _, node := range ordered {
+	for _, node := range revision.Graph.Nodes {
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
 		if releaseErr != nil {
 			return domain.Run{}, releaseErr
 		}
 		releaseByNode[node.ID] = release
 	}
+	planGraph, dependencyIssues := normalizeScenarioGraph(revision.Graph, releaseByNode)
+	if len(dependencyIssues) > 0 {
+		return domain.Run{}, &domain.ValidationError{Message: "scenario dependency graph is incomplete", Details: dependencyIssues}
+	}
+	ordered, err := topologicalNodes(planGraph)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if err := domain.MatchEnvironment(revision.EnvironmentConstraints, environment.Revision.Facts); err != nil {
+		return domain.Run{}, fmt.Errorf("场景 %s: %w", scenario.Name, err)
+	}
+	resolvedByNode, provenanceByNode, err := resolveScenarioParameters(planGraph, releaseByNode, *environment.Revision)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	steps := make([]lockedStep, 0, len(ordered))
 	for _, node := range ordered {
 		release := releaseByNode[node.ID]
 		if constraintErr := validateEnvironmentConstraints(release.EnvironmentConstraints, environment.Revision.Facts); constraintErr != nil {
@@ -344,18 +354,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 		if actionErr != nil {
 			return domain.Run{}, actionErr
 		}
-		variables, provenance, resolveErr := resolveOwnParameters(release, node, *environment.Revision, false)
-		if resolveErr != nil {
-			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, resolveErr)
-		}
-		if mapErr := applyParameterMappings(release, node, revision.Graph, releaseByNode, resolvedByNode, variables, provenance); mapErr != nil {
-			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, mapErr)
-		}
-		if err := validateResolvedParameters(release.Parameters, variables); err != nil {
-			return domain.Run{}, fmt.Errorf("node %s: %w", node.ID, err)
-		}
-		resolvedByNode[node.ID] = variables
-		provenanceByNode[node.ID] = provenance
+		variables := resolvedByNode[node.ID]
 		action.HostGroup = node.HostGroup
 		step, stepErr := p.lockAction(component, node.ID, release, action, variables)
 		if stepErr != nil {
@@ -380,7 +379,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 				if targetErr != nil {
 					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, targetErr)
 				}
-				if mapErr := applyParameterMappings(target, node, revision.Graph, releaseByNode, resolvedByNode, verifyVariables, map[string]resolvedParameter{}); mapErr != nil {
+				if mapErr := applyParameterMappings(target, node, planGraph, releaseByNode, resolvedByNode, verifyVariables, map[string]resolvedParameter{}); mapErr != nil {
 					return domain.Run{}, fmt.Errorf("node %s rollback target: %w", node.ID, mapErr)
 				}
 				if err := validateResolvedParameters(target.Parameters, verifyVariables); err != nil {
@@ -402,7 +401,7 @@ func (p *Platform) startScenario(ctx context.Context, user domain.User, revision
 			return domain.Run{}, err
 		}
 	}
-	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps, provenanceByNode, "")
+	run, err := p.createRun(ctx, user, environment, kind, "", revision.ID, "", steps, provenanceByNode, "", scenarioRevisionSpecDigest(revision))
 	if err != nil && kind == domain.RunScenarioTest {
 		_ = p.store.SetScenarioRevisionStatus(ctx, revisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 	}
@@ -427,16 +426,7 @@ func containsParameterValue(values []any, value any) bool {
 func parameterValuesEqual(left, right any) bool { return domain.ParameterValuesEqual(left, right) }
 
 func validateEnvironmentConstraints(constraints, facts map[string]any) error {
-	for key, expected := range constraints {
-		actual, found := facts[key]
-		if !found {
-			return fmt.Errorf("%w: environment fact %q is required by the component", domain.ErrInvalid, key)
-		}
-		if !constraintMatches(expected, actual) {
-			return fmt.Errorf("%w: environment fact %q=%v does not satisfy %v", domain.ErrInvalid, key, actual, expected)
-		}
-	}
-	return nil
+	return domain.MatchEnvironment(constraints, facts)
 }
 
 func constraintMatches(expected, actual any) bool {
@@ -519,32 +509,28 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	if err := validatePlanHostGroups(environment.Revision.Inventory, plan.Steps); err != nil {
 		return lockedPlan{}, "", false, err
 	}
-	if digester, ok := p.runner.(planDigestRunner); ok {
-		playbooks := make([]string, 0, len(plan.Steps))
-		for _, step := range plan.Steps {
-			playbooks = append(playbooks, step.Playbook)
-		}
-		digests, treeDigest, err := digester.DigestPlan(playbooks)
-		if err != nil {
-			return lockedPlan{}, "", false, err
-		}
-		plan.TreeDigest = treeDigest
-		for i := range plan.Steps {
-			plan.Steps[i].PlaybookDigest = digests[plan.Steps[i].Playbook]
-		}
-	} else if digester, ok := p.runner.(digestRunner); ok {
-		for i := range plan.Steps {
-			playbookDigest, treeDigest, err := digester.Digest(plan.Steps[i].Playbook)
-			if err != nil {
-				return lockedPlan{}, "", false, err
-			}
-			if plan.TreeDigest != "" && plan.TreeDigest != treeDigest {
-				return lockedPlan{}, "", false, fmt.Errorf("%w: playbooks resolved to different executable trees", domain.ErrConflict)
-			}
-			plan.Steps[i].PlaybookDigest = playbookDigest
-			plan.TreeDigest = treeDigest
+	if _, planOK := p.runner.(planDigestRunner); !planOK {
+		if _, singleOK := p.runner.(digestRunner); !singleOK {
+			return lockedPlan{}, "", false, fmt.Errorf("%w: runner cannot verify executable fingerprints", domain.ErrConflict)
 		}
 	}
+	if err := p.bindVerifiedWorkspaceDigests(ctx, plan.Steps); err != nil {
+		return lockedPlan{}, "", false, err
+	}
+	tree := sha256.New()
+	releaseTrees := map[string]string{}
+	for _, step := range plan.Steps {
+		releaseTrees[step.ReleaseID] = step.WorkspaceDigest
+	}
+	releaseIDs := make([]string, 0, len(releaseTrees))
+	for releaseID := range releaseTrees {
+		releaseIDs = append(releaseIDs, releaseID)
+	}
+	sort.Strings(releaseIDs)
+	for _, releaseID := range releaseIDs {
+		_, _ = tree.Write([]byte(releaseID + "\x00" + releaseTrees[releaseID] + "\x00"))
+	}
+	plan.TreeDigest = fmt.Sprintf("%x", tree.Sum(nil))
 	if err := p.bindBackupPlan(ctx, environment.ID, runID, kind, capturedAt, &plan); err != nil {
 		return lockedPlan{}, "", false, err
 	}
@@ -563,6 +549,94 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	return plan, planDigest, destructive, nil
 }
 
+// bindVerifiedWorkspaceDigests joins the immutable Release contract, its
+// persisted manifest, and the current executable bytes. It deliberately groups
+// steps by Release so a plan scans each workspace once.
+func (p *Platform) bindVerifiedWorkspaceDigests(ctx context.Context, steps []lockedStep) error {
+	planDigester, planOK := p.runner.(planDigestRunner)
+	singleDigester, singleOK := p.runner.(digestRunner)
+	if !planOK && !singleOK {
+		return fmt.Errorf("%w: runner cannot verify executable fingerprints", domain.ErrConflict)
+	}
+	byRelease := map[string][]int{}
+	for index := range steps {
+		byRelease[steps[index].ReleaseID] = append(byRelease[steps[index].ReleaseID], index)
+	}
+	for releaseID, indexes := range byRelease {
+		release, err := p.store.GetComponentRelease(ctx, releaseID)
+		if err != nil {
+			return err
+		}
+		if err := p.validateWorkspaceManifest(ctx, release); err != nil {
+			return err
+		}
+		playbooks := make([]string, 0, len(indexes))
+		actions := make(map[string]domain.ActionDefinition, len(release.Actions))
+		for _, action := range release.Actions {
+			actions[action.ID] = action
+		}
+		for _, index := range indexes {
+			step := &steps[index]
+			if current := componentReleaseSpecDigest(release); current != step.ReleaseSpecDigest {
+				return fmt.Errorf("%w: release %s changed after the plan was assembled", domain.ErrConflict, releaseID)
+			}
+			action, found := actions[step.ActionID]
+			if !found || action.Kind != step.Action || action.Playbook != step.Playbook {
+				return fmt.Errorf("%w: release %s action changed after the plan was assembled", domain.ErrConflict, releaseID)
+			}
+			if action.PlaybookSHA256 == "" {
+				return fmt.Errorf("%w: action %s has no persisted Playbook digest", domain.ErrConflict, action.Kind)
+			}
+			playbooks = append(playbooks, step.Playbook)
+		}
+		digests := map[string]string{}
+		treeDigest := ""
+		if planOK {
+			digests, treeDigest, err = planDigester.DigestPlan(playbooks)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, playbook := range playbooks {
+				if _, exists := digests[playbook]; exists {
+					continue
+				}
+				playbookDigest, workspaceDigest, digestErr := singleDigester.Digest(playbook)
+				if digestErr != nil {
+					return digestErr
+				}
+				if treeDigest != "" && treeDigest != workspaceDigest {
+					return fmt.Errorf("%w: release %s actions resolve to different workspaces", domain.ErrConflict, releaseID)
+				}
+				digests[playbook], treeDigest = playbookDigest, workspaceDigest
+			}
+		}
+		for _, index := range indexes {
+			step := &steps[index]
+			action := actions[step.ActionID]
+			if digests[step.Playbook] != action.PlaybookSHA256 {
+				return fmt.Errorf("%w: action %s bytes differ from the Release manifest", domain.ErrConflict, action.Kind)
+			}
+			step.PlaybookDigest = digests[step.Playbook]
+			step.WorkspaceDigest = treeDigest
+		}
+	}
+	return nil
+}
+
+func (p *Platform) verifyLockedWorkspaceDigests(ctx context.Context, locked []lockedStep) error {
+	current := append([]lockedStep(nil), locked...)
+	if err := p.bindVerifiedWorkspaceDigests(ctx, current); err != nil {
+		return err
+	}
+	for index := range locked {
+		if current[index].PlaybookDigest != locked[index].PlaybookDigest || current[index].WorkspaceDigest != locked[index].WorkspaceDigest {
+			return fmt.Errorf("%w: release workspace changed after the run was queued", domain.ErrConflict)
+		}
+	}
+	return nil
+}
+
 func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) string {
 	type digestStep struct {
 		ComponentID         string
@@ -575,6 +649,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		ToReleaseID         string
 		Playbook            string
 		PlaybookDigest      string
+		WorkspaceDigest     string
 		Tags                []string
 		Limit               string
 		Variables           map[string]any
@@ -615,7 +690,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		digestSteps = append(digestSteps, digestStep{
 			ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, ReleaseSpecDigest: step.ReleaseSpecDigest,
 			ActionID: step.ActionID, Action: step.Action, FromReleaseID: step.FromReleaseID, ToReleaseID: step.ToReleaseID,
-			Playbook: step.Playbook, PlaybookDigest: step.PlaybookDigest, Tags: step.Tags, Limit: step.Limit,
+			Playbook: step.Playbook, PlaybookDigest: step.PlaybookDigest, WorkspaceDigest: step.WorkspaceDigest, Tags: step.Tags, Limit: step.Limit,
 			Variables: variables, RequiredCredentials: step.RequiredCredentials,
 			TimeoutSeconds: step.TimeoutSeconds, NeedsApproval: step.NeedsApproval,
 			BackupRef: backupRef, BackupInstallRunID: backupInstallRunID,

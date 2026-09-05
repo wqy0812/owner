@@ -14,20 +14,14 @@ describe('API response contract', () => {
       releases: [{
         id: 'release-1', componentId: 'component-1', lineId: 'line-1', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', status: 'draft',
         review: { status: 'not_submitted' },
-        readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing', message: '缺少安装证据', actionUrl: '/components?selected=component-1&action=validate' }], runtimeEvidence: [
-          { runtime: 'docker', version: 'docker@20.10.21', installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback', complete: true },
-          { runtime: 'containerd', version: 'containerd@2.0.10', complete: false },
-        ] },
+        readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing', message: '缺少安装证据', actionUrl: '/components?selected=component-1&action=validate' }], installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback' },
         parameters: [], dependencies: [], actions: [], artifacts: [], images: [],
       }],
     }] }), 'application/json')));
 
     await expect(api.components()).resolves.toMatchObject([{
       id: 'component-1', tags: ['runtime'],
-      latestRelease: { readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing' }], runtimeEvidence: [
-        { runtime: 'docker', version: 'docker@20.10.21', installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback', complete: true },
-        { runtime: 'containerd', version: 'containerd@2.0.10', complete: false },
-      ] } },
+      latestRelease: { readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing' }], installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback' } },
     }]);
   });
 

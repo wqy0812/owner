@@ -108,11 +108,14 @@ func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 	if r.Review.Status == "" {
 		r.Review.Status = domain.ReleaseReviewNotSubmitted
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.PlaybookTreeSHA256, r.PlaybookWorkspaceRoot, timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
 	if err := replaceReleaseChildren(ctx, tx, r); err != nil {
+		return err
+	}
+	if err := insertComponentPlaybookFiles(ctx, tx, r.ID, r.PlaybookFiles); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE component_releases SET candidate=?,review_status=?,review_contract_digest=?,review_submitted_at=?,reviewed_by=?,reviewed_at=?,review_comment=? WHERE id=?`, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.ID)
@@ -160,7 +163,7 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 	if err := validateReleaseCatalogTx(ctx, tx, r, &previous); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,playbook_workspace_root=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.PlaybookWorkspaceRoot, r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -186,7 +189,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		if mappings == nil {
 			mappings = []domain.ParameterMapping{}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES(?,?,?,?,?,?)`, d.ID, r.ID, d.UpstreamComponentID, d.UpstreamReleaseID, d.Purpose, jsonText(mappings))
+		_, err := tx.ExecContext(ctx, `INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json,kind) VALUES(?,?,?,?,?,?,?)`, d.ID, r.ID, d.UpstreamComponentID, d.UpstreamReleaseID, d.Purpose, jsonText(mappings), d.Kind)
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -229,6 +232,10 @@ func getComponentRelease(ctx context.Context, q queryer, id string) (domain.Comp
 		return r, err
 	}
 	r.Actions, err = listActions(ctx, q, id)
+	if err != nil {
+		return r, err
+	}
+	r.PlaybookFiles, err = listComponentPlaybookFiles(ctx, q, id)
 	if err != nil {
 		return r, err
 	}
@@ -275,7 +282,7 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var candidate int
 	var constraints, parameters, created string
 	var parent, template, submitted, reviewedBy, reviewed, released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.Review.Status, &r.Review.ContractDigest, &submitted, &reviewedBy, &reviewed, &r.Review.Comment, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &created, &released, &deprecated)
+	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.Review.Status, &r.Review.ContractDigest, &submitted, &reviewedBy, &reviewed, &r.Review.Comment, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &r.PlaybookTreeSHA256, &r.PlaybookWorkspaceRoot, &created, &released, &deprecated)
 	r.ParentReleaseID = parent.String
 	r.TemplateSourceReleaseID = template.String
 	r.Candidate = candidate != 0
@@ -292,7 +299,7 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 
 func listDependencies(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ComponentDependency, error) {
 	placeholders, args := releaseIDPlaceholders(releaseIDs)
-	rows, err := q.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id IN (`+placeholders+`) ORDER BY c.name`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,d.kind,c.name,ur.version FROM component_dependencies d JOIN components c ON c.id=d.upstream_component_id JOIN component_releases ur ON ur.id=d.upstream_release_id WHERE d.release_id IN (`+placeholders+`) ORDER BY c.name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +308,7 @@ func listDependencies(ctx context.Context, q queryer, releaseIDs ...string) ([]d
 	for rows.Next() {
 		var d domain.ComponentDependency
 		var mappings string
-		if err := rows.Scan(&d.ID, &d.ReleaseID, &d.UpstreamComponentID, &d.UpstreamReleaseID, &d.Purpose, &mappings, &d.UpstreamComponentName, &d.UpstreamVersion); err != nil {
+		if err := rows.Scan(&d.ID, &d.ReleaseID, &d.UpstreamComponentID, &d.UpstreamReleaseID, &d.Purpose, &mappings, &d.Kind, &d.UpstreamComponentName, &d.UpstreamVersion); err != nil {
 			return nil, err
 		}
 		d.ParameterMappings = decodeJSON(mappings, []domain.ParameterMapping{})
@@ -350,7 +357,7 @@ WHERE id=?
   AND status IN ('draft','released')
 	AND NOT EXISTS (
 	  SELECT 1
-	  FROM runs
+	  FROM retained_run_history runs
 	    JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
 	    WHERE runs.scenario_revision_id IS NOT NULL
 	    AND runs.kind IN ('scenario_test','scenario_run')
@@ -454,7 +461,7 @@ func componentReleaseDeletionImpact(ctx context.Context, q queryer, id string) (
 	var impact ComponentReleaseDeletionImpact
 	err := q.QueryRowContext(ctx, `
 SELECT
-  (SELECT COUNT(DISTINCT r.id) FROM runs r
+  (SELECT COUNT(DISTINCT r.id) FROM retained_run_history r
    WHERE r.component_release_id=?
       OR (r.kind IN ('scenario_test','scenario_run') AND EXISTS (
         SELECT 1 FROM json_each(r.input_snapshot_json, '$.steps') step
@@ -650,7 +657,7 @@ func (s *Store) DecideComponentReleaseReview(ctx context.Context, id string, sta
 type DependencyLink struct{ DownstreamComponentID, DownstreamComponentName, DownstreamOwnerID, UpstreamComponentID string }
 
 func (s *Store) ListReleasedDependencyLinks(ctx context.Context) ([]DependencyLink, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT r.component_id,c.name,c.owner_id,d.upstream_component_id FROM component_dependencies d JOIN component_releases r ON r.id=d.release_id JOIN components c ON c.id=r.component_id WHERE r.status='released'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT r.component_id,c.name,c.owner_id,d.upstream_component_id FROM component_dependencies d JOIN component_releases r ON r.id=d.release_id JOIN components c ON c.id=r.component_id WHERE r.status='released' AND d.kind=''`)
 	if err != nil {
 		return nil, err
 	}
@@ -726,4 +733,33 @@ func (s *Store) RenameReleaseLine(ctx context.Context, lineID, componentID, name
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) RenameReleaseLineAndDraftActions(ctx context.Context, lineID, componentID, name, draftID, workspaceRoot string, actionPaths map[string]string) error {
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE component_release_lines SET name=? WHERE id=? AND component_id=?`, name, lineID, componentID)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if updated, _ := res.RowsAffected(); updated == 0 {
+		return domain.ErrNotFound
+	}
+	if draftID != "" {
+		if err := invalidateDraftReleaseDeliveryTx(ctx, tx, draftID); err != nil {
+			return err
+		}
+		for actionID, path := range actionPaths {
+			if _, err := tx.ExecContext(ctx, `UPDATE action_definitions SET playbook=? WHERE id=? AND release_id=?`, path, actionID, draftID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE component_releases SET playbook_workspace_root=? WHERE id=?`, workspaceRoot, draftID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

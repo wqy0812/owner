@@ -24,8 +24,8 @@ func (p *Platform) prepareLockedPlan(ctx context.Context, environment domain.Env
 func (p *Platform) componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan lockedPlan, digest string, destructive bool) ComponentTestPlan {
 	return p.planBuilder.componentTestPlanDTO(ctx, environment, plan, digest, destructive)
 }
-func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolved map[string]map[string]resolvedParameter, expectedDigest string) (domain.Run, error) {
-	return p.runCreator.createRun(ctx, user, environment, kind, releaseID, revisionID, action, steps, resolved, expectedDigest)
+func (p *Platform) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolved map[string]map[string]resolvedParameter, expectedDigest string, expectedScenarioDigest ...string) (domain.Run, error) {
+	return p.runCreator.createRun(ctx, user, environment, kind, releaseID, revisionID, action, steps, resolved, expectedDigest, expectedScenarioDigest...)
 }
 func (p *Platform) bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
 	return p.rollbackPlanner.bindBackupPlan(ctx, environmentID, runID, kind, capturedAt, plan)

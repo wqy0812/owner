@@ -127,13 +127,16 @@ func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
-	var input graphInput
+	var input struct {
+		Graph                  graphInput     `json:"graph"`
+		EnvironmentConstraints map[string]any `json:"environmentConstraints"`
+	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
 		return
 	}
-	graph := input.domain()
-	revision, err := h.platform.Scenarios().SaveGraph(r.Context(), currentUser(r), r.PathValue("id"), graph)
+	graph := input.Graph.domain()
+	revision, err := h.platform.Scenarios().SaveGraph(r.Context(), currentUser(r), r.PathValue("id"), graph, input.EnvironmentConstraints)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -284,7 +287,7 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	}
 	return map[string]any{
 		"id": revision.ID, "scenarioId": revision.ScenarioID, "revision": revision.Revision,
-		"state": state, "nodes": nodes, "edges": revision.Graph.Edges,
+		"environmentConstraints": revision.EnvironmentConstraints, "state": state, "nodes": nodes, "edges": revision.Graph.Edges,
 		"testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}
 }

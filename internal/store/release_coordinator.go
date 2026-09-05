@@ -103,7 +103,7 @@ func publicationWriteError(err error) error {
 // publication. Every definition/dependency guard and the global released-graph
 // epoch are checked inside the same transaction as the status transition.
 func (s *Store) PublishComponentRelease(ctx context.Context, id string, expectedEpoch int64, guards []ReleasePublicationGuard, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -162,6 +162,9 @@ func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run
 	if run.Kind != domain.RunScenarioTest || run.Status != domain.RunSucceeded || run.ScenarioRevisionID != revision.ID {
 		return nil, fmt.Errorf("%w: Run is not successful evidence for this scenario revision", domain.ErrConflict)
 	}
+	if err := validateScenarioAdaptationRead(ctx, tx, revision); err != nil {
+		return nil, err
+	}
 	lockedScenarioDigest, _ := run.InputSnapshot["scenarioRevisionSpecDigest"].(string)
 	if lockedScenarioDigest == "" || lockedScenarioDigest != domain.ScenarioRevisionSpecDigest(revision) {
 		return nil, fmt.Errorf("%w: scenario test evidence belongs to a different graph definition", domain.ErrConflict)
@@ -197,7 +200,7 @@ func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run
 // Run still matches both the Scenario graph and every locked Release digest.
 // A stale success resets the Revision to Draft in the same transaction.
 func (s *Store) PromoteScenarioRevisionFromRun(ctx context.Context, runID string, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -236,7 +239,7 @@ func (s *Store) PromoteScenarioRevisionFromRun(ctx context.Context, runID string
 // opted-in Draft in one transaction. The successful test Run is re-read and
 // checked against current Release digests before any status changes occur.
 func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionGuard ScenarioPublicationGuard, candidateReleaseIDs []string, releaseGuards []ReleasePublicationGuard, evidenceRunID string, expectedEpoch int64, at time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
 	}

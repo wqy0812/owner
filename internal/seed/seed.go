@@ -156,8 +156,6 @@ func initialPlatformCategories() []seededPlatformCategory {
 		{id: "platform-category-architecture", key: "architecture", label: "架构", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"amd64", "x86/amd64"}, {"arm64", "ARM/arm64"}}},
 		{id: "platform-category-operating-system", key: "operatingSystem", label: "操作系统", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"Ubuntu", "Ubuntu"}, {"SUSE", "SUSE"}, {"Kylin", "Kylin"}}},
 		{id: "platform-category-operating-system-version", key: "operatingSystemVersion", label: "操作系统版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"18.04", "18.04"}, {"20.04", "20.04"}, {"22.04", "22.04"}, {"24.04", "24.04"}, {"18.04 / 24.04", "18.04 / 24.04（混合）"}}},
-		{id: "platform-category-container-runtime", key: "containerRuntime", label: "容器运行时", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"docker", "Docker"}, {"containerd", "containerd"}}},
-		{id: "platform-category-container-runtime-version", key: "containerRuntimeVersion", label: "运行时版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, parentKey: "containerRuntime", options: []seededPlatformOption{{"docker@20.10.21", "20.10.21"}, {"docker@20.10.24", "20.10.24"}, {"docker@24.0.9", "24.0.9"}, {"containerd@2.0.10", "2.0.10"}}, optionParents: map[string]string{"docker@20.10.21": "docker", "docker@20.10.24": "docker", "docker@24.0.9": "docker", "containerd@2.0.10": "containerd"}},
 		{id: "platform-category-ip-family", key: "ipFamily", label: "IP 协议族", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"IPv4", "IPv4"}, {"IPv6", "IPv6"}}},
 		{id: "platform-category-hardware-profile", key: "hardwareProfile", label: "硬件类型", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"general", "通用主机"}, {"gpu", "GPU"}, {"dpu", "DPU"}, {"bms", "BMS"}}},
 		{id: "platform-category-deployment-mode", key: "deploymentMode", label: "部署形态", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"standard", "standard"}, {"serverless", "serverless"}, {"ingress", "ingress"}}},
@@ -361,6 +359,11 @@ func (s Seeder) ensureSeedHostGroup(ctx context.Context, group string, now time.
 }
 
 func (s Seeder) createScenarioIfMissing(ctx context.Context, scenario domain.Scenario, revision domain.ScenarioRevision) (bool, error) {
+	graph, err := s.scenarioGraph(ctx, revision.Graph.Nodes, revision.Graph.Edges)
+	if err != nil {
+		return false, err
+	}
+	revision.Graph = graph
 	if existing, err := s.Store.GetScenario(ctx, scenario.ID, false); err == nil {
 		return false, s.createScenarioRevisionIfMissing(ctx, revision, existing.CurrentRevisionID == "")
 	} else if !errors.Is(err, domain.ErrNotFound) {
@@ -454,3 +457,79 @@ func seedPtrTime(value *time.Time) any {
 }
 
 func ptr(value time.Time) *time.Time { return &value }
+
+// scenarioGraph builds new demo graphs from exact Release contracts and the
+// additional ordering constraints explicitly declared by the demo scenario.
+func (s Seeder) scenarioGraph(ctx context.Context, nodes []domain.ScenarioNode, ordering []domain.ScenarioEdge) (domain.ScenarioGraph, error) {
+	graph := domain.ScenarioGraph{Nodes: nodes, Edges: []domain.ScenarioEdge{}}
+	for i := range graph.Nodes {
+		node := &graph.Nodes[i]
+		release, err := s.Store.GetComponentRelease(ctx, node.ReleaseID)
+		if err != nil {
+			return graph, err
+		}
+		if node.DependencySources == nil {
+			node.DependencySources = map[string]string{}
+		}
+		for _, dep := range release.Dependencies {
+			if node.Action == domain.ActionVerify && len(dep.ParameterMappings) == 0 {
+				continue
+			}
+			selected := node.DependencySources[dep.ID]
+			candidates := []string{}
+			for _, other := range nodes {
+				if other.ID != node.ID && other.ReleaseID == dep.UpstreamReleaseID {
+					candidates = append(candidates, other.ID)
+				}
+			}
+			if selected == "" && len(candidates) == 1 {
+				selected = candidates[0]
+			}
+			if selected == "" {
+				return graph, fmt.Errorf("seed node %s requires an explicit source for %s", node.ID, dep.ID)
+			}
+			node.DependencySources[dep.ID] = selected
+			if dep.Kind == domain.DependencyConfiguration {
+				continue
+			}
+			graph.Edges = append(graph.Edges, domain.ScenarioEdge{ID: fmt.Sprintf("dependency:%s:%s:%s", dep.ID, selected, node.ID), Source: selected, Target: node.ID, Kind: domain.ScenarioEdgeDependency, DependencyID: dep.ID})
+		}
+	}
+	for _, edge := range ordering {
+		if !seedReachable(graph.Edges, edge.Source, edge.Target) {
+			graph.Edges = append(graph.Edges, edge)
+		}
+	}
+	// Keep only additional sequence constraints not already implied by the final DAG.
+	for i := 0; i < len(graph.Edges); {
+		e := graph.Edges[i]
+		rest := append(append([]domain.ScenarioEdge{}, graph.Edges[:i]...), graph.Edges[i+1:]...)
+		if e.Kind == domain.ScenarioEdgeSequence && seedReachable(rest, e.Source, e.Target) {
+			graph.Edges = rest
+		} else {
+			i++
+		}
+	}
+	return graph, nil
+}
+func seedReachable(edges []domain.ScenarioEdge, source, target string) bool {
+	queue := []string{source}
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == target {
+			return true
+		}
+		if seen[current] {
+			continue
+		}
+		seen[current] = true
+		for _, e := range edges {
+			if e.Source == current {
+				queue = append(queue, e.Target)
+			}
+		}
+	}
+	return false
+}

@@ -8,7 +8,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-const releaseSelect = `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id`
+const releaseSelect = `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.playbook_tree_sha256,r.playbook_workspace_root,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id`
 
 // Lists hydrate a complete contract within one read snapshot. No write lock or
 // cross-request cache is needed, and child cursors never hold a second connection.
@@ -70,7 +70,7 @@ func listComponents(ctx context.Context, q queryer, viewer domain.User) ([]domai
 			releaseArgs = append(releaseArgs, viewer.ID)
 		}
 	}
-	releases, err := listReleases(ctx, q, releaseQuery+` ORDER BY r.created_at DESC`, releaseArgs...)
+	releases, err := listReleases(ctx, q, releaseQuery+` ORDER BY r.created_at DESC,r.id DESC`, releaseArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (s *Store) ListComponentReleases(ctx context.Context, componentID string, r
 	if releasedOnly {
 		query += ` AND r.status='released'`
 	}
-	items, err := listReleases(ctx, tx, query+` ORDER BY r.created_at DESC`, componentID)
+	items, err := listReleases(ctx, tx, query+` ORDER BY r.created_at DESC,r.id DESC`, componentID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +151,7 @@ func hydrateReleaseChildren(ctx context.Context, q queryer, releases []domain.Co
 			r := &batch[i]
 			ids = append(ids, r.ID)
 			byID[r.ID] = r
+			r.PlaybookFiles = []domain.ComponentPlaybookFile{}
 			r.Artifacts = []domain.ComponentArtifact{}
 			r.Images = []domain.ComponentImage{}
 		}
@@ -169,6 +170,14 @@ func hydrateReleaseChildren(ctx context.Context, q queryer, releases []domain.Co
 		for _, item := range actions {
 			r := byID[item.ReleaseID]
 			r.Actions = append(r.Actions, item)
+		}
+		playbookFiles, err := listComponentPlaybookFiles(ctx, q, ids...)
+		if err != nil {
+			return err
+		}
+		for _, item := range playbookFiles {
+			r := byID[item.ReleaseID]
+			r.PlaybookFiles = append(r.PlaybookFiles, item)
 		}
 		artifacts, err := listComponentArtifacts(ctx, q, ids...)
 		if err != nil {

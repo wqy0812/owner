@@ -81,6 +81,7 @@ describe('component template import', () => {
 
 describe('scenario template import', () => {
   const template = {
+    environmentConstraints: {},
     nodes: [{
       id: 'runtime', type: 'component' as const, position: { x: 10, y: 20 },
       data: { label: 'Runtime', componentId: 'component-runtime', releaseId: 'release-runtime', action: 'install' as const, parameterValues: {}, dependencySources: {} },
@@ -90,6 +91,20 @@ describe('scenario template import', () => {
 
   it('round-trips nodes and edges without loss', () => {
     expect(parseScenarioTemplate(serializeScenarioTemplate(template))).toEqual(template);
+  });
+
+  it('round-trips typed dependency and sequence edges and rejects untyped edges', () => {
+    const typed = {
+      ...template,
+      nodes: [template.nodes[0], { ...template.nodes[0], id: 'control', data: { ...template.nodes[0].data, label: 'Control' } }],
+      edges: [
+        { id: 'dependency', source: 'runtime', target: 'control', kind: 'dependency' as const, dependencyId: 'dep-runtime' },
+      ],
+    };
+    expect(parseScenarioTemplate(serializeScenarioTemplate(typed))).toEqual(typed);
+    expect(() => parseScenarioTemplate(JSON.stringify({ ...typed, edges: [{ id: 'legacy', source: 'runtime', target: 'control' }] }))).toThrow(/kind/);
+    expect(() => parseScenarioTemplate(JSON.stringify({ ...typed, edges: [{ id: 'bad', source: 'runtime', target: 'control', kind: 'dependency' }] }))).toThrow(/dependencyId/);
+    expect(() => parseScenarioTemplate(JSON.stringify({ ...typed, edges: [{ id: 'bad', source: 'runtime', target: 'control', kind: 'sequence', dependencyId: 'dep-runtime' }] }))).toThrow(/顺序边/);
   });
 
   it('rejects malformed nodes, invalid coordinates, and missing edge endpoints', () => {
@@ -108,8 +123,8 @@ describe('scenario template import', () => {
         { ...template.nodes[0], id: 'worker', data: { ...template.nodes[0].data, label: 'Worker' } },
       ],
       edges: [
-        { id: 'runtime-worker', source: 'runtime', target: 'worker' },
-        { id: 'worker-runtime', source: 'worker', target: 'runtime' },
+        { kind: 'sequence', id: 'runtime-worker', source: 'runtime', target: 'worker' },
+        { kind: 'sequence', id: 'worker-runtime', source: 'worker', target: 'runtime' },
       ],
     };
     expect(() => parseScenarioTemplate(JSON.stringify(cyclic))).toThrow(/无环 DAG/);

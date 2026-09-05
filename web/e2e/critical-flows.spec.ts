@@ -83,3 +83,53 @@ test('scenario-owned parameters are saved in the graph and runs accept only an e
   await page.getByRole('button', { name: '开始完整测试' }).click();
   await expect.poll(() => submitted).toEqual({ environmentId: 'test' });
 });
+
+test('scenario dependencies are generated and an ambiguous exact Release source is selected explicitly', async ({ page }) => {
+  let savedGraph: any;
+  const runtimeRelease = {
+    id: 'runtime-r1', componentId: 'runtime-component', lineId: 'runtime-line', lineName: 'Runtime', compatibility: 'not_applicable', version: '1.0.0', status: 'released',
+    review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], dependencies: [], artifacts: [], images: [],
+    actions: [{ kind: 'install', playbook: 'runtime.yml', hostGroup: 'runtime_nodes' }],
+  };
+  const controlRelease = {
+    id: 'control-r1', componentId: 'control-component', lineId: 'control-line', lineName: 'Control', compatibility: 'not_applicable', version: '1.0.0', status: 'released',
+    review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], artifacts: [], images: [],
+    dependencies: [{ id: 'dep-runtime', upstreamComponentId: 'runtime-component', upstreamComponentName: 'Runtime', upstreamReleaseId: runtimeRelease.id, upstreamVersion: runtimeRelease.version, purpose: 'CRI', parameterMappings: [] }],
+    actions: [{ kind: 'install', playbook: 'control.yml', hostGroup: 'control_plane' }],
+  };
+  const revision = {
+    id: 'auto-r1', scenarioId: 'auto', revision: 1, state: 'draft', edges: [],
+    nodes: [
+      { id: 'runtime-a', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Runtime A', componentId: 'runtime-component', releaseId: runtimeRelease.id, action: 'install', hostGroup: 'runtime_nodes', parameterValues: {}, dependencySources: {} } },
+      { id: 'runtime-b', type: 'component', position: { x: 80, y: 300 }, data: { label: 'Runtime B', componentId: 'runtime-component', releaseId: runtimeRelease.id, action: 'install', hostGroup: 'runtime_nodes', parameterValues: {}, dependencySources: {} } },
+      { id: 'control', type: 'component', position: { x: 420, y: 180 }, data: { label: 'Control', componentId: 'control-component', releaseId: controlRelease.id, action: 'install', hostGroup: 'control_plane', parameterValues: {}, dependencySources: {} } },
+    ],
+  };
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    let data: unknown = [];
+    if (path.endsWith('/session/users')) data = Object.values(users);
+    else if (path.endsWith('/session/me')) data = users['scenario-owner-a'];
+    else if (path.endsWith('/components')) data = [
+      { id: 'runtime-component', name: 'Runtime', ownerId: 'component-owner-a', layer: 'runtime_state', tags: [], latestRelease: runtimeRelease, releases: [runtimeRelease] },
+      { id: 'control-component', name: 'Control', ownerId: 'component-owner-a', layer: 'orchestration_core', tags: [], latestRelease: controlRelease, releases: [controlRelease] },
+    ];
+    else if (path.endsWith('/scenarios')) data = [{ id: 'auto', slug: 'auto', name: 'Automatic dependencies', ownerId: 'scenario-owner-a', currentRevisionId: revision.id, currentRevision: revision, revisions: [revision] }];
+    else if (path.endsWith('/scenario-revisions/auto-r1/graph') && request.method() === 'PUT') {
+      savedGraph = request.postDataJSON();
+      data = { ...revision, nodes: savedGraph.nodes, edges: savedGraph.edges };
+    } else if (path.endsWith('/workbench')) data = { generatedAt: '', role: 'scenario_owner', summary: {}, assets: {}, items: [] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
+  });
+
+  await page.goto('/scenarios');
+  await expect(page.getByText('1 项依赖待处理')).toBeVisible();
+  await page.getByText('Control', { exact: true }).last().click();
+  await page.getByRole('combobox', { name: '来源节点' }).selectOption('runtime-b');
+  await expect(page.locator('.scenario-edge--dependency')).toHaveCount(1);
+  await expect(page.getByText('1 项依赖待处理')).toHaveCount(0);
+  await page.getByRole('button', { name: '保存草稿' }).click();
+  await expect.poll(() => savedGraph?.nodes?.find((node: any) => node.id === 'control')?.data?.dependencySources).toEqual({ 'dep-runtime': 'runtime-b' });
+  await expect.poll(() => savedGraph?.edges).toEqual([expect.objectContaining({ source: 'runtime-b', target: 'control', kind: 'dependency', dependencyId: 'dep-runtime' })]);
+});

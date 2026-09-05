@@ -28,7 +28,7 @@ const links = [
   { to: '/disaster-recovery', label: '灾备目录', icon: GitBranch, environmentOwnerOnly: true },
   { to: '/runs', label: '运行', icon: PlayCircle },
   { to: '/platform-management', label: '平台管理', icon: Settings2, platformAdminOnly: true },
-  { to: '/manual', label: '操作说明书', icon: BookOpenText },
+  { to: '/manual', label: '平台说明书', icon: BookOpenText },
 ];
 
 export function AppShell() {

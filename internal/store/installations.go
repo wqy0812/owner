@@ -60,7 +60,15 @@ ORDER BY installed_at,component_id`, environmentID)
 }
 
 func (s *Store) UpsertEnvironmentComponentInstallation(ctx context.Context, installation domain.EnvironmentComponentInstallation) error {
-	_, err := s.execWithBusyRetry(ctx, `
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := validateNewRunReferences(ctx, tx, domain.Run{RetryOfRunID: installation.InstallRunID, InputSnapshot: map[string]any{"backup": installation.Backup}}); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 INSERT INTO environment_component_installations(
   environment_id,component_id,release_id,install_run_id,backup_ref,backup_metadata_json,test_only,installed_at
 ) VALUES(?,?,?,?,?,?,?,?)
@@ -75,7 +83,10 @@ ON CONFLICT(environment_id,component_id) DO UPDATE SET
 		installation.InstallRunID, installation.BackupRef, jsonText(installation.Backup),
 		installation.TestOnly, timeText(installation.InstalledAt),
 	)
-	return mapSQLError(err)
+	if err != nil {
+		return mapSQLError(err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteEnvironmentComponentInstallation(ctx context.Context, environmentID, componentID, installRunID string) error {

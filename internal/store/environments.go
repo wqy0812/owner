@@ -42,9 +42,6 @@ func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r d
 	defer tx.Rollback()
 	requireComplete := len(writes) > 0 && writes[0].RequireCompleteFacts
 	if len(writes) > 0 {
-		if err := materializeEnvironmentParametersTx(ctx, tx, &r, writes[0]); err != nil {
-			return err
-		}
 	}
 	if err := validateEnvironmentCatalogTx(ctx, tx, r, domain.EnvironmentRevision{}, false, true, requireComplete); err != nil {
 		return err
@@ -71,7 +68,7 @@ func environmentLifecycleImpact(ctx context.Context, q queryer, environmentID st
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_revisions WHERE environment_id=?`, environmentID).Scan(&impact.RevisionCount); err != nil {
 		return impact, err
 	}
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('running','awaiting_approval','queued') THEN 1 ELSE 0 END),0) FROM runs WHERE environment_id=?`, environmentID).Scan(&impact.RunCount, &impact.ActiveRunCount); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('running','awaiting_approval','queued') THEN 1 ELSE 0 END),0) FROM retained_run_history WHERE environment_id=?`, environmentID).Scan(&impact.RunCount, &impact.ActiveRunCount); err != nil {
 		return impact, err
 	}
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END),0) FROM component_image_builds WHERE environment_id=?`, environmentID).Scan(&impact.ImageBuildCount, &impact.ActiveImageBuildCount); err != nil {
@@ -206,9 +203,6 @@ func (s *Store) CreateEnvironmentRevision(ctx context.Context, r domain.Environm
 	var write EnvironmentRevisionWrite
 	if len(writes) > 0 {
 		write = writes[0]
-	}
-	if err := materializeEnvironmentParametersTx(ctx, tx, &r, write); err != nil {
-		return err
 	}
 	if len(writes) > 0 && write.ExpectedCurrentRevisionID != currentID {
 		return fmt.Errorf("%w: environment revision changed; refresh and retry", domain.ErrConflict)

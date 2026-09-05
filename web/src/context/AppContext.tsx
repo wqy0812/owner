@@ -17,9 +17,9 @@ interface Toast {
   message?: string;
 }
 
-export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench' | 'catalog-repository' | 'platform-options' | 'environment-parameter-definitions' | 'environment-variable-definitions' | 'environment-parameter-fields';
+export type RefreshTarget = 'components' | 'scenarios' | 'environments' | 'runs' | 'notifications' | 'workbench' | 'catalog-repository' | 'platform-options' | 'environment-variable-definitions' | 'environment-parameter-fields';
 
-export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench', 'catalog-repository', 'platform-options', 'environment-parameter-definitions', 'environment-variable-definitions', 'environment-parameter-fields'];
+export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'scenarios', 'environments', 'runs', 'notifications', 'workbench', 'catalog-repository', 'platform-options', 'environment-variable-definitions', 'environment-parameter-fields'];
 
 type RefreshTokens = Record<RefreshTarget, number>;
 
@@ -65,7 +65,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     workbench: 0,
     'catalog-repository': 0,
     'platform-options': 0,
-    'environment-parameter-definitions': 0,
     'environment-variable-definitions': 0,
     'environment-parameter-fields': 0,
   });
@@ -192,7 +191,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['environment.archived', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.unarchived', () => scheduleRefresh(['environments', 'workbench'])],
       ['platform_options.updated', () => scheduleRefresh(['platform-options', 'components', 'environments', 'scenarios'])],
-      ['platform_parameters.updated', () => scheduleRefresh(['environment-parameter-definitions', 'environment-variable-definitions', 'environment-parameter-fields'])],
+      ['platform_parameters.updated', () => scheduleRefresh(['environment-variable-definitions', 'environment-parameter-fields'])],
     ];
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {

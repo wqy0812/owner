@@ -1,3 +1,4 @@
+import { ComponentUsagePanel } from '../components/ComponentUsagePanel';
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Archive, Beaker, Boxes, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Container, ExternalLink, FileCode2, FilePlus2, Filter, GitBranch, History, PencilLine, Plus, Rocket, Search, Shield, Trash2, Undo2, Upload, UserRound } from 'lucide-react';
@@ -12,9 +13,10 @@ import {
 } from '../types/componentClassification';
 import { ComponentMappingOverview, defaultContractRelease, DependencyContractList, DependencyEditor, mappingCount, ParameterContractList, ParameterTable, parameterContractErrors } from '../components/ParameterEditors';
 import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
+import type { ComponentSummary, EvidenceSummary, ReleaseEvidenceSummary, RunSummary } from '../types/domain';
 import { environmentConstraintDimensions, environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
 import { parseComponentImportTemplate } from './componentTemplateImport';
-import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImage, ComponentImageBuild, ComponentLayer, ComponentRelease, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, PlaybookFile, Run, WorkExplanation } from '../types/domain';
+import type { ActionDefinition, Component, ComponentArtifact, ComponentDependency, ComponentImage, ComponentImageBuild, ComponentLayer, ComponentRelease, ComponentTestPlan, ComponentTestRequest, Environment, ImpactPreview, ParameterDefinition, PlaybookFile, PlaybookWorkspace, WorkExplanation } from '../types/domain';
 
 type ContractSection = 'dependencies' | 'parameters';
 type ContractEditIntent = ContractSection | 'all';
@@ -42,63 +44,41 @@ function CompatibilityBadge({ release }: { release: ComponentRelease }) {
   return <span className={release.compatibility === 'breaking' ? 'breaking-badge' : 'release-line-badge'}>{label}</span>;
 }
 
-const PRIMARY_ACTIONS = new Set<ActionDefinition['type']>(['upgrade', 'install', 'configure', 'preflight', 'inspect']);
-
 function releaseIsReady(release: ComponentRelease) {
   return release.readiness.status !== 'blocked';
 }
 
-function runHasOrderedVerification(run: Run, primary: (action: ActionDefinition['type']) => boolean) {
-  let primarySeen = false;
-  for (const step of run.steps ?? []) {
-    const action = step.action as ActionDefinition['type'];
-    if (primary(action)) primarySeen = true;
-    else if (primarySeen && action === 'verify') return true;
-  }
-  return false;
+function componentNeedsAttention(component: ComponentSummary) {
+  return component.needsAttention;
 }
 
-function newestRun(runs: Run[], predicate: (run: Run) => boolean) {
-  return runs.filter(predicate).sort((left, right) => Date.parse(right.finishedAt ?? right.createdAt ?? '') - Date.parse(left.finishedAt ?? left.createdAt ?? ''))[0];
+function releaseEvidence(evidence: ReleaseEvidenceSummary | undefined, mode: 'install' | 'rollback') {
+  return mode === 'install' ? evidence?.currentInstall ?? evidence?.historicalInstall : evidence?.currentRollback ?? evidence?.historicalRollback;
 }
 
-function componentNeedsAttention(component: Component) {
-  const releases = component.releases?.length ? component.releases : component.latestRelease ? [component.latestRelease] : [];
-  const draft = releases.find((release) => release.state === 'draft');
-  const release = draft ?? component.latestRelease ?? releases[0];
-  if (!release) return true;
-  return Boolean(draft) || !releaseIsReady(release);
-}
-
-function releaseEvidence(release: ComponentRelease, runs: Run[], mode: 'install' | 'rollback') {
-  return newestRun(runs, (run) => run.kind === 'component_test'
-    && run.componentReleaseId === release.id
-    && (mode === 'rollback'
-      ? runHasOrderedVerification(run, (action) => action === 'rollback')
-      : runHasOrderedVerification(run, (action) => PRIMARY_ACTIONS.has(action))));
-}
-
-function releaseReadyForPublish(release: ComponentRelease, _runs: Run[]) {
+function releaseReadyForPublish(release: ComponentRelease) {
   return releaseIsReady(release);
 }
 
-function EvidenceLink({ run, stale = false }: { run?: Run; stale?: boolean }) {
+function EvidenceLink({ run }: { run?: EvidenceSummary }) {
   if (!run) return <small className="verification-evidence verification-evidence--missing">暂无 Run 证据</small>;
+  const stale = !run.matchesContract;
   return <Link className={`verification-evidence${run.status === 'succeeded' && !stale ? ' verification-evidence--passed' : ' verification-evidence--failed'}`} to={`/runs?selected=${run.id}`} onClick={(event) => event.stopPropagation()}>
     {run.environmentName ?? '未知环境'} · {formatTime(run.finishedAt ?? run.createdAt)}
+    {run.status === 'failed' || run.status === 'interrupted' ? ' · 验证失败' : run.status === 'cancelled' ? ' · 已取消' : ''}
     {stale ? ' · 合同已变更' : ''}
     <ExternalLink size={12} aria-hidden="true" />
   </Link>;
 }
 
-function componentEvidenceLabel(release: ComponentRelease, run: Run) {
+function componentEvidenceLabel(release: ComponentRelease, run: RunSummary) {
   if (run.id === release.readiness.transitionEvidenceRunId) return '当前升级闭环证据';
   if (run.id === release.readiness.installEvidenceRunId) return '当前安装证据';
   if (run.id === release.readiness.rollbackEvidenceRunId) return '当前回退证据';
   return '历史证据';
 }
 
-function componentRunLabel(run: Run) {
+function componentRunLabel(run: RunSummary) {
   switch (run.action) {
     case 'rollback': return '回退验证';
     case 'upgrade': return '升级闭环验证';
@@ -110,14 +90,14 @@ function componentRunLabel(run: Run) {
   }
 }
 
-function scenarioRunLabel(run: Run) {
+function scenarioRunLabel(run: RunSummary) {
   return run.kind === 'scenario_test' ? '完整测试' : '正式运行';
 }
 
 interface ScenarioRunEvidenceGroup {
   id: string;
   name: string;
-  runs: Run[];
+  runs: RunSummary[];
   testCount: number;
   runCount: number;
 }
@@ -130,7 +110,7 @@ function ReleaseRunEvidenceModal({ release, onClose }: { release: ComponentRelea
     const groups = new Map<string, ScenarioRunEvidenceGroup>();
     for (const run of runs ?? []) {
       if (run.kind !== 'scenario_test' && run.kind !== 'scenario_run') continue;
-      const id = run.scenarioId ?? run.scenarioRevisionId ?? run.id;
+      const id = run.scenarioId ?? run.id;
       const group = groups.get(id) ?? { id, name: run.scenarioName ?? '未知场景', runs: [], testCount: 0, runCount: 0 };
       group.runs.push(run);
       if (run.kind === 'scenario_test') group.testCount++;
@@ -197,9 +177,9 @@ function ReleaseReviewDetails({ release }: { release: ComponentRelease }) {
   </section>;
 }
 
-function DraftReadiness({ release, runs, onContract, onReview, onLifecycle, onImage, onArtifact, onValidate, onPublish }: {
+function DraftReadiness({ release, evidence, onContract, onReview, onLifecycle, onImage, onArtifact, onValidate, onPublish }: {
   release: ComponentRelease;
-  runs: Run[];
+  evidence?: ReleaseEvidenceSummary;
   onContract: () => void;
   onReview: () => void;
   onLifecycle: () => void;
@@ -209,17 +189,16 @@ function DraftReadiness({ release, runs, onContract, onReview, onLifecycle, onIm
   onPublish: () => void;
 }) {
   const lifecycle = lifecycleSummary(release.actions, Boolean(release.parentReleaseId));
-  const install = runs.find((run) => run.id === release.readiness.installEvidenceRunId) ?? releaseEvidence(release, runs, 'install');
-  const rollback = runs.find((run) => run.id === release.readiness.rollbackEvidenceRunId) ?? releaseEvidence(release, runs, 'rollback');
-  const transition = runs.find((run) => run.id === release.readiness.transitionEvidenceRunId);
+  const install = releaseEvidence(evidence, 'install');
+  const rollback = releaseEvidence(evidence, 'rollback');
+  const transition = evidence?.currentTransition ?? evidence?.historicalTransition;
   const evolution = Boolean(release.parentReleaseId);
-  const runtimeMatrix = release.readiness.runtimeEvidence ?? [];
   const blockerCodes = new Set(release.readiness.blockers.map((item) => item.code));
   const checks = [
     ![...blockerCodes].some((code) => code.includes('contract') || code.includes('dependency')),
     !blockerCodes.has('lifecycle_action_missing'),
     release.review.status === 'approved',
-    ...(runtimeMatrix.length ? runtimeMatrix.map((row) => row.complete) : evolution ? [Boolean(release.readiness.transitionEvidenceRunId)] : [Boolean(release.readiness.installEvidenceRunId), Boolean(release.readiness.rollbackEvidenceRunId)]),
+    ...(evolution ? [Boolean(release.readiness.transitionEvidenceRunId)] : [Boolean(release.readiness.installEvidenceRunId), Boolean(release.readiness.rollbackEvidenceRunId)]),
   ];
   const complete = checks.filter(Boolean).length;
   const ready = complete === checks.length;
@@ -234,7 +213,7 @@ function DraftReadiness({ release, runs, onContract, onReview, onLifecycle, onIm
       <section className="readiness-step readiness-step--done"><CheckCircle2 size={18} /><div><strong>Release 合同</strong><p>{release.dependencies?.length ?? 0} 项依赖 · {release.parameters?.length ?? 0} 个参数</p></div><button className="icon-text" onClick={onContract}>编辑合同</button></section>
       <section className={release.review.status === 'approved' ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{release.review.status === 'approved' ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>平台合同审核</strong><p>{release.review.status === 'approved' ? '当前参数、Action 与环境绑定已批准' : release.review.status === 'pending' ? '等待平台 Owner 审核' : release.review.status === 'rejected' ? `已驳回：${release.review.comment || '请修改后重提'}` : '请在版本列表提交审核'}</p></div>{release.review.status === 'rejected' && <button className="icon-text" onClick={onReview}>查看审批意见</button>}</section>
       <section className={lifecycle.completed === lifecycle.total ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{lifecycle.completed === lifecycle.total ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>生命周期动作</strong><p>{lifecycle.completed}/{lifecycle.total}：{lifecycle.labels}</p></div><button className="icon-text" onClick={onLifecycle}>配置动作</button></section>
-      {runtimeMatrix.length ? runtimeMatrix.map((row) => <section key={`${row.runtime}:${row.version}`} className={row.complete ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{row.complete ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>{row.runtime} · {row.version.split('@').pop()}</strong><p>安装/验证：{row.installEvidenceRunId ? '已完成' : '缺失'} · 回退/验证：{row.rollbackEvidenceRunId ? '已完成' : '缺失'}</p></div><button className="icon-text" onClick={onValidate}>环境验证</button></section>) : evolution ? <section className={release.readiness.transitionEvidenceRunId ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{release.readiness.transitionEvidenceRunId ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>升级与回退闭环</strong><EvidenceLink run={transition} /></div><button className="icon-text" onClick={onValidate}>环境验证</button></section> : <>
+      {evolution ? <section className={release.readiness.transitionEvidenceRunId ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{release.readiness.transitionEvidenceRunId ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>升级与回退闭环</strong><EvidenceLink run={transition} /></div><button className="icon-text" onClick={onValidate}>环境验证</button></section> : <>
         <section className={release.readiness.installEvidenceRunId ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{release.readiness.installEvidenceRunId ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>安装与验证</strong><EvidenceLink run={install} /></div><button className="icon-text" onClick={onValidate}>环境验证</button></section>
         <section className={release.readiness.rollbackEvidenceRunId ? 'readiness-step readiness-step--done' : 'readiness-step readiness-step--blocked'}>{release.readiness.rollbackEvidenceRunId ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}<div><strong>回退与回退后验证</strong><EvidenceLink run={rollback} /></div><button className="icon-text" onClick={onValidate}>环境验证</button></section>
       </>}
@@ -249,9 +228,7 @@ function DraftReadiness({ release, runs, onContract, onReview, onLifecycle, onIm
 export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: components, loading, error, isRefreshing, reload } = useApiData((signal) => api.components(signal), [user.id], 'components');
-  const { data: runs } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
-  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
+  const { data: components, loading, error, isRefreshing, reload } = useApiData((signal) => api.componentSummaries(signal), [user.id], 'components');
   const selectedId = searchParams.get('selected') ?? undefined;
   const selectedReleaseId = searchParams.get('release') ?? undefined;
   const deepLinkAction = searchParams.get('action') ?? undefined;
@@ -282,20 +259,22 @@ export function ComponentsPage() {
   const [layerOpen, setLayerOpen] = useState<Partial<Record<ComponentLayer, boolean>>>({});
   const [busy, setBusy] = useState(false);
 
-  const selected = useMemo(
-    () => selectedId ? components?.find((item) => item.id === selectedId) : components?.[0],
-    [components, selectedId],
-  );
+  const detailId = selectedId ?? components?.[0]?.id;
+  const detailQuery = useApiData((signal) => detailId ? api.component(detailId, signal) : Promise.resolve(undefined), [user.id, detailId], ['components', 'runs', 'workbench']);
+  const selected = detailQuery.data;
+  const { data: editorComponents, error: editorComponentsError, loading: editorComponentsLoading, reload: reloadEditorComponents } = useApiData((signal) => editingContract ? api.components(signal) : Promise.resolve(undefined), [user.id, editingContract], 'components');
+  const contractComponents = selected ? [selected] : [];
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
   const releaseGroups = selected?.releaseLines?.length ? selected.releaseLines : releases.length ? [{ id: 'default', name: '默认发布线', releases }] : [];
   const reviewRelease = releases.find((release) => release.id === reviewReleaseId && release.review.status === 'rejected');
   const contractRelease = releases.find((release) => release.id === (contractReleaseId ?? selectedReleaseId))
     ?? (pendingContractRelease?.id === contractReleaseId ? pendingContractRelease : undefined)
+    ?? releases.find((release) => release.id === components?.find((component) => component.id === selected?.id)?.defaultReleaseId)
     ?? defaultContractRelease(releases, selected?.latestRelease);
   const editableDrafts = releases.filter((release) => release.state === 'draft');
   const editableDraft = editableDrafts[0];
   const activeDraft = contractRelease?.state === 'draft' ? contractRelease : undefined;
-  const releaseWorkItem = workbench?.items.find((item) => item.subject.type === 'component_release' && item.subject.id === contractRelease?.id);
+  const releaseWorkItem = selected?.readContext?.workItems.find((item) => item.subject.type === 'component_release' && item.subject.id === contractRelease?.id);
   const visibleEditRelease = editRelease?.componentId === selected?.id ? editRelease : undefined;
   const showContractEditor = Boolean(editingContract && contractRelease?.state === 'draft');
   const deprecationScenarioRunCount = deprecateRelease ? impact?.scenarioRunCount ?? 0 : 0;
@@ -304,6 +283,8 @@ export function ComponentsPage() {
   const canTest = mine || user.role === 'environment_owner';
   useEffect(() => {
     setContractReleaseId(selectedReleaseId);
+    setEvidenceRelease((current) => current?.id === selectedReleaseId ? current : undefined);
+    setTestRelease((current) => current?.id === selectedReleaseId ? current : undefined);
   }, [selectedReleaseId]);
   useEffect(() => {
     setContractReleaseId(undefined);
@@ -322,7 +303,7 @@ export function ComponentsPage() {
     setEditRelease(undefined);
     setImageRelease(undefined);
     setArtifactRelease(undefined);
-  }, [selected?.id]);
+  }, [selected?.id, user.id]);
   useEffect(() => {
     if (!deepLinkAction) {
       handledDeepLink.current = undefined;
@@ -380,7 +361,7 @@ export function ComponentsPage() {
       const matchesQuery = !query || `${component.name} ${component.slug ?? ''}`.toLocaleLowerCase().includes(query);
       if (!matchesQuery) return false;
       if (catalogFilter === 'mine') return component.ownerId === user.id;
-      if (catalogFilter === 'draft') return component.ownerId === user.id && component.releases?.some((release) => release.state === 'draft');
+      if (catalogFilter === 'draft') return component.ownerId === user.id && component.hasDraft;
       if (catalogFilter === 'attention') return component.ownerId === user.id && componentNeedsAttention(component);
       return true;
     });
@@ -392,7 +373,7 @@ export function ComponentsPage() {
   const selectedInCatalog = Boolean(selected && filteredComponents.some((component) => component.id === selected.id));
   function isLayerOpen(layer: ComponentLayer) {
     if (layerOpen[layer] !== undefined) return layerOpen[layer];
-    return selected?.layer === layer;
+    return (components?.find((component) => component.id === detailId)?.layer ?? selected?.layer) === layer;
   }
   function toggleLayer(layer: ComponentLayer) {
     setLayerOpen((current) => ({ ...current, [layer]: !isLayerOpen(layer) }));
@@ -437,7 +418,7 @@ export function ComponentsPage() {
 
   async function confirmPublish() {
     if (!publishRelease) return;
-    if (!releaseReadyForPublish(publishRelease, runs ?? [])) {
+    if (!releaseReadyForPublish(publishRelease)) {
       notify('error', '暂不能发布', '请先完成生命周期、安装验证和回退验证。');
       return;
     }
@@ -457,7 +438,7 @@ export function ComponentsPage() {
   }
 
   async function toggleCandidate(release: ComponentRelease) {
-    if (!release.candidate && !releaseReadyForPublish(release, runs ?? [])) {
+    if (!release.candidate && !releaseReadyForPublish(release)) {
       notify('error', '暂不能加入候选集', '请先完成生命周期、安装验证和回退验证。');
       return;
     }
@@ -570,8 +551,9 @@ export function ComponentsPage() {
                 ['mine', '我负责的'],
                 ['draft', '有 Draft'],
                 ['attention', '待处理'],
-              ] as Array<[CatalogFilter, string]>).map(([value, label]) => <button key={value} type="button" className={catalogFilter === value ? 'active' : ''} aria-pressed={catalogFilter === value} onClick={() => setCatalogFilter(value)}>{label}</button>)}
+              ] as Array<[CatalogFilter, string]>).map(([value, label]) => <button key={value} type="button" className={catalogFilter === value ? 'active' : ''} aria-pressed={catalogFilter === value} title={value === 'attention' ? '我负责的组件中，尚无版本或有 Draft 的组件' : undefined} onClick={() => setCatalogFilter(value)}>{label}</button>)}
             </div>
+            {catalogFilter === 'attention' ? <p>待处理：我负责且尚无版本或有 Draft 的组件。文件与验证问题请查看组件详情。</p> : null}
             {components?.length && filteredComponents.length ? layeredComponents.map(({ layer, components: layerComponents }) => {
               if ((catalogSearch || catalogFilter !== 'all') && !layerComponents.length) return null;
               const open = isLayerOpen(layer.value);
@@ -582,7 +564,7 @@ export function ComponentsPage() {
                   {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                 </button>
                 {open ? <div id={`catalog-layer-${layer.value}`}>{layerComponents.length ? layerComponents.map((component) => (
-                  <button key={component.id} type="button" disabled={Boolean(editRelease) && selected?.id !== component.id} className={`catalog-item${selected?.id === component.id ? ' active' : ''}`} onClick={() => selectComponent(component.id)}>
+                  <button key={component.id} type="button" disabled={Boolean(editRelease) && selected?.id !== component.id} className={`catalog-item${detailId === component.id ? ' active' : ''}`} onClick={() => selectComponent(component.id)}>
                     <span className="catalog-item__icon"><Boxes size={18} /></span>
                     <span><strong>{component.name}</strong><small>{component.tags.length ? component.tags.join(' · ') : '暂无标签'}</small></span>
                     {component.ownerId === user.id && <span className="mine-dot" title="我负责的组件" />}
@@ -592,7 +574,8 @@ export function ComponentsPage() {
             }) : components?.length ? <EmptyState title="没有匹配的组件" description="请调整搜索词或筛选条件。" /> : <EmptyState title="暂无组件" description="组件 Owner 可以创建第一个组件。" />}
           </aside>
 
-          {selected ? <section className="detail-stack">
+          {detailQuery.error && !selected ? <section className="panel"><ErrorBlock message={detailQuery.error} onRetry={() => void detailQuery.reload()} /></section> : detailId && !selected ? <section className="panel"><LoadingBlock label="正在读取组件详情…" /></section> : selected ? <section className="detail-stack">
+            <RefreshNotice loading={detailQuery.isRefreshing} error={detailQuery.error} onRetry={() => void detailQuery.reload()} />
             {!selectedInCatalog ? <div className="catalog-selection-notice"><span>当前详情不在目录筛选结果中：{selected.name}</span><button type="button" className="icon-text" onClick={() => { setCatalogSearch(''); setCatalogFilter('all'); }}>清除筛选</button></div> : null}
             <article className="panel component-hero">
               <div className="component-hero__title">
@@ -608,10 +591,11 @@ export function ComponentsPage() {
             </article>
 
             <StatusExplanationPanel item={releaseWorkItem} />
+            {(mine || user.role === "platform_admin") && <ComponentUsagePanel key={selected.id} component={selected} />}
 
             {mine && activeDraft ? <DraftReadiness
               release={activeDraft}
-              runs={runs ?? []}
+              evidence={selected.readContext?.evidence[activeDraft.id]}
               onContract={() => { selectContractRelease(activeDraft.id); setEditingContract(true); }}
               onReview={() => setReviewReleaseId(activeDraft.id)}
               onLifecycle={() => setEditRelease(activeDraft)}
@@ -624,19 +608,19 @@ export function ComponentsPage() {
             <article className="panel">
               <header className="panel__header"><div><span className="panel__icon"><Rocket size={18} /></span><div><h2>发布历史</h2><p>点击版本可切换下方依赖和参数合同；已发布版本不可修改</p></div></div></header>
               {releases.length ? <div className="release-table">
-                <div className="release-table__head"><span>版本</span><span>适配环境</span><span>验证</span><span>依赖 / 动作</span><span>创建 / 发布时间</span><span /></div>
+                <div className="release-table__head"><span>版本</span><span>适配标签</span><span>验证</span><span>依赖 / 动作</span><span>创建 / 发布时间</span><span /></div>
                 {releaseGroups.flatMap((line) => [<div key={`line:${line.id}`} className="release-line-header"><GitBranch size={15} /><strong>{line.name}</strong><span>{line.releases.length} 个版本</span></div>, ...line.releases.map((release) => {
                   const active = contractRelease?.id === release.id;
                   const lifecycle = lifecycleSummary(release.actions, Boolean(release.parentReleaseId));
-                  const evidence = releaseEvidence(release, runs ?? [], 'install');
-                  const publishReady = releaseReadyForPublish(release, runs ?? []);
+                  const evidence = releaseEvidence(selected.readContext?.evidence[release.id], 'install');
+                  const publishReady = releaseReadyForPublish(release);
                   return <div key={release.id} className={`release-row${active ? ' release-row--active' : ''}`} onClick={() => selectContractRelease(release.id)}>
                     <button type="button" className="release-row__version" aria-pressed={active} aria-label={`查看 ${release.version} 的依赖和参数合同`} onClick={() => selectContractRelease(release.id)}>
                       <span className="release-state-line"><strong>{release.version}</strong><StatusPill status={release.state} />{release.candidate && <StatusPill status="candidate">候选集</StatusPill>}<StatusPill status={release.review.status}>{release.review.status === 'approved' ? '合同已审核' : release.review.status === 'pending' ? '合同审核中' : release.review.status === 'rejected' ? '合同已驳回' : '合同待提交'}</StatusPill><CompatibilityBadge release={release} /></span>
                       <small>{release.releaseNotes ?? '未填写发布说明'}</small>
                     </button>
                     <EnvironmentConstraints constraints={release.environmentConstraints} />
-                    <div className="release-verification"><StatusPill status={release.readiness.status} /><EvidenceLink run={evidence} stale={!release.readiness.installEvidenceRunId} /></div>
+                    <div className="release-verification"><StatusPill status={release.readiness.status} /><EvidenceLink run={evidence} /></div>
                     <div className="release-facts"><span>{release.dependencies?.length ?? 0} 项依赖</span><span>{mappingCount(release)} 个参数映射</span><span>{publicCount(release)} 个公开参数</span><span className={`lifecycle-completeness${lifecycle.completed === lifecycle.total ? ' lifecycle-completeness--complete' : ''}`}>动作 {lifecycle.completed}/{lifecycle.total}：{lifecycle.labels}</span></div>
                     <div>{release.releasedAt ? formatTime(release.releasedAt) : `创建 ${formatTime(release.createdAt)}`}</div>
                     <div className="row-actions" onClick={(event) => event.stopPropagation()}>
@@ -660,10 +644,10 @@ export function ComponentsPage() {
               </div> : <EmptyState title="尚无发布版本" description="创建 Draft 并配置安装、验证和升级动作。" />}
             </article>
 
-            <ComponentMappingOverview releases={releases} components={components ?? []} />
+            <ComponentMappingOverview releases={releases} components={contractComponents} />
             {!contractReleaseId && !selectedReleaseId && selected.latestRelease && contractRelease && selected.latestRelease.id !== contractRelease.id ? <p className="mapping-empty contract-hint">当前展示 {contractRelease.lineName} · {contractRelease.version}，因为它有参数映射。默认版本 {selected.latestRelease.lineName} · {selected.latestRelease.version} 没有映射。</p> : null}
             {showContractEditor && contractRelease ? (
-              <ReleaseContractEditor key={contractRelease.id} release={contractRelease} components={components ?? []} focusSection={contractFocus} onCancel={() => { setEditingContract(false); setContractFocus(undefined); }} onSaved={() => { setEditingContract(false); setContractFocus(undefined); signalRefresh('components'); }} />
+              editorComponentsError ? <ErrorBlock message={editorComponentsError} onRetry={() => void reloadEditorComponents()} /> : editorComponentsLoading || !editorComponents ? <LoadingBlock label="正在读取可引用的组件合同…" /> : <ReleaseContractEditor key={contractRelease.id} release={contractRelease} components={editorComponents} focusSection={contractFocus} onCancel={() => { setEditingContract(false); setContractFocus(undefined); }} onSaved={() => { setEditingContract(false); setContractFocus(undefined); signalRefresh('components'); }} />
             ) : (
               <div className="two-column">
                 <article className="panel">
@@ -671,14 +655,14 @@ export function ComponentsPage() {
                     <div><span className="panel__icon panel__icon--cyan"><GitBranch size={18} /></span><div><h2>直接依赖</h2><p>{contractRelease ? `${contractRelease.version} 锁定的上游，以及引用了哪个公开参数` : '锁定上游版本，并标明引用了哪个公开参数'}</p></div></div>
                     {mine && contractRelease?.state === 'draft' ? <button type="button" className="button button--quiet" aria-label="编辑直接依赖" onClick={() => startEditingContract('dependencies')}><PencilLine size={15} /> 编辑</button> : null}
                   </header>
-                  <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={components ?? []} />
+                  <DependencyContractList dependencies={contractRelease?.dependencies ?? []} components={contractComponents} />
                 </article>
                 <article className="panel">
                   <header className="panel__header">
                     <div><span className="panel__icon panel__icon--amber"><Shield size={18} /></span><div><h2>参数合同</h2><p>{contractRelease ? `${contractRelease.version} 的公开参数可被下游引用；内部参数只给本组件使用` : '公开参数可被下游引用；内部参数只给本组件使用'}</p></div></div>
                     {mine && contractRelease?.state === 'draft' ? <button type="button" className="button button--quiet" aria-label="编辑参数合同" onClick={() => startEditingContract('parameters')}><PencilLine size={15} /> 编辑</button> : null}
                   </header>
-                  <ParameterContractList release={contractRelease} components={components ?? []} />
+                  <ParameterContractList release={contractRelease} components={contractComponents} consumers={selected.readContext?.parameterConsumers} />
                 </article>
               </div>
             )}
@@ -877,7 +861,7 @@ function ImageBuildModal({ release, onClose }: { release: ComponentRelease; onCl
         <div className="form-grid image-build-form">
           <label className="span-2"><span>目标环境</span><select aria-label="目标环境" required value={environmentId} disabled={environmentsLoading} onChange={(event) => setEnvironmentId(event.target.value)}><option value="">请选择环境</option>{environments?.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · r{environment.currentRevision?.revision ?? '?'}</option>)}</select><small>{registry ? `IMAGE_REGISTRY=${registry}` : selectedEnvironment ? '该环境尚未配置 IMAGE_REGISTRY，请联系环境 Owner。' : '正在读取可用环境…'}</small></label>
           <label className="span-2"><span>Dockerfile</span><input aria-label="Dockerfile" type="file" required onChange={(event) => setDockerfile(event.target.files?.[0])} /><small>UTF-8，最大 1 MiB，必须包含 FROM 指令</small></label>
-          <label className="span-2"><span>镜像标签</span><input value={tag} required pattern="[a-z0-9][a-z0-9._-]{0,127}" onChange={(event) => setTag(event.target.value.toLowerCase())} /><small>镜像路径固定为 IMAGE_REGISTRY / components / 组件 slug : 标签</small></label>
+          <label className="span-2"><span>镜像标签</span><input value={tag} required pattern="[a-z0-9][a-z0-9._\-]{0,127}" onChange={(event) => setTag(event.target.value.toLowerCase())} /><small>镜像路径固定为 IMAGE_REGISTRY / components / 组件 slug : 标签</small></label>
         </div>
         <button disabled={busy || !dockerfile || !environmentId || !registry} className="button button--primary" type="submit"><Upload size={16} /> {busy ? '提交中…' : '上传并构建'}</button>
         </> : <>
@@ -1088,21 +1072,20 @@ function CredentialNameEditor({ values, onChange }: { values: string[]; onChange
   </div>;
 }
 
-function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyChange }: { releaseId: string; releases: ComponentRelease[]; actions: ActionDefinition[]; onChange: Dispatch<SetStateAction<ActionDefinition[]>>; onDirtyChange: (dirty: boolean) => void }) {
-  const { notify, platformOptionCategories } = useApp();
+function PlaybookActionEditor({ releaseId, releases, actions, onChange, onPersisted, onDirtyChange }: { releaseId: string; releases: ComponentRelease[]; actions: ActionDefinition[]; onChange: Dispatch<SetStateAction<ActionDefinition[]>>; onPersisted: (actions: ActionDefinition[]) => void; onDirtyChange: (dirty: boolean) => void }) {
+	const { notify, platformOptionCategories } = useApp();
   const hostGroups = platformOptionCategories.find((category) => category.kind === 'host_group')?.options ?? [];
   const [selected, setSelected] = useState(0);
   const [content, setContent] = useState('');
-  const initialFilename = actions[0]?.playbook?.split('/').pop() || `${actions[0]?.type ?? 'install'}.yml`;
-  const [filename, setFilename] = useState(initialFilename);
-  const [savedEditor, setSavedEditor] = useState({ content: '', filename: initialFilename });
+  const [savedContent, setSavedContent] = useState('');
+  const [savedSHA256, setSavedSHA256] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const pendingSelection = useRef<number>();
   const loadRequest = useRef(0);
   const action = actions[selected];
   const releaseIds = new Set(releases.map((release) => release.id));
-  const dirty = content !== savedEditor.content || filename !== savedEditor.filename;
+  const dirty = content !== savedContent;
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
@@ -1122,9 +1105,8 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
     if (selected < actions.length) return;
     setSelected(Math.max(0, actions.length - 1));
     setContent('');
-    const fallback = actions.at(-1)?.playbook?.split('/').pop() || `${actions.at(-1)?.type ?? 'install'}.yml`;
-    setFilename(fallback);
-    setSavedEditor({ content: '', filename: fallback });
+    setSavedContent('');
+    setSavedSHA256('');
   }, [actions.length, selected]);
 
   function selectAction(index: number) {
@@ -1134,10 +1116,8 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
     setLoading(false);
     setSelected(index);
     setContent('');
-    const path = actions[index]?.playbook;
-    const nextFilename = path?.split('/').pop() || `${actions[index]?.type ?? 'install'}.yml`;
-    setFilename(nextFilename);
-    setSavedEditor({ content: '', filename: nextFilename });
+    setSavedContent('');
+    setSavedSHA256('');
   }
 
   function updateAction(patch: Partial<ActionDefinition>, index = selected) {
@@ -1157,33 +1137,53 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
     });
     const template = '---\n- name: Install component\n  hosts: all\n  become: true\n  tasks: []\n';
     setContent(template);
-    setFilename('install.yml');
-    setSavedEditor({ content: '', filename: 'install.yml' });
+    setSavedContent('');
+    setSavedSHA256('');
   }
 
-  function removeAction() {
-    if (!action || !window.confirm(`确认移除 ${action.type} 动作？托管文件不会立即删除。`)) return;
-    onChange((current) => current.filter((_, index) => index !== selected));
+  async function currentWorkspaceExpectation() {
+    const workspace = await api.playbookWorkspace(releaseId);
+    return {
+      fileSHA256: savedSHA256 || workspace.files.find((file) => file.path === `${action?.type}.yml`)?.sha256 || '',
+      treeSHA256: workspace.treeSha256,
+    };
+  }
+
+  async function removeAction() {
+		if (!action || !window.confirm(action.id
+			? `确认立即删除 ${action.type} Action 及入口 ${action.type}.yml？该操作不会因关闭 Draft 编辑器而撤销。`
+			: `确认移除尚未保存的 ${action.type} Action？`)) return;
+		if (action.id) {
+      try {
+        const expected = await currentWorkspaceExpectation();
+        await api.deleteActionPlaybook(releaseId, action.type, expected.fileSHA256, expected.treeSHA256);
+      } catch (reason) {
+        notify('error', '删除动作入口失败', displayError(reason));
+        return;
+      }
+    }
+		const remaining = actions.filter((_, index) => index !== selected);
+		if (action.id) onPersisted(remaining);
+		else onChange(remaining);
     loadRequest.current += 1;
     setLoading(false);
     setSelected(Math.max(0, selected - 1));
     setContent('');
-    const previous = actions[Math.max(0, selected - 1)];
-    const previousFilename = previous?.playbook?.split('/').pop() || `${previous?.type ?? 'install'}.yml`;
-    setFilename(previousFilename);
-    setSavedEditor({ content: '', filename: previousFilename });
+    setSavedContent('');
+    setSavedSHA256('');
+		if (action.id) notify('success', 'Action 已删除', '动作配置、入口文件与工作区清单已原子更新。');
   }
 
   async function loadPlaybook() {
-    if (!action?.playbook) return;
+    if (!action) return;
     const request = ++loadRequest.current;
     setLoading(true);
     try {
-      const playbook = await api.playbook(releaseId, action.playbook);
+      const playbook = await api.playbook(releaseId, action.type);
       if (request !== loadRequest.current) return;
       setContent(playbook.content);
-      setFilename(playbook.filename);
-      setSavedEditor({ content: playbook.content, filename: playbook.filename });
+      setSavedContent(playbook.content);
+      setSavedSHA256(playbook.sha256);
     } catch (reason) {
       if (request !== loadRequest.current) return;
       notify('error', '读取 Playbook 失败', displayError(reason));
@@ -1197,12 +1197,16 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
     const actionIndex = selected;
     setSaving(true);
     try {
-      const playbook = await api.uploadPlaybook(releaseId, file);
-      setContent(playbook.content);
-      setFilename(playbook.filename);
-      updateAction({ playbook: playbook.path }, actionIndex);
-      setSavedEditor({ content: playbook.content, filename: playbook.filename });
-      notify('success', 'Playbook 已上传', '托管路径已自动绑定到当前动作；保存 Draft 后生效。');
+      if (!action) return;
+      const expected = await currentWorkspaceExpectation();
+      const playbook = await api.uploadPlaybook(releaseId, action, file, expected.fileSHA256, expected.treeSHA256);
+		const persistedAction = { ...(playbook.action ?? action), playbook: playbook.path };
+		const nextActions = actions.map((item, index) => index === actionIndex ? persistedAction : item);
+		setContent(playbook.content);
+		onPersisted(nextActions);
+      setSavedContent(playbook.content);
+      setSavedSHA256(playbook.sha256);
+	  notify('success', 'Action 已保存', '动作配置、入口文件与工作区清单已作为一个操作保存。');
     } catch (reason) {
       notify('error', '上传 Playbook 失败', displayError(reason));
     } finally {
@@ -1218,11 +1222,14 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
     const actionIndex = selected;
     setSaving(true);
     try {
-      const playbook = await api.savePlaybook(releaseId, filename, content);
-      setFilename(playbook.filename);
-      updateAction({ playbook: playbook.path }, actionIndex);
-      setSavedEditor({ content, filename: playbook.filename });
-      notify('success', 'Playbook 已保存', '托管路径已自动绑定到当前动作；保存 Draft 后生效。');
+      const expected = await currentWorkspaceExpectation();
+		const playbook = await api.savePlaybook(releaseId, action, content, expected.fileSHA256, expected.treeSHA256);
+		const persistedAction = { ...(playbook.action ?? action), playbook: playbook.path };
+		const nextActions = actions.map((item, index) => index === actionIndex ? persistedAction : item);
+		onPersisted(nextActions);
+      setSavedContent(content);
+      setSavedSHA256(playbook.sha256);
+	  notify('success', 'Action 已保存', '动作配置、入口文件与工作区清单已作为一个操作保存。');
     } catch (reason) {
       notify('error', '保存 Playbook 失败', displayError(reason));
     } finally {
@@ -1240,16 +1247,17 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
         {actions.map((item, index) => <button key={`${item.type}-${index}`} type="button" disabled={saving} className={selected === index ? 'active' : ''} onClick={() => selectAction(index)}>{ACTION_OPTIONS.find((option) => option.value === item.type)?.label ?? item.type}</button>)}
       </div>
       <div className="form-grid playbook-action-fields">
-        <label><span>动作类型</span><select value={action.type} onChange={(event) => {
+        <label><span>动作类型</span><select value={action.type} disabled={Boolean(action.id)} onChange={(event) => {
           const type = event.target.value as ActionDefinition['type'];
-          const previousType = action.type;
-          updateAction({ type, name: !action.name || action.name === previousType ? type : action.name, idempotent: type === 'install' ? action.idempotent : false });
-          if (filename === `${previousType}.yml` || filename === `${previousType}.yaml`) setFilename(`${type}.yml`);
-        }}>{ACTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.value} · {option.label}</option>)}</select></label>
+          setContent('');
+          setSavedContent('');
+          setSavedSHA256('');
+          updateAction({ type, name: !action.name || action.name === action.type ? type : action.name, idempotent: type === 'install' ? action.idempotent : false });
+        }}>{ACTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.value} · {option.label}</option>)}</select>{action.id ? <small>已保存动作的类型不可修改；如需更换，请删除后新建。</small> : null}</label>
         <label><span>目标主机组</span><select required value={action.hostGroup ?? ''} onChange={(event) => updateAction({ hostGroup: event.target.value })}><option value="">请选择主机组</option>{hostGroups.map((option) => <option key={option.id} value={option.value}>{option.label}</option>)}</select></label>
         <label><span>超时（秒）</span><input type="number" min={1} value={action.timeoutSeconds ?? 1800} onChange={(event) => updateAction({ timeoutSeconds: Number(event.target.value) })} /></label>
         <label><span>风险级别</span><select value={action.riskLevel ?? 'low'} onChange={(event) => { const riskLevel = event.target.value as NonNullable<ActionDefinition['riskLevel']>; updateAction({ riskLevel, destructive: riskLevel === 'destructive' }); }}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label>
-        <label className="span-2"><span>Playbook 路径</span><div className="inline-field"><input value={action.playbook} onChange={(event) => updateAction({ playbook: event.target.value })} placeholder="可填写服务器已有的相对路径，或在下方上传" /><button type="button" className="button button--quiet" disabled={!action.playbook || loading} onClick={() => void loadPlaybook()}>{loading ? '读取中…' : '载入编辑器'}</button></div></label>
+        <div className="span-2 platform-managed-path"><span>平台入口</span><code>{action.type}.yml</code><button type="button" className="button button--quiet" disabled={loading} onClick={() => void loadPlaybook()}>{loading ? '读取中…' : '载入编辑器'}</button></div>
         <label><span>Tags（逗号分隔）</span><input value={(action.tags ?? []).join(', ')} onChange={(event) => updateAction({ tags: splitCSV(event.target.value) })} /></label>
         <CredentialNameEditor values={action.requiredCredentials ?? []} onChange={(requiredCredentials) => updateAction({ requiredCredentials })} />
         {action.type === 'install' ? <label className="checkbox-field span-2 action-capability-field"><input type="checkbox" checked={action.idempotent ?? false} onChange={(event) => updateAction({ idempotent: event.target.checked })} /><span><strong>幂等安装，同时作为升级作业</strong><small>场景选择 upgrade 时复用这个 Playbook，无需再录入一份升级动作。</small></span></label> : null}
@@ -1262,14 +1270,158 @@ function PlaybookActionEditor({ releaseId, releases, actions, onChange, onDirtyC
       <div className="playbook-source">
         <div className="playbook-source__toolbar">
           <label><Upload size={15} /><span>上传 .yml / .yaml</span><input type="file" accept=".yml,.yaml,text/yaml,application/x-yaml" onChange={(event) => { void uploadPlaybook(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label>
-          <input aria-label="Playbook 文件名" value={filename} onChange={(event) => setFilename(event.target.value)} pattern="[A-Za-z0-9][A-Za-z0-9._\-]*\.(yml|yaml)" />
-          <span>{dirty ? '有未保存内容' : content ? '内容已保存' : '可上传或载入现有文件'}</span>
+          <span>入口文件名由动作类型固定</span><span>{dirty ? '有未保存内容' : content ? '内容已保存' : '可上传或载入现有文件'}</span>
         </div>
         <textarea className="code-editor playbook-source__editor" aria-label="Playbook 在线编辑器" spellCheck={false} value={content} placeholder={'---\n- name: Install component\n  hosts: all\n  tasks: []'} onChange={(event) => setContent(event.target.value)} />
-        <div className="playbook-source__actions"><button type="button" className="icon-text icon-text--danger" disabled={saving} onClick={removeAction}><Trash2 size={14} /> 移除动作</button><button type="button" className="button button--secondary" disabled={saving || !content.trim()} onClick={() => void savePlaybook()}><FileCode2 size={15} /> {saving ? '保存中…' : '保存 Playbook'}</button></div>
+        <div className="playbook-source__actions"><button type="button" className="icon-text icon-text--danger" disabled={saving} onClick={() => void removeAction()}><Trash2 size={14} /> 移除动作</button><button type="button" className="button button--secondary" disabled={saving || !content.trim()} onClick={() => void savePlaybook()}><FileCode2 size={15} /> {saving ? '保存中…' : '保存 Playbook'}</button></div>
       </div>
-    </> : <div className="playbook-editor__empty"><FileCode2 size={24} /><p>尚未配置生命周期动作。新增动作后即可上传或在线编写 Playbook。</p><button type="button" className="button button--secondary" onClick={addAction}><Plus size={15} /> 新增第一个动作</button></div>}
+      <PlaybookWorkspaceEditor releaseId={releaseId} refreshToken={`${action.type}:${savedSHA256}`} notify={notify} />
+    </> : <><div className="playbook-editor__empty"><FileCode2 size={24} /><p>尚未配置生命周期动作。新增动作后即可上传或在线编写 Playbook。</p><button type="button" className="button button--secondary" onClick={addAction}><Plus size={15} /> 新增第一个动作</button></div><PlaybookWorkspaceEditor releaseId={releaseId} refreshToken="" notify={notify} /></>}
   </section>;
+}
+
+export function PlaybookWorkspaceEditor({ releaseId, refreshToken, notify }: { releaseId: string; refreshToken: string; notify: (tone: 'success' | 'error' | 'info', title: string, message?: string) => void }) {
+  const [workspace, setWorkspace] = useState<PlaybookWorkspace>();
+  const [selectedPath, setSelectedPath] = useState('');
+  const [content, setContent] = useState('');
+  const [savedContent, setSavedContent] = useState('');
+	const [loadedSHA256, setLoadedSHA256] = useState('');
+  const [editable, setEditable] = useState(false);
+  const [newPath, setNewPath] = useState('templates/example.j2');
+  const [busy, setBusy] = useState(false);
+  const selected = workspace?.files.find((file) => file.path === selectedPath);
+
+  async function refresh(select?: string) {
+    const next = await api.playbookWorkspace(releaseId);
+	const activePath = select ?? selectedPath;
+	const remote = activePath ? next.files.find((file) => file.path === activePath) : undefined;
+	const remoteChanged = (remote?.sha256 ?? '') !== loadedSHA256;
+	const reloadFile = Boolean(select) || remoteChanged;
+	if (reloadFile && content !== savedContent && !window.confirm('辅助文件有未保存内容。是否放弃本地内容并重新载入？')) return;
+	if (reloadFile) {
+	  if (remote) {
+		const file = await api.workspaceFile(releaseId, activePath);
+		setContent(file.content ?? ''); setSavedContent(file.content ?? ''); setLoadedSHA256(file.sha256);
+		setSelectedPath(activePath); setEditable(file.editable === true);
+	  } else {
+		setSelectedPath(''); setContent(''); setSavedContent(''); setLoadedSHA256('');
+		setEditable(false);
+	  }
+	}
+    setWorkspace(next);
+    if (select && next.files.some((file) => file.path === select)) setSelectedPath(select);
+    else if (selectedPath && !next.files.some((file) => file.path === selectedPath)) {
+      setSelectedPath(''); setContent(''); setSavedContent(''); setLoadedSHA256('');
+    }
+  }
+
+  useEffect(() => {
+    void refresh().catch((reason) => notify('error', '读取工作区失败', displayError(reason)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [releaseId, refreshToken]);
+
+  async function openFile(path: string) {
+    if (content !== savedContent && !window.confirm('辅助文件有未保存内容，确认放弃？')) return;
+    setBusy(true);
+    try {
+      const file = await api.workspaceFile(releaseId, path);
+      setSelectedPath(path);
+      setContent(file.content ?? '');
+      setSavedContent(file.content ?? '');
+	  setLoadedSHA256(file.sha256);
+      setEditable(file.editable === true);
+    } catch (reason) { notify('error', '读取文件失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function createTextFile() {
+    if (!newPath.trim()) return;
+    setBusy(true);
+    try {
+	  await api.saveWorkspaceFile(releaseId, newPath.trim(), '', '', workspace?.treeSha256 ?? '');
+      await refresh(newPath.trim());
+      notify('success', '文件已创建', newPath.trim());
+    } catch (reason) { notify('error', '创建文件失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function createDirectory() {
+    const directory = newPath.trim().replace(/\/+$/, '');
+    if (!directory) return;
+    setBusy(true);
+    try {
+      const marker = `${directory}/.gitkeep`;
+	  await api.saveWorkspaceFile(releaseId, marker, '', '', workspace?.treeSha256 ?? '');
+      await refresh(marker);
+      notify('success', '目录已创建', directory);
+    } catch (reason) { notify('error', '创建目录失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function saveSelected() {
+    if (!selectedPath) return;
+    setBusy(true);
+    try {
+      if (!selected) return;
+	  const saved = await api.saveWorkspaceFile(releaseId, selectedPath, content, loadedSHA256, workspace?.treeSha256 ?? '');
+      setSavedContent(content);
+	  setLoadedSHA256(saved.sha256);
+      setWorkspace(await api.playbookWorkspace(releaseId));
+      notify('success', '辅助文件已保存', selectedPath);
+    } catch (reason) { notify('error', '保存文件失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function upload(file?: File) {
+    if (!file) return;
+    const path = newPath.trim() || file.name;
+    setBusy(true);
+    try {
+      const existingSHA256 = workspace?.files.find((item) => item.path === path)?.sha256 ?? '';
+	  await api.uploadWorkspaceFile(releaseId, path, file, existingSHA256, workspace?.treeSha256 ?? '');
+      await refresh(path);
+      notify('success', '文件已上传', path);
+    } catch (reason) { notify('error', '上传文件失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function renameSelected() {
+    if (!selectedPath || isActionEntry(selectedPath)) return;
+    const next = window.prompt('输入新的工作区相对路径', selectedPath)?.trim();
+    if (!next || next === selectedPath) return;
+    setBusy(true);
+    try {
+      if (!selected) return;
+	  const updated = await api.renameWorkspaceFile(releaseId, selectedPath, next, loadedSHA256, workspace?.treeSha256 ?? '');
+      setWorkspace(updated); setSelectedPath(next);
+      notify('success', '文件已改名', `${selectedPath} → ${next}`);
+    } catch (reason) { notify('error', '改名失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  async function deleteSelected() {
+    if (!selectedPath || isActionEntry(selectedPath) || !window.confirm(`确认删除 ${selectedPath}？`)) return;
+    setBusy(true);
+    try {
+      if (!selected) return;
+	  setWorkspace(await api.deleteWorkspaceFile(releaseId, selectedPath, loadedSHA256, workspace?.treeSha256 ?? ''));
+	  setSelectedPath(''); setContent(''); setSavedContent(''); setLoadedSHA256('');
+      notify('success', '文件已删除');
+    } catch (reason) { notify('error', '删除文件失败', displayError(reason)); } finally { setBusy(false); }
+  }
+
+  return <section className="workspace-browser">
+    <header><div><h4>Ansible 工作区</h4><p><code>{workspace?.root ?? 'managed/…'}</code> · {workspace?.files.length ?? 0}/1000 文件 · 树摘要 <code>{workspace?.treeSha256?.slice(0, 12) || '—'}</code></p></div><button type="button" className="button button--quiet" disabled={busy} onClick={() => void refresh()}>刷新</button></header>
+    <div className="workspace-browser__create"><input aria-label="工作区相对路径" value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="templates/config.j2" /><button type="button" className="button button--quiet" disabled={busy || !newPath.trim()} onClick={() => void createDirectory()}>新建目录</button><button type="button" className="button button--quiet" disabled={busy || !newPath.trim()} onClick={() => void createTextFile()}>新建文本文件</button><label className="button button--quiet"><Upload size={14} /> 上传/替换<input type="file" disabled={busy} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label></div>
+    <div className="workspace-browser__body">
+      <nav aria-label="Ansible 工作区文件树">{workspace?.files.map((file) => <button type="button" key={file.path} disabled={busy} className={file.path === selectedPath ? 'active' : ''} style={{ paddingLeft: `${12 + Math.max(0, file.path.split('/').length - 1) * 14}px` }} onClick={() => void openFile(file.path)}><span>{file.path}</span><small>{formatBytes(file.sizeBytes)}{isActionEntry(file.path) ? ' · 动作入口' : ''}</small></button>)}{workspace && !workspace.files.length ? <p>工作区尚无文件。</p> : null}</nav>
+      <div className="workspace-browser__editor">{selected ? <><div className="workspace-browser__selection"><strong>{selected.path}</strong><span>{selected.mediaType} · {formatBytes(selected.sizeBytes)}</span></div>{!editable ? <p>该文件较大或不是 UTF-8 文本，只能下载、替换或删除。</p> : <textarea className="code-editor" aria-label="辅助文件在线编辑器" disabled={busy || isActionEntry(selected.path)} spellCheck={false} value={content} onChange={(event) => setContent(event.target.value)} />}<div className="playbook-source__actions"><a className="button button--quiet" href={api.workspaceFileDownloadURL(releaseId, selected.path)}>下载</a>{!isActionEntry(selected.path) ? <><button type="button" className="button button--quiet" disabled={busy} onClick={() => void renameSelected()}>改名</button><button type="button" className="icon-text icon-text--danger" disabled={busy} onClick={() => void deleteSelected()}>删除</button></> : null}{editable && !isActionEntry(selected.path) ? <button type="button" className="button button--secondary" disabled={busy || content === savedContent} onClick={() => void saveSelected()}>保存辅助文件</button> : null}</div></> : <p>从左侧选择文件。动作入口请在上方生命周期编辑器维护。</p>}</div>
+    </div>
+  </section>;
+}
+
+function isActionEntry(path: string) {
+  return ACTION_OPTIONS.some((option) => path === `${option.value}.yml`);
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
 function splitCSV(value: string): string[] {
@@ -1286,7 +1438,7 @@ function EditComponentModal({ component, onClose, onDone }: { component: Compone
       notify('success', '组件信息已更新'); onDone();
     } catch (reason) { notify('error', '更新组件失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={`编辑 ${component.name}`} description="名称和分类在这里改。参数公开/内部、以及依赖哪个上游参数，属于 Release 合同。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9-]+" /></label><ClassificationFields component={component} /><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
+  return <Modal title={`编辑 ${component.name}`} description="名称和分类在这里改。参数公开/内部、以及依赖哪个上游参数，属于 Release 合同。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" defaultValue={component.name} required /></label><label><span>标识</span><input name="slug" defaultValue={component.slug} required pattern="[a-z0-9\-]+" /></label><ClassificationFields component={component} /><label className="span-2"><span>说明</span><textarea name="description" defaultValue={component.description} rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '保存中…' : '保存组件'}</button></footer></form></Modal>;
 }
 
 function CreateComponentModal({ onClose, onDone }: { onClose: () => void; onDone: (component: Component) => void }) {
@@ -1298,7 +1450,7 @@ function CreateComponentModal({ onClose, onDone }: { onClose: () => void; onDone
     try { const component = await api.createComponent(componentInput(form)); notify('success', '组件已创建', '继续创建首个 Draft，并上传或在线编写 Playbook。'); onDone(component); }
     catch (reason) { notify('error', '创建失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title="新建组件" description="选择稳定的架构分层；用途和检索维度使用自由标签。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" required placeholder="例如 containerd" /></label><label><span>标识</span><input name="slug" required pattern="[a-z0-9-]+" placeholder="containerd" /></label><ClassificationFields /><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建组件'}</button></footer></form></Modal>;
+  return <Modal title="新建组件" description="选择稳定的架构分层；用途和检索维度使用自由标签。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>组件名称</span><input name="name" required placeholder="例如 containerd" /></label><label><span>标识</span><input name="slug" required pattern="[a-z0-9\-]+" placeholder="containerd" /></label><ClassificationFields /><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建组件'}</button></footer></form></Modal>;
 }
 
 function componentInput(form: FormData): Partial<Component> {
@@ -1320,7 +1472,7 @@ function ClassificationFields({ component }: { component?: Component }) {
 }
 
 function NewVersionModal({ component, baseRelease, blank = false, contractIntent, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; blank?: boolean; contractIntent?: ContractEditIntent; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
-  const { notify, platformOptionCategories } = useApp();
+	const { notify, platformOptionCategories, signalRefresh } = useApp();
   const dimensions = environmentConstraintDimensions(platformOptionCategories);
   const [busy, setBusy] = useState(false);
   const lines = component.releaseLines ?? [];
@@ -1434,9 +1586,9 @@ function NewVersionModal({ component, baseRelease, blank = false, contractIntent
 }
 
 function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRelease; onClose: () => void; onDone: () => void }) {
-  const { notify } = useApp();
-  const { data: environments } = useApiData((signal) => api.environments(signal), [], 'environments');
-  const { data: components } = useApiData((signal) => api.components(signal), [], 'components');
+  const { notify, user } = useApp();
+  const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
+  const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const installAction = (['upgrade', 'install', 'configure', 'preflight', 'inspect'] as const)
     .map((type) => release.actions?.find((action) => action.type === type))
     .find((action) => action !== undefined);
@@ -1534,9 +1686,9 @@ function TestReleaseModal({ release, onClose, onDone }: { release: ComponentRele
 }
 
 function EditReleaseModal({ release, releases, onClose, onDone }: { release: ComponentRelease; releases: ComponentRelease[]; onClose: () => void; onDone: () => void }) {
-  const { notify, platformOptionCategories } = useApp();
+  const { notify, user, platformOptionCategories, signalRefresh } = useApp();
   const dimensions = environmentConstraintDimensions(platformOptionCategories);
-  const { data: components } = useApiData((signal) => api.components(signal), [], 'components');
+  const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const [busy, setBusy] = useState(false);
   const [constraints, setConstraints] = useState(() => parseConstraintSelection(release.environmentConstraints, dimensions));
   const [constraintsCatalogReady, setConstraintsCatalogReady] = useState(dimensions.length > 0);
@@ -1554,7 +1706,7 @@ function EditReleaseModal({ release, releases, onClose, onDone }: { release: Com
   const contractErrors = parameterContractErrors(parameters, dependencies, components?.flatMap((item) => item.releases ?? []) ?? []);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (playbookDirty) { notify('error', '请先保存 Playbook', '在线编辑器中仍有未保存内容。'); return; }
+		if (playbookDirty || actionsDirty) { notify('error', '请先保存当前 Action', 'Action 配置或在线编辑器内容仍有未保存变更。'); return; }
     setBusy(true); const form = new FormData(event.currentTarget);
     if (contractErrors.length) { notify('error', '参数合同无效', contractErrors.join('；')); setBusy(false); return; }
     try {
@@ -1577,13 +1729,13 @@ function EditReleaseModal({ release, releases, onClose, onDone }: { release: Com
       });
       setActions(saved.actions ?? []);
       setSavedActions(JSON.stringify(saved.actions ?? []));
-      notify('success', 'Draft 配置已保存', clearedCredentials ? `已清除 ${clearedCredentials} 个 CredentialRef；其余 Draft 配置也已更新。` : '参数合同、依赖映射和 Ansible 动作已更新。');
+		notify('success', 'Draft 配置已保存', clearedCredentials ? `已清除 ${clearedCredentials} 个 CredentialRef；其余 Draft 配置也已更新。` : '版本信息、参数合同和依赖映射已更新。');
       onDone();
     } catch (reason) { notify('error', '保存 Draft 失败', displayError(reason)); }
     finally { setBusy(false); }
   }
   const close = () => { if (!busy) onClose(); };
-  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="维护版本信息、参数合同、依赖映射，以及可上传和在线编辑的 Playbook。" onClose={close}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>风险级别</span><select name="riskLevel" defaultValue={release.riskLevel ?? 'low'}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label>{release.parentReleaseId ? <label><span>升级兼容性</span><select name="compatibility" defaultValue={release.compatibility}><option value="compatible">兼容升级</option><option value="breaking">破坏性升级</option></select></label> : <div><span>版本关系</span><strong>全新基线 · 不适用升级兼容性</strong></div>}<label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div><div className="span-2"><PlaybookActionEditor releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onDirtyChange={setPlaybookDirty} /></div><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}</div><footer className="modal-actions">{playbookDirty ? <span className="modal-actions__hint">请先保存 Playbook 内容</span> : actionsDirty ? <span className="modal-actions__hint">动作配置有未保存变更</span> : null}<button type="button" className="button button--quiet" disabled={busy} onClick={close}>取消</button><button className="button button--primary" disabled={busy || playbookDirty}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
+  return <Modal size="wide" title={`配置 Draft ${release.version}`} description="维护版本信息、参数合同、依赖映射，以及可上传和在线编辑的 Playbook。Action 保存/删除会立即原子持久化，关闭编辑器不会撤销。" onClose={close}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>版本</span><input name="version" defaultValue={release.version} required /></label><label><span>风险级别</span><select name="riskLevel" defaultValue={release.riskLevel ?? 'low'}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label>{release.parentReleaseId ? <label><span>升级兼容性</span><select name="compatibility" defaultValue={release.compatibility}><option value="compatible">兼容升级</option><option value="breaking">破坏性升级</option></select></label> : <div><span>版本关系</span><strong>全新基线 · 不适用升级兼容性</strong></div>}<label className="span-2"><span>发布说明</span><textarea name="notes" defaultValue={release.releaseNotes} rows={3} required /></label><div className="span-2"><EnvironmentConstraintEditor value={constraints} onChange={setConstraints} /></div><div className="span-2"><PlaybookActionEditor releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onPersisted={(persistedActions) => { setActions(persistedActions); setSavedActions(JSON.stringify(persistedActions)); signalRefresh('components'); }} onDirtyChange={setPlaybookDirty} /></div><div className="span-2 contract-section"><h3>参数合同</h3><p>公开参数会出现在下游的「上游公开参数」列表中；内部参数不会。</p><ParameterTable parameters={parameters} onChange={setParameters} /></div><div className="span-2 contract-section"><h3>精确依赖与公开参数映射</h3><p>先选上游组件版本，再把它的公开参数映射到本组件参数。</p><DependencyEditor dependencies={dependencies} components={components ?? []} currentParameters={parameters} currentComponentId={release.componentId} onChange={setDependencies} /></div>{contractErrors.length ? <div className="span-2 form-validation">{contractErrors.map((item) => <span key={item}>{item}</span>)}</div> : null}</div><footer className="modal-actions">{playbookDirty || actionsDirty ? <span className="modal-actions__hint">请先保存当前 Action</span> : null}<button type="button" className="button button--quiet" disabled={busy} onClick={close}>取消</button><button className="button button--primary" disabled={busy || playbookDirty || actionsDirty}><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</button></footer></form></Modal>;
 }
 
 function InspectReleaseModal({ release, components, onClose, onEdit }: { release: ComponentRelease; components: Component[]; onClose: () => void; onEdit?: () => void }) {
@@ -1597,10 +1749,10 @@ function InspectReleaseModal({ release, components, onClose, onEdit }: { release
     setPlaybook(undefined);
     setPlaybookError('');
     setPlaybookLoading(false);
-    if (!action?.playbook) return;
+	if (!action) return;
     const controller = new AbortController();
     setPlaybookLoading(true);
-    void api.playbook(release.id, action.playbook, controller.signal)
+	void api.playbook(release.id, action.type, controller.signal)
       .then((value) => setPlaybook(value))
       .catch((reason) => {
         if (!controller.signal.aborted) setPlaybookError(displayError(reason));
@@ -1626,7 +1778,7 @@ function InspectReleaseModal({ release, components, onClose, onEdit }: { release
         <p>{release.releaseNotes || '未填写发布说明'}</p>
       </section>
       <section className="contract-section">
-        <h3>适配环境</h3>
+        <h3>适配标签</h3>
         <EnvironmentConstraints constraints={release.environmentConstraints} />
       </section>
       <ReleaseReviewDetails release={release} />
@@ -1667,7 +1819,7 @@ function publicCount(release: ComponentRelease) {
 function EnvironmentConstraints({ constraints }: { constraints?: Record<string, unknown> }) {
   const { platformOptionCategories } = useApp();
   const groups = environmentConstraintGroups(constraints, environmentConstraintDimensions(platformOptionCategories));
-  if (!groups.length) return <div className="env-constraints env-constraints--empty">未声明适配环境</div>;
+  if (!groups.length) return <div className="env-constraints env-constraints--empty">未声明适配标签</div>;
   return <div className="env-constraints">{groups.map((group) => (
     <span className="env-constraint" key={group.key}>
       <em>{group.label}</em>
@@ -1678,7 +1830,7 @@ function EnvironmentConstraints({ constraints }: { constraints?: Record<string, 
 
 function ComponentTemplateImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { notify } = useApp();
-  const [text, setText] = useState('[\n  {\n    "component": {\n      "name": "示例组件",\n      "slug": "example-component",\n      "description": "单一职责说明",\n      "layer": "orchestration_core",\n      "tags": ["worker", "core"]\n    },\n    "release": {\n      "version": "1.0.0",\n      "releaseNotes": "初始细粒度版本",\n      "environmentConstraints": {\n        "architecture": ["amd64"],\n        "operatingSystem": ["Ubuntu"],\n        "operatingSystemVersion": ["18.04"],\n        "dockerVersion": ["20.10.21"]\n      },\n      "parameters": [],\n      "dependencies": [],\n      "actions": []\n    },\n    "playbooks": []\n  }\n]');
+  const [text, setText] = useState('[\n  {\n    "component": {\n      "name": "示例组件",\n      "slug": "example-component",\n      "description": "单一职责说明",\n      "layer": "orchestration_core",\n      "tags": ["worker", "core"]\n    },\n    "release": {\n      "version": "1.0.0",\n      "releaseNotes": "初始细粒度版本",\n      "environmentConstraints": {\n        "architecture": ["amd64"],\n        "operatingSystem": ["Ubuntu"],\n        "operatingSystemVersion": ["18.04"]\n      },\n      "parameters": [],\n      "dependencies": [],\n      "actions": []\n    },\n    "playbooks": []\n  }\n]');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
 

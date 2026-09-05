@@ -127,6 +127,13 @@ func (p *Platform) platformAdminWorkbench(ctx context.Context, user domain.User)
 		return domain.Workbench{}, err
 	}
 	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
+	workbench.Items = platformAdminComponentWork(components)
+	workbench.Summary.ActionRequired = len(workbench.Items)
+	return workbench, nil
+}
+
+func platformAdminComponentWork(components []domain.Component) []domain.WorkItem {
+	items := []domain.WorkItem{}
 	for _, component := range components {
 		for _, release := range component.Releases {
 			if release.Status != domain.ReleaseDraft || release.Review.Status != domain.ReleaseReviewPending {
@@ -140,7 +147,7 @@ func (p *Platform) platformAdminWorkbench(ctx context.Context, user domain.User)
 			if len(digest) > 16 {
 				digest = digest[:16] + "…"
 			}
-			workbench.Items = append(workbench.Items, domain.WorkItem{
+			items = append(items, domain.WorkItem{
 				ID: "component_review:" + release.ID, Kind: "component_review", Priority: domain.WorkPriorityHigh,
 				Status: domain.WorkStatusActionRequired, Title: component.Name + " " + release.Version + " 等待合同审核",
 				Subject: domain.WorkSubject{Type: "component_release", ID: release.ID, ParentID: component.ID, Name: component.Name, Version: release.Version},
@@ -152,9 +159,8 @@ func (p *Platform) platformAdminWorkbench(ctx context.Context, user domain.User)
 			})
 		}
 	}
-	sortWorkItems(workbench.Items)
-	workbench.Summary.ActionRequired = len(workbench.Items)
-	return workbench, nil
+	sortWorkItems(items)
+	return items
 }
 
 func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) []domain.WorkItem {
@@ -244,7 +250,7 @@ func componentOwnerWork(user domain.User, components []domain.Component, runs []
 				reasons = append(reasons, domain.WorkReason{Code: "release.validation_in_progress", Message: runStatusMessage(latest.Status), EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看运行", "/runs?selected="+latest.ID)})
 				title = fmt.Sprintf("%s %s 正在验证", component.Name, release.Version)
 				action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
-			} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+			} else if latest != nil && latest.InputSnapshot["cleaned"] != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 				embedded[latest.ID] = true
 				priority = domain.WorkPriorityCritical
 				reasons = append(reasons, domain.WorkReason{Code: "release.validation_failed", Message: "当前合同最近一次环境验证失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
@@ -358,7 +364,7 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 		if latest != nil && activeWorkRunStatuses[latest.Status] {
 			embedded[latest.ID] = true
 			action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
-		} else if latest != nil && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+		} else if latest != nil && latest.InputSnapshot["cleaned"] != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 			embedded[latest.ID] = true
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
 			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前 Revision 最近一次完整测试失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
@@ -494,7 +500,7 @@ func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.
 	}
 	items := []domain.WorkItem{}
 	for _, run := range runs {
-		if embedded[run.ID] {
+		if run.InputSnapshot["cleaned"] == true || embedded[run.ID] {
 			continue
 		}
 		active := activeWorkRunStatuses[run.Status]

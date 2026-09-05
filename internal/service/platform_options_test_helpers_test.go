@@ -27,6 +27,6 @@ func seedPlatformOptionsForServiceTest(t *testing.T, database *store.Store) {
 func completeServiceTestFacts() map[string]any {
 	return map[string]any{
 		"architecture": "amd64", "operatingSystem": "Ubuntu", "operatingSystemVersion": "24.04",
-		"containerRuntime": "docker", "containerRuntimeVersion": "docker@24.0.9", "ipFamily": "IPv4",
+		"ipFamily": "IPv4",
 	}
 }

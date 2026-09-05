@@ -48,8 +48,7 @@ export type ParameterVisibility = 'internal' | 'public';
 export type ParameterValueProvider = 'component_owner' | 'scenario_owner' | 'environment_owner' | 'upstream_mapping';
 
 export interface EnvironmentParameterBinding {
-  kind: 'private' | 'global';
-  definitionId?: string;
+  kind: 'private';
 }
 
 export interface ParameterDefinition {
@@ -68,20 +67,6 @@ export interface ParameterDefinition {
   minLength?: number;
 }
 
-export interface EnvironmentParameterDefinition {
-  id: string;
-  key: string;
-  label: string;
-  description: string;
-  type: ParameterType;
-  enum?: unknown[];
-  minLength?: number;
-  defaultValue?: unknown;
-  usage: number;
-  createdBy: string;
-  createdAt: string;
-}
-
 export interface EnvironmentVariableDefinition {
   id: string;
   name: string;
@@ -98,6 +83,7 @@ export interface ParameterMapping {
 }
 
 export interface ComponentDependency {
+  kind?: 'configuration';
   id?: string;
   componentId: string;
   componentName?: string;
@@ -143,6 +129,24 @@ export interface PlaybookFile {
   content: string;
   sha256: string;
   updatedAt?: string;
+  action?: ActionDefinition;
+}
+
+export interface PlaybookWorkspaceFile {
+  releaseId: string;
+  path: string;
+  sha256: string;
+  sizeBytes: number;
+  mediaType: string;
+  updatedAt?: string;
+  editable?: boolean;
+  content?: string;
+}
+
+export interface PlaybookWorkspace {
+  root: string;
+  treeSha256: string;
+  files: PlaybookWorkspaceFile[];
 }
 
 export interface ReleaseReviewPreview {
@@ -191,6 +195,10 @@ export interface ComponentRelease {
   actions?: ActionDefinition[];
   artifacts?: ComponentArtifact[];
   images?: ComponentImage[];
+  playbookFiles?: PlaybookWorkspaceFile[];
+  playbookFileCount?: number;
+  playbookTreeSha256?: string;
+  playbookWorkspaceRoot?: string;
   createdAt?: string;
   releasedAt?: string;
   deprecatedAt?: string;
@@ -202,17 +210,9 @@ export interface ReleaseReadiness {
   installEvidenceRunId?: string;
   rollbackEvidenceRunId?: string;
   transitionEvidenceRunId?: string;
-  runtimeEvidence?: RuntimeEvidence[];
 }
 
-export interface RuntimeEvidence {
-  runtime: string;
-  version: string;
-  installEvidenceRunId?: string;
-  rollbackEvidenceRunId?: string;
-  transitionEvidenceRunId?: string;
-  complete: boolean;
-}
+
 
 export interface ComponentReleaseLine {
   id: string;
@@ -281,8 +281,85 @@ export interface ComponentImageBuild {
   logs?: ImageBuildLog[];
 }
 
+export interface EvidenceSummary {
+  id: string;
+  status: RunStatus;
+  environmentId: string;
+  environmentName: string;
+  createdAt: string;
+  finishedAt?: string;
+  matchesContract: boolean;
+}
+
+export interface ReleaseEvidenceSummary {
+  currentInstall?: EvidenceSummary;
+  currentRollback?: EvidenceSummary;
+  currentTransition?: EvidenceSummary;
+  historicalInstall?: EvidenceSummary;
+  historicalRollback?: EvidenceSummary;
+  historicalTransition?: EvidenceSummary;
+  currentById: Record<string, EvidenceSummary>;
+}
+
+export interface ParameterConsumer {
+  componentName: string;
+  version?: string;
+  upstreamParameter: string;
+  targetParameter: string;
+  label: string;
+}
+
+export interface ComponentSummary {
+  id: string;
+  name: string;
+  slug?: string;
+  description?: string;
+  ownerId: string;
+  ownerName: string;
+  layer: ComponentLayer;
+  tags: string[];
+  releaseCount: number;
+  defaultReleaseId?: string;
+  hasDraft: boolean;
+  needsAttention: boolean;
+}
+
+export interface RunSummary {
+  archiveStatus?: string;
+  archivedAt?: string;
+  archiveSizeBytes?: number;
+  id: string;
+  kind?: Run['kind'];
+  status: RunStatus;
+  name: string;
+  scenarioName?: string;
+  componentName?: string;
+  componentReleaseId?: string;
+  scenarioId?: string;
+  action?: ActionDefinition['type'];
+  environmentId: string;
+  environmentName: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  queuePosition?: number;
+  approvalId?: string;
+}
+
+export interface RunPage {
+  items: RunSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface Component {
   id: string;
+  readContext?: {
+    evidence: Record<string, ReleaseEvidenceSummary>;
+    workItems: WorkItem[];
+    parameterConsumers: ParameterConsumer[];
+  };
   name: string;
   slug?: string;
   description?: string;
@@ -322,9 +399,12 @@ export interface ScenarioEdge {
   id: string;
   source: string;
   target: string;
+  kind?: 'dependency' | 'sequence';
+  dependencyId?: string;
 }
 
 export interface ScenarioRevision {
+  environmentConstraints?: Record<string, unknown>;
   id: string;
   scenarioId: string;
   revision: number;
@@ -486,13 +566,11 @@ export interface EnvironmentImportPlan {
 
 export interface EnvironmentParameterField {
   valueKey: string;
-  definitionId?: string;
   label: string;
   description: string;
   type: ParameterType;
   required: boolean;
   suggestedValue?: unknown;
-  defaultValue?: unknown;
   enum?: unknown[];
   minLength?: number;
   bindings: Array<{ componentId: string; componentName: string; releaseId: string; version: string; parameterName: string }>;
@@ -668,6 +746,7 @@ export interface DeliveryResult {
 }
 
 export interface Run {
+  archive?: import("../components/RunRetentionPanel").ArchiveInfo;
   id: string;
   kind?: 'component_test' | 'scenario_test' | 'scenario_run' | 'environment_rollback';
   name?: string;

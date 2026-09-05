@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260903-run-evidence-indexes');
+VALUES(1, 'clusterforge-v1-20260905-adaptation-run-archive');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS component_releases (
   risk_level TEXT NOT NULL DEFAULT 'low',
   environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   parameters_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parameters_json)),
+  playbook_tree_sha256 TEXT NOT NULL DEFAULT '',
+  playbook_workspace_root TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   released_at TEXT,
   deprecated_at TEXT,
@@ -144,6 +146,7 @@ CREATE TABLE IF NOT EXISTS component_dependencies (
   upstream_release_id TEXT NOT NULL REFERENCES component_releases(id),
   purpose TEXT NOT NULL DEFAULT '',
   parameter_mappings_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parameter_mappings_json)),
+  kind TEXT NOT NULL DEFAULT '' CHECK (kind IN ('', 'configuration')),
   UNIQUE(release_id, upstream_component_id)
 );
 
@@ -165,6 +168,27 @@ CREATE TABLE IF NOT EXISTS action_definitions (
   to_release_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS component_playbook_files (
+  release_id TEXT NOT NULL REFERENCES component_releases(id) ON DELETE CASCADE,
+  relative_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  media_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(release_id, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS playbook_action_mutations (
+  id TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES component_releases(id),
+  workspace_root TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  before_exists INTEGER NOT NULL CHECK (before_exists IN (0,1)),
+  before_content BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(release_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_releases_component ON component_releases(component_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_releases_line ON component_releases(line_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_draft_per_line
@@ -173,8 +197,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_successor
   ON component_releases(parent_release_id)
   WHERE parent_release_id IS NOT NULL
     AND (status IN ('draft', 'released') OR released_at IS NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_playbook_workspace_root
+  ON component_releases(playbook_workspace_root) WHERE playbook_workspace_root <> '';
 CREATE INDEX IF NOT EXISTS idx_dependencies_upstream ON component_dependencies(upstream_component_id);
 CREATE INDEX IF NOT EXISTS idx_actions_release ON action_definitions(release_id, kind, name);
+CREATE INDEX IF NOT EXISTS idx_playbook_files_release ON component_playbook_files(release_id, relative_path);
 
 CREATE TABLE IF NOT EXISTS scenarios (
   id TEXT PRIMARY KEY,
@@ -193,6 +220,7 @@ CREATE TABLE IF NOT EXISTS scenario_revisions (
   revision INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('draft','testing','test_passed','released','deprecated')),
   publication_generation INTEGER NOT NULL DEFAULT 1 CHECK (publication_generation > 0),
+  environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   graph_json TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[]}' CHECK (json_valid(graph_json)),
   created_at TEXT NOT NULL,
   test_passed_at TEXT,
@@ -271,14 +299,6 @@ CREATE TABLE IF NOT EXISTS runs (
     CASE WHEN json_type(input_snapshot_json,'$.componentTestEvidence')='text'
       THEN json_extract(input_snapshot_json,'$.componentTestEvidence') END
   ) VIRTUAL,
-  runtime_name TEXT GENERATED ALWAYS AS (
-    CASE WHEN json_type(input_snapshot_json,'$.runtimeCompatibility.runtime')='text'
-      THEN json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime') END
-  ) VIRTUAL,
-  runtime_version TEXT GENERATED ALWAYS AS (
-    CASE WHEN json_type(input_snapshot_json,'$.runtimeCompatibility.version')='text'
-      THEN json_extract(input_snapshot_json,'$.runtimeCompatibility.version') END
-  ) VIRTUAL,
   evidence_at TEXT GENERATED ALWAYS AS (COALESCE(finished_at,created_at)) VIRTUAL
 );
 
@@ -286,9 +306,6 @@ CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, s
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_component_evidence
 ON runs(component_release_id, component_spec_digest, component_evidence_kind, evidence_at DESC, created_at DESC, id DESC)
-WHERE kind='component_test' AND status='succeeded';
-CREATE INDEX IF NOT EXISTS idx_runs_runtime_evidence
-ON runs(component_release_id, component_spec_digest, runtime_name, runtime_version, component_evidence_kind, evidence_at DESC, created_at DESC, id DESC)
 WHERE kind='component_test' AND status='succeeded';
 CREATE INDEX IF NOT EXISTS idx_runs_active_component
 ON runs(component_release_id)
@@ -666,3 +683,31 @@ AFTER DELETE ON component_release_images
 BEGIN
   UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
 END;
+
+CREATE TABLE IF NOT EXISTS run_retention_policy (
+ id INTEGER PRIMARY KEY CHECK(id=1),auto_archive INTEGER NOT NULL DEFAULT 0 CHECK(auto_archive IN (0,1)),auto_cleanup INTEGER NOT NULL DEFAULT 0 CHECK(auto_cleanup IN (0,1)),archive_days INTEGER NOT NULL DEFAULT 90 CHECK(archive_days BETWEEN 1 AND 36500),cleanup_days INTEGER NOT NULL DEFAULT 90 CHECK(cleanup_days BETWEEN 1 AND 36500),last_scan_at TEXT,last_scan_result TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO run_retention_policy(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS run_archive_tasks (
+ run_id TEXT PRIMARY KEY REFERENCES runs(id),status TEXT NOT NULL CHECK(status IN ('queued','running','archived','failed')),source TEXT NOT NULL CHECK(source IN ('manual','automatic')),actor_id TEXT NOT NULL,error_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,lease_until TEXT,lease_token TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS run_archive_files (
+ run_id TEXT PRIMARY KEY REFERENCES runs(id),relative_path TEXT NOT NULL UNIQUE,format_version TEXT NOT NULL,size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),sha256 TEXT NOT NULL,source_digest TEXT NOT NULL,log_count INTEGER NOT NULL,archived_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_archive_tasks_state ON run_archive_tasks(status,updated_at);
+CREATE INDEX IF NOT EXISTS idx_runs_retention_scan ON runs(status,finished_at,id) WHERE finished_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_cleanup_results ON audit_events(created_at DESC) WHERE action IN ('run.cleaned','run.cleanup_skipped','run.cleanup_failed');
+CREATE TABLE IF NOT EXISTS run_cleanup_history (
+ id TEXT PRIMARY KEY,kind TEXT NOT NULL,status TEXT NOT NULL CHECK(status='failed'),requested_by TEXT NOT NULL,environment_id TEXT NOT NULL REFERENCES environments(id),environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),component_release_id TEXT REFERENCES component_releases(id),scenario_revision_id TEXT REFERENCES scenario_revisions(id),action_kind TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT NOT NULL,cleaned_at TEXT NOT NULL,actor_id TEXT NOT NULL,reason TEXT NOT NULL,identity_json TEXT NOT NULL CHECK(json_valid(identity_json))
+);
+CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_update BEFORE UPDATE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_delete BEFORE DELETE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
+CREATE VIEW IF NOT EXISTS retained_run_history AS
+ SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at FROM runs
+ UNION ALL SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,0,identity_json,'',NULL,NULL,0,0,'记录已按保留策略清理',created_at,NULL,finished_at FROM run_cleanup_history;
+CREATE TABLE IF NOT EXISTS run_retention_cursors(status TEXT PRIMARY KEY,finished_at TEXT NOT NULL,run_id TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS archived_run_no_log_insert BEFORE INSERT ON run_logs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'Run logs have been archived'); END;
+CREATE TRIGGER IF NOT EXISTS archived_run_no_update BEFORE UPDATE ON runs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.id) BEGIN SELECT RAISE(ABORT,'archived Run core is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS archived_run_no_step_update BEFORE UPDATE ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS archived_run_no_step_insert BEFORE INSERT ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS archived_run_no_approval_update BEFORE UPDATE ON approvals WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run approvals are immutable'); END;

@@ -22,6 +22,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Digest      string `json:"digest"`
 	}
 	type dependencySpec struct {
+		Kind                string             `json:"kind,omitempty"`
 		UpstreamComponentID string             `json:"upstreamComponentId"`
 		UpstreamReleaseID   string             `json:"upstreamReleaseId"`
 		Purpose             string             `json:"purpose"`
@@ -42,6 +43,11 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		FromReleaseID       string     `json:"fromReleaseId"`
 		ToReleaseID         string     `json:"toReleaseId"`
 	}
+	type playbookFileSpec struct {
+		Path      string `json:"path"`
+		SHA256    string `json:"sha256"`
+		SizeBytes int64  `json:"sizeBytes"`
+	}
 	spec := struct {
 		LineID                  string                `json:"lineId"`
 		ParentReleaseID         string                `json:"parentReleaseId"`
@@ -54,6 +60,9 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Parameters              []ParameterDefinition `json:"parameters"`
 		Dependencies            []dependencySpec      `json:"dependencies"`
 		Actions                 []actionSpec          `json:"actions"`
+		PlaybookFiles           []playbookFileSpec    `json:"playbookFiles"`
+		PlaybookTreeSHA256      string                `json:"playbookTreeSha256"`
+		PlaybookWorkspaceRoot   string                `json:"playbookWorkspaceRoot"`
 		Artifacts               []artifactSpec        `json:"artifacts"`
 		Images                  []imageSpec           `json:"images"`
 	}{
@@ -61,6 +70,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Version: release.Version, ReleaseNotes: release.ReleaseNotes,
 		Compatibility: release.Compatibility, RiskLevel: release.RiskLevel,
 		EnvironmentConstraints: release.EnvironmentConstraints, Parameters: release.Parameters,
+		PlaybookTreeSHA256: release.PlaybookTreeSHA256, PlaybookWorkspaceRoot: release.PlaybookWorkspaceRoot,
 	}
 	artifacts := append([]ComponentArtifact(nil), release.Artifacts...)
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Alias < artifacts[j].Alias })
@@ -75,7 +85,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 	for _, dependency := range release.Dependencies {
 		spec.Dependencies = append(spec.Dependencies, dependencySpec{
 			UpstreamComponentID: dependency.UpstreamComponentID, UpstreamReleaseID: dependency.UpstreamReleaseID, Purpose: dependency.Purpose,
-			ParameterMappings: dependency.ParameterMappings,
+			ParameterMappings: dependency.ParameterMappings, Kind: dependency.Kind,
 		})
 	}
 	for _, action := range release.Actions {
@@ -88,13 +98,25 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 			FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,
 		})
 	}
+	files := append([]ComponentPlaybookFile(nil), release.PlaybookFiles...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	for _, file := range files {
+		spec.PlaybookFiles = append(spec.PlaybookFiles, playbookFileSpec{Path: file.Path, SHA256: file.SHA256, SizeBytes: file.SizeBytes})
+	}
 	encoded, _ := json.Marshal(spec)
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }
 
 func ScenarioRevisionSpecDigest(revision ScenarioRevision) string {
-	encoded, _ := json.Marshal(struct{ Graph ScenarioGraph }{Graph: revision.Graph})
+	constraints := revision.EnvironmentConstraints
+	if len(constraints) == 0 {
+		constraints = map[string]any{}
+	}
+	encoded, _ := json.Marshal(struct {
+		Graph                  ScenarioGraph
+		EnvironmentConstraints map[string]any
+	}{revision.Graph, constraints})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }

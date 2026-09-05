@@ -173,11 +173,15 @@ func bindBackupVariables(step *lockedStep, operation string, cleanupOnSuccess bo
 func releaseDependencySnapshot(release domain.ComponentRelease) map[string]any {
 	dependencies := make([]map[string]any, 0, len(release.Dependencies))
 	for _, dependency := range release.Dependencies {
-		dependencies = append(dependencies, map[string]any{
+		entry := map[string]any{
 			"component_id":       dependency.UpstreamComponentID,
 			"release_id":         dependency.UpstreamReleaseID,
 			"parameter_mappings": dependency.ParameterMappings,
-		})
+		}
+		if dependency.Kind != "" {
+			entry["kind"] = dependency.Kind
+		}
+		dependencies = append(dependencies, entry)
 	}
 	return map[string]any{"dependencies": dependencies}
 }

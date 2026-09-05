@@ -9,6 +9,7 @@ import (
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 func componentImportRecoveryPlatform(t *testing.T) (*Platform, *store.Store, string) {
@@ -31,7 +32,7 @@ func componentImportRecoveryPlatform(t *testing.T) (*Platform, *store.Store, str
 
 func recoveryImportFile(componentID, releaseID, slug string) componentImportFile {
 	component := domain.Component{ID: componentID, Slug: slug}
-	release := domain.ComponentRelease{ID: releaseID, ComponentID: componentID}
+	release := domain.ComponentRelease{ID: releaseID, ComponentID: componentID, LineName: "Baseline", Version: "1.0.0"}
 	return componentImportFile{
 		Component: component, Release: release,
 		RelativePath: managedReleasePrefix(component, release) + "install.yml",
@@ -121,13 +122,25 @@ func TestComponentImportPromotionRejectsManagedDirectorySymlink(t *testing.T) {
 }
 
 func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
-	platform, _, root := componentImportRecoveryPlatform(t)
+	platform, db, root := componentImportRecoveryPlatform(t)
 	component := domain.Component{ID: "component-clone-symlink", Slug: "clone-symlink"}
-	source := domain.ComponentRelease{ID: "release-clone-source", ComponentID: component.ID}
-	target := domain.ComponentRelease{ID: "release-clone-target", ComponentID: component.ID, Actions: []domain.ActionDefinition{
+	source := domain.ComponentRelease{ID: "release-clone-source", ComponentID: component.ID, LineName: "Baseline", Version: "1.0.0"}
+	target := domain.ComponentRelease{ID: "release-clone-target", ComponentID: component.ID, LineName: "Baseline", Version: "2.0.0", Actions: []domain.ActionDefinition{
 		{Playbook: managedReleasePrefix(component, source) + "install.yml"},
 	}}
-	sourceDirectory := filepath.Join(root, "managed", component.Slug, source.ID)
+	component.Name, component.OwnerID, component.Layer, component.CreatedAt, component.UpdatedAt = component.Slug, "component-import-owner", domain.LayerRuntimeState, time.Now().UTC(), time.Now().UTC()
+	if err := db.CreateComponent(context.Background(), component); err != nil {
+		t.Fatal(err)
+	}
+	source.Status, source.RiskLevel, source.CreatedAt = domain.ReleaseDraft, domain.RiskLow, time.Now().UTC()
+	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "install.yml"}}
+	if err := db.CreateComponentRelease(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Workspaces(t, db, root, source.ID)
+	source, _ = db.GetComponentRelease(context.Background(), source.ID)
+	target.Actions = []domain.ActionDefinition{{ID: target.ID + "-install", ReleaseID: target.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: source.Actions[0].Playbook}}
+	sourceDirectory := filepath.Join(root, filepath.FromSlash(managedReleasePrefix(component, source)))
 	if err := os.MkdirAll(sourceDirectory, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +148,10 @@ func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
-	if err := os.Symlink(out, filepath.Join(root, "managed", component.Slug, target.ID)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Clean(filepath.Join(root, filepath.FromSlash(managedReleasePrefix(component, target))))), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(out, filepath.Clean(filepath.Join(root, filepath.FromSlash(managedReleasePrefix(component, target))))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := platform.copyManagedPlaybooksForClone(component, source.ID, &target); err == nil {
@@ -151,13 +167,25 @@ func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
 }
 
 func TestReleaseCloneCopyRecoveryRemovesUncommittedPromotion(t *testing.T) {
-	platform, _, root := componentImportRecoveryPlatform(t)
+	platform, db, root := componentImportRecoveryPlatform(t)
 	component := domain.Component{ID: "component-clone-recovery", Slug: "clone-recovery"}
-	source := domain.ComponentRelease{ID: "release-clone-recovery-source", ComponentID: component.ID}
-	target := domain.ComponentRelease{ID: "release-clone-recovery-target", ComponentID: component.ID, Actions: []domain.ActionDefinition{
+	source := domain.ComponentRelease{ID: "release-clone-recovery-source", ComponentID: component.ID, LineName: "Baseline", Version: "1.0.0"}
+	target := domain.ComponentRelease{ID: "release-clone-recovery-target", ComponentID: component.ID, LineName: "Baseline", Version: "2.0.0", Actions: []domain.ActionDefinition{
 		{Playbook: managedReleasePrefix(component, source) + "install.yml"},
 	}}
-	sourceDirectory := filepath.Join(root, "managed", component.Slug, source.ID)
+	component.Name, component.OwnerID, component.Layer, component.CreatedAt, component.UpdatedAt = component.Slug, "component-import-owner", domain.LayerRuntimeState, time.Now().UTC(), time.Now().UTC()
+	if err := db.CreateComponent(context.Background(), component); err != nil {
+		t.Fatal(err)
+	}
+	source.Status, source.RiskLevel, source.CreatedAt = domain.ReleaseDraft, domain.RiskLow, time.Now().UTC()
+	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "install.yml"}}
+	if err := db.CreateComponentRelease(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Workspaces(t, db, root, source.ID)
+	source, _ = db.GetComponentRelease(context.Background(), source.ID)
+	target.Actions = []domain.ActionDefinition{{ID: target.ID + "-install", ReleaseID: target.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: source.Actions[0].Playbook}}
+	sourceDirectory := filepath.Join(root, filepath.FromSlash(managedReleasePrefix(component, source)))
 	if err := os.MkdirAll(sourceDirectory, 0o750); err != nil {
 		t.Fatal(err)
 	}

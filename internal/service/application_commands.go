@@ -11,6 +11,9 @@ import (
 )
 
 // Catalog application boundary.
+func (s *CatalogService) ListComponentSummaries(ctx context.Context, user domain.User) ([]domain.ComponentSummary, error) {
+	return s.platform.store.ListComponentSummaries(ctx, user)
+}
 func (s *CatalogService) ListComponents(ctx context.Context, user domain.User) ([]domain.Component, error) {
 	return s.platform.ListComponents(ctx, user)
 }
@@ -181,6 +184,75 @@ func (s *CatalogService) ReadPlaybook(ctx context.Context, user domain.User, rel
 func (s *CatalogService) SavePlaybook(ctx context.Context, user domain.User, releaseID, filename string, content []byte) (PlaybookFile, error) {
 	return s.platform.SaveReleasePlaybook(ctx, user, releaseID, filename, content)
 }
+func (s *CatalogService) SaveActionPlaybook(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, content []byte) (PlaybookFile, error) {
+	return s.platform.SaveReleaseActionPlaybook(ctx, user, releaseID, kind, content)
+}
+func (s *CatalogService) SaveActionPlaybookConditional(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, content []byte, expectedSHA256 *string) (PlaybookFile, error) {
+	return s.platform.SaveReleaseActionPlaybookConditional(ctx, user, releaseID, kind, content, expectedSHA256)
+}
+func (s *CatalogService) SaveActionPlaybookWithExpectation(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, content []byte, expectedSHA256, expectedTreeSHA256 *string) (PlaybookFile, error) {
+	return s.platform.SaveReleaseActionPlaybookWithExpectation(ctx, user, releaseID, kind, content, expectedSHA256, expectedTreeSHA256)
+}
+func (s *CatalogService) SaveActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, content []byte, expectedSHA256, expectedTreeSHA256 *string) (PlaybookFile, error) {
+	return s.platform.SaveReleaseActionAtomic(ctx, user, releaseID, action, content, expectedSHA256, expectedTreeSHA256)
+}
+func (s *CatalogService) ReadActionPlaybook(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind) (PlaybookFile, error) {
+	release, component, err := s.platform.authorizePlaybook(ctx, user, releaseID, false)
+	if err != nil {
+		return PlaybookFile{}, err
+	}
+	path, err := actionPlaybookPath(component, release, kind)
+	if err != nil {
+		return PlaybookFile{}, err
+	}
+	return s.platform.ReadReleasePlaybook(ctx, user, releaseID, path)
+}
+func (s *CatalogService) ListPlaybookWorkspace(ctx context.Context, user domain.User, releaseID string) (PlaybookWorkspace, error) {
+	return s.platform.ListReleasePlaybookWorkspace(ctx, user, releaseID)
+}
+func (s *CatalogService) ReadPlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, path string) (WorkspaceFile, []byte, error) {
+	return s.platform.ReadReleaseWorkspaceFile(ctx, user, releaseID, path)
+}
+func (s *CatalogService) SavePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, path string, content []byte) (WorkspaceFile, error) {
+	return s.platform.SaveReleaseWorkspaceFile(ctx, user, releaseID, path, content)
+}
+func (s *CatalogService) SavePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, path string, content []byte, expectedSHA256 *string) (WorkspaceFile, error) {
+	return s.platform.SaveReleaseWorkspaceFileConditional(ctx, user, releaseID, path, content, expectedSHA256)
+}
+func (s *CatalogService) SavePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, path string, content []byte, expectedSHA256, expectedTreeSHA256 *string) (WorkspaceFile, error) {
+	return s.platform.SaveReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, path, content, expectedSHA256, expectedTreeSHA256)
+}
+func (s *CatalogService) RenamePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, from, to string) (PlaybookWorkspace, error) {
+	return s.platform.RenameReleaseWorkspaceFile(ctx, user, releaseID, from, to)
+}
+func (s *CatalogService) RenamePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.RenameReleaseWorkspaceFileConditional(ctx, user, releaseID, from, to, expectedSHA256)
+}
+func (s *CatalogService) RenamePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.RenameReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, from, to, expectedSHA256, expectedTreeSHA256)
+}
+func (s *CatalogService) DeletePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, path string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseWorkspaceFile(ctx, user, releaseID, path)
+}
+func (s *CatalogService) DeletePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, path string, expectedSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseWorkspaceFileConditional(ctx, user, releaseID, path, expectedSHA256)
+}
+func (s *CatalogService) DeletePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, path string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, path, expectedSHA256, expectedTreeSHA256)
+}
+
+func (s *CatalogService) DeleteActionPlaybook(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseActionPlaybook(ctx, user, releaseID, kind)
+}
+func (s *CatalogService) DeleteActionPlaybookConditional(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseActionPlaybookConditional(ctx, user, releaseID, kind, expectedSHA256)
+}
+func (s *CatalogService) DeleteActionPlaybookWithExpectation(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseActionPlaybookWithExpectation(ctx, user, releaseID, kind, expectedSHA256, expectedTreeSHA256)
+}
+func (s *CatalogService) DeleteActionAtomic(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	return s.platform.DeleteReleaseActionAtomic(ctx, user, releaseID, kind, expectedSHA256, expectedTreeSHA256)
+}
 
 // Scenario application boundary. Publication is intentionally absent and is
 // exposed only by ReleaseCoordinator.
@@ -205,8 +277,8 @@ func (s *ScenarioService) PreviewClone(ctx context.Context, user domain.User, id
 func (s *ScenarioService) AbandonRevision(ctx context.Context, user domain.User, id string) (domain.Scenario, error) {
 	return s.platform.AbandonScenarioRevision(ctx, user, id)
 }
-func (s *ScenarioService) SaveGraph(ctx context.Context, user domain.User, id string, graph domain.ScenarioGraph) (domain.ScenarioRevision, error) {
-	return s.platform.SaveScenarioGraph(ctx, user, id, graph)
+func (s *ScenarioService) SaveGraph(ctx context.Context, user domain.User, id string, graph domain.ScenarioGraph, constraints ...map[string]any) (domain.ScenarioRevision, error) {
+	return s.platform.SaveScenarioGraph(ctx, user, id, graph, constraints...)
 }
 func (s *ScenarioService) Validate(ctx context.Context, user domain.User, id string) ([]domain.ValidationIssue, error) {
 	return s.platform.ValidateScenario(ctx, user, id)

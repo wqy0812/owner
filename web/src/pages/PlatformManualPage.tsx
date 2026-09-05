@@ -19,6 +19,7 @@ import { Link, useParams } from 'react-router-dom';
 import { PageHeader } from '../components/Primitives';
 import { useApp } from '../context/AppContext';
 import { ROLE_LABELS, type Role } from '../types/domain';
+import capabilitiesMarkdown from '../../../docs/platform-capabilities.md?raw';
 
 interface OwnerManual {
   title: string;
@@ -52,7 +53,7 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
     path: '所有页面',
     description: '首次进入先确认右上角身份，再从左侧主导航进入工作中心。',
     entries: [
-      { label: '我的工作 / 组件 / 场景 / 环境 / 运行 / 通知 / 操作说明书', purpose: '通过左侧主导航或顶部通知入口切换工作中心。', availability: '所有已登录用户', result: '只切换页面，不创建业务记录。' },
+      { label: '我的工作 / 组件 / 场景 / 环境 / 运行 / 通知 / 平台说明书', purpose: '通过左侧主导航或顶部通知入口切换工作中心。', availability: '所有已登录用户', result: '只切换页面，不创建业务记录。' },
       { label: '灾备目录', purpose: '进入发布目录的 Git 仓库接入、备份和空库恢复页面。', availability: '环境 Owner', result: '只进入页面；创建、接入、备份或恢复仍需单独提交。' },
       { label: '切换演示身份', purpose: '在 Demo 中切换组件、场景、环境 Owner 或平台 Owner。', availability: 'Demo 身份模式', result: '服务端切换身份并按新角色重新读取可见数据；真实环境以登录身份为准。' },
       { label: '刷新使用新版本', purpose: '检测到前端构建已更新后加载新 SPA。', availability: '页面版本与服务端版本不一致时', result: '丢弃未保存的前台状态并整页刷新；刷新前先记录尚未提交的输入。' },
@@ -75,9 +76,11 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
     description: '所有角色都从同一处读取服务端权威运行状态和发布影响。',
     entries: [
       { label: '全部 / 进行中 / 已结束', purpose: '筛选 Run 列表。', availability: '运行中心', result: '只改变前台列表范围。' },
+      { label: '当前记录 / 历史归档 / 全部记录 / 上一页 / 下一页', purpose: '按归档状态和页码读取可见运行摘要。', availability: '运行中心', result: '切换列表范围；选中 Run 后独立加载详情。' },
+      { label: '下载归档包', purpose: '下载完整保留日志、执行快照、步骤和审批。', availability: '成功归档且当前身份有 Run 查看权限', result: '文件校验通过后下载；缺失或损坏时明确报错。' },
       { label: 'Run 卡片', purpose: '选择一个 Run 并加载完整详情。', availability: '存在可见 Run 时', result: '显示锁定快照、步骤、审批与脱敏日志。' },
       { label: '搜索运行日志 / 日志流筛选', purpose: '按关键字和 stdout、stderr、system 流定位日志。', availability: '已选择 Run', result: '只过滤当前日志显示，不修改 Run。' },
-      { label: '复制结果 / 下载完整日志', purpose: '复制当前筛选结果或下载完整脱敏日志。', availability: '已选择 Run', result: '复制仅包含当前筛选行；下载始终包含该 Run 的全部日志。' },
+      { label: '复制结果 / 下载已加载日志', purpose: '复制筛选结果或下载当前已加载的脱敏日志。', availability: '已选择 Run', result: '复制仅包含当前筛选行；下载包含当前已加载的全部日志行（末尾最多 200 行），不受显示筛选影响；完整保留日志从成功归档包获取。' },
       { label: '取消', purpose: '请求取消仍在活动状态的 Run。', availability: 'Run 可取消且未等待审批时', result: '改变 Run 状态；提交前先核对环境与 Run ID。' },
       { label: '预览安全续跑', purpose: '重新校验环境、资源和可执行指纹，只继续安全的未完成步骤。', availability: '本人创建且失败或中断的可续跑 Run', result: '确认后创建关联 Run；同一根链只允许一个活动续跑，续跑编号不可重复。' },
       { label: '全部 / 未读', purpose: '筛选通知。', availability: '通知中心', result: '只改变前台列表范围。' },
@@ -93,7 +96,7 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '取消 / 关闭 / ×', purpose: '退出当前弹窗或编辑流程。', availability: '弹窗打开时', result: '不提交当前表单；未保存内容会丢失。' },
       { label: '重试', purpose: '数据读取失败后重新请求。', availability: '错误或空状态允许重试时', result: '重新读取服务端，不会绕过权限或校验。' },
       { label: '重新加载', purpose: '页面发生未捕获错误时恢复应用。', availability: '错误边界页面', result: '整页刷新，未保存的前台状态会丢失。' },
-      { label: '工作流总览 / 我的角色手册 / 部署与版本切换', purpose: '切换说明书章节。', availability: '操作说明书页面', result: '只切换文档；角色手册随当前身份变化。' },
+      { label: '平台功能 / 工作流总览 / 我的角色手册 / 部署与版本切换', purpose: '了解功能、对象关系并查阅角色操作。', availability: '平台说明书页面', result: '只切换文档；角色手册随当前身份变化。' },
     ],
   },
 ];
@@ -116,6 +119,7 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: '发布线 / Release 版本行', purpose: '按独立发布线查看版本，并选择具体合同。', availability: '所有用户', result: '只切换当前查看版本；不会把不同发布线解释为升级关系。' },
       { label: 'Draft 发布就绪度 / 编辑合同 / 配置动作 / 构建镜像 / 管理介质', purpose: '汇总发布阻断项并进入对应处理入口。', availability: '组件 Owner 自有 Draft', result: '卡片本身只汇总状态；具体写操作仍需在后续表单确认。' },
       { label: '查看详情 / 关闭', purpose: '只读查看版本信息、环境约束、参数、依赖、生命周期动作和 Playbook。', availability: '所有可见 Release', result: '不修改 Release 或 Playbook。' },
+      { label: '谁用了我 / 包含历史引用', purpose: '按精确版本查看直接组件依赖和场景引用，辅助评估影响。', availability: '组件 Owner 自有组件或平台 Owner', result: '只读统计已保存引用；无详情权限的私有对象只展示摘要。' },
       { label: 'Run 证据 / 关闭', purpose: '查看当前 Release 的组件验证历史，以及按场景聚合的完整测试和正式运行记录。', availability: '组件 Owner 自有 Release', result: '只读展示不可变 Run 证据；展开场景后可进入运行中心查看每次执行的步骤与日志。' },
       { label: '配置合同 / 编辑依赖和参数 / 编辑', purpose: '编辑 Draft 的参数与精确依赖映射。', availability: '组件 Owner 自有 Draft', result: '打开合同编辑器；需“保存依赖和参数”才写入。' },
       { label: '编辑可见性与映射', purpose: '从合同查看弹窗转入 Draft 编辑。', availability: '当前 Release 可编辑时', result: '关闭只读视图并打开编辑器。' },
@@ -127,15 +131,15 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
     ],
   },
   {
-    page: 'Draft 与 Playbook', path: '/components', description: '动作配置与文件内容分别保存，离开前必须处理未保存提示。', entries: [
+    page: 'Draft 与 Playbook', path: '/components', description: 'Action 配置、入口文件和工作区清单原子保存；参数、依赖等其余 Draft 字段仍由保存 Draft 提交。', entries: [
       { label: '编辑版本与 Playbook / Playbook', purpose: '打开完整 Draft 编辑器。', availability: '组件 Owner 自有 Draft', result: '可维护版本、约束、动作、参数与依赖。' },
       { label: '新增动作 / 新增第一个动作', purpose: '增加 install、verify、rollback 等生命周期动作。', availability: 'Draft 编辑器', result: '新增未保存动作配置。' },
       { label: '动作标签', purpose: '切换当前编辑的生命周期动作。', availability: '已配置动作时', result: '只切换编辑对象。' },
       { label: '幂等安装，同时作为升级作业', purpose: '声明 install Playbook 可安全重复执行并复用于 upgrade。', availability: '当前动作类型为 install', result: '保存后场景可直接选择 upgrade，无需重复录入升级动作。' },
       { label: '载入编辑器', purpose: '读取已填写路径的 Playbook 内容。', availability: '路径非空', result: '把服务器文件载入在线编辑器，不自动保存。' },
       { label: '上传文件', purpose: '从本机载入 Playbook 文本。', availability: 'Draft 编辑器', result: '只填充编辑器，仍需保存。' },
-      { label: '移除动作', purpose: '从 Draft 删除当前生命周期动作。', availability: '已选择动作', result: '标记动作删除；最终以保存 Draft 为准。' },
-      { label: '保存 Playbook', purpose: '保存当前动作的 Playbook 文件内容。', availability: '内容非空', result: '写入 Draft Playbook；随后仍需保存 Draft 动作配置。' },
+      { label: '移除动作', purpose: '从 Draft 删除当前生命周期动作。', availability: '已选择动作', result: '已保存 Action 会与入口文件、清单立即原子删除；关闭编辑器不会撤销。' },
+      { label: '保存 Playbook', purpose: '保存当前 Action 的完整配置和 Playbook 文件内容。', availability: '内容非空且 Action 配置有效', result: 'Action、入口文件、工作区清单与合同失效在同一操作中提交；进程中断会在启动时恢复。' },
       { label: '添加 / 清空全部 / 删除 CredentialRef', purpose: '声明动作所需的凭据引用名称。', availability: 'Draft 编辑器', result: '只保存引用名，不读取或展示实际 Secret。' },
       { label: '新增参数 / 删除参数 / 新增依赖 / 删除依赖 / 增加映射 / 删除映射', purpose: '维护参数合同和精确依赖传值。', availability: 'Draft 编辑器', result: '改变尚未提交的 Draft 表单。' },
       { label: '保存 Draft', purpose: '提交版本、约束、动作和合同。', availability: '校验通过且 Playbook 无未保存内容', result: '更新 Draft；不会改写 Released Release。' },
@@ -178,7 +182,7 @@ const SCENARIO_BUTTON_GROUPS: ButtonGuideGroup[] = [
     page: 'DAG 画布与运行', path: '/scenarios', description: '组件节点代表逻辑执行单元，不代表环境主机数量。', entries: [
       { label: '组件库条目', purpose: '把组件最新 Released 或已共享候选 Release 加入画布。', availability: '自有 Draft', result: '新增锁定精确 Release 的节点。' },
       { label: 'DAG / 节点表 / 参数总览', purpose: '在拓扑画布、节点清单和按组件分类的参数填写区之间切换。', availability: '已选择 Revision', result: '三处共享同一 Draft；参数总览按组件、精确 Release、节点分组。' },
-      { label: '节点 / 连线端点', purpose: '选择节点或拖拽建立执行依赖。', availability: '画布', result: '选择会打开检查器；新连线需保存草稿。' },
+      { label: '节点 / 连线端点', purpose: '选择节点或拖拽补充手工执行顺序。', availability: '画布', result: 'Release 依赖线由系统只读维护；手工顺序线需保存草稿。' },
       { label: '放大 / 缩小 / 适配视图', purpose: '调整 DAG 画布视口。', availability: '画布', result: '只改变前台视图。' },
       { label: '删除节点', purpose: '删除节点及其关联连线。', availability: '自有 Draft 且已选节点', result: '改变未保存画布，需保存草稿。' },
       { label: '环境测试 / 开始完整测试', purpose: '在共享环境验证当前 Draft 的完整 DAG。', availability: '自有可测试 Draft', result: '创建 Run；成功后 Revision 进入 Test Passed。' },
@@ -195,7 +199,7 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
       { label: 'Inventory / 环境事实 / 组件环境参数 / 环境变量 / 凭据引用', purpose: '切换环境配置分区。', availability: '所有用户可查看', result: '只切换分区；环境 Owner 仅填写平台和组件合同分配的字段。' },
       { label: '添加节点 / 编辑节点 / 移除节点', purpose: '通过弹框维护节点连接信息与所属主机组。', availability: '环境 Owner 自有且未归档的环境', result: '改变未保存 Inventory，保存新 Revision 后生效。' },
       { label: '主机组管理 / 应用更改', purpose: '按组搜索、添加或移出节点；支持批量添加搜索结果。', availability: '环境 Owner 自有且未归档的环境', result: '应用分组修改到当前编辑；移出组不删除节点，取消不应用。' },
-      { label: '采用平台默认值 / 采用建议值 / 添加变量 / 删除环境变量', purpose: '维护组件环境参数，并从平台目录选择 IMAGE_REGISTRY、FILE_STATION 等非敏感变量。', availability: '环境 Owner 自有环境', result: '全局字段可覆盖平台默认值；无默认值时必填，保存后写入环境版本。不能创建任意键，Secret 不得填入此处。' },
+      { label: '采用建议值 / 添加变量 / 删除环境变量', purpose: '维护组件环境参数，并从平台目录选择 IMAGE_REGISTRY、FILE_STATION 等非敏感变量。', availability: '环境 Owner 自有环境', result: '组件 Owner 定义字段，环境 Owner 填写后保存到环境版本，下游引用最终值。不能创建任意键，Secret 不得填入此处。' },
       { label: '添加引用 / 删除凭据引用', purpose: '维护 CredentialRef 类型与引用位置。', availability: '环境 Owner 自有环境', result: '只保存引用，不把实际凭据返回前台。' },
       { label: '立即检查', purpose: '一次执行 TCP 端点探测和 Inventory 主机的 Go SSH 认证与 true 命令。', availability: '环境 Owner 自有环境', result: '分别保存带 Revision 来源的 TCP、SSH 结果和审计记录；不会创建 Run 或执行安装。' },
       { label: '一键回滚至干净状态 / 创建回滚 Run（待审批）', purpose: '从当前安装清单自动生成分层逆序 rollback 计划。', availability: '环境 Owner 自有且调度空闲的环境', result: '逐项校验来源 Run、备份和 Playbook 指纹；按来源时间倒序、来源内步骤逆序，输入环境名称后创建待审批 Run。' },
@@ -230,20 +234,32 @@ const ENVIRONMENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
 const OWNER_MANUALS: Record<Role, OwnerManual> = {
   platform_admin: {
     title: '平台 Owner 操作手册',
-    summary: '在“我的工作”逐条预览并审核 Component Release 合同，在“平台管理”维护平台目录与全局环境字段。',
+    summary: '在“我的工作”逐条预览并审核 Component Release 合同，在“平台管理”维护平台目录与环境变量字段。',
     icon: ServerCog,
     tone: 'indigo',
     primaryPath: '/',
     primaryLabel: '进入我的工作',
     checkpoints: ['审核前完整预览合同与 Playbook', '主机组类别不可删除', '历史快照引用会阻止删除', '平台 Owner 不执行 Owner 写操作'],
-    buttonGroups: [],
+    buttonGroups: [
+      { page: '审核与目录治理', path: '/ · /platform-management', description: '平台 Owner 维护治理规则，合同审核从工作台进入。', entries: [
+        { label: '预览并审核 / 批准 / 驳回', purpose: '读取当前合同和实际 Playbook 后提交审核结论。', availability: '待审核合同；完整预览成功且摘要仍匹配', result: '批准绑定当前摘要；驳回必须填写原因，内容漂移后需重新预览。' },
+        { label: '新增类别 / 新增选项 / 新增变量字段', purpose: '维护环境维度、主机组选项和非敏感变量字段。', availability: '平台 Owner；通过目录约束校验', result: '写入目录，新表单读取更新后的可选项。' },
+        { label: '双击更名 / 退役 / 恢复 / 彻底删除', purpose: '维护显示名称与可用状态。', availability: '平台 Owner；删除受系统保护、父子关系和全部历史引用约束', result: '更名保留技术标识；退役保留历史引用；无保护引用的条目才能彻底删除。' },
+      ] },
+      { page: '运行历史管理', path: '/runs', description: '归档成功记录，按保留策略清理符合条件的失败记录。', entries: [
+        { label: '运行历史管理 / 保存策略', purpose: '配置自动归档、自动清理和保留天数。', availability: '平台 Owner；自动处理初始关闭', result: '保存后后台按策略扫描，默认保留 90 天。' },
+        { label: '归档 / 归档所选成功记录', purpose: '提交选定成功 Run 的日志归档任务。', availability: '平台 Owner；归档目录可用，记录未处于归档处理中', result: '受理不等于完成；文件校验、落盘和数据库提交成功后才移除在线日志。' },
+        { label: '预览清理 / 确认清理失败记录', purpose: '核对过期失败记录及引用保护后清理。', availability: '平台 Owner；整批记录均符合保留策略且无安装、续跑或回滚保护', result: '正式提交重新校验；清理不可恢复，保留审计及最小历史标记。' },
+      ] },
+    ],
     markdown: `## 平台 Owner 操作路径
 
 1. 在 **我的工作** 打开每条待审 Component Release 的 **预览并审核**；完整合同和全部锁定 Playbook 加载成功前不能批准或驳回。
 2. 核对组件 Owner、版本关系、发布说明、风险、环境约束、参数、依赖映射、介质、镜像、Action、主机组、CredentialRef、Playbook 正文与 SHA-256。批准备注可选，驳回原因必填；摘要漂移后必须重新预览。
-3. 在 **平台管理** 中新增环境维度类别或类别选项，维护全局环境参数字段，并通过“设置平台默认值”或“编辑默认值”设置、修改、取消默认值。无默认值的全局字段由环境 Owner 必填，平台默认值修改不覆盖已有环境与历史运行；主机组是系统保护类别，只能维护其选项。这里不再提供合同审核入口。
+3. 在 **平台管理** 中新增环境维度类别或类别选项，维护非敏感环境变量字段；主机组是系统保护类别，只能维护其选项。组件参数及建议值由所属组件的 Owner 定义，其他组件通过公开参数映射引用；平台管理不再提供全局环境参数字段或默认值入口。这里不再提供合同审核入口。
 4. 删除目录项前核对组件、场景和环境历史引用统计；存在任一引用时平台会拒绝删除。
-5. 组件、场景、环境和运行页面对平台 Owner 只读；不能代替任何 Owner 创建资源、发起 Run、审批或发布。`,
+5. 在 **运行 → 运行历史管理** 配置保留策略、归档成功记录或预览清理过期失败记录；自动处理初始关闭。
+6. 平台 Owner 不能代替资源 Owner 创建组件、场景或环境，也不能发起 Run、审批危险执行或发布版本。`,
   },
   component_owner: {
     title: '组件 Owner 操作手册',
@@ -267,7 +283,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 ### 2. 配置版本合同
 
-- 使用结构化表单设置操作系统、版本、Docker 版本等环境约束，以及参数、依赖和 Ansible 生命周期动作。
+- 使用结构化表单设置架构、操作系统、版本、网络栈等适配范围，以及参数、精确依赖和 Ansible 生命周期动作；Docker/containerd 通过组件依赖表达。
 - 直接发布时依赖必须锁定已发布的上游 Release；候选链应由场景 Revision 一并编排和原子发布。下游只能映射上游的公开参数。
 - 参数必须明确公开/内部、可修改性和值提供方。组件固定值写入 fixedValue；场景和环境字段只由相应 Owner 填写；映射字段必须存在唯一上游映射。
 - 密码、Token、私钥等不能写进参数，只能声明所需的 CredentialRef。
@@ -301,7 +317,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
     tone: 'cyan',
     primaryPath: '/scenarios',
     primaryLabel: '进入场景中心',
-    checkpoints: ['节点锁定精确 Release', 'DAG 连线表达执行顺序', 'Test Passed 后才能发布', '版本更新后重读 Revision 并校验'],
+    checkpoints: ['节点锁定精确 Release', '依赖线自动生成、顺序线人工补充', 'Test Passed 后才能发布', '版本更新后重读 Revision 并校验'],
     buttonGroups: SCENARIO_BUTTON_GROUPS,
     markdown: `## 集群 Owner 操作路径
 
@@ -312,7 +328,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 1. 在 **场景** 页面新建场景，系统会创建初始 Draft Revision。
 2. 误建且从未发布、从未产生 Run 的场景可使用 **删除场景** 永久清理；若已有发布或运行历史，只能废弃并保留记录。
 3. 从组件库加入已发布 Release 或组件 Owner 共享的候选 Draft；每个节点锁定加入时的精确版本。
-4. 用 DAG 连线表达硬依赖和实际顺序；动作决定只读主机组，不能由场景修改。目标主机组不同的同组件节点应选择组件 Owner 提供的不同 Release 发布线。
+4. 系统按精确 Release 合同生成只读依赖线；场景 Owner 只补充不违反依赖方向的手工顺序线。动作决定只读主机组，不能由场景修改。目标主机组不同的同组件节点应选择组件 Owner 提供的不同 Release 发布线。
 5. 通过 **参数总览** 按组件、精确 Release 和节点填写集群 Owner 字段；重复节点分别保存，建议值必须显式采用。
 6. 可用 **导入模板** 载入节点、边和 parameterValues，或用 **导出 JSON** 下载当前 Revision；通过 **DAG / 节点表 / 参数总览** 交叉核对。
 
@@ -456,6 +472,7 @@ ClusterForge 把交付过程拆成组件 Release、场景 Revision、环境 Revi
 
 ### 协作边界
 
+- **平台 Owner** 维护目录、审核当前组件合同并管理运行历史策略。
 - **组件 Owner** 发布能力合同和动作，不决定某次集群交付的完整顺序。
 - **集群 Owner** 锁定精确 Release，并通过 DAG 连线编排完整交付流程。
 - **环境 Owner** 维护目标主机、参数和凭据引用，并审批危险操作。
@@ -601,35 +618,38 @@ function ButtonGuide({ title, intro, groups }: { title: string; intro: string; g
   );
 }
 
-export function OperationManualPage() {
+export function PlatformManualPage() {
   const { user } = useApp();
   const { section } = useParams<{ section: string }>();
   const roleView = section === 'role';
   const deploymentView = section === 'deployment';
+  const capabilitiesView = !section || section === 'features';
+  const overviewView = !roleView && !deploymentView && !capabilitiesView;
   const manual = OWNER_MANUALS[user.role];
   const OwnerIcon = manual.icon;
-  const pageTitle = deploymentView ? '部署与版本切换交接' : roleView ? manual.title : '平台工作流程总览';
-  const pageSummary = deploymentView
+  const pageTitle = capabilitiesView ? '平台功能与核心概念' : deploymentView ? '部署与版本切换交接' : roleView ? manual.title : '平台工作流程总览';
+  const pageSummary = capabilitiesView ? '了解各工作中心能做什么、由谁负责，以及版本、参数、证据与运行如何关联。' : deploymentView
     ? '把部署门禁、可回退切换、旧 SPA 刷新和分角色恢复步骤整理为一条可核查流程。'
     : roleView ? manual.summary : '用四类不可变记录串起组件发布、场景发布、环境管理与一次真实执行。';
-  const pageSource = deploymentView ? DEPLOYMENT_MARKDOWN : roleView ? manual.markdown : OVERVIEW_MARKDOWN;
+  const pageSource = capabilitiesView ? capabilitiesMarkdown : deploymentView ? DEPLOYMENT_MARKDOWN : roleView ? manual.markdown : OVERVIEW_MARKDOWN;
   const PageIcon = deploymentView ? ServerCog : roleView ? OwnerIcon : FileText;
-  const showRoleManualAction = deploymentView || !roleView;
+  const showRoleManualAction = !roleView;
 
   return (
     <div className="page page--manual">
       <PageHeader
-        eyebrow="Role-based playbook"
-        title="操作说明书"
+        eyebrow="Platform guide"
+        title="平台说明书"
         description={`当前为项目首个版本（V1），环境仅用于测试，不是生产环境；除非出现明确的 V2 文档，所有操作都按首版合同执行。当前身份：${ROLE_LABELS[user.role]}。`}
         actions={<Link className="button button--primary" to={showRoleManualAction ? '/manual/role' : '/manual/deployment'}>{showRoleManualAction ? <OwnerIcon size={16} /> : <RefreshCw size={16} />}{showRoleManualAction ? '查看我的操作手册' : '查看部署交接'}</Link>}
       />
 
       <div className="manual-shell">
         <aside className="manual-toc panel" aria-label="说明书目录">
-          <div className="manual-toc__heading"><BookOpenText size={17} /><div><strong>阅读目录</strong><small>随演示身份自动切换</small></div></div>
+          <div className="manual-toc__heading"><BookOpenText size={17} /><div><strong>阅读目录</strong><small>功能说明 · 工作流 · 角色操作</small></div></div>
           <nav>
-            <Link to="/manual" className={!roleView && !deploymentView ? 'active' : ''}><FileText size={16} /><span><strong>工作流总览</strong><small>组件、场景、环境与运行</small></span></Link>
+            <Link to="/manual/features" className={capabilitiesView ? 'active' : ''}><BookOpenText size={16} /><span><strong>平台功能</strong><small>能力、对象关系与职责</small></span></Link>
+            <Link to="/manual/workflow" className={overviewView ? 'active' : ''}><FileText size={16} /><span><strong>工作流总览</strong><small>组件、场景、环境与运行</small></span></Link>
             <Link to="/manual/role" className={roleView ? 'active' : ''}><OwnerIcon size={16} /><span><strong>{ROLE_LABELS[user.role]} 手册</strong><small>{user.name}</small></span></Link>
             <Link to="/manual/deployment" className={deploymentView ? 'active' : ''}><ServerCog size={16} /><span><strong>部署与版本切换</strong><small>分角色交接与验收</small></span></Link>
           </nav>
@@ -641,17 +661,17 @@ export function OperationManualPage() {
             <header className="manual-preview-panel__header">
               <span className={`manual-title-icon manual-title-icon--${deploymentView ? 'amber' : roleView ? manual.tone : 'indigo'}`}><PageIcon size={21} /></span>
               <div>
-                <div className="eyebrow">Markdown preview</div>
+                <div className="eyebrow">平台说明书</div>
                 <h2>{pageTitle}</h2>
                 <p>{pageSummary}</p>
               </div>
             </header>
 
             <div className="manual-preview-panel__body">
-              {!roleView && !deploymentView && <WorkflowOverview />}
+              {overviewView && <WorkflowOverview />}
               <MarkdownPreview source={pageSource} />
 
-              {!deploymentView && (
+              {(roleView || overviewView) && (
                 <ButtonGuide
                   title={roleView ? `${ROLE_LABELS[user.role]} 按钮操作目录` : '全员公共按钮操作目录'}
                   intro={roleView

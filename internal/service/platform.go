@@ -22,6 +22,7 @@ type EnvironmentSSHChecker interface {
 }
 
 type Platform struct {
+	archiveRoot       string
 	store             *store.Store
 	runner            ActionRunner
 	sshChecker        EnvironmentSSHChecker
@@ -37,6 +38,7 @@ type Platform struct {
 	rootCtx         context.Context
 	cancel          context.CancelFunc
 	mu              sync.Mutex
+	workspaceMu     sync.Mutex
 	workers         map[string]environmentWorkerState
 	nextWorkerToken uint64
 	active          map[string]context.CancelFunc
@@ -165,6 +167,9 @@ func (p *Platform) requestPublicationBackup(reason string) {
 }
 
 func (p *Platform) Start(ctx context.Context) error {
+	if err := p.RecoverActionFileMutations(ctx); err != nil {
+		return fmt.Errorf("recover Action file mutations: %w", err)
+	}
 	if err := p.RecoverComponentImportFiles(ctx); err != nil {
 		return fmt.Errorf("recover component import files: %w", err)
 	}
@@ -291,6 +296,12 @@ func validateRelease(release domain.ComponentRelease) error {
 	}
 	seenDependencies := make(map[string]struct{}, len(release.Dependencies))
 	for _, dependency := range release.Dependencies {
+		if dependency.Kind != "" && dependency.Kind != domain.DependencyConfiguration {
+			return fmt.Errorf("%w: invalid dependency kind", domain.ErrInvalid)
+		}
+		if dependency.Kind == domain.DependencyConfiguration && len(dependency.ParameterMappings) == 0 {
+			return fmt.Errorf("%w: configuration references require parameter mappings", domain.ErrInvalid)
+		}
 		if dependency.UpstreamComponentID == "" || dependency.UpstreamReleaseID == "" {
 			return fmt.Errorf("%w: dependencies must lock a component and release", domain.ErrInvalid)
 		}

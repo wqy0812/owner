@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api/client';
-import type { Component, ComponentDependency, ComponentRelease, EnvironmentParameterDefinition, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider, ParameterVisibility } from '../types/domain';
+import { ChevronDown } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
+import type { Component, ComponentDependency, ComponentRelease, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider, ParameterVisibility } from '../types/domain';
 
 const PARAMETER_TYPES: ParameterType[] = ['string', 'boolean', 'integer', 'number', 'object', 'array'];
+const VALUE_PROVIDER_LABELS: Record<ParameterValueProvider, string> = {
+  component_owner: '组件 Owner 固定',
+  scenario_owner: '集群 Owner 填写',
+  environment_owner: '环境 Owner 填写',
+  upstream_mapping: '上游映射提供',
+};
 
 export function emptyParameter(): ParameterDefinition {
   return { name: '', description: '', type: 'string', required: false, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '', enum: undefined };
@@ -83,8 +89,9 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
      if (parameter.valueProvider === 'component_owner' && (parameter.modifiable || parameter.fixedValue === undefined)) errors.push(`参数 ${parameter.name} 必须由组件固定且填写固定值`);
      if ((parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && !parameter.modifiable) errors.push(`参数 ${parameter.name} 分配给外部 Owner 后必须允许修改`);
      if ((parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && (parameter.type === 'object' || parameter.type === 'array') && !parameter.enum?.length) errors.push(`参数 ${parameter.name} 是结构化字段，必须提供受控枚举，不能让外部 Owner 编辑原始 JSON`);
-     if (parameter.valueProvider === 'environment_owner' && !parameter.environmentBinding) errors.push(`环境参数 ${parameter.name} 必须选择私有或全局环境字段`);
-     if (parameter.valueProvider === 'upstream_mapping' && parameter.modifiable) errors.push(`上游映射参数 ${parameter.name} 不允许人工修改`);
+     if (parameter.valueProvider === 'environment_owner' && !parameter.environmentBinding) errors.push(`环境参数 ${parameter.name} 必须绑定本组件的环境字段`);
+     if (parameter.environmentBinding && parameter.environmentBinding.kind !== 'private') errors.push(`参数 ${parameter.name} 必须使用组件环境字段`);
+    if (parameter.valueProvider === 'upstream_mapping' && parameter.modifiable) errors.push(`上游映射参数 ${parameter.name} 不允许人工修改`);
    }
   const mapped = new Set<string>();
   const lockedComponents = new Set<string>();
@@ -118,12 +125,8 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
 }
 
 export function ParameterTable({ parameters, onChange, disabled }: { parameters: ParameterDefinition[]; onChange: (parameters: ParameterDefinition[]) => void; disabled?: boolean }) {
-  const [environmentDefinitions, setEnvironmentDefinitions] = useState<EnvironmentParameterDefinition[]>([]);
-  useEffect(() => {
-    const controller = new AbortController();
-    void api.environmentParameterDefinitions(controller.signal).then(setEnvironmentDefinitions).catch(() => undefined);
-    return () => controller.abort();
-  }, []);
+  const [expandedIndex, setExpandedIndex] = useState<number>();
+  const tableId = useId();
   function update(index: number, patch: Partial<ParameterDefinition>) {
     onChange(parameters.map((item, current) => current === index ? { ...item, ...patch } : item));
   }
@@ -138,8 +141,31 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
     if (valueProvider === 'environment_owner') base.environmentBinding = { kind: 'private' };
     onChange(parameters.map((item, current) => current === index ? base : item));
   }
+  function removeParameter(index: number) {
+    onChange(parameters.filter((_, current) => current !== index));
+    setExpandedIndex((current) => current === undefined || current < index ? current : current === index ? undefined : current - 1);
+  }
+  function addParameter() {
+    setExpandedIndex(parameters.length);
+    onChange([...parameters, emptyParameter()]);
+  }
   return <div className="parameter-table">
-    {parameters.map((parameter, index) => <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}`}>
+    {parameters.map((parameter, index) => {
+      const expanded = expandedIndex === index;
+      const displayName = parameter.name || `未命名参数 ${index + 1}`;
+      const editorId = `${tableId}-parameter-${index}`;
+      return <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}${expanded ? ' is-expanded' : ''}`}>
+      <button type="button" className="parameter-card__summary" aria-label={`${expanded ? '收起' : '编辑'}参数 ${displayName}`} aria-expanded={expanded} aria-controls={editorId} onClick={() => setExpandedIndex(expanded ? undefined : index)}>
+        <span className="parameter-card__identity"><strong>{displayName}</strong><small>{parameter.description || '尚未填写说明'}</small></span>
+        <span className="parameter-card__meta">
+          <em>{parameter.type}</em>
+          <em className={`parameter-card__visibility parameter-card__visibility--${parameter.visibility}`}>{parameter.visibility === 'public' ? '公开' : '内部'}</em>
+          <em>{VALUE_PROVIDER_LABELS[parameter.valueProvider]}</em>
+          {parameter.required ? <em>必填</em> : null}
+        </span>
+        <span className="parameter-card__toggle">{expanded ? '收起' : '编辑'}<ChevronDown size={15} aria-hidden="true" /></span>
+      </button>
+      {expanded ? <div className="parameter-card__editor" id={editorId}>
       <div className="parameter-card__grid">
         <label><span>参数名称</span><input aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value.trim() })} /></label>
         <label className="span-2"><span>说明</span><input aria-label="参数说明" placeholder="这个参数给谁用" value={parameter.description} disabled={disabled} onChange={(event) => update(index, { description: event.target.value })} /></label>
@@ -167,13 +193,15 @@ export function ParameterTable({ parameters, onChange, disabled }: { parameters:
         {parameter.valueProvider === 'component_owner' ? <label><span>Release 固定值</span><ParameterValueEditor parameter={parameter} value={parameter.fixedValue} disabled={disabled} onChange={(fixedValue) => update(index, { fixedValue })} /></label> : null}
         {parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner' ? <label><span>建议值（不自动生效）</span><ParameterValueEditor parameter={parameter} value={parameter.suggestedValue} disabled={disabled} optional onChange={(suggestedValue) => update(index, { suggestedValue })} /></label> : null}
         {parameter.valueProvider !== 'component_owner' ? <label><span>组件独立测试值</span><ParameterValueEditor parameter={parameter} value={parameter.testValue} disabled={disabled} optional onChange={(testValue) => update(index, { testValue })} /></label> : null}
-        {parameter.valueProvider === 'environment_owner' ? <label><span>环境字段绑定</span><select aria-label="环境字段绑定" disabled={disabled} value={parameter.environmentBinding?.kind === 'global' ? `global:${parameter.environmentBinding.definitionId ?? ''}` : 'private'} onChange={(event) => update(index, { environmentBinding: event.target.value === 'private' ? { kind: 'private' } : { kind: 'global', definitionId: event.target.value.slice(7) } })}><option value="private">组件私有字段</option>{environmentDefinitions.filter((item) => item.type === parameter.type).map((item) => <option key={item.id} value={`global:${item.id}`}>全局 · {item.label}</option>)}</select></label> : null}
+        {parameter.valueProvider === 'environment_owner' ? <p className="section-hint">由本组件定义，环境 Owner 按组件版本填写；其他组件通过公开参数映射引用。</p> : null}
         <label><span>枚举</span><input aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label>
         {parameter.type === 'string' ? <label><span>最小长度</span><input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })} /></label> : <span />}
       </div>
-      {!disabled && <button type="button" className="button button--quiet" onClick={() => onChange(parameters.filter((_, current) => current !== index))}>删除参数</button>}
-    </article>)}
-    {!disabled && <button type="button" className="button button--secondary" onClick={() => onChange([...parameters, emptyParameter()])}>新增参数</button>}
+      {!disabled && <button type="button" className="button button--quiet" onClick={() => removeParameter(index)}>删除参数</button>}
+      </div> : null}
+    </article>;
+    })}
+    {!disabled && <button type="button" className="button button--secondary" onClick={addParameter}>新增参数</button>}
   </div>;
 }
 
@@ -251,10 +279,11 @@ export function DependencyEditor({
             <option value="">{dependency.componentId ? '选择可用版本' : '先选择上游组件'}</option>
             {selectedComponent?.releases.map((release) => <option key={release.id} value={release.id}>{release.version} · {release.state === 'draft' ? 'Draft' : 'Released'}</option>)}
           </select></label>
+          <label><span>引用方式</span><select aria-label="引用方式" disabled={disabled} value={dependency.kind ?? ''} onChange={(event) => update(index, { kind: event.target.value === 'configuration' ? 'configuration' : undefined })}><option value="">执行依赖及参数引用</option><option value="configuration">仅引用配置，不约束执行顺序</option></select></label>
           <label><span>依赖用途</span><input aria-label="依赖用途" placeholder="例如复用 kubelet 安装目录" disabled={disabled} value={dependency.purpose ?? ''} onChange={(event) => update(index, { purpose: event.target.value })} /></label>
         </div>
         <div className="mapping-block">
-          <strong>参数映射</strong>
+          <strong>{dependency.kind === 'configuration' ? '配置参数引用' : '参数映射'}</strong>
           <p>选择上游的公开参数，写入本组件的目标参数。内部参数不会出现在来源列表中。</p>
           {(dependency.parameterMappings ?? []).map((mapping, mappingIndex) => <div key={`${mapping.targetParameter}-${mappingIndex}`} className="mapping-row">
             <p className="parameter-lineage">{describeParameterMapping(dependency, mapping, components)}</p>
@@ -315,7 +344,7 @@ export function DependencyContractList({ dependencies, components }: { dependenc
       return <article key={`${dependency.id ?? ''}-${dependency.componentId}-${dependency.releaseId}`} className="dependency-contract__item">
         <header>
           <strong>{upstreamLabel(dependency, components)}</strong>
-          <small>{dependency.purpose || '运行时依赖'}</small>
+          <small>{dependency.kind === 'configuration' ? '配置引用，不约束执行顺序' : dependency.purpose || '执行依赖'}</small>
         </header>
         {mappings.length ? mappings.map((mapping) => <p key={`${mapping.upstreamParameter}-${mapping.targetParameter}`} className="parameter-lineage">{describeParameterMapping(dependency, mapping, components)}</p>) : <p className="mapping-empty">只锁定上游版本，未引用其公开参数</p>}
       </article>;
@@ -323,10 +352,10 @@ export function DependencyContractList({ dependencies, components }: { dependenc
   </div>;
 }
 
-export function ParameterContractList({ release, components }: { release?: ComponentRelease; components: Component[] }) {
+export function ParameterContractList({ release, components, consumers: providedConsumers }: { release?: ComponentRelease; components: Component[]; consumers?: ReturnType<typeof downstreamParameterConsumers> }) {
   const parameters = release?.parameters ?? [];
   const sources = importedParameterSources(release, components);
-  const consumers = downstreamParameterConsumers(release?.componentId, components);
+  const consumers = providedConsumers ?? downstreamParameterConsumers(release?.componentId, components);
   const publicItems = parameters.filter((item) => item.visibility === 'public');
   const internalItems = parameters.filter((item) => item.visibility !== 'public');
   return <div className="parameter-preview">

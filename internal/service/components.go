@@ -26,6 +26,13 @@ func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]doma
 		if err != nil {
 			return nil, err
 		}
+		// Catalog lists expose workspace identity and size, not an unbounded file
+		// manifest. The dedicated workspace endpoint remains the source for files.
+		for releaseIndex := range components[i].Releases {
+			release := &components[i].Releases[releaseIndex]
+			release.PlaybookFileCount = len(release.PlaybookFiles)
+			release.PlaybookFiles = nil
+		}
 	}
 	return components, nil
 }
@@ -98,6 +105,9 @@ func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id str
 		if err := validateSlug(patch.Slug); err != nil {
 			return component, err
 		}
+		if patch.Slug != component.Slug && len(component.Releases) > 0 {
+			return component, fmt.Errorf("%w: component slug is frozen after its first Release is created", domain.ErrConflict)
+		}
 		component.Slug = patch.Slug
 	}
 	component.Description = patch.Description
@@ -119,7 +129,9 @@ func rewriteReleaseChildren(release *domain.ComponentRelease) {
 		release.Dependencies[i].ReleaseID = release.ID
 	}
 	for i := range release.Actions {
-		release.Actions[i].ID = newID("action")
+		if release.Actions[i].ID == "" {
+			release.Actions[i].ID = newID("action")
+		}
 		release.Actions[i].ReleaseID = release.ID
 		if release.Actions[i].TimeoutSeconds <= 0 {
 			release.Actions[i].TimeoutSeconds = 1800
@@ -156,6 +168,8 @@ func (p *Platform) populatePlaybookDigests(component domain.Component, release *
 }
 
 func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id string, patch domain.ComponentRelease) (domain.ComponentRelease, error) {
+	p.workspaceMu.Lock()
+	defer p.workspaceMu.Unlock()
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
@@ -189,7 +203,50 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	if patch.RiskLevel == "" {
 		patch.RiskLevel = release.RiskLevel
 	}
-	p.populatePlaybookDigests(component, &patch, release.Actions)
+	patch.PlaybookWorkspaceRoot = release.PlaybookWorkspaceRoot
+	if patch.Version != release.Version || patch.LineName != release.LineName {
+		patch.PlaybookWorkspaceRoot = generatedManagedReleasePrefix(component, patch)
+	}
+	existingActions := make(map[string]domain.ActionKind, len(release.Actions))
+	for _, action := range release.Actions {
+		existingActions[action.ID] = action.Kind
+	}
+	for index := range patch.Actions {
+		if patch.Actions[index].ID == "" {
+			return release, fmt.Errorf("%w: save new actions with their Playbook before saving the Draft", domain.ErrConflict)
+		}
+		kind, exists := existingActions[patch.Actions[index].ID]
+		if !exists {
+			return release, fmt.Errorf("%w: action %s no longer exists", domain.ErrConflict, patch.Actions[index].ID)
+		}
+		if kind != patch.Actions[index].Kind {
+			return release, fmt.Errorf("%w: saved action kind is immutable; delete it and create a new action", domain.ErrConflict)
+		}
+	}
+	if len(patch.Actions) != len(release.Actions) {
+		return release, fmt.Errorf("%w: save or delete actions through the atomic Action operation before saving the Draft", domain.ErrConflict)
+	}
+	// Action metadata is owned by the atomic Action endpoint. A general Draft
+	// save must not replay a stale browser copy over a newer Action mutation.
+	patch.Actions = append([]domain.ActionDefinition(nil), release.Actions...)
+	for index := range patch.Actions {
+		path, err := actionPlaybookPath(component, patch, patch.Actions[index].Kind)
+		if err != nil {
+			return release, err
+		}
+		patch.Actions[index].Playbook = path
+	}
+	patch.PlaybookFiles, patch.PlaybookTreeSHA256 = release.PlaybookFiles, release.PlaybookTreeSHA256
+	undoWorkspaceMove, err := p.moveDraftWorkspace(component, release, patch)
+	if err != nil {
+		return release, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			undoWorkspaceMove()
+		}
+	}()
 	rewriteReleaseChildren(&patch)
 	if err := p.validateReleaseContract(ctx, patch, false); err != nil {
 		return release, err
@@ -200,6 +257,7 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	if err := p.store.UpdateDraftRelease(ctx, patch); err != nil {
 		return release, err
 	}
+	committed = true
 	p.audit(ctx, user, "component_release.updated", "component_release", id, map[string]any{"version": patch.Version})
 	return p.store.GetComponentRelease(ctx, id)
 }
@@ -432,6 +490,11 @@ func (p *Platform) validateReleaseContract(ctx context.Context, release domain.C
 }
 
 func (p *Platform) validateReleaseContractWithCatalog(ctx context.Context, release domain.ComponentRelease, publishing bool, loadCatalog func(context.Context) (store.CatalogValidationSnapshot, error)) error {
+	if !publishing || release.Status == domain.ReleaseDraft {
+		if err := domain.ValidateComponentParameterAuthoring(release.Parameters); err != nil {
+			return err
+		}
+	}
 	if err := validateRelease(release); err != nil {
 		return err
 	}
@@ -443,6 +506,9 @@ func (p *Platform) validateReleaseContractWithCatalog(ctx context.Context, relea
 		return err
 	}
 	if err := p.validateReleaseMappings(ctx, release); err != nil {
+		return err
+	}
+	if err := p.validateConfigurationReferenceClosure(ctx, release); err != nil {
 		return err
 	}
 	if publishing {
@@ -468,7 +534,7 @@ func validateReleaseCatalogValues(release domain.ComponentRelease, catalog store
 			return err
 		}
 	}
-	return domain.ValidateGlobalParameterBindings(release.Parameters, catalog.Parameters)
+	return domain.ValidateComponentParameterAuthoring(release.Parameters)
 }
 
 func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
@@ -568,7 +634,7 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 		if upstream.ComponentID != dependency.UpstreamComponentID || upstream.Status != domain.ReleaseReleased {
 			return fmt.Errorf("%w: upstream dependency must lock a released version of component %s", domain.ErrInvalid, dependency.UpstreamComponentID)
 		}
-		if dependencyPathExists(forward, dependency.UpstreamComponentID, release.ComponentID) {
+		if dependency.Kind != domain.DependencyConfiguration && dependencyPathExists(forward, dependency.UpstreamComponentID, release.ComponentID) {
 			return fmt.Errorf("%w: dependency would create a component cycle", domain.ErrInvalid)
 		}
 	}

@@ -83,15 +83,11 @@ func numericValue(value any) float64 {
 func ValidateResolvedParameters(parameters []ParameterDefinition, resolved map[string]any) error {
 	for _, parameter := range parameters {
 		value, exists := resolved[parameter.Name]
-		global := parameter.ValueProvider == ParameterProviderEnvironmentOwner && parameter.EnvironmentBinding != nil && parameter.EnvironmentBinding.Kind == EnvironmentBindingGlobal
 		if !exists {
-			if parameter.Required || global {
+			if parameter.Required {
 				return fmt.Errorf("%w: required parameter %q has no resolved value", ErrInvalid, parameter.Name)
 			}
 			continue
-		}
-		if global && MissingEnvironmentParameterValue(value) {
-			return fmt.Errorf("%w: environment parameter %q must be filled by the Environment Owner", ErrInvalid, parameter.Name)
 		}
 		if !MatchesParameterType(value, string(parameter.Type)) {
 			return fmt.Errorf("%w: parameter %q must be of type %s", ErrInvalid, parameter.Name, parameter.Type)
@@ -192,13 +188,9 @@ func NormalizeEnvironmentVariables(variables map[string]string, refs []Credentia
 }
 
 // ValidateEnvironmentValues validates supplied values only, not run-time completeness.
-// Each binding is checked so a global field cannot pick an arbitrary first consumer.
-func ValidateEnvironmentValues(values map[string]any, variables map[string]string, refs []CredentialRef, releases []ComponentRelease, definitions []EnvironmentParameterDefinition, variableDefinitions []EnvironmentVariableDefinition) error {
+// Values belong to the exact Release parameter that defines them.
+func ValidateEnvironmentValues(values map[string]any, variables map[string]string, refs []CredentialRef, releases []ComponentRelease, variableDefinitions []EnvironmentVariableDefinition) error {
 	fields := map[string][]ParameterDefinition{}
-	globals := map[string]EnvironmentParameterDefinition{}
-	for _, d := range definitions {
-		globals[d.ID] = d
-	}
 	for _, r := range releases {
 		if r.Status == ReleaseDeprecated && r.ReleasedAt == nil {
 			continue
@@ -206,11 +198,6 @@ func ValidateEnvironmentValues(values map[string]any, variables map[string]strin
 		for _, p := range r.Parameters {
 			if p.ValueProvider != ParameterProviderEnvironmentOwner || !p.Modifiable {
 				continue
-			}
-			if p.EnvironmentBinding != nil && p.EnvironmentBinding.Kind == EnvironmentBindingGlobal {
-				if _, ok := globals[p.EnvironmentBinding.DefinitionID]; !ok {
-					continue
-				}
 			}
 			key := EnvironmentParameterValueKey(r.ID, p)
 			p.Name, p.Required = key, false
@@ -240,30 +227,6 @@ func ValidateEnvironmentValues(values map[string]any, variables map[string]strin
 	}
 	_, err := NormalizeEnvironmentVariables(variables, refs)
 	return err
-}
-
-func ValidateGlobalParameterBindings(parameters []ParameterDefinition, definitions []EnvironmentParameterDefinition) error {
-	byID := map[string]EnvironmentParameterDefinition{}
-	for _, d := range definitions {
-		byID[d.ID] = d
-	}
-	for _, p := range parameters {
-		if p.ValueProvider != ParameterProviderEnvironmentOwner || p.EnvironmentBinding == nil || p.EnvironmentBinding.Kind != EnvironmentBindingGlobal {
-			continue
-		}
-		d, ok := byID[p.EnvironmentBinding.DefinitionID]
-		if !ok {
-			return fmt.Errorf("%w: environment parameter %q references an unknown global definition", ErrInvalid, p.Name)
-		}
-		matches := len(d.Enum) == len(p.Enum)
-		for i := 0; matches && i < len(d.Enum); i++ {
-			matches = ParameterValuesEqual(d.Enum[i], p.Enum[i])
-		}
-		if d.Type != p.Type || d.MinLength != p.MinLength || !matches {
-			return fmt.Errorf("%w: environment parameter %q does not match its global definition", ErrInvalid, p.Name)
-		}
-	}
-	return nil
 }
 
 func (r ComponentRelease) IsApprovedCandidate() bool {

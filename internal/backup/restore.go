@@ -192,7 +192,7 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
 	}
-	order := []string{"users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
+	order := []string{"users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -303,7 +303,7 @@ func validateCatalogReferences(catalog Catalog) error {
 		}
 	}
 	optionValues := map[string]bool{}
-	type optionRecord struct{ id, categoryID, parentID string }
+	type optionRecord struct{ id, categoryID, parentID, value string }
 	optionByID := map[string]optionRecord{}
 	options := tables["platform_options"]
 	for _, row := range options.Rows {
@@ -332,7 +332,7 @@ func validateCatalogReferences(catalog Catalog) error {
 		if err != nil {
 			return err
 		}
-		optionByID[id] = optionRecord{id: id, categoryID: categoryID, parentID: parentID}
+		optionByID[id] = optionRecord{id: id, categoryID: categoryID, parentID: parentID, value: value}
 	}
 	for _, option := range optionByID {
 		category := categoryByID[option.categoryID]
@@ -345,6 +345,21 @@ func validateCatalogReferences(catalog Catalog) error {
 				return invalid(options.Name, option.id, "parent_option_id", fmt.Sprintf("Catalog child option %s has an invalid parent", option.id))
 			}
 		}
+	}
+
+	categories := []domain.PlatformOptionCategory{}
+	for _, c := range categoryByID {
+		category := domain.PlatformOptionCategory{ID: c.id, Key: c.key, Kind: domain.PlatformOptionCategoryKind(c.kind), ParentCategoryID: c.parentID}
+		for _, o := range optionByID {
+			if o.categoryID == c.id {
+				category.Options = append(category.Options, domain.PlatformOption{ID: o.id, CategoryID: o.categoryID, ParentOptionID: o.parentID, Value: o.value})
+			}
+		}
+		categories = append(categories, category)
+	}
+	catalogOptions, err := domain.NewCatalogOptions(categories)
+	if err != nil {
+		return err
 	}
 
 	componentIDs := tableIDs(tables["components"])
@@ -444,6 +459,13 @@ func validateCatalogReferences(catalog Catalog) error {
 					return invalid(releases.Name, id, "environment_constraints_json", fmt.Sprintf("Catalog Release %s references an unknown environment option", id))
 				}
 			}
+		}
+		constraintValues := map[string]any{}
+		for key, values := range constraints {
+			constraintValues[key] = values
+		}
+		if err := catalogOptions.ValidateConstraints(constraintValues); err != nil {
+			return invalid(releases.Name, id, "environment_constraints_json", err.Error())
 		}
 		releaseRecords[id] = releaseRecord{id: id, componentID: componentID, lineID: lineID, parentID: parentID, templateID: templateID, status: status, compatibility: compatibility, releasedAt: releasedAt}
 	}
@@ -575,9 +597,30 @@ func validateCatalogReferences(catalog Catalog) error {
 		}
 	}
 
+	releaseConstraints := map[string]map[string]any{}
+	for _, row := range releases.Rows {
+		id, _ := requiredText(releases, row, "id")
+		raw, _ := requiredText(releases, row, "environment_constraints_json")
+		var c map[string]any
+		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+			return err
+		}
+		releaseConstraints[id] = c
+	}
 	revisions := tables["scenario_revisions"]
 	graphIndex := columnIndex(revisions.Columns, "graph_json")
 	for _, row := range revisions.Rows {
+		labelsRaw, err := requiredText(revisions, row, "environment_constraints_json")
+		if err != nil {
+			return err
+		}
+		labels := map[string]any{}
+		if err = json.Unmarshal([]byte(labelsRaw), &labels); err != nil {
+			return err
+		}
+		if err := catalogOptions.ValidateConstraints(labels); err != nil {
+			return fmt.Errorf("Catalog scenario adaptation is invalid: %w", err)
+		}
 		raw, _ := row[graphIndex].Value().(string)
 		var graph struct {
 			Nodes []struct {
@@ -589,6 +632,9 @@ func validateCatalogReferences(catalog Catalog) error {
 			return fmt.Errorf("Catalog scenario graph is invalid: %w", err)
 		}
 		for _, node := range graph.Nodes {
+			if issues := domain.ScenarioAdaptationIssues(labels, releaseConstraints[node.ReleaseID], "", node.ReleaseID, true); len(issues) > 0 {
+				return fmt.Errorf("Catalog scenario adaptation mismatch: %v", issues)
+			}
 			if _, found := releaseRecords[node.ReleaseID]; !found {
 				return invalid(revisions.Name, "", "graph_json", fmt.Sprintf("Catalog scenario references missing Release %s", node.ReleaseID))
 			}

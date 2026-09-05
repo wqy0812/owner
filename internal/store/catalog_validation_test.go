@@ -105,9 +105,9 @@ func TestReleaseReviewAndCandidateCAS(t *testing.T) {
 }
 
 func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
-	for _, resource := range []string{"release", "category", "environment", "scenario", "parameter", "variable"} {
+	for _, resource := range []string{"release", "category", "environment", "scenario", "variable"} {
 		mutations := []string{"delete"}
-		if resource != "parameter" && resource != "variable" {
+		if resource != "variable" {
 			mutations = append(mutations, "retire")
 		}
 		for _, mutation := range mutations {
@@ -121,12 +121,6 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 					}
 					if err := a.UpsertPlatformOption(ctx, option); err != nil {
 						t.Fatal(err)
-					}
-					parameter := domain.EnvironmentParameterDefinition{ID: "global-region", Key: "region", Label: "Region", Type: domain.ParameterTypeString, CreatedBy: "component-owner-a", CreatedAt: testNow}
-					if resource == "parameter" {
-						if err := a.UpsertEnvironmentParameterDefinition(ctx, parameter); err != nil {
-							t.Fatal(err)
-						}
 					}
 					if resource == "variable" {
 						if err := a.UpsertEnvironmentVariableDefinition(ctx, domain.EnvironmentVariableDefinition{ID: "variable-region", Name: "REGION", Label: "Region", CreatedBy: "component-owner-a", CreatedAt: testNow}); err != nil {
@@ -146,9 +140,6 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 					if resource == "release" || resource == "category" {
 						release.EnvironmentConstraints = map[string]any{"architecture": []string{option.Value}}
 					}
-					if resource == "parameter" {
-						release.Parameters = []domain.ParameterDefinition{{Name: "region", Type: domain.ParameterTypeString, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingGlobal, DefinitionID: parameter.ID}}}
-					}
 					// This snapshot represents successful service validation before either writer starts.
 					snapshot, err := a.ReadCatalogValidation(ctx)
 					if err != nil {
@@ -161,7 +152,7 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 					}
 					write := func() error {
 						switch resource {
-						case "release", "category", "parameter":
+						case "release", "category":
 							return a.UpdateDraftRelease(ctx, release)
 						case "environment", "variable":
 							e := domain.Environment{ID: "ref-environment", Name: "Environment", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
@@ -185,8 +176,6 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 								return b.SetPlatformOptionCategoryRetired(ctx, option.CategoryID, &testNow, audit)
 							}
 							return b.DeletePlatformOptionCategory(ctx, option.CategoryID, audit)
-						case "parameter":
-							return b.DeleteEnvironmentParameterDefinition(ctx, parameter.ID, audit)
 						case "variable":
 							return b.DeleteEnvironmentVariableDefinition(ctx, "variable-region", audit)
 						default:

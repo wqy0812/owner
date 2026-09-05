@@ -100,7 +100,7 @@ func benchmarkComponentsHTTP(b *testing.B, withPlaybooks bool) {
 			if err := database.CreateSession(ctx, fmt.Sprintf("%x", sha256.Sum256([]byte(token))), owner.ID, now.Add(time.Hour)); err != nil {
 				b.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodGet, "/api/v1/components", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/components?view=contracts", nil)
 			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 			check := httptest.NewRecorder()
 			handler.ServeHTTP(check, request)

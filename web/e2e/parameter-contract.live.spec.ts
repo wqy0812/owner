@@ -21,13 +21,19 @@ test('component page shows upstream parameter lineage and visibility editor', as
         releases?: Array<{ dependencies?: Array<{ parameterMappings?: unknown[] }> }>;
       }>;
     };
-    const component = (componentsPayload.items ?? []).find((item) =>
-      item.ownerId === user.id && item.releases?.some((release) =>
-        release.dependencies?.some((dependency) => (dependency.parameterMappings?.length ?? 0) > 0)));
-    if (component) {
-      selected = { componentId: component.id, componentName: component.name };
-      break;
+    for (const item of componentsPayload.items ?? []) {
+      if (item.ownerId !== user.id) continue;
+      const detailResponse = await page.request.get(`/api/v1/components/${encodeURIComponent(item.id)}`);
+      expect(detailResponse.ok()).toBeTruthy();
+      const payload = await detailResponse.json();
+      const component = payload.data ?? payload;
+      if (component.releases?.some((release: { dependencies?: Array<{ parameterMappings?: unknown[] }> }) =>
+        release.dependencies?.some((dependency) => (dependency.parameterMappings?.length ?? 0) > 0))) {
+        selected = { componentId: item.id, componentName: item.name };
+        break;
+      }
     }
+    if (selected) break;
   }
   expect(selected, 'seeded catalog must expose a component dependency contract').toBeTruthy();
 
@@ -42,6 +48,10 @@ test('component page shows upstream parameter lineage and visibility editor', as
   await expect(editContract).toBeVisible();
   await editContract.click();
   if (await page.getByRole('dialog', { name: /创建 Draft 编辑依赖和参数/ }).count()) {
+    // Catalog examples have no executable workspace; exercise parameter authoring
+    // with a new line instead of cloning their incomplete Playbook manifests.
+    await page.getByRole('combobox', { name: '创建方式' }).selectOption('new_line');
+    await page.getByRole('textbox', { name: '发布线名称' }).fill(`UI contract ${Date.now()}`);
     await page.getByPlaceholder('v1.1.0').fill(`1.0.0-ui-${Date.now()}`);
     await page.locator('textarea[name="notes"]').fill('验证页面内依赖和参数编辑');
     page.once('dialog', (dialog) => dialog.accept());
@@ -50,12 +60,19 @@ test('component page shows upstream parameter lineage and visibility editor', as
 
   await expect(page.getByRole('button', { name: '新增依赖' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新增参数' })).toBeVisible();
-  if (await page.getByRole('radio', { name: /内部/ }).count() === 0) {
+  if (await page.getByRole('button', { name: /编辑参数/ }).count() === 0) {
     await page.getByRole('button', { name: '新增参数' }).click();
+  } else {
+    await expect(page.getByRole('radio', { name: /内部/ })).toHaveCount(0);
+    await page.getByRole('button', { name: /编辑参数/ }).first().click();
   }
   await expect(page.getByRole('radio', { name: /内部/ }).first()).toBeVisible();
   await expect(page.getByRole('radio', { name: /公开/ }).first()).toBeVisible();
   await page.getByRole('radio', { name: /公开/ }).first().click();
   await expect(page.getByRole('radio', { name: /公开/ }).first()).toBeChecked();
+  const valueProvider = page.getByRole('combobox', { name: '值的负责人' }).last();
+  await valueProvider.click();
+  await valueProvider.selectOption('scenario_owner');
+  await expect(valueProvider).toHaveValue('scenario_owner');
   await expect(page.getByRole('button', { name: '保存依赖和参数' })).toBeVisible();
 });

@@ -31,15 +31,12 @@ func TestCatalogDefinitionsExcludeHistoryAndPreserveManagementUsage(t *testing.T
 	s := newTestStore(t)
 	ctx := context.Background()
 	definition := domain.EnvironmentParameterDefinition{ID: "region", Key: "region", Label: "Region", Type: domain.ParameterTypeString, Enum: []any{"north", "south"}, DefaultValue: "north", CreatedBy: "component-owner-a", CreatedAt: testNow}
-	if err := s.UpsertEnvironmentParameterDefinition(ctx, definition); err != nil {
-		t.Fatal(err)
-	}
 	c := componentFixture("catalog-reader", "component-owner-a")
 	if err := s.CreateComponent(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	r := releaseFixture("catalog-reader-r1", c.ID, "1.0.0", domain.ReleaseDraft)
-	r.Parameters = []domain.ParameterDefinition{{Name: "region", Type: domain.ParameterTypeString, Enum: definition.Enum, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingGlobal, DefinitionID: definition.ID}}}
+	r.Parameters = []domain.ParameterDefinition{{Name: "region", Type: domain.ParameterTypeString, Enum: definition.Enum, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}
 	if err := s.CreateComponentRelease(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +45,11 @@ func TestCatalogDefinitionsExcludeHistoryAndPreserveManagementUsage(t *testing.T
 	s.DB().SetMaxOpenConns(1)
 	q := &definitionsOnlyQuery{queryer: s.DB(), t: t}
 	snapshot, err := loadCatalogDefinitions(ctx, q)
-	if err != nil || q.count != 4 {
+	if err != nil || q.count != 3 {
 		t.Fatalf("dictionary queries=%d err=%v", q.count, err)
 	}
-	if len(snapshot.Releases) != 0 || len(snapshot.Parameters) != 1 || snapshot.Parameters[0].Usage != 0 || !reflect.DeepEqual(snapshot.Parameters[0], definition) {
-		t.Fatalf("dictionary contract changed: %+v", snapshot.Parameters)
+	if len(snapshot.Releases) != 0 {
+		t.Fatal("dictionary query loaded releases")
 	}
 	publicSnapshot, err := s.ReadCatalogDefinitions(ctx)
 	if err != nil || !reflect.DeepEqual(snapshot, publicSnapshot) {
@@ -83,14 +80,7 @@ func TestCatalogDefinitionsExcludeHistoryAndPreserveManagementUsage(t *testing.T
 	if err != nil || !reflect.DeepEqual(options, expected) {
 		t.Fatalf("option-only lookup differs: %v", err)
 	}
-	parameters, err := s.ListEnvironmentParameterDefinitions(ctx)
-	if err != nil || len(parameters) != 1 || parameters[0].Usage != 1 {
-		t.Fatalf("management parameter usage=%+v err=%v", parameters, err)
-	}
 	if err := s.DeletePlatformOption(ctx, "option-workers", domain.AuditEvent{}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("referenced option deletion=%v", err)
-	}
-	if err := s.DeleteEnvironmentParameterDefinition(ctx, definition.ID, domain.AuditEvent{}); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("referenced parameter deletion=%v", err)
 	}
 }

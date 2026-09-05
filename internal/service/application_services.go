@@ -76,11 +76,6 @@ type platformOptionStore interface {
 	SetPlatformOptionRetired(context.Context, string, *time.Time, domain.AuditEvent) error
 	DeletePlatformOptionCategory(context.Context, string, domain.AuditEvent) error
 	DeletePlatformOption(context.Context, string, domain.AuditEvent) error
-	ListEnvironmentParameterDefinitions(context.Context) ([]domain.EnvironmentParameterDefinition, error)
-	GetEnvironmentParameterDefinition(context.Context, string) (domain.EnvironmentParameterDefinition, error)
-	CreateEnvironmentParameterDefinition(context.Context, domain.EnvironmentParameterDefinition, domain.AuditEvent) error
-	UpdateEnvironmentParameterDefault(context.Context, string, any, domain.AuditEvent) (domain.EnvironmentParameterDefinition, error)
-	DeleteEnvironmentParameterDefinition(context.Context, string, domain.AuditEvent) error
 	ListEnvironmentVariableDefinitions(context.Context) ([]domain.EnvironmentVariableDefinition, error)
 	CreateEnvironmentVariableDefinition(context.Context, domain.EnvironmentVariableDefinition, domain.AuditEvent) error
 	DeleteEnvironmentVariableDefinition(context.Context, string, domain.AuditEvent) error

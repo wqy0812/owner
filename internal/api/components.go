@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -14,6 +15,24 @@ type componentDTO struct {
 	OwnerName    string                        `json:"ownerName"`
 	ReleaseCount int                           `json:"releaseCount"`
 	ReleaseLines []domain.ComponentReleaseLine `json:"releaseLines"`
+	ReadContext  *service.ComponentReadContext `json:"readContext,omitempty"`
+}
+
+// A Release contract is serialized once. Lines only carry its identity.
+func (c componentDTO) MarshalJSON() ([]byte, error) {
+	type plain componentDTO
+	lines := make([]map[string]any, 0, len(c.ReleaseLines))
+	for _, line := range c.ReleaseLines {
+		ids := make([]string, 0, len(line.Releases))
+		for _, release := range line.Releases {
+			ids = append(ids, release.ID)
+		}
+		lines = append(lines, map[string]any{"id": line.ID, "componentId": line.ComponentID, "name": line.Name, "latestReleasedId": line.LatestReleasedID, "currentDraftId": line.CurrentDraftID, "evolutionEligible": line.EvolutionEligible, "evolutionParentId": line.EvolutionParentID, "evolutionBlockedReason": line.EvolutionBlockedReason, "releaseIds": ids, "createdAt": line.CreatedAt})
+	}
+	return json.Marshal(struct {
+		plain
+		Lines []map[string]any `json:"releaseLines"`
+	}{plain(c), lines})
 }
 
 type releaseInput struct {
@@ -29,6 +48,7 @@ type releaseInput struct {
 }
 
 type componentDependencyInput struct {
+	Kind                string                    `json:"kind,omitempty"`
 	UpstreamComponentID string                    `json:"upstreamComponentId"`
 	UpstreamReleaseID   string                    `json:"upstreamReleaseId"`
 	Purpose             string                    `json:"purpose"`
@@ -39,7 +59,6 @@ type componentActionInput struct {
 	ID                  string            `json:"id"`
 	Name                string            `json:"name"`
 	Kind                domain.ActionKind `json:"kind"`
-	Playbook            string            `json:"playbook"`
 	Tags                []string          `json:"tags"`
 	HostGroup           string            `json:"hostGroup"`
 	RequiredCredentials *[]string         `json:"requiredCredentials"`
@@ -63,7 +82,7 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 			UpstreamComponentID: dependency.UpstreamComponentID,
 			UpstreamReleaseID:   dependency.UpstreamReleaseID,
 			Purpose:             dependency.Purpose,
-			ParameterMappings:   dependency.ParameterMappings,
+			ParameterMappings:   dependency.ParameterMappings, Kind: dependency.Kind,
 		})
 	}
 	return dependencies
@@ -97,7 +116,7 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 			requiredCredentials = &empty
 		}
 		release.Actions = append(release.Actions, domain.ActionDefinition{
-			Name: inputAction.Name, Kind: inputAction.Kind, Playbook: inputAction.Playbook, Tags: inputAction.Tags,
+			ID: inputAction.ID, Name: inputAction.Name, Kind: inputAction.Kind, Tags: inputAction.Tags,
 			HostGroup:           inputAction.HostGroup,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
@@ -109,6 +128,20 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 }
 
 func (h *Handler) listComponents(w http.ResponseWriter, r *http.Request) {
+	view := r.URL.Query().Get("view")
+	if view != "" && view != "contracts" {
+		writeError(w, fmt.Errorf("%w: invalid component view", domain.ErrInvalid))
+		return
+	}
+	if view == "" {
+		summaries, err := h.platform.Catalog().ListComponentSummaries(r.Context(), currentUser(r))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeItems(w, summaries)
+		return
+	}
 	components, err := h.platform.Catalog().ListComponents(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
@@ -127,7 +160,18 @@ func (h *Handler) getComponent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, h.componentDTO(r, component))
+	readContext, err := h.platform.Catalog().ReadContext(r.Context(), currentUser(r), component)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for i := range component.Releases {
+		component.Releases[i].PlaybookFileCount = len(component.Releases[i].PlaybookFiles)
+		component.Releases[i].PlaybookFiles = nil
+	}
+	dto := h.componentDTO(r, component)
+	dto.ReadContext = &readContext
+	writeData(w, http.StatusOK, dto)
 }
 
 func (h *Handler) createComponent(w http.ResponseWriter, r *http.Request) {

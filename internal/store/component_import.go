@@ -16,6 +16,11 @@ func (s *Store) CreateComponentImport(ctx context.Context, components []domain.C
 		return err
 	}
 	defer tx.Rollback()
+	// Configuration references may point to another member created later in this
+	// atomic import. Foreign keys are still enforced at commit.
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON`); err != nil {
+		return err
+	}
 	for _, component := range components {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO components(id,slug,name,description,layer,tags_json,owner_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, component.ID, component.Slug, component.Name, component.Description, component.Layer, jsonText(nonNilStrings(component.Tags)), component.OwnerID, timeText(component.CreatedAt), timeText(component.UpdatedAt)); err != nil {
 			return mapSQLError(err)

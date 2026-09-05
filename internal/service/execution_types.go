@@ -21,7 +21,7 @@ type playbookValidationRunner interface {
 }
 
 type workspaceRunner interface {
-	PrepareWorkspace(expectedTreeSHA256 string) (*ansiblerunner.Workspace, error)
+	PrepareWorkspace(playbook, expectedTreeSHA256 string) (*ansiblerunner.Workspace, error)
 	RunInWorkspace(context.Context, *ansiblerunner.Workspace, ansiblerunner.Request) (ansiblerunner.Result, error)
 }
 
@@ -40,6 +40,7 @@ type lockedStep struct {
 	ToReleaseID         string                 `json:"toReleaseId,omitempty"`
 	Playbook            string                 `json:"playbook"`
 	PlaybookDigest      string                 `json:"playbookDigest"`
+	WorkspaceDigest     string                 `json:"workspaceDigest"`
 	Tags                []string               `json:"tags"`
 	Limit               string                 `json:"limit"`
 	Variables           map[string]any         `json:"variables"`

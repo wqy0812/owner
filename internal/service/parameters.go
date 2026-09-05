@@ -176,6 +176,9 @@ func resolveOwnParameters(
 	environment domain.EnvironmentRevision,
 	componentTest bool,
 ) (map[string]any, map[string]resolvedParameter, error) {
+	if err := domain.ValidateComponentParameterAuthoring(release.Parameters); err != nil {
+		return nil, nil, err
+	}
 	mapped := domain.MappedTargets(release.Dependencies)
 	resolved := map[string]any{}
 	provenance := map[string]resolvedParameter{}
@@ -220,12 +223,11 @@ func applyParameterMappings(
 	resolved map[string]any,
 	provenance map[string]resolvedParameter,
 ) error {
-	reachable := graphReachability(graph)
 	for _, dependency := range release.Dependencies {
 		if len(dependency.ParameterMappings) == 0 {
 			continue
 		}
-		sourceID, err := selectDependencySource(node, dependency, graph, releaseByNode, reachable)
+		sourceID, err := selectDependencySource(node, dependency, graph, releaseByNode)
 		if err != nil {
 			return err
 		}
@@ -255,51 +257,34 @@ func selectDependencySource(
 	dependency domain.ComponentDependency,
 	graph domain.ScenarioGraph,
 	releaseByNode map[string]domain.ComponentRelease,
-	reachable map[string]map[string]bool,
 ) (string, error) {
-	candidates := reachableUpstreamNodes(node.ID, dependency.UpstreamReleaseID, graph, reachable)
-	switch len(candidates) {
-	case 0:
-		return "", fmt.Errorf("%w: locked upstream component release is absent from the graph", domain.ErrInvalid)
-	case 1:
-		return candidates[0], nil
-	default:
-		selected := ""
-		if node.DependencySources != nil {
-			selected = node.DependencySources[dependency.ID]
-		}
+	if dependency.Kind == domain.DependencyConfiguration {
+		selected := node.DependencySources[dependency.ID]
 		if selected == "" {
 			return "", fmt.Errorf("%w: node %s must choose a source for dependency %s", domain.ErrInvalid, node.ID, dependency.ID)
 		}
-		found := false
-		for _, candidate := range candidates {
-			if candidate == selected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", fmt.Errorf("%w: selected source %s is not a reachable %s node", domain.ErrInvalid, selected, dependency.UpstreamReleaseID)
-		}
-		if release, ok := releaseByNode[selected]; !ok || release.ID != dependency.UpstreamReleaseID {
-			return "", fmt.Errorf("%w: selected source %s does not lock upstream release %s", domain.ErrInvalid, selected, dependency.UpstreamReleaseID)
+		if source, ok := releaseByNode[selected]; !ok || source.ID != dependency.UpstreamReleaseID || selected == node.ID {
+			return "", fmt.Errorf("%w: invalid configuration source %s", domain.ErrInvalid, selected)
 		}
 		return selected, nil
 	}
-}
-
-func reachableUpstreamNodes(downstreamID, upstreamReleaseID string, graph domain.ScenarioGraph, reachable map[string]map[string]bool) []string {
-	var matches []string
-	for _, candidate := range graph.Nodes {
-		if candidate.ReleaseID != upstreamReleaseID {
-			continue
-		}
-		if reachable[candidate.ID][downstreamID] {
-			matches = append(matches, candidate.ID)
+	selected := ""
+	if node.DependencySources != nil {
+		selected = node.DependencySources[dependency.ID]
+	}
+	if selected == "" {
+		return "", fmt.Errorf("%w: node %s must choose a source for dependency %s", domain.ErrInvalid, node.ID, dependency.ID)
+	}
+	if release, ok := releaseByNode[selected]; !ok || release.ID != dependency.UpstreamReleaseID {
+		return "", fmt.Errorf("%w: selected source %s does not lock upstream release %s", domain.ErrInvalid, selected, dependency.UpstreamReleaseID)
+	}
+	for _, edge := range graph.Edges {
+		if edge.Kind == domain.ScenarioEdgeDependency && edge.DependencyID == dependency.ID &&
+			((edge.Source == selected && edge.Target == node.ID) || (edge.Source == node.ID && edge.Target == selected)) {
+			return selected, nil
 		}
 	}
-	sort.Strings(matches)
-	return matches
+	return "", fmt.Errorf("%w: selected source %s is not bound by dependency %s", domain.ErrInvalid, selected, dependency.ID)
 }
 
 func nodeOverridesMappedParameter(node domain.ScenarioNode, release domain.ComponentRelease) []string {

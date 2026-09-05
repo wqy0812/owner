@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,6 +26,7 @@ import (
 	"codex/platform-demo/internal/seed"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 func TestEnvironmentMaintenanceHealthRevisionHistoryAndRestore(t *testing.T) {
@@ -94,7 +96,7 @@ func TestReleaseReviewPreviewRBACContentAndDigestGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	f.platform.ConfigurePlaybookRoot(root)
+	f.configurePlaybookRoot(root)
 	release := domain.ComponentRelease{
 		ID: "release-review-api", ComponentID: component.ID, LineName: "baseline", Version: "1.0.0-p1",
 		Compatibility: domain.CompatibilityNotApplicable, Status: domain.ReleaseDraft, RiskLevel: domain.RiskLow,
@@ -551,7 +553,7 @@ func componentImportEntry(slug string) map[string]any {
 func TestComponentImportAtomicallyCommitsNormalizedCatalogAndPlaybook(t *testing.T) {
 	f := newAPIFixture(t)
 	root := t.TempDir()
-	f.platform.ConfigurePlaybookRoot(root)
+	f.configurePlaybookRoot(root)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	entry := componentImportEntry(" imported-atomic ")
 	plan := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": []any{entry}}, alice)
@@ -584,7 +586,7 @@ func TestComponentImportAtomicallyCommitsNormalizedCatalogAndPlaybook(t *testing
 func TestComponentImportDatabaseFailureRollsBackRowsAuditsAndFiles(t *testing.T) {
 	f := newAPIFixture(t)
 	root := t.TempDir()
-	f.platform.ConfigurePlaybookRoot(root)
+	f.configurePlaybookRoot(root)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	entries := []any{componentImportEntry("atomic-first"), componentImportEntry("atomic-second")}
 	plan := f.request(http.MethodPost, "/api/v1/component-imports/plan", map[string]any{"entries": entries}, alice)
@@ -613,7 +615,7 @@ func TestComponentImportDatabaseFailureRollsBackRowsAuditsAndFiles(t *testing.T)
 		if walkErr != nil {
 			return walkErr
 		}
-		if !entry.IsDir() {
+		if !entry.IsDir() && !strings.Contains(path, "/managed/fixtures/") {
 			return fmt.Errorf("failed import left file %s", path)
 		}
 		return nil
@@ -639,6 +641,7 @@ func TestFailedIdempotentInstallRetryRebindsBackupToNewRun(t *testing.T) {
 	if err := f.database.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
+	testutil.Workspaces(t, f.database, f.runner.root, release.ID)
 	request := map[string]any{"environmentId": "environment-test", "mode": "install_verify"}
 	plan := f.request(http.MethodPost, "/api/v1/component-releases/release-retry-safe/test-plan", request, alice)
 	if plan.Code != http.StatusOK {
@@ -910,12 +913,18 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		}
 	}
 
+	for i := range fixtures {
+		item := &fixtures[i]
+		testutil.Workspaces(t, f.database, f.runner.root, item.releaseID)
+		item.installPlaybook = "managed/fixtures/" + item.releaseID + "/install.yml"
+		item.rollbackPlaybook = "managed/fixtures/" + item.releaseID + "/rollback.yml"
+	}
 	sourceRunIDs := []string{"run-clean-foundation-install", "run-clean-service-install"}
 	lockedInstall := func(id string, item fixtureComponent, limit string) map[string]any {
 		return map[string]any{
 			"id": id, "nodeId": id, "name": item.id + " · install", "componentId": item.id, "componentName": item.id,
 			"releaseId": item.releaseID, "releaseVersion": "clean-v1", "releaseSpecDigest": "locked", "actionId": item.installActionID,
-			"action": "install", "playbook": item.installPlaybook, "playbookDigest": "playbook:" + item.installPlaybook,
+			"action": "install", "playbook": item.installPlaybook, "playbookDigest": fmt.Sprintf("%x", sha256.Sum256([]byte(testutil.Playbook))),
 			"limit": limit, "variables": map[string]any{}, "requiredCredentials": []any{}, "timeoutSeconds": 60,
 		}
 	}
@@ -950,7 +959,7 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		}
 		backup := domain.BackupMetadata{
 			EnvironmentID: "environment-test", ComponentID: item.id, ReleaseID: item.releaseID, ActionID: item.installActionID,
-			InstallRunID: sourceRunID, CapturedAt: capturedAt, PlaybookSHA256: "playbook:" + item.installPlaybook,
+			InstallRunID: sourceRunID, CapturedAt: capturedAt, PlaybookSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(testutil.Playbook))),
 			DependencySnapshot: map[string]any{"dependencies": []any{}},
 		}
 		if err := f.database.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
@@ -1490,6 +1499,7 @@ func TestWorkbenchApprovalActionMatchesViewerPermission(t *testing.T) {
 }
 
 type fakeRunner struct {
+	root                   string
 	mu                     sync.Mutex
 	calls                  []string
 	requests               []ansiblerunner.Request
@@ -1513,13 +1523,18 @@ func (delivery *fakeImageDelivery) Probe(_ context.Context, location service.Ima
 func (*fakeImageDelivery) Transfer(context.Context, service.ImageTransfer) error { return nil }
 
 func (f *fakeRunner) Digest(playbook string) (string, string, error) {
-	return "playbook:" + playbook, "fixed-tree-digest", nil
+	content, err := os.ReadFile(filepath.Join(f.root, filepath.FromSlash(playbook)))
+	return fmt.Sprintf("%x", sha256.Sum256(content)), "fixed-tree-digest", err
 }
 
 func (f *fakeRunner) DigestPlan(playbooks []string) (map[string]string, string, error) {
 	digests := make(map[string]string, len(playbooks))
 	for _, playbook := range playbooks {
-		digests[playbook] = "playbook:" + playbook
+		digest, _, err := f.Digest(playbook)
+		if err != nil {
+			return nil, "", err
+		}
+		digests[playbook] = digest
 	}
 	return digests, "fixed-tree-digest", nil
 }
@@ -1529,7 +1544,7 @@ func (f *fakeRunner) Run(_ context.Context, request ansiblerunner.Request) (ansi
 	f.calls = append(f.calls, request.Playbook)
 	f.requests = append(f.requests, request)
 	shouldFail := false
-	if f.failPlaybook == request.Playbook {
+	if f.failPlaybook == request.Playbook || (strings.HasPrefix(f.failPlaybook, "tests/") && filepath.Base(f.failPlaybook) == filepath.Base(request.Playbook)) {
 		f.matchingPlaybookCalls++
 		shouldFail = f.failPlaybookOccurrence == 0 || f.matchingPlaybookCalls == f.failPlaybookOccurrence
 	}
@@ -1559,7 +1574,7 @@ type apiFixture struct {
 func completeTestEnvironmentFacts() map[string]any {
 	return map[string]any{
 		"architecture": "amd64", "operatingSystem": "Ubuntu", "operatingSystemVersion": "24.04",
-		"containerRuntime": "docker", "containerRuntimeVersion": "docker@24.0.9", "ipFamily": "IPv4",
+		"ipFamily": "IPv4",
 	}
 }
 
@@ -1573,8 +1588,23 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		t.Fatal(err)
 	}
 	seedAPITestFixtures(t, database)
-	runner := &fakeRunner{}
+	root := t.TempDir()
+	testutil.Workspaces(t, database, root)
+	stored, err := database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := domain.ComponentReleaseSpecDigest(stored)
+	now := time.Now().UTC()
+	if err := database.SubmitComponentReleaseReview(context.Background(), stored.ID, digest, stored.PublicationGeneration, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DecideComponentReleaseReview(context.Background(), stored.ID, domain.ReleaseReviewApproved, seed.PlatformAdminID, "fixture approval", digest, now); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{root: root}
 	platform := service.NewPlatform(database, runner, service.NewEventHub())
+	platform.ConfigurePlaybookRoot(root)
 	if err := platform.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -1701,7 +1731,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 		Backup: domain.BackupMetadata{
 			EnvironmentID: environment.ID, ComponentID: newRelease.ComponentID, ReleaseID: newRelease.ID,
 			ActionID: "action-test-runtime-upgrade-1.1", InstallRunID: installedRun.ID, CapturedAt: now,
-			PlaybookSHA256: "playbook:tests/runtime/upgrade.yml", DependencySnapshot: map[string]any{"dependencies": []any{}},
+			PlaybookSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(testutil.Playbook))), DependencySnapshot: map[string]any{"dependencies": []any{}},
 		},
 		TestOnly: true, InstalledAt: now,
 	}); err != nil {
@@ -1717,6 +1747,7 @@ func componentRequest(name, slug string) map[string]any {
 
 func (f *apiFixture) createNewLineDraft(componentID string, definition map[string]any, cookie *http.Cookie) *httptest.ResponseRecorder {
 	f.t.Helper()
+	f.configurePlaybookRoot(f.t.TempDir())
 	version, _ := definition["version"].(string)
 	releaseNotes, _ := definition["releaseNotes"].(string)
 	if releaseNotes == "" {
@@ -1741,6 +1772,32 @@ func (f *apiFixture) createNewLineDraft(componentID string, definition map[strin
 		f.t.Fatalf("create new-line draft status=%d body=%s", created.Code, created.Body.String())
 	}
 	releaseID := decodeEnvelope(f.t, created)["data"].(map[string]any)["id"].(string)
+	if rawActions, ok := definition["actions"].([]any); ok && len(rawActions) > 0 {
+		persistedActions := make([]any, 0, len(rawActions))
+		workspace := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/playbook-workspace", nil, cookie)
+		if workspace.Code != http.StatusOK {
+			f.t.Fatalf("load new-line workspace status=%d body=%s", workspace.Code, workspace.Body.String())
+		}
+		treeSHA, _ := decodeEnvelope(f.t, workspace)["data"].(map[string]any)["treeSha256"].(string)
+		for _, rawAction := range rawActions {
+			action := rawAction.(map[string]any)
+			kind, _ := action["kind"].(string)
+			saved := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/playbook", map[string]any{
+				"actionKind": kind, "action": action, "content": "---\n- hosts: all\n  tasks: []\n", "expectedSha256": "", "expectedTreeSha256": treeSHA,
+			}, cookie)
+			if saved.Code != http.StatusOK {
+				f.t.Fatalf("save new-line action %s status=%d body=%s", kind, saved.Code, saved.Body.String())
+			}
+			data := decodeEnvelope(f.t, saved)["data"].(map[string]any)
+			persistedAction := data["action"].(map[string]any)
+			delete(persistedAction, "playbook")
+			delete(persistedAction, "releaseId")
+			persistedActions = append(persistedActions, persistedAction)
+			workspace = f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/playbook-workspace", nil, cookie)
+			treeSHA, _ = decodeEnvelope(f.t, workspace)["data"].(map[string]any)["treeSha256"].(string)
+		}
+		definition["actions"] = persistedActions
+	}
 	definition["releaseNotes"] = releaseNotes
 	updated := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID, definition, cookie)
 	if updated.Code != http.StatusOK {
@@ -1830,6 +1887,7 @@ func TestReleaseReadinessSurvivesServiceRestartAndEmptyEventHub(t *testing.T) {
 
 	restarted := service.NewPlatform(f.database, f.runner, service.NewEventHub())
 	defer restarted.Close()
+	restarted.ConfigurePlaybookRoot(f.runner.root)
 	release, err := restarted.Catalog().GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
 	if err != nil {
 		t.Fatal(err)
@@ -1965,13 +2023,31 @@ func (f *apiFixture) multipartFileRequest(path string, fields map[string]string,
 func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	f := newAPIFixture(t)
 	root := t.TempDir()
-	f.platform.ConfigurePlaybookRoot(root)
+	f.configurePlaybookRoot(root)
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	bob := f.session(seed.ComponentOwnerK8sID)
 	carol := f.session(seed.ScenarioOwnerID)
 	dave := f.session(seed.EnvironmentOwnerID)
 	releasePath := "/api/v1/component-releases/release-test-runtime-1.1.0/playbook"
-	releasedRelativePath := "tests/runtime/install.yml"
+	releasedRelativePath := "managed/fixtures/release-test-runtime-1.0.0/install.yml"
+	draft, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var install domain.ActionDefinition
+	for _, action := range draft.Actions {
+		if action.Kind == domain.ActionInstall {
+			install = action
+			break
+		}
+	}
+	if install.ID == "" {
+		t.Fatal("fixture has no install Action")
+	}
+	actionJSON, err := json.Marshal(install)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(root, "tests", "runtime"), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -1984,14 +2060,20 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 			t.Fatalf("%s read released Playbook status=%d body=%s", label, response.Code, response.Body.String())
 		}
 	}
+	if response := f.multipartFileRequest(releasePath, nil, "playbook", "install.yml", []byte("---\n[]\n"), alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("non-atomic Playbook upload status=%d body=%s", response.Code, response.Body.String())
+	}
 
-	uploaded := f.multipartFileRequest(releasePath, nil, "playbook", "install.yml", []byte("---\n- hosts: all\n  tasks: []\n"), alice)
+	uploaded := f.multipartFileRequest(releasePath, map[string]string{
+		"actionKind": "install", "action": string(actionJSON),
+		"expectedSha256": draft.Actions[0].PlaybookSHA256, "expectedTreeSha256": draft.PlaybookTreeSHA256,
+	}, "playbook", "install.yml", []byte("---\n- hosts: all\n  tasks: []\n"), alice)
 	if uploaded.Code != http.StatusCreated {
 		t.Fatalf("upload Playbook status=%d body=%s", uploaded.Code, uploaded.Body.String())
 	}
 	data := decodeEnvelope(t, uploaded)["data"].(map[string]any)
 	managedPath, ok := data["path"].(string)
-	if !ok || managedPath != "managed/component-test-runtime/release-test-runtime-1.1.0/install.yml" {
+	if !ok || managedPath != draft.PlaybookWorkspaceRoot+"install.yml" {
 		t.Fatalf("managed Playbook path=%#v", data)
 	}
 	contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(managedPath)))
@@ -2003,16 +2085,8 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if loaded.Code != http.StatusOK || !strings.Contains(loaded.Body.String(), "hosts: all") {
 		t.Fatalf("load Playbook status=%d body=%s", loaded.Code, loaded.Body.String())
 	}
-	draft, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
+	draft, err = f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.1.0")
 	if err != nil {
-		t.Fatal(err)
-	}
-	for index := range draft.Actions {
-		if draft.Actions[index].Kind == domain.ActionInstall {
-			draft.Actions[index].Playbook = managedPath
-		}
-	}
-	if err := f.database.UpdateDraftRelease(context.Background(), draft); err != nil {
 		t.Fatal(err)
 	}
 	f.recordReleaseReadiness("release-test-runtime-1.1.0")
@@ -2025,7 +2099,17 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 			t.Fatalf("%s read shared candidate Playbook status=%d body=%s", label, response.Code, response.Body.String())
 		}
 	}
-	edited := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n- hosts: workers\n  tasks: []\n"}, alice)
+	install = draft.Actions[0]
+	for _, action := range draft.Actions {
+		if action.Kind == domain.ActionInstall {
+			install = action
+			break
+		}
+	}
+	edited := f.request(http.MethodPut, releasePath, map[string]any{
+		"actionKind": install.Kind, "action": install, "content": "---\n- hosts: workers\n  tasks: []\n",
+		"expectedSha256": data["sha256"], "expectedTreeSha256": draft.PlaybookTreeSHA256,
+	}, alice)
 	if edited.Code != http.StatusOK || !strings.Contains(edited.Body.String(), "hosts: workers") {
 		t.Fatalf("edit Playbook status=%d body=%s", edited.Code, edited.Body.String())
 	}
@@ -2034,20 +2118,44 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if err != nil || decorateErr != nil || release.Candidate || release.Review.Status != domain.ReleaseReviewNotSubmitted || decorated.Readiness.Status != domain.ReadinessBlocked {
 		t.Fatalf("Playbook edit candidate/readiness: candidate=%v readiness=%+v err=%v/%v", release.Candidate, decorated.Readiness, err, decorateErr)
 	}
-	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, bob); response.Code != http.StatusForbidden {
+	install = release.Actions[0]
+	for _, action := range release.Actions {
+		if action.Kind == domain.ActionInstall {
+			install = action
+			break
+		}
+	}
+	if response := f.request(http.MethodPut, releasePath, map[string]any{
+		"actionKind": install.Kind, "action": install, "content": "---\n[]\n",
+		"expectedSha256": decodeEnvelope(t, edited)["data"].(map[string]any)["sha256"], "expectedTreeSha256": release.PlaybookTreeSHA256,
+	}, bob); response.Code != http.StatusForbidden {
 		t.Fatalf("other owner edit Playbook status=%d body=%s", response.Code, response.Body.String())
 	}
 	if response := f.request(http.MethodGet, releasePath+"?path="+managedPath, nil, bob); response.Code != http.StatusForbidden {
 		t.Fatalf("other owner read private Draft Playbook status=%d body=%s", response.Code, response.Body.String())
 	}
-	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook", map[string]any{"filename": "install.yml", "content": "---\n[]\n"}, alice); response.Code != http.StatusConflict {
+	released, err := f.database.GetComponentRelease(context.Background(), "release-test-runtime-1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasedInstall := released.Actions[0]
+	for _, action := range released.Actions {
+		if action.Kind == domain.ActionInstall {
+			releasedInstall = action
+			break
+		}
+	}
+	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.0.0/playbook", map[string]any{
+		"actionKind": releasedInstall.Kind, "action": releasedInstall, "content": "---\n[]\n",
+		"expectedSha256": releasedInstall.PlaybookSHA256, "expectedTreeSha256": released.PlaybookTreeSHA256,
+	}, alice); response.Code != http.StatusConflict {
 		t.Fatalf("released Playbook edit status=%d body=%s", response.Code, response.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "managed", "component-test-runtime", "release-test-runtime-1.0.0", "install.yml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("released Playbook edit replaced a managed file: %v", err)
 	}
-	if response := f.request(http.MethodPut, releasePath, map[string]any{"filename": "notes.txt", "content": "not yaml"}, alice); response.Code != http.StatusBadRequest {
-		t.Fatalf("invalid Playbook extension status=%d body=%s", response.Code, response.Body.String())
+	if response := f.request(http.MethodPut, releasePath, map[string]any{"content": "not atomic"}, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("non-atomic Playbook write status=%d body=%s", response.Code, response.Body.String())
 	}
 	outside := filepath.Join(t.TempDir(), "outside.yml")
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
@@ -2057,8 +2165,131 @@ func TestDraftPlaybookUploadAndOnlineEdit(t *testing.T) {
 	if err := os.Symlink(outside, escapePath); err != nil {
 		t.Fatal(err)
 	}
-	if response := f.request(http.MethodGet, releasePath+"?path=managed/component-test-runtime/release-test-runtime-1.1.0/escape.yml", nil, alice); response.Code != http.StatusBadRequest {
+	if response := f.request(http.MethodGet, releasePath+"?path="+draft.PlaybookWorkspaceRoot+"escape.yml", nil, alice); response.Code != http.StatusBadRequest {
 		t.Fatalf("escaping Playbook symlink status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDraftPlaybookWorkspaceManagesAuxiliaryFilesAndRejectsUnsafePaths(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	f.configurePlaybookRoot(root)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	bob := f.session(seed.ComponentOwnerK8sID)
+	base := "/api/v1/component-releases/release-test-runtime-1.1.0/playbook-workspace"
+	if response := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.1.0/playbook", map[string]any{"actionKind": "install", "content": "---\n- hosts: all\n"}, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("action Playbook save without precondition status=%d body=%s", response.Code, response.Body.String())
+	}
+	created := f.request(http.MethodPut, base+"/file", map[string]any{"path": "templates/runtime.conf.j2", "content": "port={{ runtime_port }}\n", "expectedSha256": ""}, alice)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create workspace text file status=%d body=%s", created.Code, created.Body.String())
+	}
+	createdSHA := decodeEnvelope(t, created)["data"].(map[string]any)["sha256"].(string)
+	listing := f.request(http.MethodGet, base, nil, alice)
+	if listing.Code != http.StatusOK || !strings.Contains(listing.Body.String(), "templates/runtime.conf.j2") || !strings.Contains(listing.Body.String(), "treeSha256") {
+		t.Fatalf("workspace listing status=%d body=%s", listing.Code, listing.Body.String())
+	}
+	if response := f.request(http.MethodGet, base, nil, bob); response.Code != http.StatusForbidden {
+		t.Fatalf("other owner read private workspace status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, base+"/file", map[string]any{"path": "../outside", "content": "secret", "expectedSha256": ""}, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("workspace traversal status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, base+"/file", map[string]any{"path": "templates/runtime.conf.j2", "content": "port=9090\n", "expectedSha256": createdSHA}, alice); response.Code != http.StatusOK {
+		t.Fatalf("conditional workspace save status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, base+"/file", map[string]any{"path": "templates/runtime.conf.j2", "content": "stale", "expectedSha256": createdSHA}, alice); response.Code != http.StatusConflict {
+		t.Fatalf("stale workspace save status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := f.request(http.MethodPut, base+"/file", map[string]any{"path": "templates/runtime.conf.j2", "content": "missing precondition"}, alice); response.Code != http.StatusBadRequest {
+		t.Fatalf("workspace save without precondition status=%d body=%s", response.Code, response.Body.String())
+	}
+	binary := []byte{0, 1, 2, 3, 4}
+	upload := f.multipartFileRequest(base+"/file", map[string]string{"path": "files/helper.bin", "expectedSha256": ""}, "file", "ignored-client-path.bin", binary, alice)
+	if upload.Code != http.StatusCreated || !strings.Contains(upload.Body.String(), `"editable":false`) {
+		t.Fatalf("binary upload status=%d body=%s", upload.Code, upload.Body.String())
+	}
+	binarySHA := decodeEnvelope(t, upload)["data"].(map[string]any)["sha256"].(string)
+	download := f.request(http.MethodGet, base+"/file?path=files%2Fhelper.bin&download=1", nil, alice)
+	if download.Code != http.StatusOK || !bytes.Equal(download.Body.Bytes(), binary) {
+		t.Fatalf("binary download status=%d body=%v", download.Code, download.Body.Bytes())
+	}
+	renamed := f.request(http.MethodPatch, base+"/file", map[string]any{"from": "files/helper.bin", "to": "files/helper-v2.bin", "expectedSha256": binarySHA}, alice)
+	if renamed.Code != http.StatusOK || !strings.Contains(renamed.Body.String(), "files/helper-v2.bin") {
+		t.Fatalf("workspace rename status=%d body=%s", renamed.Code, renamed.Body.String())
+	}
+	deleted := f.request(http.MethodDelete, base+"/file?path=files%2Fhelper-v2.bin&expectedSha256="+binarySHA, nil, alice)
+	if deleted.Code != http.StatusOK || strings.Contains(deleted.Body.String(), "files/helper-v2.bin") {
+		t.Fatalf("workspace delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestDraftActionAPICommitsMetadataAndEntrypointTogether(t *testing.T) {
+	f := newAPIFixture(t)
+	root := t.TempDir()
+	f.configurePlaybookRoot(root)
+	alice := f.session(seed.ComponentOwnerRuntimeID)
+	releaseID := "release-test-runtime-1.1.0"
+	release, err := f.database.GetComponentRelease(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var install domain.ActionDefinition
+	for _, action := range release.Actions {
+		if action.Kind == domain.ActionInstall {
+			install = action
+			break
+		}
+	}
+	if install.ID == "" {
+		t.Fatal("fixture has no install action")
+	}
+	install.Name = "Atomic install"
+	path := "/api/v1/component-releases/" + releaseID + "/playbook"
+	saved := f.request(http.MethodPut, path, map[string]any{
+		"actionKind": install.Kind, "action": install,
+		"content": "---\n- hosts: all\n  tasks: []\n", "expectedSha256": install.PlaybookSHA256, "expectedTreeSha256": release.PlaybookTreeSHA256,
+	}, alice)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("atomic action save status=%d body=%s", saved.Code, saved.Body.String())
+	}
+	data := decodeEnvelope(t, saved)["data"].(map[string]any)
+	if data["action"].(map[string]any)["name"] != "Atomic install" {
+		t.Fatalf("atomic action response=%#v", data)
+	}
+	persisted, err := f.database.GetComponentRelease(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.PlaybookFiles) != len(release.PlaybookFiles) {
+		t.Fatalf("manifest files=%+v", persisted.PlaybookFiles)
+	}
+	found := false
+	for _, action := range persisted.Actions {
+		if action.ID == install.ID {
+			found = action.Name == "Atomic install" && action.PlaybookSHA256 == data["sha256"].(string)
+		}
+	}
+	if !found {
+		t.Fatalf("action metadata was not committed with entrypoint: %+v", persisted.Actions)
+	}
+	workspace := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/playbook-workspace", nil, alice)
+	workspaceData := decodeEnvelope(t, workspace)["data"].(map[string]any)
+	deleted := f.request(http.MethodDelete, path+"?actionKind=install&expectedSha256="+url.QueryEscape(data["sha256"].(string))+"&expectedTreeSha256="+url.QueryEscape(workspaceData["treeSha256"].(string)), nil, alice)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("atomic action delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	persisted, err = f.database.GetComponentRelease(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range persisted.Actions {
+		if action.Kind == domain.ActionInstall {
+			t.Fatalf("atomic delete left action metadata: %+v", action)
+		}
+	}
+	if len(persisted.PlaybookFiles) != len(release.PlaybookFiles)-1 {
+		t.Fatalf("atomic delete left manifest: %+v", persisted.PlaybookFiles)
 	}
 }
 
@@ -2144,14 +2375,14 @@ func TestNeverPublishedDeprecatedReleaseCanRestoreOrPermanentlyDelete(t *testing
 		t.Fatal(err)
 	}
 	playbookRoot := t.TempDir()
-	managedDirectory := filepath.Join(playbookRoot, "managed", "component-test-runtime", releaseID)
+	managedDirectory := filepath.Join(playbookRoot, "managed", "component-test-runtime", "disposable", "discard-me--release-disposable-draft")
 	if err := os.MkdirAll(managedDirectory, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(managedDirectory, "install.yml"), []byte("---\n[]\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	f.platform.ConfigurePlaybookRoot(playbookRoot)
+	f.configurePlaybookRoot(playbookRoot)
 	path := "/api/v1/component-releases/" + releaseID
 	if response := f.request(http.MethodDelete, path, nil, alice); response.Code != http.StatusConflict {
 		t.Fatalf("delete active Draft status=%d body=%s", response.Code, response.Body.String())
@@ -2373,7 +2604,7 @@ func TestSimplifiedComponentAndReleaseMetadata(t *testing.T) {
 	if data["layer"] != string(domain.LayerOrchestrationCore) || len(data["tags"].([]any)) == 0 {
 		t.Fatalf("simplified component metadata missing: %#v", data)
 	}
-	if len(lines) == 0 || len(lines[0].(map[string]any)["releases"].([]any)) == 0 {
+	if len(lines) == 0 || len(lines[0].(map[string]any)["releaseIds"].([]any)) == 0 {
 		t.Fatalf("component release lines missing: %#v", lines)
 	}
 	if _, found := data["kind"]; found {
@@ -2459,6 +2690,12 @@ func TestFirstVersionAPIRejectsOldRequestShapes(t *testing.T) {
 			}
 		})
 	}
+	legacyActionPath := f.request(http.MethodPut, "/api/v1/component-releases/release-test-runtime-1.1.0", map[string]any{
+		"version": "1.1.0", "actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "caller-selected.yml"}},
+	}, alice)
+	if legacyActionPath.Code != http.StatusBadRequest || !strings.Contains(legacyActionPath.Body.String(), "unknown field") {
+		t.Fatalf("client-selected action playbook status=%d body=%s", legacyActionPath.Code, legacyActionPath.Body.String())
+	}
 
 	flatGraph := f.request(http.MethodPut, "/api/v1/scenario-revisions/scenario-test-runtime-r1/graph", map[string]any{
 		"nodes": []any{map[string]any{"id": "flat", "releaseId": "release-test-runtime-1.0.0", "action": "install"}},
@@ -2510,7 +2747,7 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
 		createdRelease := f.createNewLineDraft(componentID, map[string]any{
 			"version": "1.0.0",
-			"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "hostGroup": "test_nodes", "timeoutSeconds": 60}},
+			"actions": []any{map[string]any{"name": "install", "kind": "install", "hostGroup": "test_nodes", "timeoutSeconds": 60}},
 		}, alice)
 		releaseID := decodeEnvelope(t, createdRelease)["data"].(map[string]any)["id"].(string)
 		response := f.request(http.MethodPost, "/api/v1/component-releases/"+releaseID+"/publish", nil, alice)
@@ -2651,7 +2888,7 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	componentID := decodeEnvelope(t, createdComponent)["data"].(map[string]any)["id"].(string)
 	definition := map[string]any{
 		"version": "1.0.0", "parameters": []any{},
-		"actions": []any{map[string]any{"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "hostGroup": "test_nodes", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}, "idempotent": true}},
+		"actions": []any{map[string]any{"name": "install", "kind": "install", "hostGroup": "test_nodes", "timeoutSeconds": 60, "requiredCredentials": []any{"ansible_ssh_pass"}, "idempotent": true}},
 	}
 	createdRelease := f.createNewLineDraft(componentID, definition, alice)
 	if createdRelease.Code != http.StatusOK {
@@ -2707,6 +2944,10 @@ func TestDirectComponentReadMatchesCandidateVisibility(t *testing.T) {
 	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), "release-test-runtime-1.1.0") {
 		t.Fatalf("direct component read hid ready candidate status=%d body=%s", visible.Code, visible.Body.String())
 	}
+	contracts := f.request(http.MethodGet, "/api/v1/components?view=contracts", nil, carol)
+	if contracts.Code != http.StatusOK || !strings.Contains(contracts.Body.String(), "release-test-runtime-1.1.0") {
+		t.Fatalf("contract view hid ready candidate: %s", contracts.Body.String())
+	}
 	f.invalidateReleaseReadiness("release-test-runtime-1.1.0")
 	filtered := f.request(http.MethodGet, "/api/v1/components/component-test-runtime", nil, carol)
 	if filtered.Code != http.StatusOK || strings.Contains(filtered.Body.String(), "release-test-runtime-1.1.0") {
@@ -2718,7 +2959,7 @@ func TestDirectComponentReadMatchesCandidateVisibility(t *testing.T) {
 		if _, err := f.database.DB().ExecContext(context.Background(), "UPDATE component_releases SET candidate=1,review_status=?,review_contract_digest='stale' WHERE id=?", status, "release-test-runtime-1.1.0"); err != nil {
 			t.Fatal(err)
 		}
-		for _, path := range []string{"/api/v1/components", "/api/v1/components/component-test-runtime"} {
+		for _, path := range []string{"/api/v1/components", "/api/v1/components?view=contracts", "/api/v1/components/component-test-runtime"} {
 			response := f.request(http.MethodGet, path, nil, carol)
 			if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "release-test-runtime-1.1.0") {
 				t.Fatalf("invalid candidate escaped %s: %s", path, response.Body.String())
@@ -2741,7 +2982,7 @@ func TestDraftRequiredCredentialsDistinguishesOmittedFromExplicitEmpty(t *testin
 	definition := map[string]any{
 		"version": "1.0.0", "parameters": []any{},
 		"actions": []any{map[string]any{
-			"name": "install", "kind": "install", "playbook": "tests/runtime/install.yml", "hostGroup": "test_nodes", "timeoutSeconds": 60,
+			"name": "install", "kind": "install", "hostGroup": "test_nodes", "timeoutSeconds": 60,
 			"requiredCredentials": []any{"K8S_BOOTSTRAP_TOKEN"},
 		}},
 	}
@@ -2761,11 +3002,18 @@ func TestDraftRequiredCredentialsDistinguishesOmittedFromExplicitEmpty(t *testin
 		t.Fatalf("omitted required credentials were not preserved: %#v", got)
 	}
 	action["requiredCredentials"] = []any{}
-	cleared := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID, definition, alice)
+	playbook := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/playbook?actionKind=install", nil, alice)
+	playbookData := decodeEnvelope(t, playbook)["data"].(map[string]any)
+	workspace := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/playbook-workspace", nil, alice)
+	workspaceData := decodeEnvelope(t, workspace)["data"].(map[string]any)
+	cleared := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/playbook", map[string]any{
+		"actionKind": "install", "action": action, "content": playbookData["content"],
+		"expectedSha256": playbookData["sha256"], "expectedTreeSha256": workspaceData["treeSha256"],
+	}, alice)
 	if cleared.Code != http.StatusOK {
 		t.Fatalf("clear credential update status=%d body=%s", cleared.Code, cleared.Body.String())
 	}
-	clearedAction := decodeEnvelope(t, cleared)["data"].(map[string]any)["actions"].([]any)[0].(map[string]any)
+	clearedAction := decodeEnvelope(t, cleared)["data"].(map[string]any)["action"].(map[string]any)
 	if got := clearedAction["requiredCredentials"].([]any); len(got) != 0 {
 		t.Fatalf("explicit empty required credentials were not cleared: %#v", got)
 	}
@@ -2850,7 +3098,7 @@ func TestUpdatingReleaseContractPreservesActionsAndScopesDraftUpstream(t *testin
 	createdRelease := f.createNewLineDraft(componentID, map[string]any{
 		"version": "1.0.0", "riskLevel": "medium",
 		"actions": []any{map[string]any{
-			"name": "custom-install", "kind": "install", "playbook": "tests/runtime/install.yml",
+			"name": "custom-install", "kind": "install",
 			"hostGroup": "test_nodes", "timeoutSeconds": 60, "riskLevel": "high",
 		}},
 	}, alice)
@@ -2927,6 +3175,7 @@ func TestCloneReleaseCanOverrideEnvironmentConstraints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	testutil.Workspaces(t, f.database, f.runner.root, releaseID)
 	const sourceArtifactID = "artifact-clone-env-source"
 	if _, err := f.database.DB().ExecContext(context.Background(), `INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, sourceArtifactID, releaseID, "package", "package.tgz", strings.Repeat("a", 64), 128, "https://files.example.invalid/components/clone-env/package.tgz", seed.ComponentOwnerRuntimeID, now.Format(time.RFC3339Nano), seed.ComponentOwnerRuntimeID, now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
@@ -3012,20 +3261,48 @@ func TestPublishRejectsCrossReleaseTransitionMismatch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	testutil.Workspaces(t, f.database, f.runner.root, oldID)
 	draftInput := map[string]any{"mode": "evolution", "parentReleaseId": oldID, "version": "2.0.0", "releaseNotes": "bad transition", "compatibility": "compatible"}
 	preview := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/release-draft-plan", draftInput, alice)
 	draftInput["expectedPlanDigest"] = decodeEnvelope(t, preview)["data"].(map[string]any)["planDigest"]
 	newResponse := f.request(http.MethodPost, "/api/v1/components/"+componentID+"/release-drafts", draftInput, alice)
 	newID := decodeEnvelope(t, newResponse)["data"].(map[string]any)["id"].(string)
+	f.configurePlaybookRoot(t.TempDir())
+	actionInputs := []any{map[string]any{
+		"name": "upgrade", "kind": "upgrade", "hostGroup": "test_nodes", "timeoutSeconds": 60,
+		"fromReleaseId": oldID, "toReleaseId": "another-release",
+	}, map[string]any{
+		"name": "rollback", "kind": "rollback", "hostGroup": "test_nodes", "timeoutSeconds": 60,
+		"fromReleaseId": newID, "toReleaseId": oldID,
+	}}
+	persistedActions := make([]any, 0, len(actionInputs)+1)
+	for _, raw := range decodeEnvelope(t, newResponse)["data"].(map[string]any)["actions"].([]any) {
+		existing := raw.(map[string]any)
+		delete(existing, "playbook")
+		delete(existing, "releaseId")
+		persistedActions = append(persistedActions, existing)
+	}
+	treeSHA := decodeEnvelope(t, newResponse)["data"].(map[string]any)["playbookTreeSha256"].(string)
+	for _, raw := range actionInputs {
+		action := raw.(map[string]any)
+		kind := action["kind"].(string)
+		saved := f.request(http.MethodPut, "/api/v1/component-releases/"+newID+"/playbook", map[string]any{
+			"actionKind": kind, "action": action, "content": "---\n- hosts: all\n  tasks: []\n", "expectedSha256": "", "expectedTreeSha256": treeSHA,
+		}, alice)
+		if saved.Code != http.StatusOK {
+			t.Fatalf("save mismatched %s action status=%d body=%s", kind, saved.Code, saved.Body.String())
+		}
+		data := decodeEnvelope(t, saved)["data"].(map[string]any)
+		persistedAction := data["action"].(map[string]any)
+		delete(persistedAction, "playbook")
+		delete(persistedAction, "releaseId")
+		persistedActions = append(persistedActions, persistedAction)
+		workspace := f.request(http.MethodGet, "/api/v1/component-releases/"+newID+"/playbook-workspace", nil, alice)
+		treeSHA = decodeEnvelope(t, workspace)["data"].(map[string]any)["treeSha256"].(string)
+	}
 	updated := f.request(http.MethodPut, "/api/v1/component-releases/"+newID, map[string]any{
 		"version": "2.0.0", "releaseNotes": "bad transition", "compatibility": "compatible",
-		"actions": []any{map[string]any{
-			"name": "upgrade", "kind": "upgrade", "playbook": "tests/runtime/upgrade-v1.1.yml", "hostGroup": "test_nodes", "timeoutSeconds": 60,
-			"fromReleaseId": oldID, "toReleaseId": "another-release",
-		}, map[string]any{
-			"name": "rollback", "kind": "rollback", "playbook": "tests/runtime/rollback-v1.1.yml", "hostGroup": "test_nodes", "timeoutSeconds": 60,
-			"fromReleaseId": newID, "toReleaseId": oldID,
-		}},
+		"actions": persistedActions,
 	}, alice)
 	if updated.Code != http.StatusOK {
 		t.Fatalf("configure mismatched transition status=%d body=%s", updated.Code, updated.Body.String())
@@ -3235,7 +3512,7 @@ func TestRollbackVerifiesTargetReleaseDefaults(t *testing.T) {
 		t.Fatalf("rollback execution requests=%+v", requests)
 	}
 	requests = requests[len(requests)-2:]
-	if requests[0].Playbook != "tests/runtime/rollback.yml" || requests[1].Playbook != "tests/runtime/verify.yml" || requests[1].Variables["expected_version"] != "1.0.0" {
+	if requests[0].Playbook != "managed/fixtures/release-test-runtime-1.1.0/rollback.yml" || requests[1].Playbook != "managed/fixtures/release-test-runtime-1.0.0/verify.yml" || requests[1].Variables["expected_version"] != "1.0.0" {
 		t.Fatalf("rollback execution requests=%+v", requests)
 	}
 }
@@ -3268,7 +3545,7 @@ func TestDraftComponentRollbackTestLocksRollbackAndTargetVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	steps := lockedRun.InputSnapshot["steps"].([]any)
-	if len(steps) != 2 || steps[0].(map[string]any)["playbook"] != "tests/runtime/rollback.yml" || steps[1].(map[string]any)["playbook"] != "tests/runtime/verify.yml" || steps[1].(map[string]any)["releaseId"] != "release-test-runtime-1.0.0" {
+	if len(steps) != 2 || steps[0].(map[string]any)["playbook"] != "managed/fixtures/release-test-runtime-1.1.0/rollback.yml" || steps[1].(map[string]any)["playbook"] != "managed/fixtures/release-test-runtime-1.0.0/verify.yml" || steps[1].(map[string]any)["releaseId"] != "release-test-runtime-1.0.0" {
 		t.Fatalf("draft rollback locked steps=%#v", steps)
 	}
 	approvalID := runData["approval"].(map[string]any)["id"].(string)
@@ -3316,6 +3593,7 @@ func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
 		}
 	}
 
+	testutil.Workspaces(t, f.database, f.runner.root, "release-test-runtime-0.9.0", "release-test-runtime-bad-host")
 	var before int
 	if err := f.database.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&before); err != nil {
 		t.Fatal(err)
@@ -3409,11 +3687,7 @@ func TestComponentTestPlanReturnsActionableMissingCredentialDiagnosis(t *testing
 			release.Actions[index].RequiredCredentials = []string{"K8S_ENCRYPTION_KEY"}
 		}
 	}
-	owner, err := f.database.GetUser(ctx, seed.ComponentOwnerRuntimeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.platform.UpdateRelease(ctx, owner, release.ID, release); err != nil {
+	if err := f.database.UpdateDraftRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3550,7 +3824,7 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		t.Fatalf("unexpected seeded Kubernetes 1.17.5 revision: %#v", scenarioData)
 	}
 	currentRevision, ok := scenarioData["currentRevision"].(map[string]any)
-	if !ok || len(currentRevision["nodes"].([]any)) != 21 || len(currentRevision["edges"].([]any)) != 50 {
+	if !ok || len(currentRevision["nodes"].([]any)) != 21 || len(currentRevision["edges"].([]any)) != 48 {
 		t.Fatalf("unexpected Kubernetes 1.17.5 DAG: %#v", currentRevision)
 	}
 
@@ -3591,16 +3865,16 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 		step, ok := rawStep.(map[string]any)
 		playbook, _ := step["playbook"].(string)
 		limit, _ := step["limit"].(string)
-		if !ok || !strings.HasPrefix(playbook, "k8s-1.17.5-cluster/components/") || limit == "" {
+		if !ok || !strings.HasPrefix(playbook, "managed/fixtures/") || limit == "" {
 			t.Fatalf("locked step %d=%#v", index, rawStep)
 		}
 		if strings.Contains(strings.ToLower(playbook), "recovery") || strings.Contains(strings.ToLower(playbook), "housekeeping") || strings.Contains(strings.ToLower(playbook), "uninstall") {
 			t.Fatalf("locked step %d references a forbidden lifecycle path: %s", index, playbook)
 		}
-		if limitsByPlaybook[playbook] == nil {
-			limitsByPlaybook[playbook] = map[string]bool{}
+		if limitsByPlaybook[fmt.Sprint(step["componentId"])] == nil {
+			limitsByPlaybook[fmt.Sprint(step["componentId"])] = map[string]bool{}
 		}
-		limitsByPlaybook[playbook][limit] = true
+		limitsByPlaybook[fmt.Sprint(step["componentId"])][limit] = true
 		variables, _ := step["variables"].(map[string]any)
 		if _, leaked := variables["K8S_ENCRYPTION_KEY"]; leaked {
 			t.Fatalf("runtime encryption key leaked into locked step %d", index)
@@ -3612,15 +3886,9 @@ func TestSeededKubernetes1175ScenarioRequiresApprovalBeforeRunner(t *testing.T) 
 	if !approvalLocked {
 		t.Fatal("Kubernetes 1.17.5 plan did not lock destructive approval metadata")
 	}
-	for _, playbook := range []string{
-		"k8s-1.17.5-cluster/components/docker.yml",
-		"k8s-1.17.5-cluster/components/kubernetes-distribution.yml",
-		"k8s-1.17.5-cluster/components/flannel.yml",
-		"k8s-1.17.5-cluster/components/kubelet.yml",
-		"k8s-1.17.5-cluster/components/kube-proxy.yml",
-	} {
-		if !limitsByPlaybook[playbook]["k8smaster"] || !limitsByPlaybook[playbook]["k8snode"] || len(limitsByPlaybook[playbook]) != 2 {
-			t.Fatalf("component branches for %s did not retain their action-owned host groups: %#v", playbook, limitsByPlaybook[playbook])
+	for _, componentID := range []string{"component-docker", "component-kubernetes-distribution", "component-flannel", "component-kubelet", "component-kube-proxy"} {
+		if !limitsByPlaybook[componentID]["k8smaster"] || !limitsByPlaybook[componentID]["k8snode"] || len(limitsByPlaybook[componentID]) != 2 {
+			t.Fatalf("component branches for %s: %v", componentID, limitsByPlaybook[componentID])
 		}
 	}
 	snapshotJSON, err := json.Marshal(storedRun.InputSnapshot)
@@ -3778,4 +4046,37 @@ func waitForImageBuild(t *testing.T, database *store.Store, buildID string, stat
 	}
 	build, err := database.GetComponentImageBuild(context.Background(), buildID)
 	t.Fatalf("image build %s status=%s err=%v, want %s", buildID, build.Status, err, status)
+}
+
+func (f *apiFixture) configurePlaybookRoot(root string) {
+	f.t.Helper()
+	previous := f.runner.root
+	if previous != root {
+		err := filepath.WalkDir(previous, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			relative, err := filepath.Rel(previous, path)
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(root, relative)
+			if entry.IsDir() {
+				return os.MkdirAll(target, 0700)
+			}
+			if _, err := os.Stat(target); err == nil {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, content, 0600)
+		})
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	f.runner.root = root
+	f.platform.ConfigurePlaybookRoot(root)
 }

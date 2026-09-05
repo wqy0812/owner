@@ -102,12 +102,12 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 }
 
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "environment_variable_definitions", "environment_parameter_definitions", "platform_options", "platform_option_categories", "users"}
+	tables := []string{"run_archive_files", "run_archive_tasks", "run_cleanup_history", "run_retention_cursors", "sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "playbook_action_mutations", "component_playbook_files", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "environment_variable_definitions", "environment_parameter_definitions", "platform_options", "platform_option_categories", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS audit_events_no_update; DROP TRIGGER IF EXISTS audit_events_no_delete;`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS run_cleanup_history_no_update; DROP TRIGGER IF EXISTS run_cleanup_history_no_delete; DROP TRIGGER IF EXISTS audit_events_no_update; DROP TRIGGER IF EXISTS audit_events_no_delete;`); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -127,6 +127,8 @@ func (s *Store) Reset(ctx context.Context) error {
 	}
 	if _, err := tx.ExecContext(ctx, `
 CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END;
+CREATE TRIGGER run_cleanup_history_no_update BEFORE UPDATE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
+CREATE TRIGGER run_cleanup_history_no_delete BEFORE DELETE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
 CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END;
 `); err != nil {
 		_ = tx.Rollback()

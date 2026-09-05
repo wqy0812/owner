@@ -66,15 +66,3 @@
 .inventory-group-picker input { width: 14px; height: 14px; margin: 0; accent-color: #6177d1; }
 .inventory-group-picker label span { margin: 0; font-size: 11px; overflow-wrap: anywhere; }
 .inventory-group-picker p { color: #9a7a46; font-size: 11px; }
-@media (max-width: 680px) {
-  .inventory-table { min-width: 530px; }
-  .host-group-manager { grid-template-columns: minmax(0, 1fr); min-height: 0; }
-  .host-group-sidebar { border-right: 0; border-bottom: 1px solid #e9edf4; padding: 12px; }
-  .host-group-sidebar__list { display: flex; gap: 7px; max-height: 120px; }
-  .host-group-option { flex: 0 0 170px; margin-bottom: 0; }
-  .host-group-sidebar > p { display: none; }
-  .host-group-members { padding: 18px 16px; }
-  .host-group-node-list { max-height: 230px; }
-  .host-group-footer { flex-wrap: wrap; }
-  .host-group-footer > div { width: 100%; margin-bottom: 6px; }
-}

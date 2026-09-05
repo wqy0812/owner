@@ -1,12 +1,14 @@
+import { RunRetentionPanel } from '../components/RunRetentionPanel';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Archive, Check, CheckCircle2, ChevronRight, CircleDashed, Clock3, Copy, Download, ListFilter, PlayCircle, ScrollText, Search, ShieldAlert, Square, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
-import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill, formatTime, formatFileSize } from '../components/Primitives';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { Run, WorkExplanation } from '../types/domain';
+import type { RunSummary } from '../types/domain';
 
 const ACTIVE = new Set(['queued', 'awaiting_approval', 'running']);
 
@@ -28,9 +30,17 @@ export function runFailureSummary(run: Run): { title: string; detail: string; st
 export function RunsPage() {
   const { user, notify, signalRefresh } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: runs, loading, error, isRefreshing, reload } = useApiData((signal) => api.runs(signal), [user.id], 'runs');
+  const rawPage = Number(searchParams.get('page') ?? 1);
+  const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 1000000 ? rawPage : 1;
+  const rawFilter = searchParams.get('filter');
+  const filter = rawFilter === 'active' || rawFilter === 'finished' ? rawFilter : 'all';
+  const archive = searchParams.get('archive') === 'archived' ? 'archived' : searchParams.get('archive') === 'all' ? 'all' : 'unarchived';
+  const { data: runPage, loading, error, isRefreshing, reload } = useApiData((signal) => api.runs({ page, pageSize: 50, filter, archive }, signal), [user.id, page, filter, archive], 'runs');
+  const runs = runPage?.items;
+  const candidateQuery = useApiData((signal) => user.role === 'environment_owner' ? api.batchApprovalCandidates(signal) : Promise.resolve([]), [user.id, user.role], 'runs');
+  const [batchSelection, setBatchSelection] = useState<RunSummary[]>([]);
+  const [batchCandidates, setBatchCandidates] = useState<RunSummary[]>([]);
   const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
-  const [filter, setFilter] = useState<'all' | 'active' | 'finished'>('all');
   const [busy, setBusy] = useState<string>();
   const [actionExplanation, setActionExplanation] = useState<WorkExplanation>();
   const [batchOpen, setBatchOpen] = useState(false);
@@ -53,16 +63,19 @@ export function RunsPage() {
     setDeliveryModes({});
   }, [selectedId]);
 
-  const selectedSummary = runs?.find((run) => run.id === selectedId);
   const runWorkItem = workbench?.items.find((item) => item.subject.type === 'run' && item.subject.id === selectedId);
+  const filtered = runs ?? [];
+  const batchableApprovals = candidateQuery.data ?? [];
+  function setPage(nextPage: number, nextFilter = filter) {
+    const next = new URLSearchParams(searchParams); next.set('page', String(nextPage)); next.set('filter', nextFilter); setSearchParams(next);
+  }
+  function selectRun(id: string) { const next = new URLSearchParams(searchParams); next.set('selected', id); setSearchParams(next); }
   useEffect(() => {
-    if (!selectedSummary) return;
-    setDetail((current) => current?.id === selectedSummary.id ? { ...current, ...selectedSummary } : current);
-  }, [selectedSummary, setDetail]);
-
-  const filtered = useMemo(() => (runs ?? []).filter((run) => filter === 'all' || (filter === 'active' ? ACTIVE.has(run.status) : !ACTIVE.has(run.status))), [filter, runs]);
-  const pendingApprovals = useMemo(() => (runs ?? []).filter((run) => run.status === 'awaiting_approval' && run.approval?.id), [runs]);
-  const batchableApprovals = useMemo(() => pendingApprovals.filter((run) => !run.deliveryRequirements?.length), [pendingApprovals]);
+    if (!runPage) return;
+    const last = Math.max(1, Math.ceil(runPage.total / 50));
+    if (page > last) { const next = new URLSearchParams(searchParams); next.set('page', String(last)); setSearchParams(next, { replace: true }); }
+  }, [runPage, page, searchParams, setSearchParams]);
+  useEffect(() => { setBatchOpen(false); setBatchSelection([]); setBatchCandidates([]); }, [user.id]);
 
   async function action(kind: 'cancel' | 'approve' | 'reject') {
     if (!detail || actionInFlight.current) return;
@@ -82,15 +95,16 @@ export function RunsPage() {
   }
 
   async function approveBatch() {
-    if (!batchableApprovals.length || !batchReason.trim()) return;
+    if (!batchSelection.length || !batchReason.trim() || actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy('batch-approve');
     try {
-      await api.batchDecideApprovals(batchableApprovals.map((run) => run.approval!.id), 'approved', batchReason.trim());
+      await api.batchDecideApprovals(batchSelection.map((run) => run.approvalId!), 'approved', batchReason.trim());
       setBatchOpen(false);
-      notify('success', `已批量批准 ${batchableApprovals.length} 个运行`, '运行已按各环境 FIFO 队列排队，不会并发占用同一环境。');
+      notify('success', `已批量批准 ${batchSelection.length} 个运行`, '运行已按各环境 FIFO 队列排队，不会并发占用同一环境。');
       signalRefresh(['runs', 'environments', 'scenarios', 'workbench']);
     } catch (reason) { setActionExplanation(actionableExplanation(reason)); notify('error', '批量审批失败', displayError(reason)); }
-    finally { setBusy(undefined); }
+    finally { actionInFlight.current = false; setBusy(undefined); }
   }
 
   async function retrySafeRange() {
@@ -103,7 +117,7 @@ export function RunsPage() {
       const created = await api.retryRun(detail.id, plan.planDigest);
       notify('success', '安全续跑 Run 已创建', `原 Run 保持不变，新 Run 从第 ${plan.startStep + 1} 步继续。`);
       signalRefresh(['runs', 'workbench', 'environments', 'scenarios']);
-      setSearchParams({ selected: created.id });
+      selectRun(created.id);
     } catch (reason) { setActionExplanation(actionableExplanation(reason)); notify('error', '无法安全续跑', displayError(reason)); }
     finally { setBusy(undefined); }
   }
@@ -131,18 +145,22 @@ export function RunsPage() {
   }
 
   return <div className="page">
-    <PageHeader eyebrow="Ansible executions" title="运行中心" description="跟踪排队、审批、执行步骤和实时脱敏日志；每个环境按 FIFO 串行执行。" actions={user.role === 'environment_owner' && batchableApprovals.length ? <button className="button button--primary" onClick={() => setBatchOpen(true)}><ShieldAlert size={16} /> 批量审批 {batchableApprovals.length}</button> : undefined} />
+    <PageHeader eyebrow="Ansible executions" title="运行中心" description="跟踪排队、审批、执行步骤和实时脱敏日志；每个环境按 FIFO 串行执行。" actions={user.role === 'environment_owner' && batchableApprovals.length ? <button className="button button--primary" disabled={Boolean(candidateQuery.error) || candidateQuery.loading} onClick={() => { setBatchCandidates([...batchableApprovals]); setBatchSelection(batchableApprovals.slice(0, 100)); setBatchOpen(true); }}><ShieldAlert size={16} /> 批量审批 {batchableApprovals.length}</button> : undefined} />
+    {candidateQuery.error ? <ErrorBlock message={candidateQuery.error} onRetry={() => void candidateQuery.reload()} /> : null}
+    <div className="run-filter" aria-label="运行历史视图">{(['unarchived','archived','all'] as const).map(value=><button key={value} className={archive===value?'active':''} onClick={()=>{const next=new URLSearchParams(searchParams);next.set('archive',value);next.set('page','1');setSearchParams(next)}}>{value==='unarchived'?'当前记录':value==='archived'?'历史归档':'全部记录'}</button>)}</div>
+    {user.role === 'platform_admin' && <RunRetentionPanel runs={runs ?? []} />}
     <RefreshNotice loading={isRefreshing} error={runs ? error : undefined} onRetry={() => void reload()} />
     {loading && !runs ? <LoadingBlock label="正在加载运行队列…" /> : error && !runs ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <div className="runs-layout">
       <aside className="run-sidebar panel">
-        <div className="run-filter"><ListFilter size={16} />{(['all', 'active', 'finished'] as const).map((value) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{value === 'all' ? '全部' : value === 'active' ? '进行中' : '已结束'}</button>)}</div>
-        <div className="run-cards">{filtered.map((run) => <button key={run.id} className={`run-card${selectedId === run.id ? ' active' : ''}`} onClick={() => setSearchParams({ selected: run.id })}><span className={`run-card__status run-card__status--${run.status}`}>{run.status === 'succeeded' ? <CheckCircle2 size={17} /> : run.status === 'awaiting_approval' ? <ShieldAlert size={17} /> : <CircleDashed size={17} />}</span><div><strong>{run.name ?? run.scenarioName ?? run.componentName ?? `Run ${run.id.slice(0, 8)}`}</strong><small>{run.environmentName ?? '未知环境'} · {formatTime(run.createdAt)}</small><span><StatusPill status={run.status} />{run.queuePosition ? <em>队列 #{run.queuePosition}</em> : null}</span></div><ChevronRight size={16} /></button>)}</div>
+        <div className="run-filter"><ListFilter size={16} />{(['all', 'active', 'finished'] as const).map((value) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setPage(1, value)}>{value === 'all' ? '全部' : value === 'active' ? '进行中' : '已结束'}</button>)}</div>
+        <div className="run-cards">{filtered.map((run) => <button key={run.id} className={`run-card${selectedId === run.id ? ' active' : ''}`} onClick={() => selectRun(run.id)}><span className={`run-card__status run-card__status--${run.status}`}>{run.status === 'succeeded' ? <CheckCircle2 size={17} /> : run.status === 'awaiting_approval' ? <ShieldAlert size={17} /> : <CircleDashed size={17} />}</span><div><strong>{run.name || `Run ${run.id.slice(0, 8)}`}</strong><small>{run.environmentName ?? '未知环境'} · {formatTime(run.createdAt)}</small><span><StatusPill status={run.status} />{run.archiveStatus === "archived" ? <small>归档于 {formatTime(run.archivedAt)} · {formatFileSize(run.archiveSizeBytes ?? 0)}</small> : null}{run.queuePosition ? <em>队列 #{run.queuePosition}</em> : null}</span></div><ChevronRight size={16} /></button>)}</div>
+        <nav className="run-pagination" aria-label="运行分页"><button className="button button--quiet" disabled={page <= 1 || loading} onClick={() => setPage(page - 1)}>上一页</button><span>第 {page} / {Math.max(1, Math.ceil((runPage?.total ?? 0) / 50))} 页 · 共 {runPage?.total ?? 0} 条</span><button className="button button--quiet" disabled={page * 50 >= (runPage?.total ?? 0) || loading} onClick={() => setPage(page + 1)}>下一页</button></nav>
         {!filtered.length && <EmptyState title="当前筛选无运行" />}
       </aside>
       {detailLoading && !detail ? <section className="panel"><LoadingBlock label="正在加载运行详情…" /></section> : detailError ? <section className="panel"><ErrorBlock message={detailError} onRetry={() => void reloadDetail()} /></section> : detail ? <section className="run-detail detail-stack">
         <article className="panel run-hero">
           <div><div className={`run-symbol run-symbol--${detail.status}`}><PlayCircle size={23} /></div><div><div className="eyebrow">{detail.kind?.replaceAll('_', ' ') ?? 'scenario run'} · {detail.id.slice(0, 12)}</div><h2>{detail.name ?? detail.scenarioName ?? detail.componentName}</h2><p>{detail.environmentName} · 发起人 {detail.createdByName ?? detail.createdBy ?? '—'} · {formatTime(detail.createdAt)}</p></div></div>
-          <div className="run-actions"><StatusPill status={detail.status} />{ACTIVE.has(detail.status) && detail.status !== 'awaiting_approval' && <button disabled={busy === 'cancel'} className="button button--danger-soft" onClick={() => void action('cancel')}><Square size={14} /> 取消</button>}</div>
+          <div className="run-actions">{user.role==='platform_admin' && detail.status==='succeeded' && !['archived','queued','running'].includes(detail.archive?.status ?? '') ? <button className="button button--quiet" disabled={busy==='archive'} onClick={async()=>{setBusy('archive');try{await api.archiveRuns([detail.id]);notify('success','归档任务已受理');signalRefresh('runs')}catch(e){notify('error','归档失败',displayError(e))}finally{setBusy(undefined)}}}>归档</button>:null}<StatusPill status={detail.status} />{ACTIVE.has(detail.status) && detail.status !== 'awaiting_approval' && <button disabled={busy === 'cancel'} className="button button--danger-soft" onClick={() => void action('cancel')}><Square size={14} /> 取消</button>}</div>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /><small>{progressLabel}</small></div>
         </article>
         <StatusExplanationPanel item={runWorkItem} currentResourceHref={`/runs?selected=${selectedId}`} />
@@ -154,9 +172,9 @@ export function RunsPage() {
         <article className="panel"><header className="panel__header"><div><span className="panel__icon"><Clock3 size={18} /></span><div><h2>执行步骤</h2><p>Preflight → syntax-check → list-hosts → execute → verify</p></div></div></header>{detail.steps?.length ? <div className="step-timeline">{detail.steps.map((step, index) => <div id={`run-step-${step.id}`} key={step.id} className={`step step--${step.status}`}><span className="step__index">{step.status === 'succeeded' ? <Check size={14} /> : step.status === 'failed' ? <X size={14} /> : index + 1}</span><span className="step__line" /><div><div><strong>{step.name}</strong><StatusPill status={step.status} /></div><p>{step.componentName ? `${step.componentName} · ` : ''}{step.action ?? ''}{step.summary ? ` · ${step.summary}` : ''}</p><small>{formatTime(step.startedAt)}{step.finishedAt ? ` → ${formatTime(step.finishedAt)}` : ''}</small></div></div>)}</div> : <EmptyState title="步骤尚未生成" description={detail.status === 'awaiting_approval' ? '审批通过后进入环境队列。' : 'Planner 正在生成执行步骤。'} />}</article>
         {detail.backups?.length ? <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ShieldAlert size={18} /></span><div><h2>备份基线</h2><p>每个引用只绑定到创建它的安装 Run；回滚不会按版本猜测目录。</p></div></div></header><div className="backup-list">{detail.backups.map((backup) => <section key={`${backup.nodeId ?? backup.componentId}-${backup.backupRef}`}><div><strong>{backup.componentName ?? backup.componentId} · {backup.action}</strong><StatusPill status={backup.action === 'rollback' ? 'rollback' : 'captured'}>{backup.action === 'rollback' ? '用于回滚' : '已锁定'}</StatusPill></div><p>{backup.backupRef}</p><small>来自 Run {backup.installRunId} · 捕获于 {formatTime(backup.capturedAt)} · Playbook {backup.playbookSha256.slice(0, 16)}…</small></section>)}</div></article> : null}
         {detail.resolvedParametersByNode && Object.keys(detail.resolvedParametersByNode).length > 0 && <article className="panel"><header className="panel__header"><div><span className="panel__icon"><ListFilter size={18} /></span><div><h2>解析参数</h2><p>下游参数值及其上游来源，不包含 CredentialRef 实际值</p></div></div></header><div className="resolved-parameters">{Object.entries(detail.resolvedParametersByNode).map(([nodeId, parameters]) => <section key={nodeId}><strong>{nodeId}</strong>{Object.entries(parameters).map(([name, item]) => <div key={name} className="parameter-preview__item"><span>{name}</span><small>{item.value === undefined ? '（空）' : String(item.value)}</small>{item.upstreamParameter ? <small className="parameter-lineage">{item.targetParameter ?? name} 来自节点 {item.sourceNodeId ?? '上游'} 的公开参数 {item.upstreamParameter}</small> : <small>{item.source ?? 'local'}{item.sourceNodeId ? ` · ${item.sourceNodeId}` : ''}</small>}</div>)}</section>)}</div></article>}
-        <article className="panel log-panel"><header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><ScrollText size={18} /></span><div><h2>{ACTIVE.has(detail.status) ? '实时日志' : '历史日志'}</h2><p>stdout / stderr / system · 凭据自动脱敏</p></div></div><span className={`live-badge${ACTIVE.has(detail.status) ? '' : ' live-badge--history'}`}><span /> {ACTIVE.has(detail.status) ? 'LIVE' : 'ARCHIVED'}</span></header><div className="log-toolbar"><label><Search size={14} /><input aria-label="搜索运行日志" value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder="搜索主机、任务或错误" /></label><select aria-label="日志流筛选" value={logStream} onChange={(event) => setLogStream(event.target.value as typeof logStream)}><option value="all">全部流</option><option value="stdout">stdout</option><option value="stderr">stderr</option><option value="system">system</option></select><span>{visibleLogLines.length}/{allLogLines.length} 行</span><button className="icon-text" onClick={() => void navigator.clipboard?.writeText(visibleLogLines.join('\n'))}><Copy size={14} /> 复制结果</button><button className="icon-text" onClick={downloadLogs}><Download size={14} /> 下载完整日志</button></div><pre ref={logRef}>{allLogLines.length ? visibleLogLines.join('\n') || '没有匹配的日志行。' : `[platform] Run ${detail.id}\n[platform] status=${detail.status}\n[platform] 等待 Ansible 输出…`}</pre></article>
+        {detail.archive?.status === 'archived' ? <article className="panel"><h2>历史日志已归档</h2><p>完整脱敏日志保存在归档包内。{formatFileSize(detail.archive.sizeBytes)}</p><a className="button button--quiet" href={api.archiveDownloadURL(detail.id)}>下载归档包</a></article> : <article className="panel log-panel"><header className="panel__header"><div><span className="panel__icon panel__icon--cyan"><ScrollText size={18} /></span><div><h2>{ACTIVE.has(detail.status) ? '实时日志' : '历史日志'}</h2><p>stdout / stderr / system · 凭据自动脱敏</p></div></div><span className={`live-badge${ACTIVE.has(detail.status) ? '' : ' live-badge--history'}`}><span /> {ACTIVE.has(detail.status) ? 'LIVE' : 'ARCHIVED'}</span></header><div className="log-toolbar"><label><Search size={14} /><input aria-label="搜索运行日志" value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder="搜索主机、任务或错误" /></label><select aria-label="日志流筛选" value={logStream} onChange={(event) => setLogStream(event.target.value as typeof logStream)}><option value="all">全部流</option><option value="stdout">stdout</option><option value="stderr">stderr</option><option value="system">system</option></select><span>{visibleLogLines.length}/{allLogLines.length} 行</span><button className="icon-text" onClick={() => void navigator.clipboard?.writeText(visibleLogLines.join('\n'))}><Copy size={14} /> 复制结果</button><button className="icon-text" onClick={downloadLogs}><Download size={14} /> 下载已加载日志</button></div><pre ref={logRef}>{allLogLines.length ? visibleLogLines.join('\n') || '没有匹配的日志行。' : `[platform] Run ${detail.id}\n[platform] status=${detail.status}\n[platform] 等待 Ansible 输出…`}</pre></article>}
       </section> : <section className="panel"><EmptyState title="选择一个运行" description="查看步骤、审批和日志详情。" /></section>}
     </div>}
-    {batchOpen && <Modal title={`批量批准 ${batchableApprovals.length} 个危险运行`} description="仅包含无需逐项交付选择的 Run；平台会原子消费整批审批，再按环境 FIFO 排队。" onClose={() => setBatchOpen(false)}><div className="modal-body"><div className="batch-approval-list">{batchableApprovals.map((run) => <div key={run.id}><strong>{run.name ?? run.scenarioName ?? run.componentName}</strong><span>{run.environmentName} · {run.approval?.riskReason}</span></div>)}</div><label><span>审批理由</span><textarea rows={3} value={batchReason} onChange={(event) => setBatchReason(event.target.value)} /></label></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setBatchOpen(false)}>取消</button><button className="button button--primary" disabled={busy === 'batch-approve' || !batchReason.trim()} onClick={() => void approveBatch()}><Check size={15} /> {busy === 'batch-approve' ? '批准中…' : '确认批量批准'}</button></footer></Modal>}
+    {batchOpen && <Modal title={`批量批准 ${batchSelection.length} 个危险运行`} description={`共 ${batchCandidates.length} 个候选；每批最多 100 条。仅包含无需逐项交付选择的 Run，服务端原子校验本次勾选的审批。`} onClose={() => setBatchOpen(false)}><div className="modal-body"><div className="batch-approval-list">{batchCandidates.map((run) => { const checked = batchSelection.some((item) => item.id === run.id); return <label key={run.id}><input type="checkbox" aria-label={`审批候选 ${run.id}`} checked={checked} disabled={busy === 'batch-approve' || (!checked && batchSelection.length >= 100)} onChange={() => setBatchSelection((current) => checked ? current.filter((item) => item.id !== run.id) : [...current, run])} /><strong>{run.name}</strong><span>{run.environmentName} · Run {run.id} · 待风险审批</span></label>; })}</div><label><span>审批理由</span><textarea rows={3} value={batchReason} onChange={(event) => setBatchReason(event.target.value)} /></label></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setBatchOpen(false)}>取消</button><button className="button button--primary" disabled={busy === 'batch-approve' || !batchReason.trim() || !batchSelection.length} onClick={() => void approveBatch()}><Check size={15} /> {busy === 'batch-approve' ? '批准中…' : '确认批量批准'}</button></footer></Modal>}
   </div>;
 }

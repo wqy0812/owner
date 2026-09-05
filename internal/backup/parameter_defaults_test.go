@@ -13,7 +13,7 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func TestGlobalDefaultCatalogRoundTripRequiresCurrentTables(t *testing.T) {
+func TestCatalogKeepsCurrentTableShapeWithoutExportingUnreferencedDefaults(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	source, err := store.Open(ctx, filepath.Join(root, "source.db"))
@@ -30,14 +30,21 @@ func TestGlobalDefaultCatalogRoundTripRequiresCurrentTables(t *testing.T) {
 		}
 	}
 	d := domain.EnvironmentParameterDefinition{ID: "default-field", Key: "default_field", Label: "Enabled", Description: "Feature switch", Type: domain.ParameterTypeBoolean, DefaultValue: false, CreatedBy: admin.ID, CreatedAt: now}
-	if err := source.UpsertEnvironmentParameterDefinition(ctx, d); err != nil {
+	if err := func() error {
+		_, err := source.DB().Exec("INSERT INTO environment_parameter_definitions(id,technical_key,label,description,parameter_type,created_by,created_at) VALUES(?,?,?,?,?,?,?)", d.ID, d.Key, d.Label, d.Description, d.Type, d.CreatedBy, now.Format(time.RFC3339Nano))
+		if err != nil {
+			return err
+		}
+		_, err = source.DB().Exec("INSERT INTO environment_parameter_defaults(definition_id,value_json) VALUES(?,?)", d.ID, "false")
+		return err
+	}(); err != nil {
 		t.Fatal(err)
 	}
 	c := domain.Component{ID: "default-component", Slug: "default-component", Name: "Default consumer", OwnerID: owner.ID, Layer: domain.LayerRuntimeState, CreatedAt: now, UpdatedAt: now}
 	if err := source.CreateComponent(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	r := domain.ComponentRelease{ID: "default-release", ComponentID: c.ID, LineName: "Baseline", Version: "1.0.0", Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now, Parameters: []domain.ParameterDefinition{{Name: "enabled", Description: d.Description, Type: d.Type, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, Visibility: domain.ParameterPublic, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingGlobal, DefinitionID: d.ID}}}}
+	r := domain.ComponentRelease{ID: "default-release", ComponentID: c.ID, LineName: "Baseline", Version: "1.0.0", Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now, Parameters: []domain.ParameterDefinition{{Name: "enabled", Description: d.Description, Type: d.Type, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, Visibility: domain.ParameterPublic, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}}
 	if err := source.CreateComponentRelease(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +84,12 @@ func TestGlobalDefaultCatalogRoundTripRequiresCurrentTables(t *testing.T) {
 			if err := restoreTables(ctx, target.DB(), data); err != nil {
 				t.Fatal(err)
 			}
-			got, err := target.GetEnvironmentParameterDefinition(ctx, d.ID)
-			if err != nil {
-				t.Fatal(err)
+			var definitions int
+			err = target.DB().QueryRow("SELECT COUNT(*) FROM environment_parameter_definitions").Scan(&definitions)
+			if err != nil || definitions != 0 {
+				t.Fatalf("unreferenced definitions exported: %v %v", definitions, err)
 			}
-			if got.DefaultValue != false {
-				t.Fatalf("restored default=%#v", got.DefaultValue)
-			}
+
 		})
 	}
 	if _, err := source.DB().ExecContext(ctx, "DROP TABLE environment_parameter_defaults"); err != nil {
@@ -146,7 +152,7 @@ func TestCatalogRestoreBootstrapsEnvironmentVariablesOnStartup(t *testing.T) {
 	if !names["IMAGE_REGISTRY"] || !names["FILE_STATION"] {
 		t.Fatalf("restored directory is incomplete: %v", variables)
 	}
-	if err := domain.ValidateEnvironmentValues(nil, map[string]string{"IMAGE_REGISTRY": "registry.example.invalid:5000"}, nil, nil, nil, variables); err != nil {
+	if err := domain.ValidateEnvironmentValues(nil, map[string]string{"IMAGE_REGISTRY": "registry.example.invalid:5000"}, nil, nil, variables); err != nil {
 		t.Fatalf("registry cannot be configured: %v", err)
 	}
 	categories, err := target.ListPlatformOptionCategories(ctx)

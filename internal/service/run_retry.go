@@ -103,30 +103,13 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 			return RunRetryPlan{}, fmt.Errorf("%w: scenario revision definition changed", domain.ErrConflict)
 		}
 	}
-	playbooks := make([]string, 0, len(locked.Steps)-start)
-	for _, step := range locked.Steps[start:] {
-		playbooks = append(playbooks, step.Playbook)
-	}
-	if digester, ok := p.runner.(planDigestRunner); ok {
-		digests, treeDigest, digestErr := digester.DigestPlan(playbooks)
-		if digestErr != nil {
-			return RunRetryPlan{}, digestErr
-		}
-		if treeDigest != source.ArtifactDigest {
-			return RunRetryPlan{}, fmt.Errorf("%w: executable tree changed", domain.ErrConflict)
-		}
-		for _, step := range locked.Steps[start:] {
-			if digests[step.Playbook] != step.PlaybookDigest {
-				return RunRetryPlan{}, fmt.Errorf("%w: playbook %s changed", domain.ErrConflict, step.Playbook)
-			}
-		}
-	} else if digester, ok := p.runner.(digestRunner); ok {
+	if digester, ok := p.runner.(digestRunner); ok {
 		for _, step := range locked.Steps[start:] {
 			playbookDigest, treeDigest, digestErr := digester.Digest(step.Playbook)
 			if digestErr != nil {
 				return RunRetryPlan{}, digestErr
 			}
-			if playbookDigest != step.PlaybookDigest || treeDigest != source.ArtifactDigest {
+			if playbookDigest != step.PlaybookDigest || treeDigest != step.WorkspaceDigest {
 				return RunRetryPlan{}, fmt.Errorf("%w: executable content changed", domain.ErrConflict)
 			}
 		}

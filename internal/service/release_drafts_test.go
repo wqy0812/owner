@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/testutil"
 )
 
 func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testing.T) {
@@ -37,6 +38,10 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 	if err := database.CreateComponentRelease(ctx, child); err != nil {
 		t.Fatal(err)
 	}
+
+	workspaceRoot := t.TempDir()
+	testutil.Workspaces(t, database, workspaceRoot, child.ID)
+	platform.ConfigurePlaybookRoot(workspaceRoot)
 
 	newLineRequest := ReleaseDraftRequest{
 		Mode: ReleaseDraftNewLine, LineName: "Next baseline", TemplateSourceReleaseID: child.ID,

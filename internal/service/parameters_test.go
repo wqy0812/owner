@@ -96,29 +96,28 @@ func TestSelectDependencySourceUniqueAndAmbiguous(t *testing.T) {
 			{ID: "kubelet-worker", ReleaseID: "rel-kubelet"},
 			{ID: "proxy-master", ReleaseID: "rel-proxy", DependencySources: map[string]string{"dep-1": "kubelet-master"}},
 		},
-		Edges: []domain.ScenarioEdge{{Source: "kubelet-master", Target: "proxy-master"}, {Source: "kubelet-worker", Target: "proxy-master"}},
+		Edges: []domain.ScenarioEdge{{Source: "kubelet-master", Target: "proxy-master", Kind: domain.ScenarioEdgeDependency, DependencyID: "dep-1"}, {Source: "kubelet-worker", Target: "proxy-master", Kind: domain.ScenarioEdgeDependency, DependencyID: "dep-1"}},
 	}
 	releaseByNode := map[string]domain.ComponentRelease{
 		"kubelet-master": {ID: "rel-kubelet"},
 		"kubelet-worker": {ID: "rel-kubelet"},
 		"proxy-master":   {ID: "rel-proxy"},
 	}
-	reachable := graphReachability(graph)
 	dep := domain.ComponentDependency{ID: "dep-1", UpstreamReleaseID: "rel-kubelet"}
-	selected, err := selectDependencySource(graph.Nodes[2], dep, graph, releaseByNode, reachable)
+	selected, err := selectDependencySource(graph.Nodes[2], dep, graph, releaseByNode)
 	if err != nil || selected != "kubelet-master" {
 		t.Fatalf("explicit source=%s err=%v", selected, err)
 	}
 	ambiguous := graph.Nodes[2]
 	ambiguous.DependencySources = nil
-	if _, err := selectDependencySource(ambiguous, dep, graph, releaseByNode, reachable); err == nil || !strings.Contains(err.Error(), "must choose a source") {
+	if _, err := selectDependencySource(ambiguous, dep, graph, releaseByNode); err == nil || !strings.Contains(err.Error(), "must choose a source") {
 		t.Fatalf("ambiguous source err=%v", err)
 	}
 	uniqueGraph := domain.ScenarioGraph{
-		Nodes: []domain.ScenarioNode{{ID: "only", ReleaseID: "rel-kubelet"}, {ID: "down", ReleaseID: "rel-proxy"}},
-		Edges: []domain.ScenarioEdge{{Source: "only", Target: "down"}},
+		Nodes: []domain.ScenarioNode{{ID: "only", ReleaseID: "rel-kubelet"}, {ID: "down", ReleaseID: "rel-proxy", DependencySources: map[string]string{"dep-1": "only"}}},
+		Edges: []domain.ScenarioEdge{{Source: "only", Target: "down", Kind: domain.ScenarioEdgeDependency, DependencyID: "dep-1"}},
 	}
-	unique, err := selectDependencySource(uniqueGraph.Nodes[1], dep, uniqueGraph, map[string]domain.ComponentRelease{"only": {ID: "rel-kubelet"}}, graphReachability(uniqueGraph))
+	unique, err := selectDependencySource(uniqueGraph.Nodes[1], dep, uniqueGraph, map[string]domain.ComponentRelease{"only": {ID: "rel-kubelet"}})
 	if err != nil || unique != "only" {
 		t.Fatalf("unique source=%s err=%v", unique, err)
 	}
@@ -145,9 +144,9 @@ func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) 
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{
 			{ID: "kubelet", ReleaseID: "rel-kubelet"},
-			{ID: "proxy", ReleaseID: "rel-proxy"},
+			{ID: "proxy", ReleaseID: "rel-proxy", DependencySources: map[string]string{"dep-1": "kubelet"}},
 		},
-		Edges: []domain.ScenarioEdge{{Source: "kubelet", Target: "proxy"}},
+		Edges: []domain.ScenarioEdge{{Source: "kubelet", Target: "proxy", Kind: domain.ScenarioEdgeDependency, DependencyID: "dep-1"}},
 	}
 	kubeletVars, kubeletProv, err := resolveOwnParameters(kubelet, graph.Nodes[0], domain.EnvironmentRevision{}, false)
 	if err != nil {
@@ -190,8 +189,8 @@ func TestPlannerSupportsChainedPublicParameters(t *testing.T) {
 	b := domain.ComponentRelease{ID: "b", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "b-a", UpstreamReleaseID: "a", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
 	c := domain.ComponentRelease{ID: "c", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "c-b", UpstreamReleaseID: "b", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
 	graph := domain.ScenarioGraph{
-		Nodes: []domain.ScenarioNode{{ID: "a", ReleaseID: "a"}, {ID: "b", ReleaseID: "b"}, {ID: "c", ReleaseID: "c"}},
-		Edges: []domain.ScenarioEdge{{Source: "a", Target: "b"}, {Source: "b", Target: "c"}},
+		Nodes: []domain.ScenarioNode{{ID: "a", ReleaseID: "a"}, {ID: "b", ReleaseID: "b", DependencySources: map[string]string{"b-a": "a"}}, {ID: "c", ReleaseID: "c", DependencySources: map[string]string{"c-b": "b"}}},
+		Edges: []domain.ScenarioEdge{{Source: "a", Target: "b", Kind: domain.ScenarioEdgeDependency, DependencyID: "b-a"}, {Source: "b", Target: "c", Kind: domain.ScenarioEdgeDependency, DependencyID: "c-b"}},
 	}
 	resolved := map[string]map[string]any{}
 	byNode := map[string]domain.ComponentRelease{"a": a, "b": b, "c": c}
@@ -230,8 +229,8 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 	// duplicate target would fail validation; use two mappings to same upstream but only one required
 	downstream.Dependencies[0].ParameterMappings = []domain.ParameterMapping{{UpstreamParameter: "optional", TargetParameter: "requiredTarget"}}
 	graph := domain.ScenarioGraph{
-		Nodes: []domain.ScenarioNode{{ID: "up", ReleaseID: "up"}, {ID: "down", ReleaseID: "down"}},
-		Edges: []domain.ScenarioEdge{{Source: "up", Target: "down"}},
+		Nodes: []domain.ScenarioNode{{ID: "up", ReleaseID: "up"}, {ID: "down", ReleaseID: "down", DependencySources: map[string]string{"dep": "up"}}},
+		Edges: []domain.ScenarioEdge{{Source: "up", Target: "down", Kind: domain.ScenarioEdgeDependency, DependencyID: "dep"}},
 	}
 	vars, prov, err := resolveOwnParameters(downstream, graph.Nodes[1], domain.EnvironmentRevision{}, false)
 	if err != nil {

@@ -50,6 +50,28 @@ func TestValidateGraphRejectsCycleAndMissingFields(t *testing.T) {
 	}
 }
 
+func TestValidateGraphEnforcesTypedEdgeContractsAndUniqueEndpoints(t *testing.T) {
+	graph := ScenarioGraph{
+		Nodes: []ScenarioNode{
+			{ID: "a", ReleaseID: "r1", Action: ActionInstall, HostGroup: "all"},
+			{ID: "b", ReleaseID: "r2", Action: ActionInstall, HostGroup: "all"},
+		},
+		Edges: []ScenarioEdge{
+			{ID: "dependency", Source: "a", Target: "b", Kind: ScenarioEdgeDependency},
+			{ID: "duplicate", Source: "a", Target: "b", Kind: ScenarioEdgeSequence, DependencyID: "unexpected"},
+		},
+	}
+	codes := map[string]bool{}
+	for _, issue := range ValidateGraph(graph) {
+		codes[issue.Code] = true
+	}
+	for _, expected := range []string{"missing_edge_dependency", "unexpected_edge_dependency", "duplicate_edge_pair"} {
+		if !codes[expected] {
+			t.Fatalf("missing %s in %#v", expected, ValidateGraph(graph))
+		}
+	}
+}
+
 func TestActionNeedsApprovalUsesExplicitAndDefensiveMarkers(t *testing.T) {
 	for _, action := range []ActionDefinition{
 		{Kind: ActionUninstall},

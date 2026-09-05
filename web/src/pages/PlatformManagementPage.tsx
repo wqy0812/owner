@@ -3,9 +3,8 @@ import { useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } 
 import { api } from '../api/client';
 import { useApp, displayError } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { ParameterType, PlatformOption, PlatformOptionCategory, PlatformOptionUsage } from '../types/domain';
+import type { PlatformOption, PlatformOptionCategory, PlatformOptionUsage } from '../types/domain';
 import { EmptyState, LoadingBlock, PageHeader } from '../components/Primitives';
-import { EnvironmentParameterDefaultEditor, OptionalParameterDefaultInput, missingEnvironmentValue } from '../components/EnvironmentParameterDefaultEditor';
 
 function usageTotal(usage: PlatformOptionUsage) {
   return usage.componentReleases + usage.scenarioRevisions + usage.environmentRevisions;
@@ -34,13 +33,7 @@ export function PlatformManagementPage() {
   const [busy, setBusy] = useState('');
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const renameSubmitting = useRef(false);
-  const [parameterForm, setParameterForm] = useState({ label: '', description: '', type: 'string' as ParameterType, enum: '', minLength: '' });
-  const [parameterDefaultEnabled, setParameterDefaultEnabled] = useState(false);
-  const [parameterDefault, setParameterDefault] = useState<unknown>();
-  let parameterChoices: unknown[] = [];
-  try { const parsed: unknown = JSON.parse(parameterForm.enum || '[]'); if (Array.isArray(parsed)) parameterChoices = parsed; } catch { /* Validated when submitting. */ }
   const [variableForm, setVariableForm] = useState({ name: '', label: '', description: '' });
-  const { data: parameterDefinitions, reload: reloadParameterDefinitions } = useApiData((signal) => api.environmentParameterDefinitions(signal), [user.id], 'environment-parameter-definitions');
   const { data: variableDefinitions, reload: reloadVariableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
   const admin = user.role === 'platform_admin';
 
@@ -280,19 +273,6 @@ export function PlatformManagementPage() {
     </section>;
   }
 
-  async function createParameterDefinition(event: FormEvent) {
-    event.preventDefault(); setBusy('parameter:new');
-    try {
-      const enumValues = parameterForm.enum.trim() ? JSON.parse(parameterForm.enum) : [];
-      if (!Array.isArray(enumValues)) throw new Error('枚举必须是 JSON 数组。');
-      if (parameterDefaultEnabled && missingEnvironmentValue(parameterDefault)) throw new Error('请填写默认值或取消设置。');
-      await api.createEnvironmentParameterDefinition({ label: parameterForm.label, description: parameterForm.description, type: parameterForm.type, enum: enumValues, minLength: parameterForm.minLength === '' ? undefined : Number(parameterForm.minLength), defaultValue: parameterDefaultEnabled ? parameterDefault : undefined });
-      setParameterForm({ label: '', description: '', type: 'string', enum: '', minLength: '' });
-      setParameterDefaultEnabled(false); setParameterDefault(undefined);
-      await reloadParameterDefinitions(); notify('success', '全局环境字段已新增');
-    } catch (error) { notify('error', '新增环境字段失败', displayError(error)); } finally { setBusy(''); }
-  }
-
   async function createVariableDefinition(event: FormEvent) {
     event.preventDefault(); setBusy('variable:new');
     try {
@@ -306,7 +286,6 @@ export function PlatformManagementPage() {
     <PageHeader eyebrow="Platform directory" title="平台管理" description="集中维护环境适配维度与主机组。技术键和值由平台生成，已被任何历史业务快照引用的数据不能删除。" />
     {!admin ? <EmptyState title="仅平台 Owner 可管理目录" description="其他 Owner 可以在各自表单中选择目录数据，但不能新增或删除。" /> : <>
       <div className="two-column">
-        <section className="panel"><div className="section-heading"><div><h2>全局环境参数字段</h2><p>平台可设置默认值，环境 Owner 可以覆盖；未设置默认值的字段由环境 Owner 必填。</p></div></div><form className="form-grid" onSubmit={(event) => void createParameterDefinition(event)}><label><span>显示名</span><input required value={parameterForm.label} onChange={(event) => setParameterForm((current) => ({ ...current, label: event.target.value }))} /></label><label><span>类型</span><select value={parameterForm.type} onChange={(event) => { setParameterForm((current) => ({ ...current, type: event.target.value as ParameterType })); setParameterDefault(undefined); }}>{['string', 'boolean', 'integer', 'number', 'object', 'array'].map((type) => <option key={type}>{type}</option>)}</select></label><label className="span-2"><span>说明</span><input required value={parameterForm.description} onChange={(event) => setParameterForm((current) => ({ ...current, description: event.target.value }))} /></label><label><span>枚举（可选，JSON 数组）</span><input value={parameterForm.enum} placeholder='例如 ["small","large"]' onChange={(event) => setParameterForm((current) => ({ ...current, enum: event.target.value }))} /></label><label><span>最小长度（仅 string）</span><input type="number" min="0" disabled={parameterForm.type !== 'string'} value={parameterForm.minLength} onChange={(event) => setParameterForm((current) => ({ ...current, minLength: event.target.value }))} /></label><OptionalParameterDefaultInput type={parameterForm.type} choices={parameterChoices} enabled={parameterDefaultEnabled} value={parameterDefault} disabled={Boolean(busy)} onEnabledChange={setParameterDefaultEnabled} onChange={setParameterDefault} /><button className="button button--primary" disabled={Boolean(busy)}><Plus size={15} /> 新增字段</button></form><div className="managed-definition-list">{parameterDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.type} · {item.key} · 引用 {item.usage}</small><small>{item.defaultValue === undefined ? '无平台默认值 · 环境 Owner 必填' : `默认值：${JSON.stringify(item.defaultValue)}`}</small></div><EnvironmentParameterDefaultEditor definition={item} onSaved={reloadParameterDefinitions} /><button className="icon-text" disabled={item.usage > 0 || Boolean(busy)} onClick={() => void api.deleteEnvironmentParameterDefinition(item.id).then(() => reloadParameterDefinitions()).catch((error) => notify('error', '删除失败', displayError(error)))}><Trash2 size={14} /> 删除</button></div>)}</div></section>
         <section className="panel"><div className="section-heading"><div><h2>环境变量字段</h2><p>环境 Owner 只能从此目录选择键。</p></div></div><form className="form-grid" onSubmit={(event) => void createVariableDefinition(event)}><label><span>变量名</span><input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))} /></label><label><span>显示名</span><input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))} /></label><label className="span-2"><span>说明</span><input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))} /></label><button className="button button--primary" disabled={Boolean(busy)}><Plus size={15} /> 新增变量字段</button></form><div className="managed-definition-list">{variableDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.name} · 引用 {item.usage}</small></div><button className="icon-text" disabled={item.usage > 0 || Boolean(busy)} onClick={() => void api.deleteEnvironmentVariableDefinition(item.id).then(() => reloadVariableDefinitions()).catch((error) => notify('error', '删除失败', displayError(error)))}><Trash2 size={14} /> 删除</button></div>)}</div></section>
       </div>
       <form className="panel category-create-form" onSubmit={(event) => void createCategory(event)}>

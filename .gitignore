@@ -17,3 +17,4 @@ internal/ui/dist/
 *.db-shm
 *.db-wal
 *.tsbuildinfo
+.playwright-cli

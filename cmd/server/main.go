@@ -89,6 +89,10 @@ func run() error {
 		envOr("NEWPLATFORM_SSH_KNOWN_HOSTS", sshcheck.DefaultKnownHostsPath()),
 	)
 	platform.ConfigurePlaybookRoot(allowedRoot)
+	if err := platform.ConfigureRunArchives(os.Getenv("CLUSTERFORGE_RUN_ARCHIVE_DIR")); err != nil {
+		log.Printf("Run archive unavailable: %v", err)
+	}
+	platform.StartRunArchiveWorker()
 	platform.ConfigureImageBuilder(
 		envOr("NEWPLATFORM_IMAGE_BUILD_ROOT", "./data/image-builds"),
 		envOr("NEWPLATFORM_DOCKER_BIN", "docker"),
@@ -97,7 +101,8 @@ func run() error {
 	var catalogRepositories *backup.RepositoryController
 	if strings.EqualFold(envOr("CLUSTERFORGE_BACKUP_ENABLED", "false"), "true") {
 		backupConfig := backup.Config{
-			DatabasePath: databasePath, PlaybookRoot: allowedRoot,
+			RunArchiveDir: os.Getenv("CLUSTERFORGE_RUN_ARCHIVE_DIR"),
+			DatabasePath:  databasePath, PlaybookRoot: allowedRoot,
 			BackupDir:     envOr("CLUSTERFORGE_BACKUP_DIR", "./data/catalog-backups"),
 			CatalogRepo:   envOr("CLUSTERFORGE_CATALOG_REPO", "./data/catalog-repo"),
 			CatalogRemote: envOr("CLUSTERFORGE_CATALOG_REMOTE", "origin"),

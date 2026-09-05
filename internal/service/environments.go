@@ -65,7 +65,7 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 		CreatedBy: user.ID, ChangeReason: "创建环境", CreatedAt: now,
 	}
 	environment.CurrentRevisionID, environment.Revision = revision.ID, &revision
-	if err := p.store.CreateEnvironment(ctx, environment, revision, store.EnvironmentRevisionWrite{RequireCompleteFacts: true, ApplyParameterDefaults: true}); err != nil {
+	if err := p.store.CreateEnvironment(ctx, environment, revision, store.EnvironmentRevisionWrite{RequireCompleteFacts: true}); err != nil {
 		return environment, err
 	}
 	p.audit(ctx, user, "environment.created", "environment", environment.ID, map[string]any{"revisionId": revision.ID})
@@ -360,7 +360,7 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	}
 	revision.ID, revision.Revision, revision.CreatedAt = newID("environment-revision"), next, time.Now().UTC()
 	revision.CreatedBy, revision.ChangeReason = user.ID, strings.TrimSpace(changeReason)
-	if err := p.store.CreateEnvironmentRevision(ctx, revision, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: environment.CurrentRevisionID, ValidateAllValues: auditAction == "environment.parameters_updated" || auditAction == "environment.variables_updated", RequireCompleteFacts: true, ApplyParameterDefaults: auditAction == "environment.parameters_updated", RequireGlobalParameters: auditAction == "environment.parameters_updated"}); err != nil {
+	if err := p.store.CreateEnvironmentRevision(ctx, revision, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: environment.CurrentRevisionID, ValidateAllValues: auditAction == "environment.parameters_updated" || auditAction == "environment.variables_updated", RequireCompleteFacts: true}); err != nil {
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = revision.ID, &revision, revision.CreatedAt

@@ -56,11 +56,7 @@ func (r *LifecycleRecorder) finishRun(run domain.Run, status domain.RunStatus, c
 		}
 	}
 	if run.Kind == domain.RunScenarioTest {
-		if status == domain.RunSucceeded {
-			if err := p.store.PromoteScenarioRevisionFromRun(context.Background(), run.ID, time.Now().UTC()); err != nil {
-				log.Printf("finishRun %s: set scenario revision test_passed: %v", run.ID, err)
-			}
-		} else {
+		if status != domain.RunSucceeded {
 			if err := p.store.SetScenarioRevisionStatus(context.Background(), run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC()); err != nil {
 				log.Printf("finishRun %s: reset scenario revision to draft: %v", run.ID, err)
 			}

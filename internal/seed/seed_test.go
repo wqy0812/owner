@@ -2,8 +2,10 @@ package seed
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,12 +17,17 @@ import (
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 type seedRunner struct{}
 
 func (seedRunner) Run(context.Context, ansiblerunner.Request) (ansiblerunner.Result, error) {
 	return ansiblerunner.Result{}, nil
+}
+
+func (seedRunner) Digest(string) (string, string, error) {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(testutil.Playbook))), strings.Repeat("b", 64), nil
 }
 
 func TestSeedUsersKeepsOneComponentOwner(t *testing.T) {
@@ -308,7 +315,10 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing.T) {
 	ctx, database := seededDatabase(t)
 	owner, _ := database.GetUser(ctx, ScenarioOwnerID)
+	root := t.TempDir()
+	testutil.Workspaces(t, database, root)
 	platform := service.NewPlatform(database, seedRunner{}, nil)
+	platform.ConfigurePlaybookRoot(root)
 	defer platform.Close()
 	environment, err := database.GetEnvironment(ctx, "environment-openfuyao-template", false)
 	if err != nil || environment.Revision == nil || len(environment.Revision.CredentialRefs) != 6 {
@@ -343,7 +353,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
 	if _, err := platform.UpdateEnvironmentFacts(ctx, environmentOwner, environment.ID, map[string]any{
 		"architecture": "amd64", "operatingSystem": "Kylin", "operatingSystemVersion": "24.04",
-		"containerRuntime": "docker", "containerRuntimeVersion": "docker@24.0.9", "ipFamily": "IPv4",
+		"ipFamily": "IPv4",
 	}, "补齐当前必填事实"); err != nil {
 		t.Fatalf("complete OpenFuyao environment facts: %v", err)
 	}

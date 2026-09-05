@@ -83,6 +83,10 @@ func (m *Manager) Snapshot(ctx context.Context, reason string) (manifest Manifes
 	if err != nil {
 		return manifest, err
 	}
+	manifest.Archives, err = copyHistoryArchives(ctx, snapshotPath, m.config.RunArchiveDir, filepath.Join(backupPath, "archives"))
+	if err != nil {
+		return manifest, err
+	}
 	worktree, cleanup, err := m.catalogWorktree(ctx, backupID)
 	if err != nil {
 		return manifest, err
@@ -146,6 +150,16 @@ func (m *Manager) Resume(ctx context.Context, backupID string) (Manifest, error)
 	}
 	if manifest.BackupID != backupID || manifest.GitCommit == "" || manifest.GitTag == "" {
 		return manifest, fmt.Errorf("backup %s has no resumable Git commit", backupID)
+	}
+	databasePath := filepath.Join(backupPath, manifest.DatabaseFile)
+	if err := verifySQLite(ctx, databasePath); err != nil {
+		return manifest, err
+	}
+	if digest, err := sha256File(databasePath); err != nil || digest != manifest.DatabaseSHA256 {
+		return manifest, fmt.Errorf("database SHA-256 mismatch")
+	}
+	if err := verifyHistoryArchives(ctx, databasePath, filepath.Join(backupPath, "archives"), manifest.Archives); err != nil {
+		return manifest, err
 	}
 	if err := m.pushCatalog(ctx, manifest); err != nil {
 		manifest.Error = err.Error()
@@ -248,6 +262,9 @@ func (m *Manager) Verify(ctx context.Context, backupID string, verifyGit bool) (
 	digest, err := sha256File(databasePath)
 	if err != nil || digest != manifest.DatabaseSHA256 {
 		return manifest, fmt.Errorf("database SHA-256 mismatch: got %s, expected %s", digest, manifest.DatabaseSHA256)
+	}
+	if err := verifyHistoryArchives(ctx, databasePath, filepath.Join(m.config.BackupDir, backupID, "archives"), manifest.Archives); err != nil {
+		return manifest, err
 	}
 	if verifyGit {
 		contents, err := m.gitShow(ctx, manifest.GitCommit, "snapshot.json")

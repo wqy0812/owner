@@ -143,6 +143,9 @@ func (p *Platform) PreviewReleaseDraft(ctx context.Context, user domain.User, co
 		return ReleaseDraftPlan{}, fmt.Errorf("%w: unsupported release draft mode %q", domain.ErrInvalid, input.Mode)
 	}
 
+	if err := domain.ValidateComponentParameterAuthoring(source.Parameters); err != nil {
+		return ReleaseDraftPlan{}, err
+	}
 	executableDigests := map[string]string{}
 	if source.ID != "" {
 		plan.ArtifactCount, plan.ImageCount = len(source.Artifacts), len(source.Images)
@@ -236,6 +239,7 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 			}
 		}
 	}
+	release.PlaybookWorkspaceRoot = generatedManagedReleasePrefix(component, release)
 	for index := range release.Artifacts {
 		release.Artifacts[index].ID, release.Artifacts[index].ReleaseID = newID("artifact"), newReleaseID
 		release.Artifacts[index].CreatedAt, release.Artifacts[index].CreatedBy = now, user.ID
@@ -245,6 +249,11 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 		release.Images[index].ID, release.Images[index].ReleaseID = newID("image"), newReleaseID
 		release.Images[index].CreatedAt, release.Images[index].CreatedBy = now, user.ID
 		release.Images[index].SourceUpdatedAt, release.Images[index].SourceUpdatedBy = now, user.ID
+	}
+	// The template's child identities belong to the source Release. The clone
+	// receives fresh identities while later Draft updates preserve its own IDs.
+	for index := range release.Actions {
+		release.Actions[index].ID = ""
 	}
 	manifest := componentImportManifest{}
 	if plan.TemplateSourceReleaseID != "" {
@@ -277,6 +286,8 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 }
 
 func (p *Platform) RenameReleaseLine(ctx context.Context, user domain.User, lineID, name string) (domain.ComponentReleaseLine, error) {
+	p.workspaceMu.Lock()
+	defer p.workspaceMu.Unlock()
 	line, err := p.store.GetReleaseLine(ctx, lineID)
 	if err != nil {
 		return line, err
@@ -292,7 +303,37 @@ func (p *Platform) RenameReleaseLine(ctx context.Context, user domain.User, line
 	if name == "" {
 		return line, fmt.Errorf("%w: release line name is required", domain.ErrInvalid)
 	}
-	if err := p.store.RenameReleaseLine(ctx, lineID, component.ID, name); err != nil {
+	var draftBefore, draftAfter domain.ComponentRelease
+	actionPaths := map[string]string{}
+	releases, err := p.store.ListComponentReleases(ctx, component.ID, false)
+	if err != nil {
+		return line, err
+	}
+	for _, release := range releases {
+		if release.LineID == lineID && release.Status == domain.ReleaseDraft {
+			draftBefore, draftAfter = release, release
+			draftAfter.LineName = name
+			draftAfter.PlaybookWorkspaceRoot = generatedManagedReleasePrefix(component, draftAfter)
+			for index := range draftAfter.Actions {
+				path, pathErr := actionPlaybookPath(component, draftAfter, draftAfter.Actions[index].Kind)
+				if pathErr != nil {
+					return line, pathErr
+				}
+				draftAfter.Actions[index].Playbook = path
+				actionPaths[draftAfter.Actions[index].ID] = path
+			}
+			break
+		}
+	}
+	undo := func() {}
+	if draftBefore.ID != "" {
+		undo, err = p.moveDraftWorkspace(component, draftBefore, draftAfter)
+		if err != nil {
+			return line, err
+		}
+	}
+	if err := p.store.RenameReleaseLineAndDraftActions(ctx, lineID, component.ID, name, draftBefore.ID, draftAfter.PlaybookWorkspaceRoot, actionPaths); err != nil {
+		undo()
 		return line, err
 	}
 	p.audit(ctx, user, "component_release_line.renamed", "component_release_line", lineID, map[string]any{"componentId": component.ID, "oldName": line.Name, "newName": name})

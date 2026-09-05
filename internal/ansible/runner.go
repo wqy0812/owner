@@ -23,7 +23,7 @@ const (
 )
 
 func (r *Runner) run(parent context.Context, req Request) (result Result, runErr error) {
-	workspace, err := r.PrepareWorkspace(req.ExpectedTreeSHA256)
+	workspace, err := r.PrepareWorkspace(req.Playbook, req.ExpectedTreeSHA256)
 	if err != nil {
 		return Result{}, err
 	}
@@ -35,12 +35,13 @@ func (r *Runner) run(parent context.Context, req Request) (result Result, runErr
 // Input files are replaced between sequential steps; the tree itself is copied
 // and verified only once.
 type Workspace struct {
-	path       string
-	jobRoot    string
-	inputDir   string
-	localTemp  string
-	treeDigest string
-	runner     *Runner
+	path         string
+	jobRoot      string
+	inputDir     string
+	localTemp    string
+	treeDigest   string
+	sourcePrefix string
+	runner       *Runner
 }
 
 func (w *Workspace) Close() error {
@@ -52,7 +53,24 @@ func (w *Workspace) Close() error {
 	return err
 }
 
-func (r *Runner) PrepareWorkspace(expectedTreeSHA256 string) (*Workspace, error) {
+// Validate re-hashes the snapshotted executable tree. Callers use it after a
+// step so a Playbook that rewrites its own local workspace cannot lend stale
+// evidence to this or a later step.
+func (w *Workspace) Validate(expectedTreeSHA256 string) error {
+	if w == nil || w.path == "" || w.jobRoot == "" {
+		return fmt.Errorf("%w: invalid or closed workspace", ErrInvalidRequest)
+	}
+	digest, err := TreeDigest(w.jobRoot)
+	if err != nil {
+		return fmt.Errorf("digest workspace tree: %w", err)
+	}
+	if expectedTreeSHA256 != "" && digest != expectedTreeSHA256 {
+		return fmt.Errorf("%w: executable tree changed during execution", ErrArtifactChanged)
+	}
+	return nil
+}
+
+func (r *Runner) PrepareWorkspace(playbookPath, expectedTreeSHA256 string) (*Workspace, error) {
 	root, err := r.canonicalRoot()
 	if err != nil {
 		return nil, err
@@ -65,8 +83,20 @@ func (r *Runner) PrepareWorkspace(expectedTreeSHA256 string) (*Workspace, error)
 		_ = os.RemoveAll(path)
 		return nil, err
 	}
+	_, resolvedPlaybook, cleanPlaybook, err := r.resolvePlaybook(playbookPath)
+	if err != nil {
+		return fail(err)
+	}
+	sourceRoot := workspaceRoot(root, resolvedPlaybook, cleanPlaybook)
+	sourcePrefix, err := filepath.Rel(root, sourceRoot)
+	if err != nil {
+		return fail(err)
+	}
+	if sourcePrefix == "." {
+		sourcePrefix = ""
+	}
 	jobRoot := filepath.Join(path, "job")
-	if err := copyRegularTree(root, jobRoot); err != nil {
+	if err := copyRegularTree(sourceRoot, jobRoot); err != nil {
 		return fail(fmt.Errorf("snapshot playbook tree: %w", err))
 	}
 	// Hash the completed snapshot, not the mutable source. This both verifies
@@ -86,7 +116,7 @@ func (r *Runner) PrepareWorkspace(expectedTreeSHA256 string) (*Workspace, error)
 	if err := os.MkdirAll(localTemp, 0o700); err != nil {
 		return fail(fmt.Errorf("create Ansible local temp: %w", err))
 	}
-	return &Workspace{path: path, jobRoot: jobRoot, inputDir: inputDir, localTemp: localTemp, treeDigest: treeDigest, runner: r}, nil
+	return &Workspace{path: path, jobRoot: jobRoot, inputDir: inputDir, localTemp: localTemp, treeDigest: treeDigest, sourcePrefix: filepath.ToSlash(sourcePrefix), runner: r}, nil
 }
 
 func (r *Runner) RunInWorkspace(parent context.Context, workspace *Workspace, req Request) (result Result, runErr error) {
@@ -95,7 +125,15 @@ func (r *Runner) RunInWorkspace(parent context.Context, workspace *Workspace, re
 	}
 	resolver := *r
 	resolver.AllowedRoot = workspace.jobRoot
-	_, playbook, cleanPlaybook, err := resolver.resolvePlaybook(req.Playbook)
+	workspacePlaybook := filepath.ToSlash(req.Playbook)
+	if workspace.sourcePrefix != "" {
+		prefix := workspace.sourcePrefix + "/"
+		if !strings.HasPrefix(workspacePlaybook, prefix) {
+			return Result{}, fmt.Errorf("%w: playbook is outside the prepared Release workspace", ErrInvalidPath)
+		}
+		workspacePlaybook = strings.TrimPrefix(workspacePlaybook, prefix)
+	}
+	_, playbook, cleanPlaybook, err := resolver.resolvePlaybook(workspacePlaybook)
 	if err != nil {
 		return Result{}, err
 	}

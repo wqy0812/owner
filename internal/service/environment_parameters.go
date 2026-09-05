@@ -17,13 +17,11 @@ type EnvironmentParameterBindingUse struct {
 
 type EnvironmentParameterField struct {
 	ValueKey       string                           `json:"valueKey"`
-	DefinitionID   string                           `json:"definitionId,omitempty"`
 	Label          string                           `json:"label"`
 	Description    string                           `json:"description"`
 	Type           domain.ParameterType             `json:"type"`
 	Required       bool                             `json:"required"`
 	SuggestedValue any                              `json:"suggestedValue,omitempty"`
-	DefaultValue   any                              `json:"defaultValue,omitempty"`
 	Enum           []any                            `json:"enum,omitempty"`
 	MinLength      int                              `json:"minLength,omitempty"`
 	Bindings       []EnvironmentParameterBindingUse `json:"bindings"`
@@ -51,25 +49,11 @@ func (p *Platform) EnvironmentParameterFields(ctx context.Context) ([]Environmen
 				field := fields[key]
 				if field == nil {
 					field = &EnvironmentParameterField{ValueKey: key, Label: parameter.Name, Description: parameter.Description, Type: parameter.Type, Required: parameter.Required, SuggestedValue: parameter.SuggestedValue, Enum: parameter.Enum, MinLength: parameter.MinLength, Bindings: []EnvironmentParameterBindingUse{}}
-					if parameter.EnvironmentBinding != nil {
-						field.DefinitionID = parameter.EnvironmentBinding.DefinitionID
-					}
 					fields[key] = field
 				}
 				field.Required = field.Required || parameter.Required
 				field.Bindings = append(field.Bindings, EnvironmentParameterBindingUse{ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, Version: release.Version, ParameterName: parameter.Name})
 			}
-		}
-	}
-	definitions, err := p.store.ListEnvironmentParameterDefinitions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, definition := range definitions {
-		if field := fields["global:"+definition.ID]; field != nil {
-			field.Label, field.Description = definition.Label, definition.Description
-			field.Type, field.Enum, field.MinLength = definition.Type, definition.Enum, definition.MinLength
-			field.DefaultValue, field.SuggestedValue, field.Required = definition.DefaultValue, nil, true
 		}
 	}
 	out := make([]EnvironmentParameterField, 0, len(fields))

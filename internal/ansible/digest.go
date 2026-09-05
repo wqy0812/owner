@@ -1,12 +1,27 @@
 package ansible
 
-import "fmt"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+func workspaceRoot(root, playbook, clean string) string {
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	if len(parts) >= 5 && parts[0] == "managed" {
+		return filepath.Join(root, filepath.FromSlash(strings.Join(parts[:4], "/")))
+	}
+	return root
+}
 
 // Digest validates an allow-listed relative playbook and returns both its file
 // digest and the complete executable-tree digest. A Run stores these before it
 // enters the queue and verifies the same tree again during execution.
 func (r *Runner) Digest(relative string) (playbookSHA256, treeSHA256 string, err error) {
-	root, playbook, _, err := r.resolvePlaybook(relative)
+	root, playbook, clean, err := r.resolvePlaybook(relative)
 	if err != nil {
 		return "", "", err
 	}
@@ -14,7 +29,7 @@ func (r *Runner) Digest(relative string) (playbookSHA256, treeSHA256 string, err
 	if err != nil {
 		return "", "", fmt.Errorf("digest playbook: %w", err)
 	}
-	treeSHA256, err = TreeDigest(root)
+	treeSHA256, err = TreeDigest(workspaceRoot(root, playbook, clean))
 	if err != nil {
 		return "", "", fmt.Errorf("digest allowed tree: %w", err)
 	}
@@ -25,17 +40,13 @@ func (r *Runner) Digest(relative string) (playbookSHA256, treeSHA256 string, err
 // The tree is intentionally walked once regardless of the number of steps.
 func (r *Runner) DigestPlan(playbooks []string) (map[string]string, string, error) {
 	digests := make(map[string]string, len(playbooks))
-	var root string
+	workspaceDigests := map[string]string{}
 	for _, relative := range playbooks {
-		resolvedRoot, playbook, _, err := r.resolvePlaybook(relative)
+		resolvedRoot, playbook, clean, err := r.resolvePlaybook(relative)
 		if err != nil {
 			return nil, "", err
 		}
-		if root == "" {
-			root = resolvedRoot
-		} else if root != resolvedRoot {
-			return nil, "", fmt.Errorf("playbooks resolved to different executable trees")
-		}
+		workspace := workspaceRoot(resolvedRoot, playbook, clean)
 		if _, exists := digests[relative]; exists {
 			continue
 		}
@@ -44,13 +55,33 @@ func (r *Runner) DigestPlan(playbooks []string) (map[string]string, string, erro
 			return nil, "", fmt.Errorf("digest playbook: %w", err)
 		}
 		digests[relative] = digest
+		if _, exists := workspaceDigests[workspace]; !exists {
+			workspaceDigest, err := TreeDigest(workspace)
+			if err != nil {
+				return nil, "", fmt.Errorf("digest executable workspace: %w", err)
+			}
+			workspaceDigests[workspace] = workspaceDigest
+		}
 	}
-	if root == "" {
+	if len(workspaceDigests) == 0 {
 		return digests, "", nil
 	}
-	treeDigest, err := TreeDigest(root)
-	if err != nil {
-		return nil, "", fmt.Errorf("digest allowed tree: %w", err)
+	if len(workspaceDigests) == 1 {
+		for _, digest := range workspaceDigests {
+			return digests, digest, nil
+		}
 	}
-	return digests, treeDigest, nil
+	paths := make([]string, 0, len(workspaceDigests))
+	for path := range workspaceDigests {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	hash := sha256.New()
+	for _, path := range paths {
+		_, _ = hash.Write([]byte(filepath.ToSlash(path)))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(workspaceDigests[path]))
+		_, _ = hash.Write([]byte{0})
+	}
+	return digests, hex.EncodeToString(hash.Sum(nil)), nil
 }

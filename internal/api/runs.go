@@ -1,51 +1,68 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
+	"codex/platform-demo/internal/store"
 )
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := h.platform.Execution().ListRuns(r.Context(), currentUser(r))
+	page, size := 1, 50
+	for key, target := range map[string]*int{"page": &page, "pageSize": &size} {
+		if r.URL.Query().Has(key) {
+			n, err := strconv.Atoi(r.URL.Query().Get(key))
+			if err != nil {
+				writeError(w, fmt.Errorf("%w: invalid %s", domain.ErrInvalid, key))
+				return
+			}
+			*target = n
+		}
+	}
+	runs, err := h.platform.Execution().ListRunSummaries(r.Context(), currentUser(r), store.RunListOptions{Archive: r.URL.Query().Get("archive"), Page: page, PageSize: size, Filter: r.URL.Query().Get("filter"), EnvironmentID: r.URL.Query().Get("environmentId")})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	output := make([]map[string]any, 0, len(runs))
-	for i := range runs {
-		runs[i].Steps, _ = h.platform.Execution().ListRunSteps(r.Context(), runs[i].ID)
-		if a, aErr := h.platform.Execution().GetApprovalByRun(r.Context(), runs[i].ID); aErr == nil {
-			runs[i].Approval = &a
-		}
-		output = append(output, h.runDTO(r, runs[i]))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(runs)
+}
+
+func (h *Handler) batchApprovalCandidates(w http.ResponseWriter, r *http.Request) {
+	items, err := h.platform.Execution().BatchApprovalCandidates(r.Context(), currentUser(r))
+	if err != nil {
+		writeError(w, err)
+		return
 	}
-	writeItems(w, output)
+	writeItems(w, items)
 }
 
 func (h *Handler) listComponentReleaseRunEvidence(w http.ResponseWriter, r *http.Request) {
-	runs, err := h.platform.Execution().ListRunsForComponentRelease(r.Context(), currentUser(r), r.PathValue("id"))
+	runs, err := h.platform.Execution().ReleaseRunSummaries(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	output := make([]map[string]any, 0, len(runs))
-	for i := range runs {
-		runs[i].Steps, _ = h.platform.Execution().ListRunSteps(r.Context(), runs[i].ID)
-		if approval, approvalErr := h.platform.Execution().GetApprovalByRun(r.Context(), runs[i].ID); approvalErr == nil {
-			runs[i].Approval = &approval
-		}
-		output = append(output, h.runDTO(r, runs[i]))
-	}
-	writeItems(w, output)
+	writeItems(w, runs)
 }
 
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	if !h.canViewRun(r, currentUser(r), r.PathValue("id")) {
 		writeError(w, domain.ErrForbidden)
+		return
+	}
+	if cleaned, err := h.platform.Execution().WasCleaned(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	} else if cleaned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "run.cleaned", "message": "记录已按保留策略清理"}})
 		return
 	}
 	run, err := h.platform.Execution().GetRun(r.Context(), r.PathValue("id"))
@@ -151,6 +168,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"retryOfRunId": run.RetryOfRunID, "retryRootRunId": run.RetryRootRunID,
 		"retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
+	}
+	if archive, err := h.platform.Execution().RunArchive(r.Context(), run.ID); err == nil && archive != nil {
+		output["archive"] = archive
 	}
 	if environment, err := h.platform.Execution().GetEnvironment(r.Context(), run.EnvironmentID, false); err == nil {
 		output["environmentName"] = environment.Name

@@ -2,6 +2,7 @@ import { executableActionTypes, type ActionDefinition, type Component, type Scen
 import { COMPONENT_LAYERS } from '../types/componentClassification';
 
 export interface ScenarioTemplate {
+  environmentConstraints?: Record<string, unknown>;
   nodes: ScenarioNode[];
   edges: ScenarioEdge[];
 }
@@ -34,7 +35,7 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { throw new Error('场景模板不是有效 JSON。'); }
   if (!isRecord(raw) || !Array.isArray(raw.nodes) || !Array.isArray(raw.edges)) throw new Error('模板必须包含 nodes 和 edges 数组。');
-  assertOnlyKeys(raw, ['nodes', 'edges'], '场景模板');
+  assertOnlyKeys(raw, ['nodes', 'edges', 'environmentConstraints'], '场景模板');
 
   const nodeIDs = new Set<string>();
   const nodes = raw.nodes.map((value, index) => {
@@ -73,9 +74,10 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
   });
 
   const edgeIDs = new Set<string>();
+  const edgePairs = new Set<string>();
   const edges = raw.edges.map((value, index) => {
     if (!isRecord(value)) throw new Error(`第 ${index + 1} 条边结构无效。`);
-    assertOnlyKeys(value, ['id', 'source', 'target'], `edges[${index}]`);
+    assertOnlyKeys(value, ['id', 'source', 'target', 'kind', 'dependencyId'], `edges[${index}]`);
     const id = requiredString(value.id, `edges[${index}].id`);
     if (edgeIDs.has(id)) throw new Error(`边 ID ${id} 重复。`);
     edgeIDs.add(id);
@@ -83,7 +85,15 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     const target = requiredString(value.target, `边 ${id} 的 target`);
     if (!nodeIDs.has(source) || !nodeIDs.has(target)) throw new Error(`边 ${id} 引用了不存在的节点。`);
     if (source === target) throw new Error(`边 ${id} 不能连接节点自身。`);
-    return { id, source, target };
+    const pair = `${source}\u0000${target}`;
+    if (edgePairs.has(pair)) throw new Error(`边 ${id} 与已有连线重复。`);
+    edgePairs.add(pair);
+    const kind = requiredString(value.kind, `边 ${id} 的 kind`);
+    if (kind !== 'dependency' && kind !== 'sequence') throw new Error(`边 ${id} 的 kind 必须是 dependency 或 sequence。`);
+    const dependencyId = value.dependencyId === undefined ? undefined : requiredString(value.dependencyId, `边 ${id} 的 dependencyId`);
+    if (kind === 'dependency' && !dependencyId) throw new Error(`依赖边 ${id} 必须包含 dependencyId。`);
+    if (kind === 'sequence' && dependencyId) throw new Error(`顺序边 ${id} 不能包含 dependencyId。`);
+    return { id, source, target, kind, ...(dependencyId === undefined ? {} : { dependencyId }) } as ScenarioEdge;
   });
   const outgoing = new Map<string, string[]>();
   const indegree = new Map([...nodeIDs].map((id) => [id, 0]));
@@ -103,7 +113,8 @@ export function parseScenarioTemplate(text: string): ScenarioTemplate {
     }
   }
   if (visited !== nodes.length) throw new Error('场景节点和边必须组成无环 DAG。');
-  return { nodes, edges };
+  if (raw.environmentConstraints !== undefined && !isRecord(raw.environmentConstraints)) throw new Error('适配标签必须是对象。');
+  return { nodes, edges, environmentConstraints: raw.environmentConstraints as Record<string, unknown> | undefined };
 }
 
 export function validateScenarioTemplateReferences(template: ScenarioTemplate, components: Component[]) {
@@ -121,6 +132,7 @@ export function validateScenarioTemplateReferences(template: ScenarioTemplate, c
 
 export function serializeScenarioTemplate(template: ScenarioTemplate) {
   return JSON.stringify({
+    environmentConstraints: template.environmentConstraints ?? {},
     nodes: template.nodes.map(({ id, position, data }) => ({
       id, type: 'component', position,
       data: {
@@ -128,6 +140,6 @@ export function serializeScenarioTemplate(template: ScenarioTemplate) {
         action: data.action, parameterValues: data.parameterValues ?? {}, dependencySources: data.dependencySources ?? {}, layer: data.layer,
       },
     })),
-    edges: template.edges.map(({ id, source, target }) => ({ id, source, target })),
+    edges: template.edges.map(({ id, source, target, kind, dependencyId }) => ({ id, source, target, ...(kind ? { kind } : {}), ...(dependencyId ? { dependencyId } : {}) })),
   }, null, 2);
 }

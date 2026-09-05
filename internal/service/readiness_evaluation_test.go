@@ -74,7 +74,7 @@ func TestReadinessDefinitionFailureRemainsBlocked(t *testing.T) {
 	for _, id := range []string{"first", "second"} {
 		readiness, err := evaluation.readiness(context.Background(), evaluationRelease(id))
 		codes := readinessBlockerCodes(readiness)
-		if err != nil || readiness.Status != domain.ReadinessBlocked || !codes["release_contract_invalid"] || !codes["release_runtime_matrix_invalid"] {
+		if err != nil || readiness.Status != domain.ReadinessBlocked || !codes["release_contract_invalid"] {
 			t.Fatalf("definition failure did not block: %+v %v", readiness, err)
 		}
 	}

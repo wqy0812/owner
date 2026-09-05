@@ -31,3 +31,12 @@ func TestAutomationSnapshotAcceptsGuardedSources(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletedDatabaseConversionsAreNotAvailable(t *testing.T) {
+	for _, command := range []string{"preview-component-parameters", "convert-component-parameters", "convert-playbook-workspaces"} {
+		err := runDatabase(context.Background(), []string{command, "--db", "does-not-exist.db"})
+		if err == nil || !strings.Contains(err.Error(), "unknown database command") {
+			t.Fatalf("%s: %v", command, err)
+		}
+	}
+}

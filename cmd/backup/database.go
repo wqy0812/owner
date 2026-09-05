@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"strings"
 
+	"codex/platform-demo/internal/backup"
 	"codex/platform-demo/internal/deploydb"
 )
 
 func runDatabase(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("database requires contract, active-runs, snapshot, or verify")
+		return errors.New("database requires contract, active-runs, snapshot, verify, history-snapshot, history-verify, or history-restore")
 	}
 	set := flag.NewFlagSet("database "+args[0], flag.ContinueOnError)
+	archiveRoot := set.String("archive-dir", "", "persistent Run archive root")
 	path := set.String("db", "", "existing SQLite database path")
 	target := set.String("target", "", "new snapshot destination")
 	expected := set.String("expected-contract", "", "exact required schema contract")
@@ -25,6 +27,13 @@ func runDatabase(ctx context.Context, args []string) error {
 		return errors.New("--db is required; positional arguments are not accepted")
 	}
 	switch args[0] {
+	case "history-snapshot":
+		return backup.SnapshotRunHistory(ctx, *path, *archiveRoot, *target)
+	case "history-verify":
+		return backup.VerifyRunHistory(ctx, *path)
+	case "history-restore":
+		return backup.RestoreRunHistory(ctx, *path, *target)
+
 	case "contract":
 		contract, err := deploydb.Contract(ctx, *path)
 		if err == nil {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"codex/platform-demo/internal/domain"
@@ -45,6 +46,9 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 			add("lifecycle_action_missing", "缺少 "+required.label+" 生命周期动作", "lifecycle")
 		}
 	}
+	if err := p.validateWorkspaceManifest(ctx, release); err != nil {
+		add("playbook_workspace_invalid", err.Error(), "lifecycle")
+	}
 
 	if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
@@ -53,48 +57,7 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 	}
 
 	digest := componentReleaseSpecDigest(release)
-	catalog, pairsErr := e.catalogDefinitions(ctx)
-	var runtimePairs []domain.RuntimeCompatibility
-	if pairsErr == nil {
-		runtimePairs, pairsErr = releaseRuntimeCompatibility(release, catalog.Options)
-	}
-	if pairsErr != nil {
-		add("release_runtime_matrix_invalid", pairsErr.Error(), "contract")
-	}
-	if len(runtimePairs) > 0 {
-		for _, pair := range runtimePairs {
-			evidence := domain.RuntimeEvidence{Runtime: pair.Runtime, Version: pair.Version}
-			if release.ParentReleaseID != "" {
-				id, err := p.store.SuccessfulComponentEvolutionEvidenceRunIDForRuntime(ctx, release.ID, digest, pair.Runtime, pair.Version)
-				if err != nil {
-					return result, err
-				}
-				evidence.TransitionEvidenceRunID, evidence.Complete = id, id != ""
-				if id == "" {
-					add("runtime_evolution_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少升级闭环证据", pair.Runtime, pair.Version), "validate")
-				}
-			} else {
-				installID, rollbackID, err := p.store.SuccessfulComponentEvidenceRunIDsForRuntime(ctx, release.ID, digest, pair.Runtime, pair.Version)
-				if err != nil {
-					return result, err
-				}
-				evidence.InstallEvidenceRunID, evidence.RollbackEvidenceRunID = installID, rollbackID
-				evidence.Complete = installID != "" && rollbackID != ""
-				if installID == "" {
-					add("runtime_install_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少安装及 Verify 证据", pair.Runtime, pair.Version), "validate")
-				}
-				if rollbackID == "" {
-					add("runtime_rollback_evidence_missing", fmt.Sprintf("运行时组合 %s / %s 缺少回滚及验证证据", pair.Runtime, pair.Version), "validate")
-				}
-			}
-			result.RuntimeEvidence = append(result.RuntimeEvidence, evidence)
-		}
-		if len(result.RuntimeEvidence) == 1 {
-			result.InstallEvidenceRunID = result.RuntimeEvidence[0].InstallEvidenceRunID
-			result.RollbackEvidenceRunID = result.RuntimeEvidence[0].RollbackEvidenceRunID
-			result.TransitionEvidenceRunID = result.RuntimeEvidence[0].TransitionEvidenceRunID
-		}
-	} else if release.ParentReleaseID != "" {
+	if release.ParentReleaseID != "" {
 		transitionID, err := p.store.SuccessfulComponentEvolutionEvidenceRunID(ctx, release.ID, digest)
 		if err != nil {
 			return result, err
@@ -123,6 +86,9 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 	} else {
 		visiting[release.ID] = true
 		for _, dependency := range release.Dependencies {
+			if dependency.Kind == domain.DependencyConfiguration {
+				continue
+			} // The complete Scenario candidate set validates every configuration source.
 			upstream, getErr := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
 			if getErr != nil {
 				add("dependency_unavailable", fmt.Sprintf("依赖 Release %s 不可用", dependency.UpstreamReleaseID), "contract")
@@ -154,37 +120,6 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 	}
 	memo[release.ID] = result
 	return result, nil
-}
-
-func releaseRuntimeCompatibility(release domain.ComponentRelease, lookup domain.CatalogOptions) ([]domain.RuntimeCompatibility, error) {
-	runtimeCategory, runtimeOK := lookup.Dimensions["containerRuntime"]
-	versionCategory, versionOK := lookup.Dimensions["containerRuntimeVersion"]
-	if !runtimeOK || !versionOK {
-		return nil, nil
-	}
-	runtimeValues := constraintValues(release.EnvironmentConstraints[runtimeCategory.Key])
-	versionValues := constraintValues(release.EnvironmentConstraints[versionCategory.Key])
-	if len(runtimeValues) == 0 && len(versionValues) == 0 {
-		return nil, nil
-	}
-	selected := map[string]bool{}
-	for _, value := range runtimeValues {
-		option, ok := platformCategoryOption(runtimeCategory, value)
-		if !ok {
-			return nil, fmt.Errorf("unknown container runtime %q", value)
-		}
-		selected[option.ID] = true
-	}
-	pairs := make([]domain.RuntimeCompatibility, 0, len(versionValues))
-	for _, value := range versionValues {
-		option, ok := platformCategoryOption(versionCategory, value)
-		if !ok || !selected[option.ParentOptionID] {
-			return nil, fmt.Errorf("runtime version %q is not linked to a selected runtime", value)
-		}
-		parent := lookup.OptionsByID[option.ParentOptionID]
-		pairs = append(pairs, domain.RuntimeCompatibility{Runtime: parent.Value, Version: option.Value})
-	}
-	return pairs, nil
 }
 
 func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {
@@ -257,6 +192,44 @@ func (p *Platform) validatePlaybook(path string) error {
 	if digester, ok := p.runner.(digestRunner); ok {
 		_, _, err := digester.Digest(path)
 		return err
+	}
+	return nil
+}
+
+func (p *Platform) validateWorkspaceManifest(ctx context.Context, release domain.ComponentRelease) error {
+	if len(release.Actions) == 0 && len(release.PlaybookFiles) == 0 {
+		return nil // An empty Draft has no workspace to validate yet.
+	}
+	if release.PlaybookTreeSHA256 == "" || release.PlaybookWorkspaceRoot == "" || len(release.PlaybookFiles) == 0 {
+		return fmt.Errorf("%w: Release 缺少当前 Playbook 工作区清单", domain.ErrInvalid)
+	}
+	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
+	if err != nil {
+		return err
+	}
+	directory, err := p.workspaceDirectory(component, release, false)
+	if err != nil {
+		return err
+	}
+	files, treeSHA, err := scanWorkspace(release.ID, directory)
+	if err != nil {
+		return err
+	}
+	if treeSHA != release.PlaybookTreeSHA256 || len(files) != len(release.PlaybookFiles) {
+		return fmt.Errorf("%w: Ansible 工作区与已保存清单不一致", domain.ErrConflict)
+	}
+	expected := append([]domain.ComponentPlaybookFile(nil), release.PlaybookFiles...)
+	sort.Slice(expected, func(i, j int) bool { return expected[i].Path < expected[j].Path })
+	for index := range files {
+		if files[index].Path != expected[index].Path || files[index].SHA256 != expected[index].SHA256 || files[index].SizeBytes != expected[index].SizeBytes {
+			return fmt.Errorf("%w: Ansible 工作区文件 %s 与已保存清单不一致", domain.ErrConflict, files[index].Path)
+		}
+	}
+	for _, action := range release.Actions {
+		expectedPath, err := actionPlaybookPath(component, release, action.Kind)
+		if err != nil || action.Playbook != expectedPath {
+			return fmt.Errorf("%w: action %s must use the platform-managed entrypoint", domain.ErrInvalid, action.Kind)
+		}
 	}
 	return nil
 }

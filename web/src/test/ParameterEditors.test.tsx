@@ -98,14 +98,33 @@ describe('parameter contract editor', () => {
     }], [kubeletRelease, { ...kubeletRelease, id: 'release-kubelet-alt' }])).toContain('组件 component-kubelet 只能添加一项直接依赖');
   });
 
-  it('lets the owner add a parameter and mark it public', async () => {
+  it('binds environment input to its component and rejects legacy global authoring', async () => {
+    let changed: ParameterDefinition[] = [];
+    const parameter: ParameterDefinition = { name: 'docker_data_dir', description: 'Docker 数据目录', type: 'string', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: '/var/lib/docker' };
+    render(<ParameterTable parameters={[parameter]} onChange={(values) => { changed = values; }} />);
+    await userEvent.click(screen.getByRole('button', { name: '编辑参数 docker_data_dir' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '值的负责人' }), 'environment_owner');
+    expect(changed[0].environmentBinding).toEqual({ kind: 'private' });
+    expect(screen.queryByRole('combobox', { name: '环境字段绑定' })).not.toBeInTheDocument();
+    const legacy = { ...changed[0], environmentBinding: { kind: 'invalid' as 'private', definitionId: 'retained' } };
+    expect(parameterContractErrors([legacy], [], []).join(' ')).toContain('必须使用组件环境字段');
+  });
+
+  it('keeps parameters compact until selected and expands a newly added parameter', async () => {
     const seen: ParameterDefinition[][] = [];
-    render(<ParameterTable parameters={[{ name: 'kubeInstallRoot', description: 'root', type: 'string', required: true, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '/opt/kube' }]} onChange={(parameters) => seen.push(parameters)} />);
+    const initial: ParameterDefinition[] = [{ name: 'kubeInstallRoot', description: 'root', type: 'string', required: true, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '/opt/kube' }];
+    const view = (parameters: ParameterDefinition[]) => <ParameterTable parameters={parameters} onChange={(next) => seen.push(next)} />;
+    const { rerender } = render(view(initial));
+    expect(screen.queryByRole('radio', { name: /内部/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '编辑参数 kubeInstallRoot' }));
     expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
     await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
     expect(seen.at(-1)?.[0]?.visibility).toBe('public');
     await userEvent.click(screen.getByRole('button', { name: '新增参数' }));
     expect(seen.at(-1)?.at(-1)).toEqual({ name: '', description: '', type: 'string', required: false, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '', enum: undefined });
+    rerender(view(seen.at(-1)!));
+    expect(screen.getByRole('button', { name: '收起参数 未命名参数 2' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('textbox', { name: '参数名称' })).toBeVisible();
   });
 
   it('lets the owner pick a component before locking one of its released versions', async () => {
