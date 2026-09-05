@@ -82,12 +82,13 @@ type Result struct {
 }
 
 type Runner struct {
-	AllowedRoot string
-	WorkRoot    string
-	Binary      string
-	KillGrace   time.Duration
-	MaxLogBytes int
-	Env         map[string]string
+	AllowedRoot    string
+	WorkRoot       string
+	Binary         string
+	KillGrace      time.Duration
+	MaxLogBytes    int
+	Env            map[string]string
+	onProcessStart func(Phase, int)
 }
 
 func NewRunner(allowedRoot string) (*Runner, error) {

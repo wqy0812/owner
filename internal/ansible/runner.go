@@ -306,6 +306,9 @@ func (r *Runner) runPhase(ctx context.Context, phase Phase, args []string, dir, 
 	if err := cmd.Start(); err != nil {
 		return finishPhase(phaseResult, err, logs), err
 	}
+	if r.onProcessStart != nil {
+		r.onProcessStart(phase, cmd.Process.Pid)
+	}
 	processDone := make(chan struct{})
 	outDone := out.follow(processDone)
 	errDone := errOut.follow(processDone)

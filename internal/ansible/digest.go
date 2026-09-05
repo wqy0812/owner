@@ -11,6 +11,9 @@ import (
 
 func workspaceRoot(root, playbook, clean string) string {
 	parts := strings.Split(filepath.ToSlash(clean), "/")
+	if len(parts) >= 4 && parts[0] == "managed-scenarios" {
+		return filepath.Join(root, filepath.FromSlash(strings.Join(parts[:3], "/")))
+	}
 	if len(parts) >= 5 && parts[0] == "managed" {
 		return filepath.Join(root, filepath.FromSlash(strings.Join(parts[:4], "/")))
 	}
