@@ -9,16 +9,19 @@
 - 组件 Owner：按 L1-L6 维护组件分类、结构化合同、不可变发布版本和当前交付证据；Draft 可共享到候选集，Playbook 支持上传和在线编辑。
 - 集群 Owner：使用 DAG 组合精确 Released/候选组件版本，完整测试后原子发布场景 Revision 与全部候选 Release。
 - 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，执行整集群回滚预览并单条或批量审批高风险作业。
+- 平台 Owner：维护平台目录、在工作台审核当前组件合同并管理 Run 归档与保留策略。
 - 共享测试环境：单环境 FIFO 执行、日志搜索/流筛选/复制/下载、取消、审计和站内通知。
-- 当前测试目录：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
+- 测试目录历史快照（2026-08-30）：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；使用前需重新核对，精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
 
 ## 文档
 
 - [文档中心与维护索引](docs/README.md)
+- [开发与文档维护指南](docs/development-guide.md)
+- [平台功能与核心概念](docs/platform-capabilities.md)
 - [项目结构说明](docs/project-structure.md)
 - [平台设计文档（后端为主）](docs/backend-design.md)
-- [平台操作手册（分角色）](docs/operation-manual.md)
+- [平台说明书](docs/platform-manual.md)
 - [测试环境资产目录](docs/demo-catalog.md)
 
 > 这是本地 Demo，不是生产控制面。身份切换不包含密码认证；凭据仅允许保存文件路径或环境变量引用。
@@ -37,6 +40,8 @@ make bootstrap
 make dev
 ```
 
+前端面向桌面浏览器，工作区最小宽度为 1280 CSS 像素，较小窗口横向滚动；保留手动侧栏收起和表格滚动，不维护移动端布局。隔离启动步骤见 [开发指南](docs/development-guide.md)。
+
 前端开发地址为 `http://127.0.0.1:5173`，Vite 会把 `/api` 代理到默认后端 `http://127.0.0.1:8080`。
 
 首次启动会幂等写入演示用户、组件、场景和环境。也可以单独运行：
@@ -48,6 +53,7 @@ make seed
 ## 测试与构建
 
 ```bash
+make check-docs
 make test
 make test-e2e
 make build
@@ -79,7 +85,7 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260903-run-evidence-indexes`，包含组件发布线、参数归属治理、容器运行时兼容矩阵，以及 Run 证据生成列与查询索引。服务只接受该精确合同。已完成的历史迁移和旧目录转换入口已移除；其他结构合同只能在备份后显式重建测试库。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎，无需依赖主机的 Python SQLite 版本。
+当前合同为 `clusterforge-v1-20260905-adaptation-run-archive`，包含组件发布线、参数归属治理、Run 证据索引、唯一 Release 工作区身份、执行证据锁定、Action 文件恢复日志、统一适配标签和 Run 归档/清理结构。服务只接受该精确合同。不提供运行时历史迁移；其他结构合同只能在备份后显式重建测试库。明确授权的业务重置可用 `database foundation-snapshot` 将旧 V1 账号与基础目录复制到当前 schema 的新库，不复制旧业务或 Run，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎，无需依赖主机的 Python SQLite 版本。
 
 只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并生成经过完整性与外键检查的一致 SQLite 备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
@@ -89,19 +95,22 @@ make build
 
 组件按 L1 主机基础与安全、L2 运行时与状态存储、L3 Kubernetes 编排核心、L4 集群网络/服务发现/存储、L5 可观测与节点管理、L6 平台扩展分组，并可填写少量自由标签用于检索。环境架构、操作系统、IP 协议族等仍属于 Release 的环境约束；调度与依赖不从标签推导。
 
-分层用于目录展示、检索和编排提示，不代表精确执行顺序。Release 依赖锁定精确上游版本，场景 DAG 的边决定实际拓扑和执行顺序。
+分层用于目录展示、检索和编排提示，不代表精确执行顺序。Release 依赖锁定精确上游版本并自动生成只读依赖边；场景 Owner 可添加手工顺序边，两类边共同决定实际拓扑和执行顺序。
 
-## 当前 Kubernetes 1.17.5 测试目录
+## Kubernetes 1.17.5 测试目录快照（2026-08-30）
 
-当前测试环境保存细粒度已发布组件，覆盖主机预检与初始化、PKI、加密配置、Docker、etcd、Kubernetes 控制面与节点进程、Flannel 和 CoreDNS。已发布场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，包含 21 个节点和 50 条依赖边。需要同时覆盖控制节点和工作节点的组件由组件 Owner 提供独立 Release 发布线，场景只选择精确 Release 和 Action，主机组不可改写。
+该日期的测试环境保存细粒度已发布组件，覆盖主机预检与初始化、PKI、加密配置、Docker、etcd、Kubernetes 控制面与节点进程、Flannel 和 CoreDNS。已发布场景“Kubernetes 1.17.5 Ubuntu 六节点细粒度集群”为 r2，包含 21 个节点和 50 条依赖边。需要同时覆盖控制节点和工作节点的组件由组件 Owner 提供独立 Release 发布线，场景只选择精确 Release 和 Action，主机组不可改写。
 
 两套环境均为 Ubuntu 测试节点，使用 `IMAGE_REGISTRY`、`FILE_STATION` 和 `K8S_ENCRYPTION_KEY` CredentialRef。组件、Release、动作、场景 DAG、Environment Revision、Inventory 和恢复点的精确值见 [测试环境资产目录](docs/demo-catalog.md)。文档中的 TCP 或 SSH 连通性证据不等于 Kubernetes 安装和收敛验收。
 
 ## Ansible 安全边界
 
 - 只执行 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 下的相对 Playbook，拒绝路径穿越。
-- 前台上传/在线编辑的 Playbook 限 1 MiB UTF-8 YAML，并写入 `managed/<component-slug>/<release-id>/`；已发布版本不可改，内容变化会使原测试验证失效。
-- 每次运行使用独立工作区、0600 Inventory/变量文件和独立 `ANSIBLE_LOCAL_TEMP`。
+- 平台按 `managed/<component-slug>/<release-line-key>/<version-key>--<release-id>/` 建立版本级 Ansible 工作区；完整 Release ID 防止规范化后同名版本发生目录碰撞。Action 入口固定为 `<actionKind>.yml`，组件 Owner 不填写服务器路径或文件名。
+- 工作区可包含 `roles/`、`templates/`、`files/` 和其他辅助目录。单文件 10 MiB、单版本 50 MiB、1000 文件、16 层；UTF-8 文本不超过 1 MiB 时可在线编辑，符号链接、设备文件和路径穿越一律拒绝。安装包、离线包等大型介质仍走 FSS。
+- Release 合同锁定工作区全量文件清单和树摘要；任意模板、Role、脚本或小型二进制变化都会撤销 Draft 审核/候选状态并使旧测试证据失效。Runner 每次只复制目标 Release 工作区。
+- Action 保存和删除同时提交完整动作元数据、固定入口文件、工作区清单与合同失效；数据库事务失败时恢复原入口字节，进程中断后启动恢复日志也会完成回滚，不留下半个 Action。
+- 变更类动作逐步骤使用隔离快照；同一 Release 的只读 Verify/Inspect 可在一次 Run 内复用已校验快照。每步结束后重新核对目录树摘要；Inventory/变量文件保持 0600，并使用独立 `ANSIBLE_LOCAL_TEMP`。
 - Secret 运行时解析并脱敏，不写入数据库、快照或保留日志。
 - 每个环境同时只有一个活动执行；其他请求 FIFO 排队。
 - 安装备份按环境、组件、Release 和安装 Run 隔离；回滚只消费环境当前安装记录
@@ -123,6 +132,7 @@ make build
 | `NEWPLATFORM_SEED_PROFILE` | `demo` | `identities` 创建角色切换账号，并仅在新库初始化平台治理目录；组件、场景和环境目录保持为空供人工录入 |
 | `NEWPLATFORM_IMAGE_BUILD_ROOT` | `./data/image-builds` | 单 Dockerfile 隔离构建上下文的临时根目录 |
 | `NEWPLATFORM_DOCKER_BIN` | `docker` | 构建和推送镜像所用的 Docker CLI |
+| `CLUSTERFORGE_RUN_ARCHIVE_DIR` | 未配置 | 独立持久化 Run 归档目录；完整历史备份须包含此目录，见[运行历史管理](docs/run-history-and-adaptation.md) |
 | `CLUSTERFORGE_BACKUP_ENABLED` | `false` | 启用发布/废弃后的异步 SQLite 与 Git Catalog 快照；部署环境显式设为 `true` |
 | `CLUSTERFORGE_BACKUP_DIR` | `./data/catalog-backups` | SQLite 快照、校验清单和最近成功恢复点目录 |
 | `CLUSTERFORGE_CATALOG_REPO` | `./data/catalog-repo` | 仅供离线 CLI 使用的默认 Catalog 工作副本；在线备份使用前台选择 |
@@ -147,3 +157,5 @@ daemon 执行，因此只应上传可信内容。
 ## 灾备
 
 发布目录与 SQLite 的异步快照、前台立即备份、Git 分支/标签语义和两级恢复步骤见 [Catalog 与数据库备份恢复](docs/catalog-backup-and-restore.md)。
+
+适配标签、直接引用查询、Run 归档与保留策略见 [运行历史与适配标签](docs/run-history-and-adaptation.md)。

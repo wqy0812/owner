@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 只接受当前数据库与 API 合同，不提供历史迁移、旧字段或双合同兼容；其他合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-08-30 当前工作区代码
+> 文档基线：2026-09-05 当前工作区代码（不代表测试环境已部署）
 > 适用项目：NewPlatform Demo / ClusterForge 交付编排中心
 > 实现状态说明：本文描述当前代码已经实现的行为；“演进建议”不属于现有能力。
 
@@ -40,7 +40,7 @@
 - SSE 是进程内尽力通知，不是持久消息总线。
 - 没有密钥管理系统；只保存环境变量名或 SSH 私钥绝对路径。
 - 没有租户、项目、组织、细粒度授权策略和审批流配置。
-- 没有定时任务、自动重试或自动回滚；仅支持指纹未变且首个未完成动作明确安全时的人工续跑。
+- 没有定时提交业务 Run、自动重试或自动回滚；运行历史另有默认关闭的自动归档/清理策略，仅支持指纹未变且首个未完成动作明确安全时的人工续跑。
 - Kubernetes 目录资产仍需真实主机、介质、网络和安全验收。
 
 ## 3. 总体架构
@@ -133,9 +133,9 @@ erDiagram
 - `component_owner`：维护自己拥有的组件和 Release。
 - `scenario_owner`：维护自己拥有的场景和 Revision。
 - `environment_owner`：维护自己拥有的环境，审批该环境上的危险运行。
-- `platform_admin`：维护平台选项目录、全局环境字段和环境变量字段，审核 Component Release 合同；对业务资源全局只读。
+- `platform_admin`：维护平台选项目录和环境变量字段，审核 Component Release 合同；对业务资源全局只读。
 
-全局环境字段可有可无 `defaultValue`。默认值存放在独立的 `environment_parameter_defaults` 表，与字段一起校验和审计。该表属于当前完整数据库和 Catalog 合同。环境保存事务使用当前目录补齐缺失的默认值，并在参数保存时拒绝未填全局字段；默认值写入 Environment Revision，运行只读取锁定快照。已有环境覆盖值、精确恢复和历史 Run 不随平台默认值变化。Git Catalog 携带被保留组件引用的默认值；缺少默认值表的 Catalog 会被拒绝，平台不转换历史格式。
+全局环境参数治理已停用。组件 Owner 定义参数与公开性、修改权限及值提供方；环境填写型字段按 Release ID 与参数名保存，其他组件通过公开参数映射引用。当前参数合同只接受组件所属绑定；旧全局字段接口、默认值回填和运行解析均已删除。现有精确数据库合同中的 `environment_parameter_definitions`、`environment_parameter_defaults` 表及 Catalog 表结构保留，避免代码清理引入结构变更；业务不再读写这些表，也不提供旧合同转换。
 
 当前 seed 包含两个组件 Owner、一个集群 Owner 和一个环境 Owner。会话令牌只在 Cookie 中返回，数据库保存令牌 SHA-256 摘要，会话有效期为 24 小时。
 
@@ -162,15 +162,19 @@ erDiagram
 
 Released Release 不可修改。创建 Draft 必须先预览并提交 `expectedPlanDigest`，并明确选择“创建全新发布线”或“基于发布线演进”。全新发布线可以空白创建，也可以把同组件 Released/Deprecated Release 当作模板；模板复制会清除 Upgrade 以及 Rollback 的旧版本绑定。演进只能基于该线最后一个曾发布且当前仍为 Released 的版本，并且该父版本不得已有活动或曾发布后继；若末代曾发布版本已 Deprecated，该线关闭演进入口，只能创建新发布线。平台自动继承发布线和合同，并把 Upgrade 重写为“父版本 → 新版本”、Rollback 重写为“新版本 → 父版本”。复制提交把 Release、依赖、Action、介质/镜像内容身份和审计放在同一 SQLite 事务；托管 Playbook 先通过 manifest 暂存并提升，事务失败时清理，进程中断后由启动恢复依据目标 Release 是否落库决定保留或删除。修改 Draft 的动作、依赖、约束、参数、内容身份或 Playbook 内容摘要后，既有证据因规格摘要不匹配而自然失效。
 
+每个 Release 保存不可变的 `playbook_workspace_root` 和全树摘要。新目录由组件 slug、发布线业务名称和版本业务名称规范化生成，并在版本段追加完整、不可变的 Release ID；数据库唯一索引提供第二道碰撞防线。Draft 改版本号或发布线名称时先验证并移动目录，再提交数据库引用，失败时恢复原目录；Released/Deprecated 根目录保持冻结。已保存 Action 的 Kind 不可修改，平台把入口固定为 `<kind>.yml`。运行按 Release 验证并复制工作区；Verify/Inspect 可在同一 Run 内复用只读快照，其他动作使用隔离快照，每步后重新校验全树摘要。
+
+结构合同 `clusterforge-v1-20260905-adaptation-run-archive` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；不保留历史库或旧 Playbook 目录的一次性转换工具。
+
 未发布 Draft 可随时废弃，即使已经产生或正在产生验证 Run；废弃只关闭编辑与候选共享，不删除合同或证据。未发布的 Deprecated Release 可恢复为 Draft，但同一发布线已有其他 Draft、或同一父版本已有其他有效后继时恢复失败关闭。永久删除仅接受从未发布且已废弃的 Release；事务内再次确认不存在组件/场景 Run、镜像构建、下游依赖、场景 Revision 引用、其他 Release/Action 合同引用或环境安装记录，然后删除 Release 自有合同数据及空发布线，并保留 `component_release.deleted` 审计。已发布版本永不物理删除。
 
-参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`fixedValue`、`suggestedValue`、`testValue`、`enum` 与 `minLength` 必须和类型一致。合法提供方组合为：组件固定值必须不可修改并填写 `fixedValue`；场景和环境字段必须可修改且不得固定；上游映射必须不可修改并存在唯一映射。环境字段还必须声明私有绑定，或引用平台 Owner 维护的全局字段。分配给场景或环境 Owner 的 `object`、`array` 字段必须提供受控枚举，由界面生成选择控件，禁止退化为原始 JSON 编辑。`suggestedValue` 只供 Owner 显式采用，绝不自动生效。
+参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`fixedValue`、`suggestedValue`、`testValue`、`enum` 与 `minLength` 必须和类型一致。合法提供方组合为：组件固定值必须不可修改并填写 `fixedValue`；场景和环境字段必须可修改且不得固定；上游映射必须不可修改并存在唯一映射。环境字段只接受组件所属绑定。分配给场景或环境 Owner 的 `object`、`array` 字段必须提供受控枚举，由界面生成选择控件，禁止退化为原始 JSON 编辑。`suggestedValue` 只供 Owner 显式采用，绝不自动生效。
 
-场景节点锁定 Release，但同一 Component 在图中不要求唯一。若同一软件需要投放到 `k8smaster` 与 `k8snode`，组件 Owner 必须建立主机组各自固定的独立发布线；这些发布线可以复用 Playbook 和制品，但每个 Action 的主机组仍属于不可由场景修改的 Release 合同。场景 Owner 只选择精确 Release 和 Action。依赖成立的条件是至少存在一个锁定指定上游 Release 且可达的节点。
+场景节点锁定 Release，但同一 Component 在图中不要求唯一。若同一软件需要投放到 `k8smaster` 与 `k8snode`，组件 Owner 必须建立主机组各自固定的独立发布线；这些发布线可以复用 Playbook 和制品，但每个 Action 的主机组仍属于不可由场景修改的 Release 合同。场景 Owner 只选择精确 Release 和 Action。执行依赖必须绑定锁定指定上游 Release 的节点，并形成正确的执行先后关系。`kind: "configuration"` 仅引用执行前可确定的公开参数，保留准确版本和来源节点选择，不生成执行顺序线。参数按字段引用图解析；组件间可以互相引用不同配置字段，但字段值循环、私有来源、类型不匹配和人工覆盖仍被拒绝。候选集完整锁定并测试所有配置来源。
 
 安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同：带 from/to 的版本回滚必须选择一个同组件的 Released/Deprecated Release 追加其 verify；只有 from/to 都为空、目标为干净状态的清理 rollback 才允许 `rollback_only`。普通 `rollback_only` 仅证明清理动作完成，不能作为候选共享或发布所需的回退后验证证据；清理 rollback 若以动作标签 `clusterforge.rollback-self-verifies` 明确声明 Playbook 内含严格后置验证，则相同内容摘要下成功的 `rollback_only` 可作为回退证据。该标签用于其他 Action 或版本回滚时，Release 合同校验直接拒绝。`clusterforge.` 前缀保留为合同元数据命名空间，执行器不会把这类标签传给 Ansible `--tags`；其余动作标签仍用于选择 Ansible task。
 
-`readiness` 是唯一就绪结论。新基线实时复核 install、verify、无版本绑定的清理型 rollback 及相应成功证据；演进版本要求显式 Upgrade 或幂等 Install、精确回到父版本的 Rollback，以及同一锁定计划完成“父版本安装与验证 → 目标升级与验证 → 回退 → 父版本验证”的闭环证据。Release 声明容器运行时兼容性时，`containerRuntimeVersion` 的每个值都通过父选项形成一条明确组合；Run 快照锁定 Environment Revision 的单一组合，Readiness 必须逐组合取得当前 Release 规格摘要下的安装/验证与回滚/验证证据。Draft 规格摘要变化会让全部旧证据失效。`breaking` 使就绪度显示 `risky`，但不会替代 Action 风险判断。SSE 只负责刷新提示，丢失事件或服务重启不会改变结论。直接发布还要求上游依赖已经 Released；候选链允许依赖其他已共享且 Readiness 未阻断的候选 Draft。
+`readiness` 是唯一就绪结论。新基线实时复核 install、verify、无版本绑定的清理型 rollback 及相应成功证据；演进版本要求显式 Upgrade 或幂等 Install、精确回到父版本的 Rollback，以及同一锁定计划完成“父版本安装与验证 → 目标升级与验证 → 回退 → 父版本验证”的闭环证据。组件、场景和环境统一使用适配标签，场景范围必须被每个组件支持，环境实际值必须匹配；Docker/containerd 通过精确 Release 依赖表达，不再使用运行时标签或专用证据矩阵。Draft 规格摘要变化会让全部旧证据失效。`breaking` 使就绪度显示 `risky`，但不会替代 Action 风险判断。SSE 只负责刷新提示，丢失事件或服务重启不会改变结论。直接发布还要求上游依赖已经 Released；候选链允许依赖其他已共享且 Readiness 未阻断的候选 Draft。
 
 每个 `ActionDefinition` 可以声明 `requiredCredentials`。该列表只保存
 CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭据值。组件或
@@ -183,9 +187,9 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 
 - 状态：`draft -> testing -> test_passed -> released -> deprecated`。
 - DAG 节点锁定一个组件 Release、一个动作、只读主机组快照、结构化 `parameterValues`，以及多来源时的 `dependencySources`。主机组由 Release Action 派生，场景写接口不接受该字段。
-- DAG 边表达执行先后关系。
+- DAG 边分为系统按精确 Release 合同生成的 `dependency` 边和场景 Owner 添加的 `sequence` 边；两者都表达执行先后关系，只有依赖边参与参数来源绑定。
 
-场景面板按组件层级分组并在节点上显示层级标签，但 `ScenarioNode` 不锁定分类元数据。分层不参与调度，不自动生成边；真实执行顺序只由 Release 依赖和 DAG 边决定。
+场景面板按组件层级分组并在节点上显示层级标签，但 `ScenarioNode` 不锁定分类元数据。分层不参与调度；系统根据节点锁定的精确 Release 实时生成依赖边，场景 Owner 只补充顺序边。
 
 图校验包括：
 
@@ -196,9 +200,9 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 - 可编辑 Revision 的节点只能使用 Released Release 或组件 Owner 已共享且证据仍有效的候选 Draft；已发布场景可继续引用已废弃但保留的 Release。
 - 节点动作必须由对应 Release 定义；唯一的能力映射是 `idempotent=true` 的 `install` 可同时满足 `upgrade`。
 - 集群 Owner 只能填写 `modifiable=true` 且 `valueProvider=scenario_owner` 的已定义字段；未知字段、环境字段、固定值或映射目标均拒绝。
-- 上游依赖 Release 必须出现在图中，而且在拓扑上先于下游节点。
-- 带参数映射的依赖：只有一个可达上游节点时自动绑定；多个可达节点时必须在 `dependencySources` 中明确选择。
-- 每个 `upstream_mapping` 目标必须且只能存在一条映射；正式运行从可达上游节点取最终值。
+- 上游依赖 Release 必须出现在图中；唯一匹配节点自动绑定，多个匹配节点必须在 `dependencySources` 中明确选择。
+- 手工顺序边不能反转依赖方向或形成环，也不能代替依赖边、成为参数来源。
+- 每个 `upstream_mapping` 目标必须且只能存在一条映射；正式运行从依赖边锁定的上游节点取最终值。
 
 `verify` 节点观察的是环境中已存在的 Release，不要求在同一场景中重新执行该
 Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
@@ -209,10 +213,10 @@ Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只�
 
 `EnvironmentRevision` 包含：
 
-- Facts：架构、操作系统、操作系统版本、网络，以及联动必填的单一 `containerRuntime` / `containerRuntimeVersion` 组合。版本技术值包含父运行时身份，例如 `docker@20.10.21`。
+- Facts：架构、操作系统、操作系统版本、网络等目录维度的单选实际值。Release 和 Scenario Revision 的多选范围按同类或、跨类且匹配；运行时由精确组件依赖表达，不再维护 `containerRuntime` / `containerRuntimeVersion` 专用维度。
 - Inventory：主机名、地址、分组、SSH 用户和端口。
 - Variables：由环境 Owner 维护的非敏感字符串环境变量；使用大写标识符名称并直接注入 Ansible extra-vars。`IMAGE_REGISTRY` 和 `FILE_STATION` 分别指定镜像仓库和介质站。
-- Parameters：仅保存组件合同分配给环境 Owner 的结构化字段；私有字段按 Release 锁定键保存，全局字段按平台定义 ID 复用。
+- Parameters：仅保存组件合同分配给环境 Owner 的结构化字段；组件字段按 Release 锁定键保存，未定义键和旧全局键均不接受。
 - CredentialRefs：`envVarRef` 或 `sshKeyPath`。
 
 V1 固定每个环境一个活跃 Run、FIFO 串行，不保存可配置并发字段。
@@ -265,6 +269,7 @@ SQLite 主要表如下：
 | `component_releases` | 发布线版本 | `(component_id, version)` 唯一；每线最多一个 Draft；父版本最多一个后继 |
 | `component_dependencies` | 精确上游依赖 | 每个下游 Release 对同一上游组件唯一 |
 | `action_definitions` | Ansible 生命周期动作 | Release 外键；锁定 Playbook SHA-256；`idempotent` 只允许 install 复用于 upgrade |
+| `component_playbook_files` | Release Ansible 工作区清单 | 工作区相对路径、SHA-256、大小、媒体类型；正文保留在 Playbook 根目录 |
 | `scenarios` | 场景元数据 | slug 唯一、current Revision 指针 |
 | `scenario_revisions` | 静态 DAG | `(scenario_id, revision)` 唯一 |
 | `environments` | 环境元数据 | current Revision 指针 |
@@ -280,11 +285,19 @@ SQLite 主要表如下：
 | `component_release_artifacts` / `component_release_images` | Release 内容身份与可变来源 | alias/logicalName 唯一；SHA-256/OCI digest 进入规格摘要，sourceUrl/sourceRef 不进入 |
 | `component_artifact_mirrors` / `component_image_mirrors` | 跨仓平移记录 | 以目标与内容指纹复用 |
 | `environment_health_checks` | 环境 TCP 连通性检查 | 记录来源 Environment Revision |
+| `publication_state` | 全局发布纪元 | 发布事务内防并发漂移 |
+| `platform_option_categories` / `platform_options` | 适配维度与选项 | 父子目录、必填与历史引用保护 |
+| `environment_variable_definitions` | 非敏感环境变量字段 | 治理名称与类型 |
+| `environment_parameter_definitions` / `environment_parameter_defaults` | 停用的全局参数结构 | 当前业务不再读写，不提供旧合同转换 |
+| `playbook_action_mutations` | Action 文件提交恢复日志 | HTTP 开放前恢复未完成文件操作 |
+| `run_retention_policy` / `run_retention_cursors` | 自动历史处理策略和扫描游标 | 初始关闭，持续推进候选扫描 |
+| `run_archive_tasks` / `run_archive_files` | 归档租约任务和已验证文件清单 | 完成校验及事务后才删除在线日志 |
+| `run_cleanup_history` | 失败清理后的最小历史标记 | 保留原访问与生命周期保护，不作成功证据 |
 | `environment_ssh_checks` | 环境 Go SSH 认证与 `true` 检查 | 与 TCP 证据独立，记录来源 Environment Revision |
 
-时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同，`environment_revisions.parameters_json` 保存环境 Owner 的结构化值；`environment_parameter_definitions` 和 `environment_variable_definitions` 保存平台治理目录。
+时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同，`environment_revisions.parameters_json` 保存环境 Owner 的结构化值；`environment_variable_definitions` 保存当前变量字段目录；旧全局参数两表只保留结构，不参与业务读写。
 
-Run 的证据读取使用五个虚拟生成列：`component_spec_digest`、`component_evidence_kind`、`runtime_name`、`runtime_version` 从 `input_snapshot_json` 派生，`evidence_at` 从完成时间或创建时间派生。JSON 仍是证据元数据的唯一写入来源，生成列不能独立修改；缺失或非字符串元数据保持 NULL，避免被转换为有效证据键。成功组件测试的两个部分索引分别服务于普通证据和指定运行时的证据查询，匹配 Release、当前合同摘要和证据类型后直接取最新记录。回滚证据分别从 `rollback_verify`、`rollback_self_verify` 中取最新一条，再比较最多两条记录；`rollback_only` 不满足回滚验证门禁。时间相同时使用 Run ID 稳定排序。
+Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`component_evidence_kind` 从 `input_snapshot_json` 派生，`evidence_at` 从完成时间或创建时间派生。JSON 是证据元数据的唯一写入来源，生成列不能独立修改；缺失或非字符串元数据保持 NULL。成功组件测试的部分索引按 Release、当前合同摘要和证据类型定位最新记录，不再按运行时标签筛选。回滚证据分别从 `rollback_verify`、`rollback_self_verify` 中取最新一条，再比较最多两条记录；`rollback_only` 不满足回滚验证门禁。时间相同时使用 Run ID 稳定排序。
 
 活跃组件测试、Action 所属 Release、RunStep 所属 Run 也有对应索引，减少历史数据增长对引用检查和子项读取的影响。索引由 SQLite 随原始行维护，不增加应用层双写。虚拟列不重复存储完整快照，但索引占用额外空间，并增加写入维护成本。生成列要求所有数据库读写工具使用 [SQLite 3.31 或以上版本](https://www.sqlite.org/gencol.html)，部署脚本使用 `clusterforge-backup database` 内置的 Go SQLite 引擎完成检查和一致性文件备份，不依赖系统 Python SQLite；结构合同变更不自动迁移或重建已有数据库。
 
@@ -303,6 +316,7 @@ Run 的证据读取使用五个虚拟生成列：`component_spec_digest`、`comp
 | 维护平台字段目录 | 否 | 否 | 否 | 可以 |
 | 审批危险 Run | 否 | 否 | 仅本人环境上的 Run | 否 |
 | 取消 Run | 本人发起 | 本人发起 | 本人环境上的 Run | 否 |
+| 成功 Run 归档、失败清理和保留策略 | 否 | 否 | 否 | 可以 |
 | 全局读取业务对象和审计 | 否 | 否 | 审计可读 | 可以，敏感值仍脱敏 |
 
 服务层同时校验角色和资源 Owner，前端按钮隐藏不是权限边界。
@@ -321,7 +335,7 @@ Run 的证据读取使用五个虚拟生成列：`component_spec_digest`、`comp
 ### 7.1 组件发布与影响通知
 
 1. 组件 Owner 预览并创建全新发布线 Draft，或基于现有发布线最新 Released 版本创建演进 Draft。
-2. 后端校验版本、发布线线性约束、参数提供方、依赖、动作、环境绑定、敏感参数和 Playbook 路径。
+2. 后端校验版本、发布线线性约束、参数提供方、依赖、动作、环境绑定、敏感参数和平台生成的工作区入口。
 3. 组件 Owner 提交合同审核，平台 Owner 按当前规格摘要批准或驳回；任何合同变化都会要求重新审核。
 4. 新基线校验 Install、Verify、清理型 Rollback 和相应证据；演进版本校验 Upgrade 能力、精确父版本 Rollback 和完整升级回退闭环证据。
 5. 直接发布的上游依赖必须已经 Released，且不能形成依赖环。
@@ -465,6 +479,10 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 
 所有新活动 Run 在最终插入事务中重新检查锁定 Release 的生命周期。场景测试引用的 Draft 必须仍是候选且当前 Readiness 未阻断，正式场景运行只能引用已发布过的保留版本；候选在预检后被撤回、Readiness 变为阻断、或从未发布的 Draft 被废弃时，旧提交会以冲突拒绝。
 
+### 7.13 运行历史管理
+
+成功 Run 的日志可归档到独立目录，业务 Run、快照、步骤、审批和证据引用保留。只允许清理超过保留期限且无受保护引用的失败 Run；执行时在事务内重新校验整批资格并保留审计及最小历史标记。自动归档和清理均初始关闭，策略与每日扫描由平台 Owner 管理。下载、备份目录及恢复步骤见 [运行历史管理](run-history-and-adaptation.md)。
+
 ## 8. Ansible 与凭据安全
 
 ### 8.1 路径和制品约束
@@ -472,11 +490,13 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - 动作只能保存相对 Playbook 路径。
 - Runner 将路径限制在允许根目录内，拒绝绝对路径、`..` 穿越和越界符号链接。
 - 执行前验证 Playbook 与目录树摘要；排队后源文件变化会阻断执行。
+- Draft Action 的保存/删除以完整 Action、固定入口文件和工作区清单为一个服务操作；清单、Action 行与恢复标记删除共用 SQLite 事务。入口替换先同步文件及父目录，事务失败时立即补偿；进程中断导致恢复标记残留时，服务在开放 HTTP 前幂等恢复旧入口。
 - 每次执行复制一份只包含常规文件的目录树；执行树内禁止符号链接和特殊文件。
 
 ### 8.2 临时工作区
 
-- 每次步骤使用独立工作区。
+- 变更类步骤使用独立工作区；同一 Release 的只读 Verify/Inspect 可复用一次已校验快照。
+- 每个步骤结束后重新计算目录树摘要；任何执行期修改都立即使 Run 失败。
 - 工作区和输入目录权限为 `0700`。
 - Inventory 和变量文件权限为 `0600`。
 - 使用独立 `ANSIBLE_LOCAL_TEMP`。
@@ -500,11 +520,11 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - stdout、stderr 和 system 日志进入统一采集器。
 - 日志在进入 SQLite 和 SSE 前脱敏。
 - 单步骤保留日志受 `NEWPLATFORM_MAX_LOG_BYTES` 限制，超限后写入一条截断标记。
-- Run 详情 API 当前最多读取 500 条，再向界面返回末尾 200 条。
+- Run 详情 API 直接读取末尾最多 200 条；前端搜索、复制及“下载已加载日志”只操作这些行。成功归档包保存全部保留日志，归档后通过受权限保护的下载接口读取。
 
 ## 9. REST API
 
-所有接口使用 `/api/v1` 前缀。除身份切换外，均要求有效会话 Cookie。
+所有接口使用 `/api/v1` 前缀。身份列表与身份切换可匿名调用，其余均要求有效会话 Cookie。
 
 ### 9.1 会话与事件
 
@@ -520,7 +540,8 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET / POST | `/components` | 列表 / 创建组件 |
+| GET / POST | `/components` | 默认摘要列表；`view=contracts` 返回完整合同 / 创建组件 |
+| GET | `/components/{id}/usage` | 按 `releaseId` 与 `includeHistory` 查询直接引用；仅组件 Owner 或平台 Owner |
 | GET / PATCH | `/components/{id}` | 详情 / 修改元数据 |
 | POST | `/components/{id}/release-draft-plan` | 预览全新发布线或发布线演进 Draft，并生成计划指纹 |
 | POST | `/components/{id}/release-drafts` | 按 `expectedPlanDigest` 创建 Draft |
@@ -541,7 +562,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | POST | `/component-releases/{id}/test-plan` | 只读预览组件测试执行计划 |
 | POST | `/component-releases/{id}/test-runs` | 发起组件测试 |
 | GET | `/component-releases/{id}/run-evidence` | 组件 Owner 查询该 Release 的组件测试，以及由不可变执行快照锁定的场景测试和正式运行证据 |
-| GET / PUT / POST | `/component-releases/{id}/playbook` | 读取、在线保存或上传 Draft Playbook |
+| GET / PUT / POST / DELETE | `/component-releases/{id}/playbook` | 读取 Action 入口；写入必须携带完整 Action 及文件/工作区双重前置摘要，并原子保存或上传 |
 | GET / POST | `/component-releases/{id}/image-builds` | 查询或创建 Dockerfile 镜像构建 |
 | POST | `/component-releases/{id}/artifacts/upload` | 上传并登记组件介质 |
 | POST | `/component-releases/{id}/artifacts/register` | 登记文件站已有组件介质 |
@@ -550,6 +571,8 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | POST | `/component-releases/{id}/images/register` | 登记已有 OCI 镜像及不可变 Digest |
 | PATCH | `/component-releases/{id}/images/{name}/source` | 在 Digest 不变时修复镜像来源地址 |
 | DELETE | `/component-releases/{id}/images/{name}` | 从 Draft 移除镜像引用 |
+| GET | `/component-releases/{id}/playbook-workspace` | 加载工作区文件清单与树摘要 |
+| GET / PUT / POST / PATCH / DELETE | `/component-releases/{id}/playbook-workspace/file` | 读取、保存、上传、重命名或删除工作区文件；写入需文件和工作区摘要前置条件 |
 | GET | `/image-builds/{id}` | 查询镜像构建详情与日志 |
 
 ### 9.3 场景
@@ -561,7 +584,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | DELETE | `/scenarios/{id}` | 仅删除从未发布且从未产生 Run 的自有场景及其未发布 Revision |
 | POST | `/scenarios/{id}/revisions` | 克隆新 Revision |
 | POST | `/scenarios/{id}/revision-clone-plan` | 预览指定历史 Revision 的同场景复制 |
-| PUT | `/scenario-revisions/{id}/graph` | 原子保存静态 DAG 与节点 `parameterValues`；拒绝主机组和未知参数字段 |
+| PUT | `/scenario-revisions/{id}/graph` | 原子保存静态 DAG、适配标签与节点 `parameterValues`；拒绝主机组和未知参数字段 |
 | GET | `/scenario-revisions/{id}/parameter-overview` | 按组件、精确 Release 和节点返回集群 Owner 参数、值与错误 |
 | POST | `/scenario-revisions/{id}/validate` | 校验 DAG |
 | POST | `/scenario-revisions/{id}/test-runs` | Draft 完整测试 |
@@ -607,22 +630,39 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 | POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
 | POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
-| GET | `/runs` | 查询当前用户可见 Run |
+| GET | `/runs` | 按当前身份、环境、状态、归档范围分页返回摘要 |
+| GET | `/approvals/batch-candidates` | 环境 Owner 批量审批候选，独立于运行列表分页 |
+| POST | `/runs/archive` | 平台 Owner 提交成功 Run 归档任务 |
+| POST | `/runs/cleanup-preview` | 平台 Owner 预览选定失败 Run 的清理资格及阻断原因 |
+| POST | `/runs/cleanup` | 重新校验全部条件后原子清理选定失败 Run |
+| GET | `/runs/{id}/archive-download` | 有 Run 查看权限的用户下载经过校验的归档包 |
+| GET / PUT | `/run-retention` | 平台 Owner 查询历史管理健康状态 / 保存自动处理策略 |
+| GET / POST | `/platform-option-categories` | 登录用户读取目录类别 / 平台 Owner 创建类别 |
+| PATCH / DELETE | `/platform-option-categories/{id}` | 平台 Owner 修改类别或在无保护引用时删除 |
+| POST | `/platform-option-categories/{id}/options` | 平台 Owner 创建类别选项 |
+| PATCH / DELETE | `/platform-options/{id}` | 平台 Owner 修改选项或在无保护引用时删除 |
 | GET | `/runs/{id}` | Run 步骤、审批和日志详情 |
 | POST | `/runs/{id}/cancel` | 取消等待、排队或运行中的 Run |
 | POST | `/runs/{id}/retry-plan` | 校验环境、资源与可执行指纹并预览安全续跑 |
 | POST | `/runs/{id}/retry-runs` | 创建关联 Run，从安全的未完成步骤继续 |
-| GET / POST / DELETE | `/environment-parameter-definitions[/{id}]` | 登录用户读取、平台 Owner 新增或删除全局环境参数字段 |
-| PUT | `/environment-parameter-definitions/{id}/default` | 平台 Owner 设置默认值；`defaultValue: null` 取消默认值，省略该字段会被拒绝 |
-| GET / POST / DELETE | `/environment-variable-definitions[/{id}]` | 登录用户读取、平台 Owner 新增或删除环境变量字段 |
+| GET / POST | `/environment-variable-definitions` | 登录用户读取、平台 Owner 新增环境变量字段 |
+| DELETE | `/environment-variable-definitions/{id}` | 平台 Owner 删除未受引用保护的变量字段 |
 | POST | `/approvals/{id}/approve` | 批准危险 Run |
 | POST | `/approvals/{id}/reject` | 拒绝危险 Run |
 | POST | `/approvals/batch` | 原子批量批准或拒绝危险 Run |
 | GET | `/notifications` | 当前用户通知 |
 | PATCH | `/notifications/{id}` | 标记已读；不能恢复未读 |
-| GET | `/audit-events` | 最近 500 条审计，仅环境 Owner |
+| GET | `/audit-events` | 最近 500 条审计，环境 Owner 或平台 Owner |
 
-请求 JSON 使用唯一 camelCase 合同，Handler 拒绝未知字段。成功响应使用 `{ "data": ... }` 或 `{ "items": [...] }`。错误统一为：
+### 9.6 列表与详情读取合同
+
+- `GET /components` 返回摘要，不携带完整 Release、Action、参数和工作区。编排确需完整合同时显式使用 `view=contracts`。`GET /components/{id}` 返回选中组件及 `readContext`；`releaseLines` 用 `releaseIds` 引用版本，不重复序列化完整 Release。详情提供 `playbookFileCount`，文件清单单独从工作区接口读取。
+- `GET /runs` 接受 `page`（默认 1）、`pageSize`（默认 50，1–100）、`archive=unarchived|archived|all`、`filter=all|active|finished` 和 `environmentId`。返回 `{items, page, pageSize, total}`；摘要不包含执行快照、步骤和日志，详情独立请求。
+- `GET /component-releases/{id}/run-evidence` 使用不可变 Run 快照判断引用并返回摘要；批量审批从独立候选接口加载，不受当前列表分页限制。
+- 已按策略清理的 Run：原有查看权限用户访问详情返回 HTTP 410、错误码 `run.cleaned`；无权限用户仍返回 403。归档包缺失或校验不通过时下载报错，不能伪装成空日志。
+- JSON 响应支持协商 gzip 压缩；SSE、下载和请求体不采用该压缩包装。
+
+请求 JSON 使用唯一 camelCase 合同，Handler 拒绝未知字段。普通成功响应使用 `{ "data": ... }` 或 `{ "items": [...] }`；运行分页另带上述分页字段。错误统一为：
 
 ```json
 {
@@ -673,9 +713,10 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_CATALOG_BRANCH` | `catalog` | 最新完整 Catalog 分支 |
 | `CLUSTERFORGE_CATALOG_ALLOWED_ROOT` | `./data/private-catalog-repositories` | 环境 Owner 可创建或接入私有仓库的受控根目录 |
 | `CLUSTERFORGE_BACKUP_DEBOUNCE` | `30s` | 连续发布快照合并窗口 |
+| `CLUSTERFORGE_RUN_ARCHIVE_DIR` | 未配置 | 独立持久化归档目录的绝对路径；未配置时归档不可用，普通 Run 可执行 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260903-run-evidence-indexes` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。仓库不保留历史合同转换工具；其他合同需要通过显式备份和测试库重建流程处理。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260905-adaptation-run-archive` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库只能在备份后显式重建。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅转换旧 V1 的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
 
 ### 11.1 发布目录灾备
 
