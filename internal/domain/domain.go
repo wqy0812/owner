@@ -457,6 +457,7 @@ type ComponentDependency struct {
 type ActionKind string
 
 const (
+	ActionCheck     ActionKind = "check"
 	ActionInspect   ActionKind = "inspect"
 	ActionPreflight ActionKind = "preflight"
 	ActionInstall   ActionKind = "install"
@@ -474,6 +475,10 @@ type ActionDefinition struct {
 	Kind                ActionKind `json:"kind"`
 	Playbook            string     `json:"playbook"`
 	PlaybookSHA256      string     `json:"-"`
+	PreCheckActionID    string     `json:"preCheckActionId"`
+	PostCheckActionID   string     `json:"postCheckActionId"`
+	Become              bool       `json:"become"`
+	GatherFacts         bool       `json:"gatherFacts"`
 	Tags                []string   `json:"tags"`
 	HostGroup           string     `json:"hostGroup"`
 	RequiredCredentials []string   `json:"requiredCredentials"`
@@ -521,30 +526,43 @@ const (
 )
 
 type Scenario struct {
-	ID                string             `json:"id"`
-	Slug              string             `json:"slug"`
-	Name              string             `json:"name"`
-	Description       string             `json:"description"`
-	OwnerID           string             `json:"ownerId"`
-	CurrentRevisionID string             `json:"currentRevisionId,omitempty"`
-	CreatedAt         time.Time          `json:"createdAt"`
-	UpdatedAt         time.Time          `json:"updatedAt"`
-	Revisions         []ScenarioRevision `json:"revisions,omitempty"`
+	ForkedFromScenarioID string             `json:"forkedFromScenarioId,omitempty"`
+	ForkedFromRevisionID string             `json:"forkedFromRevisionId,omitempty"`
+	ForkedFromDigest     string             `json:"forkedFromDigest,omitempty"`
+	ID                   string             `json:"id"`
+	Slug                 string             `json:"slug"`
+	Name                 string             `json:"name"`
+	Description          string             `json:"description"`
+	OwnerID              string             `json:"ownerId"`
+	CurrentRevisionID    string             `json:"currentRevisionId,omitempty"`
+	CreatedAt            time.Time          `json:"createdAt"`
+	UpdatedAt            time.Time          `json:"updatedAt"`
+	Revisions            []ScenarioRevision `json:"revisions,omitempty"`
 }
 
 type ScenarioRevision struct {
-	ID                     string         `json:"id"`
-	ScenarioID             string         `json:"scenarioId"`
-	Revision               int            `json:"revision"`
-	Status                 RevisionStatus `json:"status"`
-	PublicationGeneration  int64          `json:"-"`
-	Graph                  ScenarioGraph  `json:"graph"`
-	EnvironmentConstraints map[string]any `json:"environmentConstraints"`
-	CreatedAt              time.Time      `json:"createdAt"`
-	TestPassedAt           *time.Time     `json:"testPassedAt,omitempty"`
-	ReleasedAt             *time.Time     `json:"releasedAt,omitempty"`
-	DeprecatedAt           *time.Time     `json:"deprecatedAt,omitempty"`
-	AbandonedAt            *time.Time     `json:"abandonedAt,omitempty"`
+	SourceRevisionID        string                     `json:"sourceRevisionId,omitempty"`
+	SourceRunID             string                     `json:"sourceRunId,omitempty"`
+	UpgradeConstraints      []ScenarioEdge             `json:"upgradeConstraints,omitempty"`
+	AcceptanceJobs          []ScenarioAcceptanceJob    `json:"acceptanceJobs,omitempty"`
+	AcceptanceParameters    []ParameterDefinition      `json:"acceptanceParameters,omitempty"`
+	AcceptanceValues        map[string]any             `json:"acceptanceValues,omitempty"`
+	AcceptanceBindings      []ScenarioParameterBinding `json:"acceptanceBindings,omitempty"`
+	AcceptanceWorkspaceRoot string                     `json:"acceptanceWorkspaceRoot,omitempty"`
+	AcceptanceTreeSHA256    string                     `json:"acceptanceTreeSha256,omitempty"`
+	DigestVersion           int                        `json:"digestVersion,omitempty"`
+	ID                      string                     `json:"id"`
+	ScenarioID              string                     `json:"scenarioId"`
+	Revision                int                        `json:"revision"`
+	Status                  RevisionStatus             `json:"status"`
+	PublicationGeneration   int64                      `json:"-"`
+	Graph                   ScenarioGraph              `json:"graph"`
+	EnvironmentConstraints  map[string]any             `json:"environmentConstraints"`
+	CreatedAt               time.Time                  `json:"createdAt"`
+	TestPassedAt            *time.Time                 `json:"testPassedAt,omitempty"`
+	ReleasedAt              *time.Time                 `json:"releasedAt,omitempty"`
+	DeprecatedAt            *time.Time                 `json:"deprecatedAt,omitempty"`
+	AbandonedAt             *time.Time                 `json:"abandonedAt,omitempty"`
 }
 
 type ScenarioGraph struct {
@@ -760,17 +778,20 @@ type EnvironmentConnectivityCheck struct {
 // captured it. Playbooks persist this value in their .captured marker while
 // the platform keeps the authoritative reference on the environment.
 type BackupMetadata struct {
-	EnvironmentID      string         `json:"environmentId"`
-	ComponentID        string         `json:"componentId"`
-	ReleaseID          string         `json:"releaseId"`
-	ActionID           string         `json:"actionId"`
-	InstallRunID       string         `json:"installRunId"`
-	CapturedAt         time.Time      `json:"capturedAt"`
-	PlaybookSHA256     string         `json:"playbookSha256"`
-	DependencySnapshot map[string]any `json:"dependencySnapshot"`
+	NodeID             string                            `json:"nodeId"`
+	Previous           *EnvironmentComponentInstallation `json:"previous,omitempty"`
+	EnvironmentID      string                            `json:"environmentId"`
+	ComponentID        string                            `json:"componentId"`
+	ReleaseID          string                            `json:"releaseId"`
+	ActionID           string                            `json:"actionId"`
+	InstallRunID       string                            `json:"installRunId"`
+	CapturedAt         time.Time                         `json:"capturedAt"`
+	PlaybookSHA256     string                            `json:"playbookSha256"`
+	DependencySnapshot map[string]any                    `json:"dependencySnapshot"`
 }
 
 type EnvironmentComponentInstallation struct {
+	NodeID        string         `json:"nodeId"`
 	EnvironmentID string         `json:"environmentId"`
 	ComponentID   string         `json:"componentId"`
 	ReleaseID     string         `json:"releaseId"`

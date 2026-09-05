@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // ComponentReleaseSpecDigest is the canonical identity of the Release
@@ -29,6 +30,11 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		ParameterMappings   []ParameterMapping `json:"parameterMappings"`
 	}
 	type actionSpec struct {
+		ID                  string     `json:"id"`
+		PreCheckActionID    string     `json:"preCheckActionId"`
+		PostCheckActionID   string     `json:"postCheckActionId"`
+		Become              bool       `json:"become"`
+		GatherFacts         bool       `json:"gatherFacts"`
 		Name                string     `json:"name"`
 		Kind                ActionKind `json:"kind"`
 		Playbook            string     `json:"playbook"`
@@ -90,7 +96,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 	}
 	for _, action := range release.Actions {
 		spec.Actions = append(spec.Actions, actionSpec{
-			Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
+			ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, GatherFacts: action.GatherFacts, Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
 			HostGroup:           action.HostGroup,
 			RequiredCredentials: action.RequiredCredentials,
 			TimeoutSeconds:      action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
@@ -109,6 +115,26 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 }
 
 func ScenarioRevisionSpecDigest(revision ScenarioRevision) string {
+	if revision.DigestVersion >= ScenarioDigestVersion {
+		// Identity and publication state are excluded, while every editable execution
+		// contract and immutable upgrade source is included. Version zero retains
+		// the exact historic algorithm for immutable Run evidence.
+		spec := revision
+		spec.ID, spec.ScenarioID, spec.Status = "", "", ""
+		spec.Revision, spec.PublicationGeneration = 0, 0
+		spec.CreatedAt = time.Time{}
+		spec.TestPassedAt, spec.ReleasedAt, spec.DeprecatedAt, spec.AbandonedAt = nil, nil, nil, nil
+		if len(spec.EnvironmentConstraints) == 0 {
+			spec.EnvironmentConstraints = map[string]any{}
+		}
+		encoded, _ := json.Marshal(spec)
+		digest := sha256.Sum256(encoded)
+		return fmt.Sprintf("%x", digest[:])
+	}
+	return LegacyScenarioRevisionSpecDigest(revision)
+}
+
+func LegacyScenarioRevisionSpecDigest(revision ScenarioRevision) string {
 	constraints := revision.EnvironmentConstraints
 	if len(constraints) == 0 {
 		constraints = map[string]any{}
