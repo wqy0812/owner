@@ -60,6 +60,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// the browser cache: a cached awaiting_approval detail can otherwise outlive
 	// an approved list response and expose an already-consumed approval action.
 	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Path != "/api/v1/events" {
+		w.Header().Add("Vary", "Accept-Encoding")
+		if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+			compressed := &jsonCompressionWriter{ResponseWriter: w, request: r}
+			defer compressed.finish()
+			w = compressed
+		}
+	}
 	if r.URL.Path == "/api/v1/session/switch" || r.URL.Path == "/api/v1/session/users" {
 		h.router.ServeHTTP(w, r)
 		return
