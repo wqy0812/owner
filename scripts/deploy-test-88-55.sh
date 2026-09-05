@@ -9,6 +9,8 @@ SSH_PORT="${CLUSTERFORGE_DEPLOY_SSH_PORT:-22}"
 SKIP_TESTS=false
 ALLOW_ACTIVE_RUNS=false
 REBUILD_V1_DB=false
+DISABLE_CATALOG_BACKUP=false
+BUSINESS_RESET_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -22,6 +24,8 @@ Options:
   --skip-tests             Skip Go, frontend, and whitespace checks
   --allow-active-runs      Restart even when active platform runs exist
   --rebuild-v1-db          Back up, then rebuild the incompatible V1 test database
+  --disable-catalog-backup Deploy with Git Catalog backup explicitly disabled
+  --business-reset-dir DIR Use a verified, copied business-only reset bundle
   -h, --help               Show this help
 
 Environment variables:
@@ -54,6 +58,18 @@ while [[ $# -gt 0 ]]; do
     --allow-active-runs)
       ALLOW_ACTIVE_RUNS=true
       shift
+      ;;
+    --disable-catalog-backup)
+      DISABLE_CATALOG_BACKUP=true
+      shift
+      ;;
+    --business-reset-dir)
+      [[ $# -ge 2 ]] || die "--business-reset-dir requires a remote directory"
+      BUSINESS_RESET_DIR="$2"
+      [[ "$BUSINESS_RESET_DIR" =~ ^/var/lib/clusterforge/business-reset-backups/[A-Za-z0-9_-]+$ ]] || die "invalid business reset directory"
+      REBUILD_V1_DB=true
+      DISABLE_CATALOG_BACKUP=true
+      shift 2
       ;;
     --rebuild-v1-db)
       REBUILD_V1_DB=true
@@ -130,8 +146,12 @@ remote_helper="/opt/clusterforge/platform/.deploy-remote-lib-${remote_helper_che
 ssh_options=(-o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT")
 scp_options=(-o BatchMode=yes -o ConnectTimeout=8 -P "$SSH_PORT")
 
+disable_catalog_backup=0
+[[ "$DISABLE_CATALOG_BACKUP" != true ]] || disable_catalog_backup=1
+
 echo "==> Checking remote deployment prerequisites on $TARGET"
-ssh "${ssh_options[@]}" "$TARGET" 'set -eu
+ssh "${ssh_options[@]}" "$TARGET" bash -s -- "$disable_catalog_backup" <<'PREFLIGHT'
+set -eu
 for command_name in awk curl flock git grep install sha256sum systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing remote command: $command_name" >&2
@@ -141,13 +161,12 @@ done
 test -x /opt/clusterforge/platform/clusterforge-platform
 test -f /var/lib/clusterforge/platform.db
 test -f /etc/clusterforge/platform.env
-systemctl is-active --quiet clusterforge-platform
-backup_enabled="$(awk -F= '\''$1=="CLUSTERFORGE_BACKUP_ENABLED" {enabled=tolower($2)} END {print enabled}'\'' /etc/clusterforge/platform.env)"
-if [ "$backup_enabled" != "true" ]; then
+backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {enabled=tolower($2)} END {print enabled}' /etc/clusterforge/platform.env)"
+if [ "$backup_enabled" != "true" ] && [ "$1" != 1 ]; then
   echo "Catalog backup capability is disabled; set CLUSTERFORGE_BACKUP_ENABLED=true before deployment so the Environment Owner UI can configure a repository" >&2
   exit 1
 fi
-ansible_binary="$(awk -F= '\''$1=="NEWPLATFORM_ANSIBLE_BIN" {sub(/^[^=]*=/,""); value=$0} END {print value}'\'' /etc/clusterforge/platform.env)"
+ansible_binary="$(awk -F= '$1=="NEWPLATFORM_ANSIBLE_BIN" {sub(/^[^=]*=/,""); value=$0} END {print value}' /etc/clusterforge/platform.env)"
 if [ -z "$ansible_binary" ]; then
   ansible_binary="ansible-playbook"
 fi
@@ -155,7 +174,13 @@ command -v "$ansible_binary" >/dev/null 2>&1 || {
   echo "configured Ansible executable is unavailable: $ansible_binary" >&2
   exit 1
 }
-'
+PREFLIGHT
+
+if [[ -n "$BUSINESS_RESET_DIR" ]]; then
+  ssh "${ssh_options[@]}" "$TARGET" '! systemctl is-active --quiet clusterforge-platform'
+else
+  ssh "${ssh_options[@]}" "$TARGET" 'systemctl is-active --quiet clusterforge-platform'
+fi
 
 echo "==> Uploading artifact $checksum"
 scp "${scp_options[@]}" "$artifact" "$TARGET:$remote_artifact"
@@ -172,7 +197,7 @@ if [[ "$REBUILD_V1_DB" == true ]]; then
 fi
 echo "==> Activating release"
 ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" <<'REMOTE_SCRIPT'
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
@@ -185,6 +210,8 @@ allow_active_runs="$7"
 rebuild_v1_db="$8"
 expected_ui_index_checksum="$9"
 expected_ui_version_checksum="${10}"
+disable_catalog_backup="${11}"
+business_reset_dir="${12}"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
@@ -225,7 +252,7 @@ finish_failure() {
         fi
       done
       systemctl daemon-reload
-      if [[ "$backup_timer_was_enabled" -eq 1 ]]; then
+      if [[ "$backup_timer_was_enabled" -eq 1 && "$disable_catalog_backup" -eq 0 ]]; then
         systemctl enable --now clusterforge-backup.timer
       else
         systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
@@ -295,6 +322,7 @@ for key in \
   NEWPLATFORM_KILL_GRACE \
   NEWPLATFORM_MAX_LOG_BYTES \
   CLUSTERFORGE_BACKUP_DIR \
+  CLUSTERFORGE_RUN_ARCHIVE_DIR \
   CLUSTERFORGE_CATALOG_REPO \
   CLUSTERFORGE_CATALOG_REMOTE \
   CLUSTERFORGE_CATALOG_BRANCH; do
@@ -328,33 +356,63 @@ run_automation_snapshot() {
 predeploy_backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_selection_file="${predeploy_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
-if [[ "$predeploy_backup_enabled" == "true" ]]; then
+if [[ "$predeploy_backup_enabled" == "true" && "$disable_catalog_backup" -eq 0 ]]; then
   clusterforge_snapshot_if_configured "$predeploy_selection_file" "$live_backup_binary" run_automation_snapshot before-deploy
 fi
 
-stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-backup_dir="$backup_root/$stamp"
-mkdir -p -m 0700 "$backup_dir"
-install -m 0755 "$live_binary" "$backup_dir/clusterforge-platform"
-if [[ -x "$live_backup_binary" ]]; then
-  install -m 0755 "$live_backup_binary" "$backup_dir/clusterforge-backup"
-fi
-for unit in clusterforge-backup.service clusterforge-backup.timer; do
-  if [[ -f "/etc/systemd/system/$unit" ]]; then
-    cp -a "/etc/systemd/system/$unit" "$backup_dir/$unit"
+if [[ -n "$business_reset_dir" ]]; then
+  [[ "$business_reset_dir" =~ ^/var/lib/clusterforge/business-reset-backups/[A-Za-z0-9_-]+$ ]]
+  [[ ! -L "$business_reset_dir" && -f "$business_reset_dir/local-copy.verified" ]]
+  ! systemctl is-active --quiet "$service_name"
+  [[ "$(cat "$business_reset_dir/local-copy.verified")" == "$(sha256sum "$business_reset_dir/SHA256SUMS" | awk '{print $1}')" ]]
+  (cd "$business_reset_dir" && sha256sum --quiet -c SHA256SUMS)
+  sha256sum --quiet -c "$business_reset_dir/source-database.sha256"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$business_reset_dir/platform.db" --expected-contract "$predeploy_schema_contract"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$business_reset_dir/foundation.db" --expected-contract "$expected_schema_contract"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-business --db "$business_reset_dir/platform.db"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-foundation --db "$business_reset_dir/foundation.db"
+  backup_dir="$business_reset_dir"
+  backup_ready=1
+  service_touched=1
+else
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  backup_dir="$backup_root/$stamp"
+  mkdir -p -m 0700 "$backup_dir"
+  install -m 0755 "$live_binary" "$backup_dir/clusterforge-platform"
+  if [[ -x "$live_backup_binary" ]]; then
+    install -m 0755 "$live_backup_binary" "$backup_dir/clusterforge-backup"
   fi
-done
+  for unit in clusterforge-backup.service clusterforge-backup.timer; do
+    if [[ -f "/etc/systemd/system/$unit" ]]; then
+      cp -a "/etc/systemd/system/$unit" "$backup_dir/$unit"
+    fi
+  done
+  service_touched=1
+  systemctl stop "$service_name"
+  active_runs="$(clusterforge_list_active_runs "$database")"
+  clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
+  clusterforge_backup_sqlite "$database" "$backup_dir/platform.db"
+  archive_root="$(platform_env_value CLUSTERFORGE_RUN_ARCHIVE_DIR)"
+  if [[ -n "$archive_root" ]]; then
+    "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-snapshot --db "$database" --archive-dir "$archive_root" --target "$backup_dir/run-history"
+    "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-verify --db "$backup_dir/run-history"
+  fi
+  if [[ -f /etc/clusterforge/platform.env ]]; then
+    cp -a /etc/clusterforge/platform.env "$backup_dir/platform.env"
+  fi
+  backup_ready=1
 
-service_touched=1
-systemctl stop "$service_name"
-# Recheck after stopping: a Run may have arrived after the initial check.
-active_runs="$(clusterforge_list_active_runs "$database")"
-clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
-clusterforge_backup_sqlite "$database" "$backup_dir/platform.db"
-if [[ -f /etc/clusterforge/platform.env ]]; then
-  cp -a /etc/clusterforge/platform.env "$backup_dir/platform.env"
 fi
-backup_ready=1
+
+if [[ "$disable_catalog_backup" -eq 1 ]]; then
+  # Preserve all unrelated environment entries and never echo secret values.
+  sed -i '/^CLUSTERFORGE_BACKUP_ENABLED=/d' /etc/clusterforge/platform.env
+  printf '\nCLUSTERFORGE_BACKUP_ENABLED=false\n' >> /etc/clusterforge/platform.env
+fi
+
+if [[ -n "$business_reset_dir" ]]; then
+  clusterforge_prepare_reset_environment /etc/clusterforge/platform.env
+fi
 
 install -m 0755 "$staged_artifact" "$live_binary"
 install -m 0755 "$staged_backup_artifact" "$live_backup_binary"
@@ -365,6 +423,9 @@ systemctl daemon-reload
 if [[ "$rebuild_v1_db" -eq 1 ]]; then
   echo "rebuilding V1 test database after backup: $backup_dir/platform.db"
   rm -f "$database" "${database}-wal" "${database}-shm"
+  if [[ -n "$business_reset_dir" ]]; then
+    install -m 0600 "$business_reset_dir/foundation.db" "$database"
+  fi
 fi
 systemctl start "$service_name"
 
@@ -394,14 +455,18 @@ served_ui_version_checksum="$(curl -fsS --max-time 3 "${health_url}version.json"
 backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 catalog_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 catalog_selection_file="${catalog_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
-if [[ "$backup_enabled" != "true" ]]; then
+if [[ "$disable_catalog_backup" -eq 0 && "$backup_enabled" != "true" ]]; then
   echo "Catalog backup capability became disabled during deployment; refusing to leave an unusable Environment Owner repository workflow" >&2
   finish_failure 1
 fi
 
 "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$database" --expected-contract "$expected_schema_contract"
+if [[ "$disable_catalog_backup" -eq 1 ]]; then
+  [[ "$backup_enabled" == "false" ]]
+fi
 
-if [[ "$rebuild_v1_db" -eq 1 && "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
+
+if [[ "$rebuild_v1_db" -eq 1 && "$disable_catalog_backup" -eq 0 && "$backup_enabled" == "true" && -f "$catalog_selection_file" ]]; then
   echo "creating recovery point for rebuilt V1 database"
   run_automation_snapshot after-v1-rebuild
 fi

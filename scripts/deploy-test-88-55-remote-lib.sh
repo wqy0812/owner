@@ -4,6 +4,20 @@
 # deployment. Keep this file free of top-level side effects so its production
 # behavior can be exercised without touching a service or deployment path.
 
+# A foundation reset must not seed example business definitions on startup.
+clusterforge_prepare_reset_environment() {
+  local config="$1"
+  local pending
+  pending="$(mktemp "${config}.reset.XXXXXX")" || return 1
+  if ! cp -p "$config" "$pending" ||
+     ! awk '!/^NEWPLATFORM_SEED_PROFILE=/ && !/^CLUSTERFORGE_BACKUP_ENABLED=/' "$config" > "$pending" ||
+     ! printf '\nNEWPLATFORM_SEED_PROFILE=identities\nCLUSTERFORGE_BACKUP_ENABLED=false\n' >> "$pending" ||
+     ! mv "$pending" "$config"; then
+    rm -f "$pending"
+    return 1
+  fi
+}
+
 clusterforge_read_schema_contract() {
   "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database contract --db "$1"
 }

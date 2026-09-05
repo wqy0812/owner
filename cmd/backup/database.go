@@ -13,7 +13,7 @@ import (
 
 func runDatabase(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("database requires contract, active-runs, snapshot, verify, history-snapshot, history-verify, or history-restore")
+		return errors.New("database requires contract, active-runs, active-work, snapshot, business-snapshot, foundation-snapshot, business-export, verify, verify-business, verify-foundation, history-snapshot, history-verify, or history-restore")
 	}
 	set := flag.NewFlagSet("database "+args[0], flag.ContinueOnError)
 	archiveRoot := set.String("archive-dir", "", "persistent Run archive root")
@@ -34,6 +34,14 @@ func runDatabase(ctx context.Context, args []string) error {
 	case "history-restore":
 		return backup.RestoreRunHistory(ctx, *path, *target)
 
+	case "verify-business", "verify-foundation":
+		return deploydb.VerifyBusiness(ctx, *path, args[0] == "verify-foundation")
+	case "active-work":
+		work, err := deploydb.ActiveWork(ctx, *path)
+		if err == nil && len(work) > 0 {
+			fmt.Println(strings.Join(work, "\n"))
+		}
+		return err
 	case "contract":
 		contract, err := deploydb.Contract(ctx, *path)
 		if err == nil {
@@ -46,6 +54,16 @@ func runDatabase(ctx context.Context, args []string) error {
 			fmt.Println(strings.Join(runs, "\n"))
 		}
 		return err
+	case "business-snapshot", "foundation-snapshot":
+		if *target == "" {
+			return errors.New("--target is required")
+		}
+		return deploydb.BusinessSnapshot(ctx, *path, *target, args[0] == "foundation-snapshot")
+	case "business-export":
+		if *target == "" {
+			return errors.New("--target is required")
+		}
+		return deploydb.ExportBusiness(ctx, *path, *target)
 	case "snapshot":
 		if *target == "" {
 			return errors.New("--target is required")
