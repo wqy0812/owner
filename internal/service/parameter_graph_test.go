@@ -1,9 +1,10 @@
 package service
 
 import (
-	"codex/platform-demo/internal/domain"
 	"strings"
 	"testing"
+
+	"codex/platform-demo/internal/domain"
 )
 
 func configurationReferenceFixture() (domain.ScenarioGraph, map[string]domain.ComponentRelease, domain.EnvironmentRevision) {

@@ -8,6 +8,9 @@ import (
 )
 
 func validateScenarioAdaptationTx(ctx context.Context, tx *sql.Tx, revision domain.ScenarioRevision, previous map[string]any, complete bool) error {
+	if err := validateBranchScopeTx(ctx, tx, "scenarios", revision.ScenarioID, revision.EnvironmentConstraints); err != nil {
+		return err
+	}
 	catalog, err := loadCatalogDefinitions(ctx, tx)
 	if err != nil {
 		return err
@@ -17,6 +20,9 @@ func validateScenarioAdaptationTx(ctx context.Context, tx *sql.Tx, revision doma
 	}
 	if err = catalog.Options.ValidateConstraintChanges(revision.EnvironmentConstraints, previous); err != nil {
 		return err
+	}
+	if !complete {
+		return nil
 	}
 	intersections := map[string]map[string]bool{}
 	for _, node := range revision.Graph.Nodes {
@@ -86,7 +92,10 @@ func validateRunAdaptationTx(ctx context.Context, tx *sql.Tx, run domain.Run) er
 	if steps, ok := run.InputSnapshot["steps"].([]any); ok {
 		for _, v := range steps {
 			if row, ok := v.(map[string]any); ok {
-				if id, ok := row["releaseId"].(string); ok {
+				if row["sourceType"] == "scenario_acceptance" {
+					continue
+				}
+				if id, ok := row["releaseId"].(string); ok && id != "" {
 					if digest, ok := row["releaseSpecDigest"].(string); ok && digest != "" {
 						release, e := getComponentRelease(ctx, tx, id)
 						if e != nil {

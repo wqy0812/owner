@@ -45,8 +45,8 @@ func relationshipTestCatalog() Catalog {
 	})
 	appendRow("components", map[string]DBCell{"id": text("component-a")})
 	appendRow("components", map[string]DBCell{"id": text("component-b")})
-	appendRow("component_release_lines", map[string]DBCell{"id": text("line-a"), "component_id": text("component-a")})
-	appendRow("component_release_lines", map[string]DBCell{"id": text("line-b"), "component_id": text("component-b")})
+	appendRow("component_release_lines", map[string]DBCell{"environment_constraints_json": text("{}"), "id": text("line-a"), "component_id": text("component-a")})
+	appendRow("component_release_lines", map[string]DBCell{"environment_constraints_json": text("{}"), "id": text("line-b"), "component_id": text("component-b")})
 	appendRow("component_releases", map[string]DBCell{
 		"id": text("release-root"), "component_id": text("component-a"), "line_id": text("line-a"),
 		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"), "environment_constraints_json": text("{}"),
@@ -60,14 +60,24 @@ func relationshipTestCatalog() Catalog {
 		"id": text("release-b"), "component_id": text("component-b"), "line_id": text("line-b"),
 		"status": text("released"), "compatibility": text("not_applicable"), "released_at": text("2026-09-01T00:00:00Z"), "environment_constraints_json": text("{}"),
 	})
-	appendRow("action_definitions", map[string]DBCell{
-		"id": text("upgrade-child"), "release_id": text("release-child"), "kind": text("upgrade"),
-		"from_release_id": text("release-root"), "to_release_id": text("release-child"), "host_group": text("all"),
-	})
-	appendRow("action_definitions", map[string]DBCell{
-		"id": text("rollback-child"), "release_id": text("release-child"), "kind": text("rollback"),
-		"from_release_id": text("release-child"), "to_release_id": text("release-root"), "host_group": text("all"),
-	})
+	for _, item := range []struct{ id, suffix string }{{"release-root", "root"}, {"release-child", "child"}, {"release-b", "b"}} {
+		checkID := "check-" + item.suffix
+		appendRow("action_definitions", map[string]DBCell{"id": text(checkID), "release_id": text(item.id), "kind": text("check"), "playbook": text("managed/" + item.id + "/tasks/checks/" + checkID + ".yml"), "host_group": text("")})
+		kinds := []string{"install", "rollback"}
+		if item.suffix == "child" {
+			kinds = append(kinds, "upgrade")
+		}
+		for _, kind := range kinds {
+			values := map[string]DBCell{"id": text(kind + "-" + item.suffix), "release_id": text(item.id), "kind": text(kind), "host_group": text("all"), "playbook": text("managed/" + item.id + "/tasks/" + kind + ".yml"), "pre_check_action_id": text(checkID), "post_check_action_id": text(checkID)}
+			if item.suffix == "child" && kind == "upgrade" {
+				values["from_release_id"], values["to_release_id"] = text("release-root"), text("release-child")
+			}
+			if item.suffix == "child" && kind == "rollback" {
+				values["from_release_id"], values["to_release_id"] = text("release-child"), text("release-root")
+			}
+			appendRow("action_definitions", values)
+		}
+	}
 	return catalog
 }
 

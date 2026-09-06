@@ -8,11 +8,14 @@ import (
 )
 
 type EnvironmentParameterBindingUse struct {
-	ComponentID   string `json:"componentId"`
-	ComponentName string `json:"componentName"`
-	ReleaseID     string `json:"releaseId"`
-	Version       string `json:"version"`
-	ParameterName string `json:"parameterName"`
+	ComponentID     string `json:"componentId"`
+	ComponentName   string `json:"componentName"`
+	ReleaseID       string `json:"releaseId"`
+	Version         string `json:"version"`
+	ParameterName   string `json:"parameterName"`
+	LineID          string `json:"lineId"`
+	LineName        string `json:"lineName"`
+	CanViewContract bool   `json:"canViewContract"`
 }
 
 type EnvironmentParameterField struct {
@@ -27,10 +30,14 @@ type EnvironmentParameterField struct {
 	Bindings       []EnvironmentParameterBindingUse `json:"bindings"`
 }
 
-func (p *Platform) EnvironmentParameterFields(ctx context.Context) ([]EnvironmentParameterField, error) {
+func (p *EnvironmentService) ParameterFields(ctx context.Context, viewers ...domain.User) ([]EnvironmentParameterField, error) {
 	components, err := p.store.ListComponents(ctx, domain.User{Role: domain.RolePlatformAdmin})
 	if err != nil {
 		return nil, err
+	}
+	viewer := domain.User{Role: domain.RolePlatformAdmin}
+	if len(viewers) > 0 {
+		viewer = viewers[0]
 	}
 	fields := map[string]*EnvironmentParameterField{}
 	for _, component := range components {
@@ -52,7 +59,7 @@ func (p *Platform) EnvironmentParameterFields(ctx context.Context) ([]Environmen
 					fields[key] = field
 				}
 				field.Required = field.Required || parameter.Required
-				field.Bindings = append(field.Bindings, EnvironmentParameterBindingUse{ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, Version: release.Version, ParameterName: parameter.Name})
+				field.Bindings = append(field.Bindings, EnvironmentParameterBindingUse{ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, Version: release.Version, ParameterName: parameter.Name, LineID: release.LineID, LineName: release.LineName, CanViewContract: configurationSourceVisible(viewer, component, release)})
 			}
 		}
 	}
@@ -67,14 +74,14 @@ func (p *Platform) EnvironmentParameterFields(ctx context.Context) ([]Environmen
 	return out, nil
 }
 
-func (p *Platform) validateEnvironmentValues(ctx context.Context, values map[string]any, variables map[string]string, refs []domain.CredentialRef) error {
+func (p *EnvironmentService) validateEnvironmentValues(ctx context.Context, values map[string]any, variables map[string]string, refs []domain.CredentialRef) error {
 	snapshot, err := p.store.ReadCatalogValidation(ctx)
 	if err != nil {
 		return err
 	}
 	return snapshot.ValidateValues(values, variables, refs)
 }
-func (p *Platform) UpdateEnvironmentParameters(ctx context.Context, user domain.User, environmentID string, values map[string]any, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateParameters(ctx context.Context, user domain.User, environmentID string, values map[string]any, changeReason ...string) (domain.Environment, error) {
 	if err := p.validateEnvironmentValues(ctx, values, nil, nil); err != nil {
 		return domain.Environment{}, err
 	}

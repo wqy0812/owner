@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"time"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
@@ -12,47 +11,58 @@ type digestRunner interface {
 	Digest(string) (playbookSHA256, treeSHA256 string, err error)
 }
 
-type planDigestRunner interface {
-	DigestPlan([]string) (playbookSHA256 map[string]string, treeSHA256 string, err error)
-}
-
-type playbookValidationRunner interface {
-	ValidatePlaybooks([]string) map[string]error
-}
-
-type workspaceRunner interface {
-	PrepareWorkspace(playbook, expectedTreeSHA256 string) (*ansiblerunner.Workspace, error)
-	RunInWorkspace(context.Context, *ansiblerunner.Workspace, ansiblerunner.Request) (ansiblerunner.Result, error)
-}
-
 type lockedStep struct {
-	ID                  string                 `json:"id"`
-	NodeID              string                 `json:"nodeId"`
-	Name                string                 `json:"name"`
-	ComponentID         string                 `json:"componentId"`
-	ComponentName       string                 `json:"componentName"`
-	ReleaseID           string                 `json:"releaseId"`
-	ReleaseVersion      string                 `json:"releaseVersion"`
-	ReleaseSpecDigest   string                 `json:"releaseSpecDigest"`
-	ActionID            string                 `json:"actionId"`
-	Action              domain.ActionKind      `json:"action"`
-	FromReleaseID       string                 `json:"fromReleaseId,omitempty"`
-	ToReleaseID         string                 `json:"toReleaseId,omitempty"`
-	Playbook            string                 `json:"playbook"`
-	PlaybookDigest      string                 `json:"playbookDigest"`
-	WorkspaceDigest     string                 `json:"workspaceDigest"`
-	Tags                []string               `json:"tags"`
-	Limit               string                 `json:"limit"`
-	Variables           map[string]any         `json:"variables"`
-	RequiredCredentials []string               `json:"requiredCredentials"`
-	TimeoutSeconds      int                    `json:"timeoutSeconds"`
-	NeedsApproval       bool                   `json:"needsApproval"`
-	RetrySafe           bool                   `json:"retrySafe"`
-	BackupRef           string                 `json:"backupRef,omitempty"`
-	Backup              *domain.BackupMetadata `json:"backup,omitempty"`
+	RollbackSourceVariables map[string]any            `json:"rollbackSourceVariables,omitempty"`
+	RollbackSourceFrozen    bool                      `json:"rollbackSourceFrozen,omitempty"`
+	RollbackSourceActionID  string                    `json:"rollbackSourceActionId,omitempty"`
+	PreCheckRequired        bool                      `json:"preCheckRequired,omitempty"`
+	RuntimeChecks           []domain.RuntimeCheck     `json:"runtimeChecks,omitempty"`
+	ResourceContract        *domain.ResourceContract  `json:"resourceContract,omitempty"`
+	Resources               []domain.ResourceInstance `json:"resources,omitempty"`
+	Media                   []ansiblerunner.JobMedia  `json:"media,omitempty"`
+	SourceParametersFrozen  bool                      `json:"sourceParametersFrozen,omitempty"`
+	SourceType              string                    `json:"sourceType,omitempty"`
+	ScenarioRevisionID      string                    `json:"scenarioRevisionId,omitempty"`
+	AcceptanceJobID         string                    `json:"acceptanceJobId,omitempty"`
+	Stage                   string                    `json:"stage,omitempty"`
+	MayMutate               bool                      `json:"mayMutate,omitempty"`
+	ParentActionID          string                    `json:"parentActionId"`
+	SourceNodeID            string                    `json:"sourceNodeId"`
+	Phase                   string                    `json:"phase"`
+	Become                  bool                      `json:"become"`
+	GatherFacts             bool                      `json:"gatherFacts"`
+	ID                      string                    `json:"id"`
+	NodeID                  string                    `json:"nodeId"`
+	Name                    string                    `json:"name"`
+	ComponentID             string                    `json:"componentId"`
+	ComponentName           string                    `json:"componentName"`
+	ReleaseID               string                    `json:"releaseId"`
+	ReleaseVersion          string                    `json:"releaseVersion"`
+	ReleaseSpecDigest       string                    `json:"releaseSpecDigest"`
+	ActionID                string                    `json:"actionId"`
+	Action                  domain.ActionKind         `json:"action"`
+	FromReleaseID           string                    `json:"fromReleaseId,omitempty"`
+	ToReleaseID             string                    `json:"toReleaseId,omitempty"`
+	Playbook                string                    `json:"playbook"`
+	PlaybookDigest          string                    `json:"playbookDigest"`
+	WorkspaceDigest         string                    `json:"workspaceDigest"`
+	Tags                    []string                  `json:"tags"`
+	Limit                   string                    `json:"limit"`
+	Variables               map[string]any            `json:"variables"`
+	RequiredCredentials     []string                  `json:"requiredCredentials"`
+	TimeoutSeconds          int                       `json:"timeoutSeconds"`
+	NeedsApproval           bool                      `json:"needsApproval"`
+	RetrySafe               bool                      `json:"retrySafe"`
+	BackupRef               string                    `json:"backupRef,omitempty"`
+	Backup                  *domain.BackupMetadata    `json:"backup,omitempty"`
 }
 
 type lockedPlan struct {
+	ExistingResources          []domain.ResourceInstance    `json:"existingResources,omitempty"`
+	ResourcePolicyVersion      int                          `json:"resourcePolicyVersion,omitempty"`
+	RecoveryEnvironmentDigest  string                       `json:"recoveryEnvironmentDigest,omitempty"`
+	ParentSteps                []lockedStep                 `json:"parentSteps"`
+	Runtime                    ansiblerunner.JobRuntime     `json:"runtime"`
 	Steps                      []lockedStep                 `json:"steps"`
 	DeliveryRequirements       []DeliveryRequirement        `json:"deliveryRequirements,omitempty"`
 	DeliveryDecisions          []DeliveryDecision           `json:"deliveryDecisions,omitempty"`
@@ -109,6 +119,7 @@ type DeliveryResult struct {
 }
 
 type lockedInstallationBaseline struct {
+	NodeID         string `json:"nodeId"`
 	ComponentID    string `json:"componentId"`
 	ReleaseID      string `json:"releaseId"`
 	InstallRunID   string `json:"installRunId"`
@@ -154,6 +165,7 @@ type RollbackVerification struct {
 }
 
 type ComponentTestRequest struct {
+	ActionID             string               `json:"actionId"`
 	EnvironmentID        string               `json:"environmentId"`
 	Mode                 ComponentTestMode    `json:"mode"`
 	RollbackVerification RollbackVerification `json:"rollbackVerification"`
@@ -161,23 +173,31 @@ type ComponentTestRequest struct {
 }
 
 type ComponentTestPlanStep struct {
-	Order              int               `json:"order"`
-	ComponentID        string            `json:"componentId"`
-	ComponentName      string            `json:"componentName"`
-	ReleaseID          string            `json:"releaseId"`
-	ReleaseVersion     string            `json:"releaseVersion"`
-	Action             domain.ActionKind `json:"action"`
-	Playbook           string            `json:"playbook"`
-	Limit              string            `json:"limit,omitempty"`
-	NeedsApproval      bool              `json:"needsApproval"`
-	FromReleaseID      string            `json:"fromReleaseId,omitempty"`
-	FromReleaseVersion string            `json:"fromReleaseVersion,omitempty"`
-	ToReleaseID        string            `json:"toReleaseId,omitempty"`
-	ToReleaseVersion   string            `json:"toReleaseVersion,omitempty"`
-	BackupRef          string            `json:"backupRef,omitempty"`
-	BackupInstallRunID string            `json:"backupInstallRunId,omitempty"`
-	BackupCapturedAt   *time.Time        `json:"backupCapturedAt,omitempty"`
-	BackupPlaybookSHA  string            `json:"backupPlaybookSha256,omitempty"`
+	RollbackSourceActionID string            `json:"rollbackSourceActionId,omitempty"`
+	Name                   string            `json:"name"`
+	Stage                  string            `json:"stage"`
+	SourceType             string            `json:"sourceType"`
+	Phase                  string            `json:"phase"`
+	ParentActionID         string            `json:"parentActionId"`
+	ActionID               string            `json:"actionId"`
+	NodeID                 string            `json:"nodeId"`
+	Order                  int               `json:"order"`
+	ComponentID            string            `json:"componentId"`
+	ComponentName          string            `json:"componentName"`
+	ReleaseID              string            `json:"releaseId"`
+	ReleaseVersion         string            `json:"releaseVersion"`
+	Action                 domain.ActionKind `json:"action"`
+	Playbook               string            `json:"playbook"`
+	Limit                  string            `json:"limit,omitempty"`
+	NeedsApproval          bool              `json:"needsApproval"`
+	FromReleaseID          string            `json:"fromReleaseId,omitempty"`
+	FromReleaseVersion     string            `json:"fromReleaseVersion,omitempty"`
+	ToReleaseID            string            `json:"toReleaseId,omitempty"`
+	ToReleaseVersion       string            `json:"toReleaseVersion,omitempty"`
+	BackupRef              string            `json:"backupRef,omitempty"`
+	BackupInstallRunID     string            `json:"backupInstallRunId,omitempty"`
+	BackupCapturedAt       *time.Time        `json:"backupCapturedAt,omitempty"`
+	BackupPlaybookSHA      string            `json:"backupPlaybookSha256,omitempty"`
 }
 
 type ComponentTestPlan struct {

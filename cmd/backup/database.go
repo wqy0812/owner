@@ -13,9 +13,11 @@ import (
 
 func runDatabase(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("database requires contract, active-runs, active-work, snapshot, business-snapshot, foundation-snapshot, business-export, verify, verify-business, verify-foundation, history-snapshot, history-verify, or history-restore")
+		return errors.New("database requires convert-scenario-lifecycle, contract, active-runs, active-work, snapshot, business-snapshot, foundation-snapshot, business-export, verify, verify-business, verify-foundation, history-snapshot, history-verify, or history-restore")
 	}
 	set := flag.NewFlagSet("database "+args[0], flag.ContinueOnError)
+	sourcePlaybooks := set.String("source-playbook-root", "", "source managed Playbook root")
+	targetPlaybooks := set.String("target-playbook-root", "", "new copied managed Playbook root")
 	archiveRoot := set.String("archive-dir", "", "persistent Run archive root")
 	path := set.String("db", "", "existing SQLite database path")
 	target := set.String("target", "", "new snapshot destination")
@@ -27,6 +29,12 @@ func runDatabase(ctx context.Context, args []string) error {
 		return errors.New("--db is required; positional arguments are not accepted")
 	}
 	switch args[0] {
+	case "convert-scenario-lifecycle", "convert-user-experience":
+		if *target == "" {
+			return errors.New("--target is required")
+		}
+		report, err := deploydb.ConvertScenarioLifecycle(ctx, *path, *target, *sourcePlaybooks, *targetPlaybooks)
+		return printResult(report, err)
 	case "history-snapshot":
 		return backup.SnapshotRunHistory(ctx, *path, *archiveRoot, *target)
 	case "history-verify":

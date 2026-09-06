@@ -15,8 +15,9 @@ import (
 
 	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/service"
+
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 // Exercise authentication, Store reads, Readiness, DTO assembly and JSON output
@@ -70,22 +71,18 @@ func benchmarkComponentsHTTP(b *testing.B, withPlaybooks bool) {
 					for _, kind := range []domain.ActionKind{domain.ActionInstall, domain.ActionVerify, domain.ActionRollback} {
 						r.Actions = append(r.Actions, domain.ActionDefinition{ID: r.ID + "-" + string(kind), ReleaseID: r.ID, Name: string(kind), Kind: kind, Playbook: "fixtures/" + string(kind) + ".yml", HostGroup: "nodes", TimeoutSeconds: 60, RiskLevel: domain.RiskLow})
 					}
+					r.Actions = testutil.BoundFixtureActions(r.ID, r.Actions)
 					if err := database.CreateComponentRelease(ctx, r); err != nil {
 						b.Fatal(err)
 					}
 				}
 			}
-			var runner service.ActionRunner
+			var runner any
+			var playbookRoot string
 			if withPlaybooks {
 				root := b.TempDir()
-				if err := os.MkdirAll(filepath.Join(root, "fixtures"), 0o700); err != nil {
-					b.Fatal(err)
-				}
-				for _, kind := range []string{"install", "verify", "rollback"} {
-					if err := os.WriteFile(filepath.Join(root, "fixtures", kind+".yml"), []byte("- hosts: all\n  tasks: []\n"), 0o600); err != nil {
-						b.Fatal(err)
-					}
-				}
+				playbookRoot = root
+				testutil.Workspaces(b, database, root)
 				for i := 0; i < 64; i++ {
 					if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("resource-%03d.txt", i)), []byte(strings.Repeat("x", 16*1024)), 0o600); err != nil {
 						b.Fatal(err)
@@ -93,7 +90,8 @@ func benchmarkComponentsHTTP(b *testing.B, withPlaybooks bool) {
 				}
 				runner = &ansible.Runner{AllowedRoot: root}
 			}
-			platform := service.NewPlatform(database, runner, nil)
+			platform := newAPITestPlatform(b, database, runner, nil)
+			platform.ConfigurePlaybookRoot(playbookRoot)
 			b.Cleanup(platform.Close)
 			handler := NewHandler(platform, nil)
 			token := "benchmark-session"
@@ -115,8 +113,18 @@ func benchmarkComponentsHTTP(b *testing.B, withPlaybooks bool) {
 					b.Fatalf("missing releases for %s", component.ID)
 				}
 				for _, release := range component.Releases {
-					if release.Readiness.Status != domain.ReadinessBlocked || len(release.Readiness.Blockers) != 2 {
+					wanted := map[string]bool{"install_evidence_missing": true, "rollback_evidence_missing": true}
+					if !withPlaybooks {
+						wanted["playbook_workspace_invalid"] = true
+					}
+					if release.Readiness.Status != domain.ReadinessBlocked || len(release.Readiness.Blockers) != len(wanted) {
 						b.Fatalf("benchmark skipped or broke Readiness: %+v", release.Readiness)
+					}
+					for _, blocker := range release.Readiness.Blockers {
+						if !wanted[blocker.Code] {
+							b.Fatalf("unexpected Readiness blocker: %+v", blocker)
+						}
+						delete(wanted, blocker.Code)
 					}
 				}
 			}

@@ -51,7 +51,7 @@ func TestIndexedEvidenceMatchesSnapshotQueries(t *testing.T) {
 				err := s.DB().QueryRowContext(ctx, `SELECT id FROM runs WHERE kind='component_test' AND status='succeeded' AND component_release_id=?
 AND json_extract(input_snapshot_json,'$.componentReleaseSpecDigest')=?
 AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
-AND CASE WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json,'$.componentTestEvidence') IN ('rollback_verify','rollback_self_verify') ELSE json_extract(input_snapshot_json,'$.componentTestEvidence')=? END
+AND CASE WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json,'$.componentTestEvidence') IN ('rollback_verify') ELSE json_extract(input_snapshot_json,'$.componentTestEvidence')=? END
 ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC,id DESC LIMIT 1`, "history-release", digest, runtime, runtime, "version-a", evidence, evidence).Scan(&expected)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					t.Fatal(err)

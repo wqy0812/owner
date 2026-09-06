@@ -79,7 +79,7 @@ func (h *Handler) createCatalogRepository(w http.ResponseWriter, r *http.Request
 		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
-	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_repository.created", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
+	h.platform.Audit().Record(r.Context(), currentUser(r), "catalog_repository.created", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
 	writeData(w, http.StatusCreated, enabledCatalogRepositoryStatus(status))
 }
 
@@ -100,7 +100,7 @@ func (h *Handler) connectCatalogRepository(w http.ResponseWriter, r *http.Reques
 		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
-	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_repository.connected", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
+	h.platform.Audit().Record(r.Context(), currentUser(r), "catalog_repository.connected", "catalog_repository", status.Path, map[string]any{"branch": status.Branch})
 	writeData(w, http.StatusOK, enabledCatalogRepositoryStatus(status))
 }
 
@@ -114,7 +114,7 @@ func (h *Handler) createCatalogBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
-	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog_backup.created", "catalog_backup", manifest.BackupID, map[string]any{
+	h.platform.Audit().Record(r.Context(), currentUser(r), "catalog_backup.created", "catalog_backup", manifest.BackupID, map[string]any{
 		"gitCommit": manifest.GitCommit, "gitTag": manifest.GitTag, "publicationGeneration": manifest.PublicationGeneration,
 	})
 	writeData(w, http.StatusCreated, manifest)
@@ -159,7 +159,7 @@ func (h *Handler) restoreCatalogRepository(w http.ResponseWriter, r *http.Reques
 		writeError(w, catalogRepositoryError(err, domain.ErrConflict))
 		return
 	}
-	h.platform.RecordAudit(r.Context(), currentUser(r), "catalog.restored", "catalog_repository", input.Ref, map[string]any{"gitCommit": result.GitCommit, "catalogSha256": result.CatalogSHA256, "counts": result.Counts})
+	h.platform.Audit().Record(r.Context(), currentUser(r), "catalog.restored", "catalog_repository", input.Ref, map[string]any{"gitCommit": result.GitCommit, "catalogSha256": result.CatalogSHA256, "counts": result.Counts})
 	writeData(w, http.StatusCreated, result)
 }
 

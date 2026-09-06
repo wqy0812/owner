@@ -126,7 +126,7 @@ func (h *Handler) updateVariables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listEnvironmentParameterFields(w http.ResponseWriter, r *http.Request) {
-	fields, err := h.platform.Environments().ParameterFields(r.Context())
+	fields, err := h.platform.Environments().ParameterFields(r.Context(), currentUser(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -195,7 +195,16 @@ func (h *Handler) checkEnvironmentConnectivity(w http.ResponseWriter, r *http.Re
 }
 
 func (h *Handler) previewEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
-	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"))
+	var input struct {
+		Nodes []string `json:"nodes"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &input); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"), input.Nodes...)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -302,4 +311,13 @@ func (h *Handler) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeItems(w, events)
+}
+
+func (h *Handler) environmentCredentialSources(w http.ResponseWriter, r *http.Request) {
+	sources, err := h.platform.Environments().CredentialSources(r.Context(), currentUser(r), r.PathValue("id"), r.URL.Query().Get("revisionId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeItems(w, sources)
 }

@@ -198,6 +198,9 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON`); err != nil {
+		return err
+	}
 	for _, name := range order {
 		table := tables[name]
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(table.Columns)), ",")
@@ -231,6 +234,12 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 }
 
 func validateCatalogReferences(catalog Catalog) error {
+	if err := validateCatalogBranchScopes(catalog); err != nil {
+		return err
+	}
+	if err := validateScenarioCatalogAcceptance(catalog); err != nil {
+		return err
+	}
 	if err := validateCatalogParameterDefaults(catalog); err != nil {
 		return err
 	}
@@ -535,6 +544,7 @@ func validateCatalogReferences(catalog Catalog) error {
 	}
 
 	actions := tables["action_definitions"]
+	actionReleases := map[string]domain.ComponentRelease{}
 	for _, row := range actions.Rows {
 		id, err := requiredText(actions, row, "id")
 		if err != nil {
@@ -556,16 +566,40 @@ func validateCatalogReferences(catalog Catalog) error {
 		if err != nil {
 			return err
 		}
+		pre, err := optionalText(actions, row, "pre_check_action_id")
+		if err != nil {
+			return err
+		}
+		post, err := optionalText(actions, row, "post_check_action_id")
+		if err != nil {
+			return err
+		}
+		action := domain.ActionDefinition{ID: id, ReleaseID: releaseID, Kind: domain.ActionKind(kind), PreCheckActionID: pre, PostCheckActionID: post}
+		entry, err := domain.ActionTaskPath(action)
+		if err != nil {
+			return err
+		}
+		source, err := requiredText(actions, row, "playbook")
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(source, "/"+entry) {
+			return invalid(actions.Name, id, "playbook", "action source must use its managed role entry")
+		}
+		release := actionReleases[releaseID]
+		release.ID = releaseID
+		release.Actions = append(release.Actions, action)
+		actionReleases[releaseID] = release
 		owner, found := releaseRecords[releaseID]
 		if !found {
 			return invalid(actions.Name, id, "release_id", fmt.Sprintf("Catalog Action %s references missing Release %s", id, releaseID))
 		}
-		hostGroup, err := requiredText(actions, row, "host_group")
+		hostGroup, err := optionalText(actions, row, "host_group")
 		if err != nil {
 			return err
 		}
 		hostGroupCategory, found := categoryByKey["hostGroup"]
-		if !found || hostGroupCategory.kind != string(domain.PlatformOptionHostGroup) || !optionValues["hostGroup\x00"+hostGroup] {
+		if !(kind == "check" && hostGroup == "") && (!found || hostGroupCategory.kind != string(domain.PlatformOptionHostGroup) || !optionValues["hostGroup\x00"+hostGroup]) {
 			return invalid(actions.Name, id, "host_group", fmt.Sprintf("Catalog Action %s references an unknown host group", id))
 		}
 		for _, endpoint := range []struct{ name, id string }{{"from_release_id", fromID}, {"to_release_id", toID}} {
@@ -594,6 +628,16 @@ func validateCatalogReferences(catalog Catalog) error {
 			if fromID != "" || toID != "" {
 				return invalid(actions.Name, id, "transition", fmt.Sprintf("Catalog non-transition Action %s must not bind Release endpoints", id))
 			}
+		}
+	}
+
+	for _, row := range releases.Rows {
+		id, _ := requiredText(releases, row, "id")
+		status, _ := requiredText(releases, row, "status")
+		release := actionReleases[id]
+		release.ID = id
+		if err := domain.ValidateActionBindings(release, status != "draft"); err != nil {
+			return invalid(actions.Name, id, "bindings", err.Error())
 		}
 	}
 
@@ -630,6 +674,16 @@ func validateCatalogReferences(catalog Catalog) error {
 		}
 		if err := jsonUnmarshalStrict([]byte(raw), &graph); err != nil {
 			return fmt.Errorf("Catalog scenario graph is invalid: %w", err)
+		}
+		var lifecycle domain.ScenarioRevision
+		lifecycleRaw, _ := row[columnIndex(revisions.Columns, "lifecycle_json")].Value().(string)
+		if err := json.Unmarshal([]byte(lifecycleRaw), &lifecycle); err != nil {
+			return err
+		}
+		for _, job := range lifecycle.AcceptanceJobs {
+			if !optionValues["hostGroup\x00"+job.HostGroup] {
+				return invalid(revisions.Name, "", "lifecycle_json", fmt.Sprintf("Catalog scenario acceptance references unknown host group %s", job.HostGroup))
+			}
 		}
 		for _, node := range graph.Nodes {
 			if issues := domain.ScenarioAdaptationIssues(labels, releaseConstraints[node.ReleaseID], "", node.ReleaseID, true); len(issues) > 0 {

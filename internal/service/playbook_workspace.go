@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"codex/platform-demo/internal/domain"
@@ -28,7 +27,19 @@ const (
 	MaxWorkspaceDepth     = 16
 )
 
+type WorkspaceActionReference struct {
+	ActionID   string   `json:"actionId"`
+	ActionName string   `json:"actionName"`
+	UsedAs     []string `json:"usedAs"`
+}
+type WorkspaceReference struct {
+	Actions                  []WorkspaceActionReference `json:"actions"`
+	StaticReferences         []string                   `json:"staticReferences"`
+	DynamicReferencesUnknown bool                       `json:"dynamicReferencesUnknown"`
+	ProtectionReason         string                     `json:"protectionReason,omitempty"`
+}
 type PlaybookWorkspace struct {
+	References map[string]WorkspaceReference  `json:"references"`
 	Root       string                         `json:"root"`
 	TreeSHA256 string                         `json:"treeSha256"`
 	Files      []domain.ComponentPlaybookFile `json:"files"`
@@ -40,39 +51,6 @@ type WorkspaceFile struct {
 	Editable bool   `json:"editable"`
 }
 
-func workspaceSegment(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	var out strings.Builder
-	separator := false
-	for _, r := range value {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			out.WriteRune(unicode.ToLower(r))
-			separator = false
-		case r == '.' || r == '_' || r == '-':
-			if out.Len() > 0 && !separator {
-				out.WriteRune(r)
-				separator = true
-			}
-		case unicode.IsSpace(r):
-			if out.Len() > 0 && !separator {
-				out.WriteByte('-')
-				separator = true
-			}
-		default:
-			if out.Len() > 0 && !separator {
-				out.WriteByte('-')
-				separator = true
-			}
-		}
-	}
-	result := strings.Trim(out.String(), "._-")
-	if result == "" || result == "." || result == ".." {
-		return "", fmt.Errorf("%w: value cannot form a safe workspace directory", domain.ErrInvalid)
-	}
-	return result, nil
-}
-
 func managedReleasePrefix(component domain.Component, release domain.ComponentRelease) string {
 	if root := strings.TrimSpace(release.PlaybookWorkspaceRoot); root != "" {
 		return strings.TrimSuffix(filepath.ToSlash(root), "/") + "/"
@@ -81,33 +59,15 @@ func managedReleasePrefix(component domain.Component, release domain.ComponentRe
 }
 
 func generatedManagedReleasePrefix(component domain.Component, release domain.ComponentRelease) string {
-	componentKey, err := workspaceSegment(component.Slug)
-	if err != nil {
-		componentKey = component.ID
-	}
-	lineKey, err := workspaceSegment(release.LineName)
-	if err != nil {
-		lineKey = release.LineID
-	}
-	versionKey, err := workspaceSegment(release.Version)
-	if err != nil {
-		versionKey = release.ID
-	}
-	// Human-readable names are not identities: different names can normalize to
-	// the same segment. The immutable full Release ID makes every physical root
-	// unambiguous without sacrificing operator readability.
-	releaseKey, err := workspaceSegment(release.ID)
-	if err != nil {
-		return "managed/" + componentKey + "/" + lineKey + "/" + release.ID + "/"
-	}
-	return "managed/" + componentKey + "/" + lineKey + "/" + versionKey + "--" + releaseKey + "/"
+	return domain.GeneratedComponentWorkspaceRoot(component, release)
 }
 
-func actionPlaybookPath(component domain.Component, release domain.ComponentRelease, kind domain.ActionKind) (string, error) {
-	if !validActionKind(kind) {
-		return "", fmt.Errorf("%w: invalid action kind %q", domain.ErrInvalid, kind)
+func actionSourcePath(component domain.Component, release domain.ComponentRelease, action domain.ActionDefinition) (string, error) {
+	relative, err := domain.ActionTaskPath(action)
+	if err != nil {
+		return "", err
 	}
-	return managedReleasePrefix(component, release) + string(kind) + ".yml", nil
+	return managedReleasePrefix(component, release) + relative, nil
 }
 
 func cleanWorkspaceRelative(relative string) (string, error) {
@@ -132,19 +92,22 @@ func cleanWorkspaceRelative(relative string) (string, error) {
 }
 
 func isActionEntrypoint(path string) bool {
-	for _, kind := range []domain.ActionKind{domain.ActionInspect, domain.ActionPreflight, domain.ActionInstall, domain.ActionConfigure, domain.ActionVerify, domain.ActionUpgrade, domain.ActionRollback, domain.ActionUninstall} {
-		if path == string(kind)+".yml" {
+	if strings.HasPrefix(path, "tasks/checks/") && strings.HasSuffix(path, ".yml") {
+		return true
+	}
+	for _, kind := range []domain.ActionKind{domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade, domain.ActionRollback, domain.ActionUninstall} {
+		if path == "tasks/"+string(kind)+".yml" {
 			return true
 		}
 	}
 	return false
 }
 
-func (p *Platform) workspaceDirectory(component domain.Component, release domain.ComponentRelease, create bool) (string, error) {
-	if strings.TrimSpace(p.playbookRoot) == "" {
+func (p *WorkspaceFiles) workspaceDirectory(component domain.Component, release domain.ComponentRelease, create bool) (string, error) {
+	if strings.TrimSpace(p.root) == "" {
 		return "", fmt.Errorf("playbook management is not configured")
 	}
-	root, err := filepath.Abs(p.playbookRoot)
+	root, err := filepath.Abs(p.root)
 	if err != nil {
 		return "", err
 	}
@@ -153,6 +116,22 @@ func (p *Platform) workspaceDirectory(component domain.Component, release domain
 		return "", fmt.Errorf("resolve playbook root: %w", err)
 	}
 	relative := strings.TrimSuffix(managedReleasePrefix(component, release), "/")
+	if create {
+		if err := domain.ValidateComponentWorkspaceRoot(relative); err != nil {
+			return "", err
+		}
+	}
+	if _, err := cleanWorkspaceRelative(relative); err != nil {
+		return "", err
+	}
+	for current := relative; current != "."; current = filepath.ToSlash(filepath.Dir(current)) {
+		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(current))); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
+			return "", fmt.Errorf("%w: workspace ancestors must be real directories", domain.ErrInvalid)
+		}
+	}
+	if create && relative+"/" != generatedManagedReleasePrefix(component, release) {
+		return "", fmt.Errorf("%w: 工作区必须使用平台为当前组件版本分配的目录", domain.ErrInvalid)
+	}
 	directory := filepath.Join(root, filepath.FromSlash(relative))
 	if create {
 		if err := ensureRealDirectories(root, relative); err != nil {
@@ -248,7 +227,7 @@ func restoreWorkspaceFile(target string, existed bool, contents []byte) error {
 	return removeWorkspaceFileDurably(target)
 }
 
-func (p *Platform) beginActionFileMutation(ctx context.Context, release domain.ComponentRelease, component domain.Component, relative string, beforeExists bool, before []byte) (string, error) {
+func (p *CatalogService) beginActionFileMutation(ctx context.Context, release domain.ComponentRelease, component domain.Component, relative string, beforeExists bool, before []byte) (string, error) {
 	id := newID("action-file-mutation")
 	err := p.store.CreatePendingActionFileMutation(ctx, store.PendingActionFileMutation{
 		ID: id, ReleaseID: release.ID, WorkspaceRoot: managedReleasePrefix(component, release), RelativePath: relative,
@@ -257,7 +236,7 @@ func (p *Platform) beginActionFileMutation(ctx context.Context, release domain.C
 	return id, err
 }
 
-func (p *Platform) discardActionFileMutation(ctx context.Context, id string) error {
+func (p *CatalogService) discardActionFileMutation(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
 	}
@@ -269,11 +248,11 @@ func (p *Platform) discardActionFileMutation(ctx context.Context, id string) err
 // transaction deletes the marker in the same commit as the Action/manifest,
 // so a remaining marker unambiguously means the filesystem change must roll
 // back before the API starts serving traffic.
-func (p *Platform) RecoverActionFileMutations(ctx context.Context) error {
-	if strings.TrimSpace(p.playbookRoot) == "" {
+func (p *CatalogService) RecoverActionFileMutations(ctx context.Context) error {
+	if strings.TrimSpace(p.workspace.root) == "" {
 		return nil
 	}
-	root, err := filepath.Abs(p.playbookRoot)
+	root, err := filepath.Abs(p.workspace.root)
 	if err != nil {
 		return err
 	}
@@ -330,11 +309,11 @@ func resolveWorkspaceReadPath(directory, relative string) (string, error) {
 // moveDraftWorkspace prepares a business-name path change before the database
 // transaction. The returned function restores the old location if the
 // transaction fails; published releases never call this path.
-func (p *Platform) moveDraftWorkspace(component domain.Component, before, after domain.ComponentRelease) (func(), error) {
+func (p *CatalogService) moveDraftWorkspace(component domain.Component, before, after domain.ComponentRelease) (func(), error) {
 	if managedReleasePrefix(component, before) == managedReleasePrefix(component, after) {
 		return func() {}, nil
 	}
-	oldDirectory, err := p.workspaceDirectory(component, before, false)
+	oldDirectory, err := p.workspace.workspaceDirectory(component, before, false)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +322,7 @@ func (p *Platform) moveDraftWorkspace(component domain.Component, before, after 
 	} else if statErr != nil {
 		return nil, statErr
 	}
-	newDirectory, err := p.workspaceDirectory(component, after, false)
+	newDirectory, err := p.workspace.workspaceDirectory(component, after, false)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +331,7 @@ func (p *Platform) moveDraftWorkspace(component domain.Component, before, after 
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	root, err := filepath.Abs(p.playbookRoot)
+	root, err := filepath.Abs(p.workspace.root)
 	if err != nil {
 		return nil, err
 	}
@@ -453,16 +432,16 @@ func workspaceTreeSHA(files []domain.ComponentPlaybookFile) string {
 }
 
 type workspaceActionMutation struct {
-	upsert     *domain.ActionDefinition
-	deleteKind *domain.ActionKind
-	journalID  string
+	upsert    *domain.ActionDefinition
+	deleteID  *string
+	journalID string
 }
 
-func (p *Platform) publishWorkspaceMetadata(ctx context.Context, release domain.ComponentRelease, component domain.Component, directory string) (PlaybookWorkspace, error) {
+func (p *CatalogService) publishWorkspaceMetadata(ctx context.Context, release domain.ComponentRelease, component domain.Component, directory string) (PlaybookWorkspace, error) {
 	return p.publishWorkspaceMetadataWithAction(ctx, release, component, directory, workspaceActionMutation{})
 }
 
-func (p *Platform) publishWorkspaceMetadataWithAction(ctx context.Context, release domain.ComponentRelease, component domain.Component, directory string, mutation workspaceActionMutation) (PlaybookWorkspace, error) {
+func (p *CatalogService) publishWorkspaceMetadataWithAction(ctx context.Context, release domain.ComponentRelease, component domain.Component, directory string, mutation workspaceActionMutation) (PlaybookWorkspace, error) {
 	files, treeSHA, err := scanWorkspace(release.ID, directory)
 	if err != nil {
 		return PlaybookWorkspace{}, err
@@ -480,26 +459,46 @@ func (p *Platform) publishWorkspaceMetadataWithAction(ctx context.Context, relea
 	}
 	workspaceRoot := managedReleasePrefix(component, release)
 	if mutation.upsert != nil {
-		mutation.upsert.PlaybookSHA256 = byPath[string(mutation.upsert.Kind)+".yml"]
+		mutation.upsert.PlaybookSHA256 = byPath[strings.TrimPrefix(mutation.upsert.Playbook, managedReleasePrefix(component, release))]
 		digests[mutation.upsert.Playbook] = mutation.upsert.PlaybookSHA256
 		err = p.store.ReplaceDraftPlaybookFilesAndUpsertAction(ctx, release.ID, workspaceRoot, treeSHA, files, digests, *mutation.upsert, mutation.journalID)
-	} else if mutation.deleteKind != nil {
-		err = p.store.ReplaceDraftPlaybookFilesAndDeleteAction(ctx, release.ID, workspaceRoot, treeSHA, files, digests, *mutation.deleteKind, mutation.journalID)
+	} else if mutation.deleteID != nil {
+		err = p.store.ReplaceDraftPlaybookFilesAndDeleteAction(ctx, release.ID, workspaceRoot, treeSHA, files, digests, *mutation.deleteID, mutation.journalID)
 	} else {
 		err = p.store.ReplaceDraftPlaybookFilesAndInvalidate(ctx, release.ID, workspaceRoot, treeSHA, files, digests)
 	}
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
-	return PlaybookWorkspace{Root: workspaceRoot, TreeSHA256: treeSHA, Files: files}, nil
+	if mutation.upsert != nil {
+		found := false
+		for i := range release.Actions {
+			if release.Actions[i].ID == mutation.upsert.ID {
+				release.Actions[i] = *mutation.upsert
+				found = true
+			}
+		}
+		if !found {
+			release.Actions = append(release.Actions, *mutation.upsert)
+		}
+	} else if mutation.deleteID != nil {
+		actions := []domain.ActionDefinition{}
+		for _, a := range release.Actions {
+			if a.ID != *mutation.deleteID {
+				actions = append(actions, a)
+			}
+		}
+		release.Actions = actions
+	}
+	return PlaybookWorkspace{Root: workspaceRoot, TreeSHA256: treeSHA, Files: files, References: workspaceReferences(release, files, directory)}, nil
 }
 
-func (p *Platform) ListReleasePlaybookWorkspace(ctx context.Context, user domain.User, releaseID string) (PlaybookWorkspace, error) {
+func (p *CatalogService) ListPlaybookWorkspace(ctx context.Context, user domain.User, releaseID string) (PlaybookWorkspace, error) {
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, false)
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
-	_, err = p.workspaceDirectory(component, release, false)
+	directory, err := p.workspace.workspaceDirectory(component, release, false)
 	if err != nil && !os.IsNotExist(err) {
 		return PlaybookWorkspace{}, err
 	}
@@ -507,10 +506,10 @@ func (p *Platform) ListReleasePlaybookWorkspace(ctx context.Context, user domain
 	if files == nil {
 		files = []domain.ComponentPlaybookFile{}
 	}
-	return PlaybookWorkspace{Root: managedReleasePrefix(component, release), TreeSHA256: release.PlaybookTreeSHA256, Files: files}, nil
+	return PlaybookWorkspace{Root: managedReleasePrefix(component, release), TreeSHA256: release.PlaybookTreeSHA256, Files: files, References: workspaceReferences(release, files, directory)}, nil
 }
 
-func (p *Platform) ReadReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string) (WorkspaceFile, []byte, error) {
+func (p *CatalogService) ReadPlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string) (WorkspaceFile, []byte, error) {
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, false)
 	if err != nil {
 		return WorkspaceFile{}, nil, err
@@ -519,7 +518,7 @@ func (p *Platform) ReadReleaseWorkspaceFile(ctx context.Context, user domain.Use
 	if err != nil {
 		return WorkspaceFile{}, nil, err
 	}
-	directory, err := p.workspaceDirectory(component, release, false)
+	directory, err := p.workspace.workspaceDirectory(component, release, false)
 	if err != nil {
 		return WorkspaceFile{}, nil, err
 	}
@@ -556,26 +555,26 @@ func (p *Platform) ReadReleaseWorkspaceFile(ctx context.Context, user domain.Use
 	return file, contents, nil
 }
 
-func (p *Platform) SaveReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string, contents []byte) (WorkspaceFile, error) {
-	return p.SaveReleaseWorkspaceFileConditional(ctx, user, releaseID, relative, contents, nil)
+func (p *CatalogService) SavePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string, contents []byte) (WorkspaceFile, error) {
+	return p.SavePlaybookWorkspaceFileConditional(ctx, user, releaseID, relative, contents, nil)
 }
 
 // SaveReleaseWorkspaceFileConditional rejects a stale browser edit when
 // expectedSHA256 is present. An empty expected value means the path must not
 // exist; a non-empty value must match the current bytes.
-func (p *Platform) SaveReleaseWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256 *string) (WorkspaceFile, error) {
-	return p.SaveReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, relative, contents, expectedSHA256, nil)
+func (p *CatalogService) SavePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256 *string) (WorkspaceFile, error) {
+	return p.SavePlaybookWorkspaceFileWithExpectation(ctx, user, releaseID, relative, contents, expectedSHA256, nil)
 }
 
-func (p *Platform) SaveReleaseWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (WorkspaceFile, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) SavePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (WorkspaceFile, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	return p.saveReleaseWorkspaceFileLocked(ctx, user, releaseID, relative, contents, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{})
 }
 
-func (p *Platform) saveReleaseWorkspaceActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (WorkspaceFile, domain.ActionDefinition, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) saveReleaseWorkspaceActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string, confirmYAMLMigration bool) (WorkspaceFile, domain.ActionDefinition, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return WorkspaceFile{}, action, err
@@ -592,12 +591,18 @@ func (p *Platform) saveReleaseWorkspaceActionAtomic(ctx context.Context, user do
 			existingIndex = index
 			continue
 		}
-		if current.Kind == action.Kind {
+		if action.Kind != domain.ActionCheck && current.Kind == action.Kind {
 			return WorkspaceFile{}, action, fmt.Errorf("%w: action kind %s already exists", domain.ErrConflict, action.Kind)
 		}
 	}
 	if action.ID != "" && existingIndex < 0 {
 		return WorkspaceFile{}, action, fmt.Errorf("%w: action %s no longer exists", domain.ErrConflict, action.ID)
+	}
+	if action.NeedsYAMLMigration() {
+		return WorkspaceFile{}, action, fmt.Errorf("%w: 旧 facts 与固定探测不可写入，请直接编写 YAML", domain.ErrInvalid)
+	}
+	if existingIndex >= 0 && !confirmYAMLMigration {
+		preserveActionLegacy(&action, release.Actions[existingIndex])
 	}
 	if action.ID == "" {
 		action.ID = newID("action")
@@ -612,7 +617,7 @@ func (p *Platform) saveReleaseWorkspaceActionAtomic(ctx context.Context, user do
 	if action.RiskLevel == "" {
 		action.RiskLevel = domain.RiskLow
 	}
-	path, err := actionPlaybookPath(component, release, action.Kind)
+	path, err := actionSourcePath(component, release, action)
 	if err != nil {
 		return WorkspaceFile{}, action, err
 	}
@@ -624,14 +629,15 @@ func (p *Platform) saveReleaseWorkspaceActionAtomic(ctx context.Context, user do
 	} else {
 		prospective.Actions = append(prospective.Actions, action)
 	}
-	if err := p.validateReleaseContract(ctx, prospective, false); err != nil {
+	if err := p.releaseRules.validateReleaseContract(ctx, prospective, false); err != nil {
 		return WorkspaceFile{}, action, err
 	}
-	file, err := p.saveReleaseWorkspaceFileLocked(ctx, user, releaseID, string(action.Kind)+".yml", contents, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{upsert: &action})
+	relative, _ := domain.ActionTaskPath(action)
+	file, err := p.saveReleaseWorkspaceFileLocked(ctx, user, releaseID, relative, contents, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{upsert: &action})
 	return file, action, err
 }
 
-func (p *Platform) saveReleaseWorkspaceFileLocked(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256, expectedTreeSHA256 *string, mutation workspaceActionMutation) (WorkspaceFile, error) {
+func (p *CatalogService) saveReleaseWorkspaceFileLocked(ctx context.Context, user domain.User, releaseID, relative string, contents []byte, expectedSHA256, expectedTreeSHA256 *string, mutation workspaceActionMutation) (WorkspaceFile, error) {
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return WorkspaceFile{}, err
@@ -646,7 +652,7 @@ func (p *Platform) saveReleaseWorkspaceFileLocked(ctx context.Context, user doma
 	if len(contents) > MaxWorkspaceFileBytes {
 		return WorkspaceFile{}, fmt.Errorf("%w: workspace file exceeds 10 MiB", domain.ErrInvalid)
 	}
-	directory, err := p.workspaceDirectory(component, release, true)
+	directory, err := p.workspace.workspaceDirectory(component, release, true)
 	if err != nil {
 		return WorkspaceFile{}, err
 	}
@@ -736,24 +742,24 @@ func (p *Platform) saveReleaseWorkspaceFileLocked(ctx context.Context, user doma
 			if editable {
 				result.Content = string(contents)
 			}
-			p.audit(ctx, user, "component_playbook_file.saved", "component_release", releaseID, map[string]any{"path": clean, "sha256": file.SHA256, "size": file.SizeBytes})
+			p.audit.Record(ctx, user, "component_playbook_file.saved", "component_release", releaseID, map[string]any{"path": clean, "sha256": file.SHA256, "size": file.SizeBytes})
 			return result, nil
 		}
 	}
 	return WorkspaceFile{}, domain.ErrNotFound
 }
 
-func (p *Platform) RenameReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, from, to string) (PlaybookWorkspace, error) {
-	return p.RenameReleaseWorkspaceFileConditional(ctx, user, releaseID, from, to, nil)
+func (p *CatalogService) RenamePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, from, to string) (PlaybookWorkspace, error) {
+	return p.RenamePlaybookWorkspaceFileConditional(ctx, user, releaseID, from, to, nil)
 }
 
-func (p *Platform) RenameReleaseWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256 *string) (PlaybookWorkspace, error) {
-	return p.RenameReleaseWorkspaceFileWithExpectation(ctx, user, releaseID, from, to, expectedSHA256, nil)
+func (p *CatalogService) RenamePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256 *string) (PlaybookWorkspace, error) {
+	return p.RenamePlaybookWorkspaceFileWithExpectation(ctx, user, releaseID, from, to, expectedSHA256, nil)
 }
 
-func (p *Platform) RenameReleaseWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) RenamePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, from, to string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return PlaybookWorkspace{}, err
@@ -769,10 +775,10 @@ func (p *Platform) RenameReleaseWorkspaceFileWithExpectation(ctx context.Context
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
-	if isActionEntrypoint(from) || isActionEntrypoint(to) {
+	if workspaceActionReferenced(release, from) || workspaceActionReferenced(release, to) {
 		return PlaybookWorkspace{}, fmt.Errorf("%w: action entrypoints cannot be renamed", domain.ErrConflict)
 	}
-	directory, err := p.workspaceDirectory(component, release, false)
+	directory, err := p.workspace.workspaceDirectory(component, release, false)
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
@@ -811,72 +817,57 @@ func (p *Platform) RenameReleaseWorkspaceFileWithExpectation(ctx context.Context
 		_ = os.Rename(target, source)
 	}
 	if err == nil {
-		p.audit(ctx, user, "component_playbook_file.renamed", "component_release", releaseID, map[string]any{"from": from, "to": to})
+		p.audit.Record(ctx, user, "component_playbook_file.renamed", "component_release", releaseID, map[string]any{"from": from, "to": to})
 	}
 	return workspace, err
 }
 
-func (p *Platform) DeleteReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string) (PlaybookWorkspace, error) {
+func (p *CatalogService) DeletePlaybookWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string) (PlaybookWorkspace, error) {
 	return p.deleteReleaseWorkspaceFile(ctx, user, releaseID, relative, false, nil, nil)
 }
 
-func (p *Platform) DeleteReleaseWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, relative string, expectedSHA256 *string) (PlaybookWorkspace, error) {
+func (p *CatalogService) DeletePlaybookWorkspaceFileConditional(ctx context.Context, user domain.User, releaseID, relative string, expectedSHA256 *string) (PlaybookWorkspace, error) {
 	return p.deleteReleaseWorkspaceFile(ctx, user, releaseID, relative, false, expectedSHA256, nil)
 }
 
-func (p *Platform) DeleteReleaseWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, relative string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+func (p *CatalogService) DeletePlaybookWorkspaceFileWithExpectation(ctx context.Context, user domain.User, releaseID, relative string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
 	return p.deleteReleaseWorkspaceFile(ctx, user, releaseID, relative, false, expectedSHA256, expectedTreeSHA256)
 }
 
-func (p *Platform) DeleteReleaseActionPlaybook(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind) (PlaybookWorkspace, error) {
-	return p.DeleteReleaseActionPlaybookConditional(ctx, user, releaseID, kind, nil)
-}
-
-func (p *Platform) DeleteReleaseActionPlaybookConditional(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256 *string) (PlaybookWorkspace, error) {
-	return p.DeleteReleaseActionPlaybookWithExpectation(ctx, user, releaseID, kind, expectedSHA256, nil)
-}
-
-func (p *Platform) DeleteReleaseActionPlaybookWithExpectation(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
-	if !validActionKind(kind) {
-		return PlaybookWorkspace{}, fmt.Errorf("%w: invalid action kind", domain.ErrInvalid)
-	}
-	return p.deleteReleaseWorkspaceFile(ctx, user, releaseID, string(kind)+".yml", true, expectedSHA256, expectedTreeSHA256)
-}
-
-func (p *Platform) DeleteReleaseActionAtomic(ctx context.Context, user domain.User, releaseID string, kind domain.ActionKind, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
-	if !validActionKind(kind) {
-		return PlaybookWorkspace{}, fmt.Errorf("%w: invalid action kind", domain.ErrInvalid)
-	}
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) DeleteActionSource(ctx context.Context, user domain.User, releaseID, actionID string, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	release, _, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
-	found := false
-	for _, action := range release.Actions {
-		if action.Kind == kind {
-			found = true
-			break
+	action, ok := release.ActionByID(actionID)
+	if !ok {
+		return PlaybookWorkspace{}, domain.ErrNotFound
+	}
+	for _, parent := range release.Actions {
+		if parent.PreCheckActionID == actionID || parent.PostCheckActionID == actionID {
+			return PlaybookWorkspace{}, fmt.Errorf("%w: check is bound to action %s", domain.ErrConflict, parent.Name)
 		}
 	}
-	if !found {
-		return PlaybookWorkspace{}, fmt.Errorf("%w: action kind %s no longer exists", domain.ErrConflict, kind)
+	relative, err := domain.ActionTaskPath(action)
+	if err != nil {
+		return PlaybookWorkspace{}, err
 	}
-	workspace, err := p.deleteReleaseWorkspaceFileLocked(ctx, user, releaseID, string(kind)+".yml", true, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{deleteKind: &kind})
+	workspace, err := p.deleteReleaseWorkspaceFileLocked(ctx, user, releaseID, relative, true, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{deleteID: &actionID})
 	if err == nil {
-		p.audit(ctx, user, "component_action.deleted", "component_release", releaseID, map[string]any{"kind": kind})
+		p.audit.Record(ctx, user, "component_action.deleted", "component_release", releaseID, map[string]any{"actionId": actionID})
 	}
 	return workspace, err
 }
 
-func (p *Platform) deleteReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string, allowEntrypoint bool, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) deleteReleaseWorkspaceFile(ctx context.Context, user domain.User, releaseID, relative string, allowEntrypoint bool, expectedSHA256, expectedTreeSHA256 *string) (PlaybookWorkspace, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	return p.deleteReleaseWorkspaceFileLocked(ctx, user, releaseID, relative, allowEntrypoint, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{})
 }
 
-func (p *Platform) deleteReleaseWorkspaceFileLocked(ctx context.Context, user domain.User, releaseID, relative string, allowEntrypoint bool, expectedSHA256, expectedTreeSHA256 *string, mutation workspaceActionMutation) (PlaybookWorkspace, error) {
+func (p *CatalogService) deleteReleaseWorkspaceFileLocked(ctx context.Context, user domain.User, releaseID, relative string, allowEntrypoint bool, expectedSHA256, expectedTreeSHA256 *string, mutation workspaceActionMutation) (PlaybookWorkspace, error) {
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
 	if err != nil {
 		return PlaybookWorkspace{}, err
@@ -888,10 +879,10 @@ func (p *Platform) deleteReleaseWorkspaceFileLocked(ctx context.Context, user do
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
-	if isActionEntrypoint(clean) && !allowEntrypoint {
+	if workspaceActionReferenced(release, clean) && !allowEntrypoint {
 		return PlaybookWorkspace{}, fmt.Errorf("%w: remove the action before deleting its entrypoint", domain.ErrConflict)
 	}
-	directory, err := p.workspaceDirectory(component, release, false)
+	directory, err := p.workspace.workspaceDirectory(component, release, false)
 	if err != nil {
 		return PlaybookWorkspace{}, err
 	}
@@ -922,7 +913,7 @@ func (p *Platform) deleteReleaseWorkspaceFileLocked(ctx context.Context, user do
 			return PlaybookWorkspace{}, fmt.Errorf("%w: workspace file changed since it was loaded", domain.ErrConflict)
 		}
 	}
-	if mutation.deleteKind != nil {
+	if mutation.deleteID != nil {
 		mutation.journalID, err = p.beginActionFileMutation(ctx, release, component, clean, true, contents)
 		if err != nil {
 			return PlaybookWorkspace{}, err
@@ -948,7 +939,7 @@ func (p *Platform) deleteReleaseWorkspaceFileLocked(ctx context.Context, user do
 			}
 			return PlaybookWorkspace{}, err
 		}
-		p.audit(ctx, user, "component_playbook_file.deleted", "component_release", releaseID, map[string]any{"path": clean})
+		p.audit.Record(ctx, user, "component_playbook_file.deleted", "component_release", releaseID, map[string]any{"path": clean})
 		return workspace, nil
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(directory), ".workspace-delete-*")
@@ -969,7 +960,7 @@ func (p *Platform) deleteReleaseWorkspaceFileLocked(ctx context.Context, user do
 		_ = os.Rename(temporaryPath, target)
 	}
 	if err == nil {
-		p.audit(ctx, user, "component_playbook_file.deleted", "component_release", releaseID, map[string]any{"path": clean})
+		p.audit.Record(ctx, user, "component_playbook_file.deleted", "component_release", releaseID, map[string]any{"path": clean})
 	}
 	return workspace, err
 }

@@ -27,7 +27,7 @@ func businessFixture(t *testing.T) string {
 	_, err = db.Exec(`
  INSERT INTO users VALUES('owner','Owner','component_owner','2026-09-05');
  INSERT INTO components(id,slug,name,owner_id,created_at,updated_at) VALUES('component','component','Component','owner','2026-09-05','2026-09-05');
- INSERT INTO component_release_lines VALUES('line','component','Line','2026-09-05');
+ INSERT INTO component_release_lines(id,component_id,name,created_at) VALUES('line','component','Line','2026-09-05');
  INSERT INTO component_releases(id,component_id,line_id,version,status,compatibility,created_at) VALUES('release','component','line','1','draft','not_applicable','2026-09-05');
  INSERT INTO environments(id,name,owner_id,created_at,updated_at) VALUES('env','Env','owner','2026-09-05','2026-09-05');
  INSERT INTO environment_revisions(id,environment_id,revision,created_at) VALUES('env-r1','env',1,'2026-09-05');
@@ -35,7 +35,7 @@ func businessFixture(t *testing.T) string {
  INSERT INTO audit_events VALUES('audit-platform-catalog-bootstrapped','system','platform_option_catalog.bootstrapped','platform','platform-option-catalog','{}','2026-09-05');
  INSERT INTO audit_events VALUES('old-audit','owner','run.completed','run','run-history-secret','{}','2026-09-05');
  INSERT INTO notifications(id,user_id,type,title,body,created_at) VALUES('note','owner','run','history','must-not-be-copied','2026-09-05');
- INSERT INTO environment_component_installations VALUES('env','component','release','run-history-secret','old-backup','{}',1,'2026-09-05');
+ INSERT INTO environment_component_installations VALUES('node','env','component','release','run-history-secret','old-backup','{}',1,'2026-09-05');
  `)
 	if err != nil {
 		t.Fatal(err)

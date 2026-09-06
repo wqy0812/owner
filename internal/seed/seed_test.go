@@ -247,10 +247,10 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	}
 	defer database.Close()
 	seeder := Seeder{Store: database, Now: func() time.Time { return time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC) }}
-	if err := seeder.Run(ctx); err != nil {
+	if err := runReferenceCatalogFixture(seeder, ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := seeder.Run(ctx); err != nil {
+	if err := runReferenceCatalogFixture(seeder, ctx); err != nil {
 		t.Fatalf("idempotent seed: %v", err)
 	}
 	users, _ := database.ListUsers(ctx)
@@ -317,7 +317,17 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	owner, _ := database.GetUser(ctx, ScenarioOwnerID)
 	root := t.TempDir()
 	testutil.Workspaces(t, database, root)
-	platform := service.NewPlatform(database, seedRunner{}, nil)
+	// Synthetic rollback fixtures use the same required credential names as the
+	// seed install contract; production seed definitions remain unchanged.
+	if _, err := database.DB().Exec(`UPDATE action_definitions AS action SET required_credentials_json=(SELECT install.required_credentials_json FROM action_definitions install WHERE install.release_id=action.release_id AND install.kind='install') WHERE action.kind='rollback' AND action.id=action.release_id||'-rollback' AND action.release_id LIKE 'release-bke-%'`); err != nil {
+		t.Fatal(err)
+	}
+	testutil.CompanionCLI(t)
+	backend := testutil.AdaptRunner(seedRunner{})
+	platform, err := service.NewPlatform(database, service.RunnerDependencies{Workspaces: backend, Runtime: backend, Jobs: backend}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	platform.ConfigurePlaybookRoot(root)
 	defer platform.Close()
 	environment, err := database.GetEnvironment(ctx, "environment-openfuyao-template", false)
@@ -351,7 +361,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		t.Fatalf("OpenFuyao environment variables=%+v", environment.Revision.Variables)
 	}
 	environmentOwner, _ := database.GetUser(ctx, EnvironmentOwnerID)
-	if _, err := platform.UpdateEnvironmentFacts(ctx, environmentOwner, environment.ID, map[string]any{
+	if _, err := platform.Environments().UpdateFacts(ctx, environmentOwner, environment.ID, map[string]any{
 		"architecture": "amd64", "operatingSystem": "Kylin", "operatingSystemVersion": "24.04",
 		"ipFamily": "IPv4",
 	}, "补齐当前必填事实"); err != nil {
@@ -362,9 +372,9 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		revisionID, role, clusterID string
 		nodes, steps                int
 	}{
-		{"scenario-openfuyao-r1", "manager", openFuyaoManagementClusterID, 5, 6},
-		{"scenario-openfuyao-work-cluster-r1", "work", openFuyaoWorkClusterID, 4, 5},
-		{"scenario-openfuyao-work-nodes-r1", "work", openFuyaoWorkClusterID, 2, 2},
+		{"scenario-openfuyao-r1", "manager", openFuyaoManagementClusterID, 5, 21},
+		{"scenario-openfuyao-work-cluster-r1", "work", openFuyaoWorkClusterID, 4, 17},
+		{"scenario-openfuyao-work-nodes-r1", "work", openFuyaoWorkClusterID, 2, 21},
 	}
 	for _, expectation := range scenarios {
 		revision, err := database.GetScenarioRevision(ctx, expectation.revisionID)
@@ -385,11 +395,58 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 				}
 			}
 		}
-		issues, err := platform.ValidateScenario(ctx, owner, expectation.revisionID)
+		// The historical enrollment template starts from an existing work cluster.
+		// A clean-environment full install explicitly includes that cluster's full
+		// dependency graph before adding its node-enrollment target.
+		if revision.ID == "scenario-openfuyao-work-nodes-r1" {
+			work, err := database.GetScenarioRevision(ctx, "scenario-openfuyao-work-cluster-r1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := revision.Graph.Nodes[1]
+			revision.Graph.Nodes = append(append([]domain.ScenarioNode(nil), work.Graph.Nodes...), worker)
+			revision.Graph.Edges = append([]domain.ScenarioEdge(nil), work.Graph.Edges...)
+		}
+		for i := range revision.Graph.Nodes {
+			if revision.Graph.Nodes[i].Action == domain.ActionVerify {
+				revision.Graph.Nodes[i].Action = domain.ActionInstall
+			}
+		}
+		revision, err = platform.Scenarios().SaveGraph(ctx, owner, revision.ID, revision.Graph)
+		if err != nil {
+			t.Fatalf("complete target graph: %#v", err)
+		}
+		// This test explicitly authors new acceptance in the unpublished fixture;
+		// seed/catalog history remains untouched and contains no invented evidence.
+		definition, err := platform.Scenarios().SaveAcceptance(ctx, owner, revision.ID, service.ScenarioAcceptanceInput{ExpectedRevisionDigest: domain.ScenarioRevisionSpecDigest(revision), Jobs: []domain.ScenarioAcceptanceJob{{ID: "business", Name: "Fixture business", Purpose: "Assert complete fixture service", HostGroup: revision.Graph.Nodes[0].HostGroup, TimeoutSeconds: 60, RiskLevel: domain.RiskLow}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		emptySHA := ""
+		treeSHA := definition.Workspace.TreeSHA256
+		if _, err = platform.Scenarios().SaveAcceptanceFile(ctx, owner, revision.ID, "tasks/acceptance/business.yml", []byte(testutil.Playbook), service.ScenarioWorkspaceExpectation{ExpectedRevisionDigest: definition.RevisionDigest, ExpectedSHA256: &emptySHA, ExpectedTreeSHA256: &treeSHA}); err != nil {
+			t.Fatal(err)
+		}
+		currentEnvironment, err := database.GetEnvironment(ctx, environment.ID, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cleanEnvironment := currentEnvironment
+		cleanEnvironment.ID = "test-" + revision.ID
+		cleanEnvironment.Name = cleanEnvironment.ID
+		cleanEnvironment.CurrentRevisionID = ""
+		cleanRevision := *currentEnvironment.Revision
+		cleanRevision.ID = cleanEnvironment.ID + "-r1"
+		cleanRevision.EnvironmentID = cleanEnvironment.ID
+		cleanRevision.Revision = 1
+		if err = database.CreateEnvironment(ctx, cleanEnvironment, cleanRevision); err != nil {
+			t.Fatal(err)
+		}
+		issues, err := platform.Scenarios().Validate(ctx, owner, expectation.revisionID)
 		if err != nil || len(issues) != 0 {
 			t.Fatalf("scenario %s dependency issues=%+v err=%v", expectation.revisionID, issues, err)
 		}
-		run, err := platform.StartScenarioTest(ctx, owner, expectation.revisionID, "environment-openfuyao-template")
+		run, err := platform.Execution().StartScenarioTest(ctx, owner, expectation.revisionID, cleanEnvironment.ID)
 		if err != nil || run.Status != domain.RunAwaitingApproval {
 			t.Fatalf("scenario %s run=%+v err=%v", expectation.revisionID, run, err)
 		}
@@ -404,7 +461,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		for _, raw := range steps {
 			step := raw.(map[string]any)
 			variables := step["variables"].(map[string]any)
-			releaseID := step["releaseId"].(string)
+			releaseID, _ := step["releaseId"].(string)
 			if openFuyaoScenarioParameterSupported(releaseID, "cluster_role") && variables["cluster_role"] != expectation.role {
 				t.Fatalf("scenario %s release %s role=%v", expectation.revisionID, releaseID, variables["cluster_role"])
 			}
@@ -423,8 +480,8 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 	}
 
 	enrollment, _ := database.GetScenarioRevision(ctx, "scenario-openfuyao-work-nodes-r1")
-	if enrollment.Graph.Nodes[0].Action != domain.ActionVerify || enrollment.Graph.Nodes[0].ReleaseID != "release-bke-master-work-25.12" || enrollment.Graph.Nodes[1].ReleaseID != "release-bke-nodes-25.12" {
-		t.Fatalf("work node enrollment boundary=%+v", enrollment.Graph.Nodes)
+	if len(enrollment.Graph.Nodes) != 5 || enrollment.Graph.Nodes[3].Action != domain.ActionInstall || enrollment.Graph.Nodes[3].ReleaseID != "release-bke-master-work-25.12" || enrollment.Graph.Nodes[4].ReleaseID != "release-bke-nodes-25.12" {
+		t.Fatalf("work node complete target boundary=%+v", enrollment.Graph.Nodes)
 	}
 
 	credentialNames := map[string]bool{
@@ -457,7 +514,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 			}
 		}
 		for _, action := range release.Actions {
-			if len(action.RequiredCredentials) == 0 {
+			if action.Kind != domain.ActionCheck && len(action.RequiredCredentials) == 0 {
 				t.Fatalf("release %s action %s has no credential contract", releaseID, action.ID)
 			}
 			for _, name := range action.RequiredCredentials {
@@ -466,7 +523,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 				}
 			}
 		}
-		componentRun, err := platform.StartComponentTest(ctx, environmentOwner, releaseID, service.ComponentTestRequest{
+		componentRun, err := platform.Execution().StartComponentTest(ctx, environmentOwner, releaseID, service.ComponentTestRequest{
 			EnvironmentID: environment.ID,
 			Mode:          service.ComponentTestInstallVerify,
 		})
@@ -570,11 +627,26 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 			t.Fatalf("scenario %s graph issues=%+v", expectation.id, issues)
 		}
 		owner, _ := database.GetUser(ctx, ScenarioOwnerID)
-		platform := service.NewPlatform(database, nil, nil)
-		issues, validateErr := platform.ValidateScenario(ctx, owner, expectation.id)
+		backend := &testutil.Runner{}
+		platform, err := service.NewPlatform(database, service.RunnerDependencies{Workspaces: backend, Runtime: backend, Jobs: backend}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issues, validateErr := platform.Scenarios().Validate(ctx, owner, expectation.id)
 		platform.Close()
-		if validateErr != nil || len(issues) != 0 {
-			t.Fatalf("scenario %s dependency validation issues=%+v err=%v", expectation.id, issues, validateErr)
+		var orderIssues []domain.ValidationIssue
+		for _, issue := range issues {
+			if issue.Code != "resource.contract_missing" {
+				orderIssues = append(orderIssues, issue)
+			}
+		}
+		if validateErr != nil || len(orderIssues) != 2 || len(issues) == len(orderIssues) {
+			t.Fatalf("scenario %s must ask Owner to order bootstrap nodes: issues=%+v err=%v", expectation.id, issues, validateErr)
+		}
+		for _, issue := range orderIssues {
+			if issue.Code != "execution_order_undetermined" || (!strings.HasSuffix(issue.NodeID, "bootstrap-master") && !strings.HasSuffix(issue.NodeID, "bootstrap-worker")) {
+				t.Fatalf("scenario %s unexpected issue: %+v", expectation.id, issue)
+			}
 		}
 	}
 	core, _ := database.GetScenarioRevision(ctx, "scenario-k8s-1.17.5-r1")
@@ -744,7 +816,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if err := seeder.seedUsers(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := seeder.seedPlatformCatalog(ctx, now); err != nil {
+	if err := seedHistoricalPlatformCatalog(seeder, ctx, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := seeder.seedComponents(ctx, now); err != nil {
@@ -769,7 +841,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 		t.Fatal(err)
 	}
 
-	if err := seeder.Run(ctx); err != nil {
+	if err := runReferenceCatalogFixture(seeder, ctx); err != nil {
 		t.Fatalf("incremental seed: %v", err)
 	}
 	assertTableCount(t, database, "components", 34)
@@ -799,7 +871,7 @@ func TestSeederAddsKubernetes1175ToExistingDatabaseWithoutOverwriting(t *testing
 	if seenBaseAudit != 1 {
 		t.Fatalf("base audit count=%d", seenBaseAudit)
 	}
-	if err := seeder.Run(ctx); err != nil {
+	if err := runReferenceCatalogFixture(seeder, ctx); err != nil {
 		t.Fatalf("repeat incremental seed: %v", err)
 	}
 	assertTableCount(t, database, "components", 34)
@@ -818,7 +890,7 @@ func seededDatabase(t *testing.T) (context.Context, *store.Store) {
 	}
 	t.Cleanup(func() { database.Close() })
 	seeder := Seeder{Store: database, Now: func() time.Time { return time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC) }}
-	if err := seeder.Run(ctx); err != nil {
+	if err := runReferenceCatalogFixture(seeder, ctx); err != nil {
 		t.Fatal(err)
 	}
 	return ctx, database

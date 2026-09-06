@@ -46,7 +46,7 @@ func TestReleaseReviewIncludesParameterlessReleaseAndInvalidatesOnContractChange
 	if approved.Review.Status != domain.ReleaseReviewApproved || approved.Review.ReviewedBy != admin.ID {
 		t.Fatalf("approved review=%+v", approved.Review)
 	}
-	changed, err := platform.UpdateReleaseContract(ctx, owner, release.ID, []domain.ParameterDefinition{{
+	changed, err := platform.catalog.updateReleaseContract(ctx, owner, release.ID, []domain.ParameterDefinition{{
 		Name: "installRoot", Description: "install root", Type: domain.ParameterTypeString,
 		Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderComponentOwner, FixedValue: "/opt/runtime",
 	}}, nil)
@@ -79,7 +79,7 @@ func TestScenarioParameterOverviewGroupsRepeatedNodesAndGraphSaveIsAtomic(t *tes
 	if err := database.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	scenario, err := platform.CreateScenario(ctx, owner, domain.Scenario{Name: "Repeated runtime", Slug: "repeated-runtime"})
+	scenario, err := platform.scenarios.Create(ctx, owner, domain.Scenario{Name: "Repeated runtime", Slug: "repeated-runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,14 +87,14 @@ func TestScenarioParameterOverviewGroupsRepeatedNodesAndGraphSaveIsAtomic(t *tes
 		{ID: "runtime-a", Name: "Runtime A", ReleaseID: release.ID, Action: domain.ActionInstall, ParameterValues: map[string]any{"cpu": 2}, Position: domain.GraphPosition{X: 10, Y: 10}},
 		{ID: "runtime-b", Name: "Runtime B", ReleaseID: release.ID, Action: domain.ActionInstall, ParameterValues: map[string]any{"cpu": 8}, Position: domain.GraphPosition{X: 300, Y: 10}},
 	}, Edges: []domain.ScenarioEdge{}}
-	saved, err := platform.SaveScenarioGraph(ctx, owner, scenario.CurrentRevisionID, graph)
+	saved, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, graph)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if saved.Graph.Nodes[0].HostGroup != "test_nodes" || saved.Graph.Nodes[1].HostGroup != "test_nodes" {
 		t.Fatalf("derived host groups=%+v", saved.Graph.Nodes)
 	}
-	overview, err := platform.ScenarioParameterOverview(ctx, owner, scenario.CurrentRevisionID)
+	overview, err := platform.scenarios.ParameterOverview(ctx, owner, scenario.CurrentRevisionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestScenarioParameterOverviewGroupsRepeatedNodesAndGraphSaveIsAtomic(t *tes
 	invalid := graph
 	invalid.Nodes = append([]domain.ScenarioNode(nil), graph.Nodes...)
 	invalid.Nodes[0].ParameterValues = map[string]any{"cpu": 3, "environmentOnly": "forbidden"}
-	if _, err := platform.SaveScenarioGraph(ctx, owner, scenario.CurrentRevisionID, invalid); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, invalid); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown scenario parameter error=%v", err)
 	}
 	retained, err := database.GetScenarioRevision(ctx, scenario.CurrentRevisionID)
@@ -144,12 +144,12 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 	if err := database.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	environment, err := platform.CreateEnvironment(ctx, owner, domain.Environment{Name: "Parameter environment"}, completeServiceTestFacts())
+	environment, err := platform.environments.Create(ctx, owner, domain.Environment{Name: "Parameter environment"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := domain.EnvironmentParameterValueKey(release.ID, release.Parameters[0])
-	updated, err := platform.UpdateEnvironmentParameters(ctx, owner, environment.ID, map[string]any{key: "cn"}, "configure region")
+	updated, err := platform.environments.UpdateParameters(ctx, owner, environment.ID, map[string]any{key: "cn"}, "configure region")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,25 +160,25 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 	if err := database.DeprecateComponentRelease(ctx, release.ID, deprecatedAt); err != nil {
 		t.Fatal(err)
 	}
-	fields, err := platform.EnvironmentParameterFields(ctx)
+	fields, err := platform.environments.ParameterFields(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fields) != 1 || fields[0].ValueKey != key || len(fields[0].Bindings) != 1 || fields[0].Bindings[0].ReleaseID != release.ID {
 		t.Fatalf("deprecated release environment fields=%+v", fields)
 	}
-	updated, err = platform.UpdateEnvironmentParameters(ctx, owner, environment.ID, map[string]any{key: "us"}, "maintain retained release parameter")
+	updated, err = platform.environments.UpdateParameters(ctx, owner, environment.ID, map[string]any{key: "us"}, "maintain retained release parameter")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Revision == nil || updated.Revision.Parameters[key] != "us" {
 		t.Fatalf("deprecated release parameters=%+v", updated.Revision)
 	}
-	if _, err := platform.UpdateEnvironmentParameters(ctx, owner, environment.ID, map[string]any{"arbitrary": true}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := platform.environments.UpdateParameters(ctx, owner, environment.ID, map[string]any{"arbitrary": true}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("arbitrary environment field error=%v", err)
 	}
 	scenarioOwner := domain.User{ID: "scenario-owner", Role: domain.RoleScenarioOwner}
-	if _, err := platform.UpdateEnvironmentParameters(ctx, scenarioOwner, environment.ID, map[string]any{key: "us"}); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := platform.environments.UpdateParameters(ctx, scenarioOwner, environment.ID, map[string]any{key: "us"}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("scenario owner environment write error=%v", err)
 	}
 }
@@ -195,20 +195,20 @@ func TestRemovedDraftEnvironmentParameterCanBeClearedWithoutChangingHistory(t *t
 	if err := db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	env, err := p.CreateEnvironment(ctx, owner, domain.Environment{Name: "Review environment"}, completeServiceTestFacts())
+	env, err := p.environments.Create(ctx, owner, domain.Environment{Name: "Review environment"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := domain.EnvironmentParameterValueKey(r.ID, parameter)
-	env, err = p.UpdateEnvironmentParameters(ctx, owner, env.ID, map[string]any{key: "small"})
+	env, err = p.environments.UpdateParameters(ctx, owner, env.ID, map[string]any{key: "small"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	componentOwner := domain.User{ID: "component-owner", Role: domain.RoleComponentOwner}
-	if _, err := p.UpdateReleaseContract(ctx, componentOwner, r.ID, []domain.ParameterDefinition{}, nil); err != nil {
+	if _, err := p.catalog.updateReleaseContract(ctx, componentOwner, r.ID, []domain.ParameterDefinition{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	fields, err := p.EnvironmentParameterFields(ctx)
+	fields, err := p.environments.ParameterFields(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,11 +218,11 @@ func TestRemovedDraftEnvironmentParameterCanBeClearedWithoutChangingHistory(t *t
 		}
 	}
 	retainedRevisionID := env.Revision.ID
-	_, err = p.UpdateEnvironmentParameters(ctx, owner, env.ID, env.Revision.Parameters)
+	_, err = p.environments.UpdateParameters(ctx, owner, env.ID, env.Revision.Parameters)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown fields must still be rejected: %v", err)
 	}
-	cleaned, err := p.UpdateEnvironmentParameters(ctx, owner, env.ID, map[string]any{}, "Remove retired field")
+	cleaned, err := p.environments.UpdateParameters(ctx, owner, env.ID, map[string]any{}, "Remove retired field")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,19 +254,19 @@ func TestRetiredGlobalBindingsCannotBeEditedClonedOrImported(t *testing.T) {
 	if _, err := db.DB().Exec("UPDATE component_releases SET parameters_json=? WHERE id=?", string(raw), r.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.UpdateReleaseContract(ctx, owner, r.ID, r.Parameters, nil); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.catalog.updateReleaseContract(ctx, owner, r.ID, r.Parameters, nil); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("draft edit: %v", err)
 	}
 	if _, err := db.DB().Exec(`UPDATE component_releases SET status='released',released_at=? WHERE id=?`, now.Format(time.RFC3339Nano), r.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.PreviewReleaseDraft(ctx, owner, r.ComponentID, ReleaseDraftRequest{Mode: ReleaseDraftNewLine, LineName: "Next", Version: "2", ReleaseNotes: "Clone", TemplateSourceReleaseID: r.ID}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.catalog.PreviewReleaseDraft(ctx, owner, r.ComponentID, ReleaseDraftRequest{Mode: ReleaseDraftNewLine, LineName: "Next", Version: "2", ReleaseNotes: "Clone", TemplateSourceReleaseID: r.ID}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("clone: %v", err)
 	}
 	entry := ComponentImportEntry{}
 	entry.Component.Name, entry.Component.Slug, entry.Component.Layer, entry.Component.Tags = "Import", "retired-import", domain.LayerRuntimeState, []string{"runtime"}
 	entry.Release.Version, entry.Release.LineName, entry.Release.ReleaseNotes, entry.Release.Parameters = "1", "Import", "Import", []domain.ParameterDefinition{param}
-	if _, err := p.PreviewComponentImport(ctx, owner, ComponentImportRequest{Entries: []ComponentImportEntry{entry}}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.catalog.PreviewImport(ctx, owner, ComponentImportRequest{Entries: []ComponentImportEntry{entry}}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("import: %v", err)
 	}
 	retained, err := db.GetComponentRelease(ctx, r.ID)

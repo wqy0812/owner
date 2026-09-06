@@ -60,6 +60,11 @@ func TestArchiveBoundaryLeaseAndLogSafety(t *testing.T) {
 	if len(logs) != 0 {
 		t.Fatal(logs)
 	}
+	cursor := int64(1)
+	activity, activityErr := s.ReadRunActivity(ctx, r.ID, &cursor, 500)
+	if activityErr != nil || !activity.Archived || activity.Status != domain.RunSucceeded || len(activity.Logs) != 0 || len(activity.WaitingObservations) != 0 || activity.NextAfterID != cursor || activity.HasMore {
+		t.Fatalf("archived activity: %+v %v", activity, activityErr)
+	}
 	if _, err = s.AppendRunLog(ctx, domain.RunLog{RunID: r.ID, Stream: "stdout", Message: "too late", CreatedAt: now}); err == nil {
 		t.Fatal("archived log mutation accepted")
 	}

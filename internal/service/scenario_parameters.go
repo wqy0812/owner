@@ -39,7 +39,7 @@ type ScenarioParameterOverview struct {
 	Components []ScenarioParameterComponentOverview `json:"components"`
 }
 
-func (p *Platform) ScenarioParameterOverview(ctx context.Context, user domain.User, revisionID string) (ScenarioParameterOverview, error) {
+func (p *ScenarioService) ParameterOverview(ctx context.Context, user domain.User, revisionID string) (ScenarioParameterOverview, error) {
 	revision, err := p.store.GetScenarioRevision(ctx, revisionID)
 	if err != nil {
 		return ScenarioParameterOverview{}, err
@@ -63,6 +63,9 @@ func (p *Platform) ScenarioParameterOverview(ctx context.Context, user domain.Us
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
 		if releaseErr != nil {
 			return overview, releaseErr
+		}
+		if release.Status == domain.ReleaseDraft && !release.Candidate && user.Role != domain.RolePlatformAdmin {
+			return overview, &domain.CodedError{Code: "scenario.contract_unavailable", Message: "组件尚未共享，详细合同暂不可用", Cause: domain.ErrConflict}
 		}
 		parameters := []domain.ParameterDefinition{}
 		allowed := map[string]domain.ParameterDefinition{}

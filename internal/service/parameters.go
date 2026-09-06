@@ -144,30 +144,8 @@ func rejectSensitiveValue(value any, label string) error {
 	return nil
 }
 
-func parameterFixedValues(parameters []domain.ParameterDefinition) map[string]any {
-	out := map[string]any{}
-	for _, parameter := range parameters {
-		if parameter.HasFixedValue() {
-			out[parameter.Name] = deepCopy(parameter.FixedValue)
-		}
-	}
-	return out
-}
-
 func validateResolvedParameters(parameters []domain.ParameterDefinition, resolved map[string]any) error {
 	return domain.ValidateResolvedParameters(parameters, resolved)
-}
-
-func equalParameterValues(left, right []any) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if !parameterValuesEqual(left[index], right[index]) {
-			return false
-		}
-	}
-	return true
 }
 
 func resolveOwnParameters(
@@ -312,15 +290,6 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func releaseNeedsImportedParameters(release domain.ComponentRelease) bool {
-	for _, dependency := range release.Dependencies {
-		if len(dependency.ParameterMappings) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func provenanceSnapshot(values map[string]map[string]resolvedParameter) map[string]any {

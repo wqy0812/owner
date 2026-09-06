@@ -13,13 +13,12 @@ import (
 )
 
 func (h *Handler) getReleasePlaybook(w http.ResponseWriter, r *http.Request) {
-	var playbook service.PlaybookFile
-	var err error
-	if kind := domain.ActionKind(strings.TrimSpace(r.URL.Query().Get("actionKind"))); kind != "" {
-		playbook, err = h.platform.Catalog().ReadActionPlaybook(r.Context(), currentUser(r), r.PathValue("id"), kind)
-	} else {
-		playbook, err = h.platform.Catalog().ReadPlaybook(r.Context(), currentUser(r), r.PathValue("id"), r.URL.Query().Get("path"))
+	actionID := strings.TrimSpace(r.URL.Query().Get("actionId"))
+	if actionID == "" {
+		writeError(w, fmt.Errorf("%w: actionId is required", domain.ErrInvalid))
+		return
 	}
+	playbook, err := h.platform.Catalog().ReadActionSource(r.Context(), currentUser(r), r.PathValue("id"), actionID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -29,11 +28,12 @@ func (h *Handler) getReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) saveReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		ActionKind         domain.ActionKind        `json:"actionKind"`
-		Content            string                   `json:"content"`
-		ExpectedSHA256     *string                  `json:"expectedSha256"`
-		ExpectedTreeSHA256 *string                  `json:"expectedTreeSha256"`
-		Action             *domain.ActionDefinition `json:"action"`
+		ActionKind           domain.ActionKind  `json:"actionKind"`
+		Content              string             `json:"content"`
+		ExpectedSHA256       *string            `json:"expectedSha256"`
+		ExpectedTreeSHA256   *string            `json:"expectedTreeSha256"`
+		Action               *actionSourceInput `json:"action"`
+		ConfirmYAMLMigration bool               `json:"confirmYamlMigration,omitempty"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
@@ -47,7 +47,7 @@ func (h *Handler) saveReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: expectedSha256 and expectedTreeSha256 are required", domain.ErrInvalid))
 		return
 	}
-	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), *input.Action, []byte(input.Content), input.ExpectedSHA256, input.ExpectedTreeSHA256)
+	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(*input.Action), []byte(input.Content), input.ExpectedSHA256, input.ExpectedTreeSHA256, input.ConfirmYAMLMigration)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -83,7 +83,7 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 		writeError(w, fmt.Errorf("%w: actionKind, expectedSha256 and expectedTreeSha256 are required", domain.ErrInvalid))
 		return
 	}
-	var action domain.ActionDefinition
+	var action actionSourceInput
 	raw := strings.TrimSpace(r.FormValue("action"))
 	if raw == "" {
 		writeError(w, fmt.Errorf("%w: complete action metadata is required", domain.ErrInvalid))
@@ -93,7 +93,7 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 		writeError(w, fmt.Errorf("%w: action metadata is malformed or does not match actionKind", domain.ErrInvalid))
 		return
 	}
-	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), action, contents, expectedSHA256, expectedTreeSHA256)
+	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(action), contents, expectedSHA256, expectedTreeSHA256, r.FormValue("confirmYamlMigration") == "true")
 	if err != nil {
 		writeError(w, err)
 		return
@@ -102,14 +102,14 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) deleteReleasePlaybook(w http.ResponseWriter, r *http.Request) {
-	kind := domain.ActionKind(strings.TrimSpace(r.URL.Query().Get("actionKind")))
+	actionID := strings.TrimSpace(r.URL.Query().Get("actionId"))
 	expectedSHA256 := optionalQueryValue(r, "expectedSha256")
 	expectedTreeSHA256 := optionalQueryValue(r, "expectedTreeSha256")
 	if expectedSHA256 == nil || expectedTreeSHA256 == nil {
 		writeError(w, fmt.Errorf("%w: expectedSha256 and expectedTreeSha256 are required", domain.ErrInvalid))
 		return
 	}
-	workspace, err := h.platform.Catalog().DeleteActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), kind, expectedSHA256, expectedTreeSHA256)
+	workspace, err := h.platform.Catalog().DeleteActionSource(r.Context(), currentUser(r), r.PathValue("id"), actionID, expectedSHA256, expectedTreeSHA256)
 	if err != nil {
 		writeError(w, err)
 		return

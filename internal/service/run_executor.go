@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
@@ -17,165 +17,174 @@ import (
 )
 
 func (e *RunExecutor) executeRun(run domain.Run) {
-	p := e.platform
-	ctx, cancel := context.WithCancel(p.rootCtx)
-	p.mu.Lock()
-	p.active[run.ID] = cancel
-	p.mu.Unlock()
+	ctx, cancel := context.WithCancel(e.rootCtx)
+	e.control.register(run.ID, cancel)
 	defer func() {
 		cancel()
-		p.mu.Lock()
-		delete(p.active, run.ID)
-		p.mu.Unlock()
+		e.control.unregister(run.ID)
 	}()
 
 	plan, err := mapToPlan(run.InputSnapshot)
 	if err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	if err := p.validateLockedRollbackPlan(ctx, run, plan); err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+	if err := e.store.ValidateScenarioExecutionBaseline(ctx, run); err != nil {
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
+	}
+	if err := e.store.ValidateRetryState(ctx, run); err != nil {
+		e.recorder.finishRun(run, domain.RunFailed, err)
+		return
+	}
+	if err := e.rollback.validateLockedRollbackPlan(ctx, run, plan); err != nil {
+		e.recorder.finishRun(run, domain.RunFailed, err)
+		return
+	}
+	if plan.ResourcePolicyVersion > 0 {
+		if e.resourceVerifier == nil {
+			e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("resource verifier is required"))
+			return
+		}
+		if err := e.resourceVerifier.verifyRunResources(ctx, run, plan); err != nil {
+			e.recorder.finishRun(run, domain.RunFailed, err)
+			return
+		}
 	}
 	// Rejoin the queued evidence with the current database contract and source
 	// workspace before any delivery or target-side mutation begins.
-	if err := p.verifyLockedWorkspaceDigests(ctx, plan.Steps); err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+	if err := e.workspaceVerifier.verifyLockedWorkspaceDigests(ctx, plan.Steps); err != nil {
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	if err := p.mirrorRunImages(ctx, run.ID, &plan); err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+	lifecycle := run.ScenarioRevisionID != "" && fmt.Sprint(run.InputSnapshot["scenarioContractVersion"]) == "2"
+	upgradeDelivery := lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionUpgrade)
+	pendingDelivery := len(plan.ImageTransfers) > 0 || len(plan.ArtifactTransfers) > 0
+	if lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionBaselineVerify) && (pendingDelivery || len(plan.DeliveryRequirements) > 0) {
+		e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("%w: 基线复核不能执行新的媒体交付；请先恢复目标环境媒体并重新预览", domain.ErrConflict))
 		return
 	}
-	if err := p.mirrorRunArtifacts(ctx, run.ID, &plan); err != nil {
-		p.finishRun(run, domain.RunFailed, err)
-		return
+	deliver := func() error {
+		// Media copying may change the environment even if a later component
+		// task never starts. Persist that fact before contacting the target.
+		if lifecycle && pendingDelivery {
+			if err := e.recorder.markMutation(ctx, run); err != nil {
+				return err
+			}
+		}
+		if err := e.delivery.mirrorRunImages(ctx, run.ID, &plan); err != nil {
+			return err
+		}
+		if err := e.delivery.mirrorRunArtifacts(ctx, run.ID, &plan); err != nil {
+			return err
+		}
+		return e.delivery.verifyLockedMedia(ctx, plan)
 	}
-	environmentRevision, err := p.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
+	if !upgradeDelivery {
+		if err := deliver(); err != nil {
+			e.recorder.finishRun(run, domain.RunFailed, err)
+			return
+		}
+	} else if !pendingDelivery {
+		if err := e.delivery.verifyLockedMedia(ctx, plan); err != nil {
+			e.recorder.finishRun(run, domain.RunFailed, err)
+			return
+		}
+	} else if pendingDelivery {
+		hasChange := false
+		for _, step := range plan.Steps {
+			hasChange = hasChange || step.Stage == "change"
+		}
+		if !hasChange {
+			e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("%w: 无组件变更的升级不能执行新的媒体交付；请先恢复目标环境媒体", domain.ErrConflict))
+			return
+		}
+	}
+	environmentRevision, err := e.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
 	if err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
 	inventory, err := renderInventory(environmentRevision.Inventory)
 	if err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
 	credentialVariables, secrets, err := resolveCredentialRefs(environmentRevision.CredentialRefs)
 	if err != nil {
-		p.finishRun(run, domain.RunFailed, err)
+		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	preparedRunner, supportsSharedWorkspace := p.runner.(workspaceRunner)
-	readOnlyWorkspaces := map[string]*ansiblerunner.Workspace{}
-	defer func() {
-		for _, workspace := range readOnlyWorkspaces {
-			_ = workspace.Close()
-		}
-	}()
 
-	for _, locked := range plan.Steps {
-		if ctx.Err() != nil {
-			p.finishRun(run, domain.RunCancelled, ctx.Err())
-			return
+	jobPlan := jobPlanFromLocked(run.EnvironmentID, plan, inventory)
+	active := map[string]domain.RunStep{}
+	deliveryCompleted := !upgradeDelivery || !pendingDelivery
+	var activeID atomic.Value
+	var logFailure atomic.Pointer[error]
+	activeID.Store("")
+	request := ansiblerunner.JobRequest{Plan: jobPlan, Credentials: credentialVariables, ConnectionVariables: connectionCredentials(credentialVariables), SecretValues: secrets}
+	if lifecycle && pendingDelivery {
+		request.StagePreparationTimeout = 30 * time.Minute
+	}
+	request.LogSink = func(event ansiblerunner.LogEvent) {
+		if err := e.recorder.recordOutput(run.ID, activeID.Load().(string), event); err != nil {
+			logFailure.CompareAndSwap(nil, &err)
+			cancel()
 		}
-		now := time.Now().UTC()
-		step := domain.RunStep{ID: newID("step"), RunID: run.ID, NodeID: locked.NodeID, Name: locked.Name, Status: domain.RunRunning, StartedAt: &now}
-		if err := p.store.CreateRunStep(ctx, step); err != nil {
-			p.finishRun(run, domain.RunFailed, err)
-			return
+	}
+	request.OnEvent = func(event ansiblerunner.JobEvent) error {
+		return e.recorder.recordEvent(ctx, run.ID, activeID.Load().(string), event)
+	}
+	request.OnBoundary = func(ctx context.Context, kind string, stage ansiblerunner.JobStep, result ansiblerunner.JobStepResult) error {
+		locked := lockedStepByID(plan.Steps, stage.ID)
+		if locked == nil {
+			return fmt.Errorf("unknown locked stage")
 		}
-		variables := cloneMap(locked.Variables)
-		mergeMap(variables, credentialVariables)
-		request := ansiblerunner.Request{
-			Playbook: locked.Playbook, Inventory: inventory, Variables: variables, SecretValues: secrets,
-			Limit: locked.Limit, Tags: actionRuntimeTags(locked.Tags), Timeout: time.Duration(locked.TimeoutSeconds) * time.Second,
-			ExpectedPlaybookSHA256: locked.PlaybookDigest, ExpectedTreeSHA256: locked.WorkspaceDigest,
-			LogSink: func(event ansiblerunner.LogEvent) {
-				_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{
-					RunID: run.ID, StepID: step.ID, Stream: string(event.Stream), Message: event.Line, CreatedAt: event.Time,
-				})
-				p.hub.Publish("run.log", map[string]any{"runId": run.ID, "stepId": step.ID, "stream": event.Stream, "line": event.Line})
-			},
-		}
-		var result ansiblerunner.Result
-		var runErr error
-		if supportsSharedWorkspace {
-			readOnly := locked.Action == domain.ActionInspect || locked.Action == domain.ActionVerify
-			stepWorkspace := (*ansiblerunner.Workspace)(nil)
-			prepareErr := error(nil)
-			if readOnly {
-				stepWorkspace = readOnlyWorkspaces[locked.ReleaseID]
+		if kind == "begin" {
+			if !deliveryCompleted && locked.Stage == "change" {
+				for _, source := range plan.Steps {
+					if source.Stage == "source_verify" && active[source.ID].Status != domain.RunSucceeded {
+						return fmt.Errorf("%w: 来源组件验证尚未全部完成，不能开始媒体交付", domain.ErrConflict)
+					}
+				}
+				activeID.Store("")
+				if err := deliver(); err != nil {
+					return err
+				}
+				deliveryCompleted = true
 			}
-			if stepWorkspace == nil {
-				stepWorkspace, prepareErr = preparedRunner.PrepareWorkspace(locked.Playbook, locked.WorkspaceDigest)
-				if prepareErr == nil && readOnly {
-					readOnlyWorkspaces[locked.ReleaseID] = stepWorkspace
-				}
+			step, err := e.recorder.beginStep(ctx, run, *locked, result)
+			if step.ID != "" {
+				active[stage.ID] = step
+				activeID.Store(step.ID)
 			}
-			if prepareErr != nil {
-				runErr = prepareErr
-			} else {
-				result, runErr = preparedRunner.RunInWorkspace(ctx, stepWorkspace, request)
-				if validateErr := stepWorkspace.Validate(locked.WorkspaceDigest); runErr == nil && validateErr != nil {
-					runErr = validateErr
-				}
-				if !readOnly {
-					_ = stepWorkspace.Close()
-				}
+			if err != nil {
+				return err
 			}
 		} else {
-			result, runErr = p.runner.Run(ctx, request)
-		}
-		exitCode := 0
-		if len(result.Phases) > 0 {
-			exitCode = result.Phases[len(result.Phases)-1].ExitCode
-		}
-		step.ExitCode = &exitCode
-		finished := time.Now().UTC()
-		step.FinishedAt = &finished
-		if runErr != nil {
-			step.Status = domain.RunFailed
-			step.Summary = runErr.Error()
-			if errors.Is(ctx.Err(), context.Canceled) {
-				step.Status = domain.RunCancelled
+			step, err := e.recorder.completeStep(ctx, run, *locked, plan.ParentSteps, active[stage.ID], result)
+			if err != nil {
+				return err
 			}
-			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
-				log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
-			}
-			if step.Status == domain.RunCancelled {
-				p.finishRun(run, domain.RunCancelled, ctx.Err())
-			} else {
-				p.finishRun(run, domain.RunFailed, runErr)
-			}
-			return
+			active[stage.ID] = step
 		}
-		if locked.WorkspaceDigest != "" && result.TreeSHA256 != locked.WorkspaceDigest {
-			step.Status, step.Summary = domain.RunFailed, "playbook tree digest changed after the run was queued"
-			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
-				log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
-			}
-			p.finishRun(run, domain.RunFailed, errors.New(step.Summary))
-			return
-		}
-		step.Status = domain.RunSucceeded
-		step.Summary = recapSummary(result.Recap)
-		if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
-			log.Printf("run %s: update step %s: %v", run.ID, step.ID, stepErr)
-		}
-		if lifecycleErr := p.recordSuccessfulLifecycleStep(context.Background(), run, locked, finished); lifecycleErr != nil {
-			step.Status = domain.RunFailed
-			step.Summary = lifecycleErr.Error()
-			if stepErr := p.store.UpdateRunStep(context.Background(), step); stepErr != nil {
-				log.Printf("run %s: persist failed lifecycle step %s: %v", run.ID, step.ID, stepErr)
-			}
-			p.finishRun(run, domain.RunFailed, lifecycleErr)
-			return
-		}
-		p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "stepId": step.ID, "status": step.Status})
+
+		return nil
 	}
-	p.finishRun(run, domain.RunSucceeded, nil)
+	result, runErr := e.executeLockedJob(ctx, run, request)
+	if failure := logFailure.Load(); failure != nil {
+		runErr = fmt.Errorf("persist execution log: %w", *failure)
+	}
+	e.recorder.recordFailedSteps(result.Steps, active)
+	if logFailure.Load() == nil && errors.Is(ctx.Err(), context.Canceled) && (result.Canceled || errors.Is(runErr, context.Canceled)) {
+		e.recorder.finishRun(run, domain.RunCancelled, ctx.Err())
+		return
+	}
+	if runErr != nil {
+		e.recorder.finishRun(run, domain.RunFailed, runErr)
+		return
+	}
+	e.recorder.finishRun(run, domain.RunSucceeded, nil)
 }
 
 func actionRuntimeTags(tags []string) []string {
@@ -186,87 +195,6 @@ func actionRuntimeTags(tags []string) []string {
 		}
 	}
 	return runtimeTags
-}
-
-func (e *RunExecutor) mirrorRunImages(ctx context.Context, runID string, plan *lockedPlan) error {
-	p := e.platform
-	for _, transfer := range plan.ImageTransfers {
-		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("mirroring image from %s to %s", transfer.SourceRegistry, transfer.TargetRegistry), CreatedAt: time.Now().UTC()})
-		if err := p.imageDelivery.Probe(ctx, ImageLocation{Ref: transfer.TargetDigest}, ImageDigest{Value: transfer.TargetDigest}); err == nil {
-			if resultErr := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, "reused_target", transfer.TargetDigest, "target content appeared while approval was pending"); resultErr != nil {
-				return resultErr
-			}
-			continue
-		}
-		request := ImageTransfer{
-			Source: ImageLocation{Ref: transfer.SourceDigest}, Target: ImageLocation{Ref: transfer.TargetRef},
-			Digest: ImageDigest{Value: transfer.TargetDigest},
-			Log: func(message string) {
-				_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: Redact(message).(string), CreatedAt: time.Now().UTC()})
-			},
-		}
-		if err := p.imageDelivery.Transfer(ctx, request); err != nil {
-			_ = e.recordDeliveryResult(context.Background(), runID, plan, transfer.RequirementID, "failed", transfer.TargetDigest, err.Error())
-			return err
-		}
-		if err := p.store.RecordComponentImageMirror(ctx, transfer.TargetRegistry, transfer.SourceDigest, transfer.TargetRef, transfer.TargetDigest, time.Now().UTC()); err != nil {
-			return err
-		}
-		if err := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, "transferred", transfer.TargetDigest, "registry copy completed and digest verified"); err != nil {
-			return err
-		}
-		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: "image is ready at " + transfer.TargetDigest, CreatedAt: time.Now().UTC()})
-	}
-	return nil
-}
-
-func (e *RunExecutor) mirrorRunArtifacts(ctx context.Context, runID string, plan *lockedPlan) error {
-	p := e.platform
-	for _, transfer := range plan.ArtifactTransfers {
-		message := fmt.Sprintf("mirroring media %s from %s to %s", transfer.Alias, transfer.SourceURL, transfer.TargetStation)
-		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: message, CreatedAt: time.Now().UTC()})
-
-		location := ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}
-		identity := ArtifactIdentity{SHA256: transfer.SHA256, SizeBytes: transfer.SizeBytes}
-		err := p.artifactDelivery.Probe(ctx, location, identity)
-		if err != nil && !errors.Is(err, ErrDeliveryTargetMissing) {
-			_ = e.recordDeliveryResult(context.Background(), runID, plan, transfer.RequirementID, "failed", artifactURL(transfer.TargetStation, transfer.RelativePath), err.Error())
-			return fmt.Errorf("verify target media %s: %w", transfer.Alias, err)
-		}
-		if errors.Is(err, ErrDeliveryTargetMissing) {
-			request := ArtifactTransfer{Source: ArtifactLocation{URL: transfer.SourceURL}, Target: location, Identity: identity}
-			if err := p.artifactDelivery.Transfer(ctx, request); err != nil {
-				_ = e.recordDeliveryResult(context.Background(), runID, plan, transfer.RequirementID, "failed", artifactURL(transfer.TargetStation, transfer.RelativePath), err.Error())
-				return fmt.Errorf("mirror media %s: %w", transfer.Alias, err)
-			}
-		}
-		if err := p.store.RecordComponentArtifactMirror(ctx, transfer.SourceURL, transfer.TargetStation, transfer.RelativePath, transfer.SHA256, time.Now().UTC()); err != nil {
-			return fmt.Errorf("record mirrored media %s: %w", transfer.Alias, err)
-		}
-		status, message := "transferred", "target FSS fetched and verified the content"
-		if err == nil {
-			status, message = "reused_target", "target content appeared while approval was pending"
-		}
-		if err := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, status, artifactURL(transfer.TargetStation, transfer.RelativePath), message); err != nil {
-			return err
-		}
-		_, _ = p.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("media %s is ready on %s (sha256:%s)", transfer.Alias, transfer.TargetStation, transfer.SHA256), CreatedAt: time.Now().UTC()})
-	}
-	return nil
-}
-
-func (e *RunExecutor) recordDeliveryResult(ctx context.Context, runID string, plan *lockedPlan, requirementID, status, location, message string) error {
-	now := time.Now().UTC()
-	for index := range plan.DeliveryResults {
-		if plan.DeliveryResults[index].RequirementID == requirementID {
-			plan.DeliveryResults[index].Status = status
-			plan.DeliveryResults[index].ActualLocation = location
-			plan.DeliveryResults[index].Message = message
-			plan.DeliveryResults[index].CompletedAt = &now
-			return e.platform.store.UpdateRunDeliveryResults(ctx, runID, plan.DeliveryResults)
-		}
-	}
-	return fmt.Errorf("%w: delivery result %s is missing from locked plan", domain.ErrConflict, requirementID)
 }
 
 func renderInventory(raw json.RawMessage) ([]byte, error) {

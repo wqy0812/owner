@@ -106,7 +106,7 @@ func readModelScaleFixture(t *testing.T) *Handler {
 			}
 		}
 	}
-	p := service.NewPlatform(db, &fakeRunner{}, service.NewEventHub())
+	p := newAPITestPlatform(t, db, &fakeRunner{}, service.NewEventHub())
 	t.Cleanup(p.Close)
 	root, err := filepath.Abs("../../web/dist")
 	if err != nil {

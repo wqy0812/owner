@@ -12,7 +12,7 @@ import (
 // Run evidence and Release contracts are still checked live. Never retain it
 // on Platform or carry it from a preview into a later mutation's validation.
 type readinessEvaluation struct {
-	platform      *Platform
+	rules         *ReleaseRules
 	readCatalog   func(context.Context) (store.CatalogValidationSnapshot, error)
 	catalog       store.CatalogValidationSnapshot
 	catalogErr    error
@@ -20,8 +20,8 @@ type readinessEvaluation struct {
 	playbooks     map[string]error
 }
 
-func newReadinessEvaluation(p *Platform) *readinessEvaluation {
-	return &readinessEvaluation{platform: p, readCatalog: p.store.ReadCatalogDefinitions}
+func newReadinessEvaluation(p *ReleaseRules) *readinessEvaluation {
+	return &readinessEvaluation{rules: p, readCatalog: p.store.ReadCatalogDefinitions}
 }
 
 func (e *readinessEvaluation) catalogDefinitions(ctx context.Context) (store.CatalogValidationSnapshot, error) {
@@ -56,10 +56,7 @@ func (e *readinessEvaluation) decorateComponent(ctx context.Context, component d
 // gate or execution plan. Missing entries (including candidate dependencies not
 // visible in the response) fall back to an independent live check.
 func (e *readinessEvaluation) preparePlaybooks(components []domain.Component) {
-	validator, ok := e.platform.runner.(playbookValidationRunner)
-	if !ok {
-		return
-	}
+	validator := e.rules.inspector
 	var paths []string
 	seen := map[string]bool{}
 	for _, component := range components {
@@ -79,5 +76,5 @@ func (e *readinessEvaluation) validatePlaybook(path string) error {
 	if err, found := e.playbooks[path]; found {
 		return err
 	}
-	return e.platform.validatePlaybook(path)
+	return e.rules.validatePlaybook(path)
 }

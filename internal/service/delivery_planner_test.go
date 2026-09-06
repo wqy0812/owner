@@ -8,8 +8,36 @@ import (
 	"testing"
 	"time"
 
+	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 )
+
+func TestLockedCachedMediaRecheckedAndDeduplicated(t *testing.T) {
+	probe := &stubArtifactDelivery{}
+	delivery := &DeliveryService{artifactDelivery: probe}
+	step := lockedStep{Variables: map[string]any{}}
+	if err := bindArtifactVariables(&step, domain.ComponentArtifact{Alias: "runtime", SHA256: strings.Repeat("a", 64), SizeBytes: 42}, "runtime.tgz", "http://fss.test/runtime.tgz"); err != nil {
+		t.Fatal(err)
+	}
+	if len(step.Media) != 1 || step.Media[0].SizeBytes != 42 {
+		t.Fatal("cached content was not locked")
+	}
+	plan := lockedPlan{Steps: []lockedStep{step, step}}
+	if err := delivery.verifyLockedMedia(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.probes) != 1 {
+		t.Fatal("duplicate media downloaded per phase")
+	}
+	probe.probeErr = errors.New("content disappeared after preview")
+	if err := delivery.verifyLockedMedia(context.Background(), plan); err == nil {
+		t.Fatal("missing cached media accepted")
+	}
+	job := jobPlanFromLocked("env", plan, nil)
+	if !reflect.DeepEqual(job.Steps[0].Media, []ansible.JobMedia{step.Media[0]}) {
+		t.Fatal("export lost cached media identities")
+	}
+}
 
 type stubArtifactDelivery struct {
 	probeErr error
@@ -32,7 +60,7 @@ func (s stubImageDelivery) Probe(context.Context, ImageLocation, ImageDigest) er
 func (stubImageDelivery) Transfer(context.Context, ImageTransfer) error { return nil }
 
 func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
-	p := &Platform{}
+	p := &DeliveryService{}
 	if _, err := p.finalizeDeliveryPlan(context.Background(), lockedPlan{}, []DeliveryDecisionInput{{RequirementID: "extra", Mode: "direct"}}, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("decision without requirements error=%v", err)
 	}
@@ -51,7 +79,7 @@ func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
 
 func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 	artifactDelivery := &stubArtifactDelivery{probeErr: ErrDeliveryTargetMissing}
-	p := &Platform{artifactDelivery: artifactDelivery}
+	p := &DeliveryService{artifactDelivery: artifactDelivery}
 	at := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	checksum := strings.Repeat("a", 64)
 	plan := lockedPlan{
@@ -84,7 +112,7 @@ func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 }
 
 func TestFinalizeDirectImageBindsImmutableSource(t *testing.T) {
-	p := &Platform{}
+	p := &DeliveryService{}
 	digest := "sha256:" + strings.Repeat("b", 64)
 	plan := lockedPlan{
 		Steps: []lockedStep{{ID: "install", Variables: map[string]any{}}},
@@ -134,7 +162,7 @@ func TestDeliveryRequirementDeduplicatesSharedReleaseAcrossSteps(t *testing.T) {
 }
 
 func TestDeliveryTargetPresenceDistinguishesKindsAndProbeFailures(t *testing.T) {
-	p := &Platform{artifactDelivery: &stubArtifactDelivery{probeErr: errors.New("fss unavailable")}, imageDelivery: stubImageDelivery{probeErr: errors.New("missing")}}
+	p := &DeliveryService{artifactDelivery: &stubArtifactDelivery{probeErr: errors.New("fss unavailable")}, imageDelivery: stubImageDelivery{probeErr: errors.New("missing")}}
 	if _, err := p.deliveryTargetPresent(context.Background(), DeliveryRequirement{Kind: "artifact", Target: "http://fss.test/file"}); err == nil || !strings.Contains(err.Error(), "probe artifact target") {
 		t.Fatalf("artifact probe error=%v", err)
 	}

@@ -18,6 +18,7 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	ctx := context.Background()
 	owner := domain.User{ID: "component-import-owner", Role: domain.RoleComponentOwner}
 	now := time.Now().UTC()
+	seedAtomicActionHostGroup(t, ctx, database, now)
 	component := domain.Component{ID: "workspace-component", Slug: "workspace-runtime", Name: "Workspace runtime", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: owner.ID, CreatedAt: now, UpdatedAt: now}
 	if err := database.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
@@ -26,17 +27,17 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	if err := database.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := platform.SaveReleaseActionPlaybook(ctx, owner, release.ID, domain.ActionInstall, []byte("---\n- hosts: all\n  tasks: []\n"))
+	entry, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, domain.ActionDefinition{Kind: domain.ActionInstall, Name: "Install", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}, []byte("---\n- ansible.builtin.assert:\n    that: true\n"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.Path != "managed/workspace-runtime/stable-1.x/1.2.3-rc1--workspace-release/install.yml" {
+	if entry.Path != "managed/workspace-runtime/stable-1.x/1.2.3-rc1--workspace-release/tasks/install.yml" {
 		t.Fatalf("entry path=%q", entry.Path)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "templates/config.j2", []byte("port={{ port }}\n")); err != nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "templates/config.j2", []byte("port={{ port }}\n")); err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := platform.ListReleasePlaybookWorkspace(ctx, owner, release.ID)
+	workspace, err := platform.catalog.ListPlaybookWorkspace(ctx, owner, release.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	if _, err := database.DB().ExecContext(ctx, `UPDATE component_releases SET candidate=1,review_status='approved',review_contract_digest='old' WHERE id=?`, release.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "roles/helper/tasks/main.yml", []byte("---\n[]\n")); err != nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "roles/helper/tasks/main.yml", []byte("---\n[]\n")); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := database.GetComponentRelease(ctx, release.ID)
@@ -57,27 +58,27 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	if updated.PlaybookTreeSHA256 == before || updated.Candidate || updated.Review.Status != domain.ReleaseReviewNotSubmitted {
 		t.Fatalf("workspace edit did not invalidate contract: %+v", updated)
 	}
-	if _, err := platform.RenameReleaseWorkspaceFile(ctx, owner, release.ID, "templates/config.j2", "templates/runtime.conf.j2"); err != nil {
+	if _, err := platform.catalog.RenamePlaybookWorkspaceFile(ctx, owner, release.ID, "templates/config.j2", "templates/runtime.conf.j2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := platform.ReadReleaseWorkspaceFile(ctx, owner, release.ID, "templates/runtime.conf.j2"); err != nil {
+	if _, _, err := platform.catalog.ReadPlaybookWorkspaceFile(ctx, owner, release.ID, "templates/runtime.conf.j2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.DeleteReleaseWorkspaceFile(ctx, owner, release.ID, "templates/runtime.conf.j2"); err != nil {
+	if _, err := platform.catalog.DeletePlaybookWorkspaceFile(ctx, owner, release.ID, "templates/runtime.conf.j2"); err != nil {
 		t.Fatal(err)
 	}
 	large := make([]byte, MaxPlaybookBytes+1)
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "files/helper.bin", large); err != nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "files/helper.bin", large); err != nil {
 		t.Fatal(err)
 	}
-	metadata, contents, err := platform.ReadReleaseWorkspaceFile(ctx, owner, release.ID, "files/helper.bin")
+	metadata, contents, err := platform.catalog.ReadPlaybookWorkspaceFile(ctx, owner, release.ID, "files/helper.bin")
 	if err != nil || metadata.Editable || len(contents) != len(large) {
 		t.Fatalf("binary metadata=%+v bytes=%d err=%v", metadata, len(contents), err)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "../escape", []byte("x")); err == nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "../escape", []byte("x")); err == nil {
 		t.Fatal("path traversal accepted")
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "files/too-large.bin", make([]byte, MaxWorkspaceFileBytes+1)); err == nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "files/too-large.bin", make([]byte, MaxWorkspaceFileBytes+1)); err == nil {
 		t.Fatal("oversized file accepted")
 	}
 	workspaceDirectory := filepath.Join(root, "managed", "workspace-runtime", "stable-1.x", "1.2.3-rc1--workspace-release")
@@ -85,7 +86,7 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(workspaceDirectory, "redirect")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "redirect/outside.txt", []byte("secret")); err == nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "redirect/outside.txt", []byte("secret")); err == nil {
 		t.Fatal("directory symlink accepted")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "outside.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -98,6 +99,7 @@ func TestPlaybookWorkspaceRejectsStaleConditionalMutations(t *testing.T) {
 	ctx := context.Background()
 	owner := domain.User{ID: "component-import-owner", Role: domain.RoleComponentOwner}
 	now := time.Now().UTC()
+	seedAtomicActionHostGroup(t, ctx, database, now)
 	component := domain.Component{ID: "conditional-component", Slug: "conditional", Name: "Conditional", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: owner.ID, CreatedAt: now, UpdatedAt: now}
 	if err := database.CreateComponent(ctx, component); err != nil {
 		t.Fatal(err)
@@ -108,39 +110,39 @@ func TestPlaybookWorkspaceRejectsStaleConditionalMutations(t *testing.T) {
 	}
 
 	mustNotExist := ""
-	first, err := platform.SaveReleaseWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("first\n"), &mustNotExist)
+	first, err := platform.catalog.SavePlaybookWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("first\n"), &mustNotExist)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := platform.SaveReleaseWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("second\n"), &first.SHA256)
+	second, err := platform.catalog.SavePlaybookWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("second\n"), &first.SHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("stale\n"), &first.SHA256); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", []byte("stale\n"), &first.SHA256); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale save error=%v, want conflict", err)
 	}
 	staleTree := "stale-tree"
-	if _, err := platform.SaveReleaseWorkspaceFileWithExpectation(ctx, owner, release.ID, "templates/config.j2", []byte("tree-stale\n"), &second.SHA256, &staleTree); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFileWithExpectation(ctx, owner, release.ID, "templates/config.j2", []byte("tree-stale\n"), &second.SHA256, &staleTree); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale workspace tree error=%v, want conflict", err)
 	}
-	workspaceBeforeAction, err := platform.ListReleasePlaybookWorkspace(ctx, owner, release.ID)
+	workspaceBeforeAction, err := platform.catalog.ListPlaybookWorkspace(ctx, owner, release.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.SaveReleaseWorkspaceFile(ctx, owner, release.ID, "roles/helper/tasks/main.yml", []byte("---\n[]\n")); err != nil {
+	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "roles/helper/tasks/main.yml", []byte("---\n[]\n")); err != nil {
 		t.Fatal(err)
 	}
 	emptySHA := ""
-	if _, err := platform.SaveReleaseActionPlaybookWithExpectation(ctx, owner, release.ID, domain.ActionInstall, []byte("---\n- hosts: all\n"), &emptySHA, &workspaceBeforeAction.TreeSHA256); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, domain.ActionDefinition{Kind: domain.ActionInstall, Name: "Install", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}, []byte("- assert:\n    that: true\n"), &emptySHA, &workspaceBeforeAction.TreeSHA256); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale action workspace tree error=%v, want conflict", err)
 	}
-	if _, err := platform.RenameReleaseWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", "templates/renamed.j2", &first.SHA256); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.RenamePlaybookWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", "templates/renamed.j2", &first.SHA256); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale rename error=%v, want conflict", err)
 	}
-	if _, err := platform.DeleteReleaseWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", &first.SHA256); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.DeletePlaybookWorkspaceFileConditional(ctx, owner, release.ID, "templates/config.j2", &first.SHA256); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale delete error=%v, want conflict", err)
 	}
-	_, contents, err := platform.ReadReleaseWorkspaceFile(ctx, owner, release.ID, "templates/config.j2")
+	_, contents, err := platform.catalog.ReadPlaybookWorkspaceFile(ctx, owner, release.ID, "templates/config.j2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +167,7 @@ func TestActionAndEntrypointAreCommittedAndDeletedAtomically(t *testing.T) {
 	}
 	empty := ""
 	action := domain.ActionDefinition{Name: "Install", Kind: domain.ActionInstall, HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}
-	saved, err := platform.SaveReleaseActionAtomic(ctx, owner, release.ID, action, []byte("---\n- hosts: all\n  tasks: []\n"), &empty, &empty)
+	saved, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, action, []byte("---\n- ansible.builtin.assert:\n    that: true\n"), &empty, &empty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,14 +184,14 @@ func TestActionAndEntrypointAreCommittedAndDeletedAtomically(t *testing.T) {
 	if pending, err := database.ListPendingActionFileMutations(ctx); err != nil || len(pending) != 0 {
 		t.Fatalf("successful save left pending mutation=%+v err=%v", pending, err)
 	}
-	workspace, err := platform.ListReleasePlaybookWorkspace(ctx, owner, release.ID)
+	workspace, err := platform.catalog.ListPlaybookWorkspace(ctx, owner, release.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.DB().ExecContext(ctx, `CREATE TRIGGER reject_atomic_action_delete BEFORE DELETE ON action_definitions BEGIN SELECT RAISE(ABORT, 'injected action delete failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.DeleteReleaseActionAtomic(ctx, owner, release.ID, domain.ActionInstall, &saved.SHA256, &workspace.TreeSHA256); err == nil {
+	if _, err := platform.catalog.DeleteActionSource(ctx, owner, release.ID, saved.Action.ID, &saved.SHA256, &workspace.TreeSHA256); err == nil {
 		t.Fatal("injected delete failure was accepted")
 	}
 	persisted, err = database.GetComponentRelease(ctx, release.ID)
@@ -199,14 +201,14 @@ func TestActionAndEntrypointAreCommittedAndDeletedAtomically(t *testing.T) {
 	if len(persisted.Actions) != 1 || len(persisted.PlaybookFiles) != 1 {
 		t.Fatalf("failed delete changed catalog: actions=%+v files=%+v", persisted.Actions, persisted.PlaybookFiles)
 	}
-	entrypoint := filepath.Join(root, "managed", "atomic-action", "stable", "1.0.0--atomic-action-release", "install.yml")
+	entrypoint := filepath.Join(root, "managed", "atomic-action", "stable", "1.0.0--atomic-action-release", "tasks", "install.yml")
 	if _, err := os.Stat(entrypoint); err != nil {
 		t.Fatalf("failed delete did not restore entrypoint: %v", err)
 	}
 	if _, err := database.DB().ExecContext(ctx, `DROP TRIGGER reject_atomic_action_delete`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.DeleteReleaseActionAtomic(ctx, owner, release.ID, domain.ActionInstall, &saved.SHA256, &workspace.TreeSHA256); err != nil {
+	if _, err := platform.catalog.DeleteActionSource(ctx, owner, release.ID, saved.Action.ID, &saved.SHA256, &workspace.TreeSHA256); err != nil {
 		t.Fatal(err)
 	}
 	persisted, err = database.GetComponentRelease(ctx, release.ID)
@@ -240,7 +242,7 @@ func TestAtomicActionRestoresEntrypointWhenCatalogTransactionFails(t *testing.T)
 	}
 	empty := ""
 	action := domain.ActionDefinition{Name: "Install", Kind: domain.ActionInstall, HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}
-	if _, err := platform.SaveReleaseActionAtomic(ctx, owner, release.ID, action, []byte("---\n- hosts: all\n"), &empty, &empty); err == nil {
+	if _, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, action, []byte("---\n- hosts: all\n"), &empty, &empty); err == nil {
 		t.Fatal("injected catalog failure was accepted")
 	}
 	persisted, err := database.GetComponentRelease(ctx, release.ID)
@@ -274,21 +276,21 @@ func TestPendingActionFileMutationIsRecoveredAfterProcessInterruption(t *testing
 		t.Fatal(err)
 	}
 	empty := ""
-	before := []byte("---\n- hosts: before\n")
+	before := []byte("---\n- debug: msg=before\n")
 	action := domain.ActionDefinition{Name: "Install", Kind: domain.ActionInstall, HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow}
-	if _, err := platform.SaveReleaseActionAtomic(ctx, owner, release.ID, action, before, &empty, &empty); err != nil {
+	if _, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, action, before, &empty, &empty); err != nil {
 		t.Fatal(err)
 	}
 	workspaceRoot := "managed/atomic-recovery/stable/1.0.0--atomic-recovery-release/"
-	entrypoint := filepath.Join(root, filepath.FromSlash(workspaceRoot), "install.yml")
-	mutation := store.PendingActionFileMutation{ID: "pending-action-recovery", ReleaseID: release.ID, WorkspaceRoot: workspaceRoot, RelativePath: "install.yml", BeforeExists: true, BeforeContents: before, CreatedAt: now.Add(time.Second)}
+	entrypoint := filepath.Join(root, filepath.FromSlash(workspaceRoot), "tasks", "install.yml")
+	mutation := store.PendingActionFileMutation{ID: "pending-action-recovery", ReleaseID: release.ID, WorkspaceRoot: workspaceRoot, RelativePath: "tasks/install.yml", BeforeExists: true, BeforeContents: before, CreatedAt: now.Add(time.Second)}
 	if err := database.CreatePendingActionFileMutation(ctx, mutation); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(entrypoint, []byte("---\n- hosts: interrupted\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.RecoverActionFileMutations(ctx); err != nil {
+	if err := platform.catalog.RecoverActionFileMutations(ctx); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := os.ReadFile(entrypoint)
@@ -338,19 +340,19 @@ func TestSavedActionKindIsImmutable(t *testing.T) {
 	patch := release
 	patch.Actions = append([]domain.ActionDefinition(nil), release.Actions...)
 	patch.Actions[0].Kind = domain.ActionConfigure
-	if _, err := platform.UpdateRelease(ctx, owner, release.ID, patch); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.updateRelease(ctx, owner, release.ID, patch); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("action kind mutation error=%v, want conflict", err)
 	}
 }
 
 func TestReleaseActionsRequireCurrentWorkspaceManifest(t *testing.T) {
 	platform, _, root := componentImportRecoveryPlatform(t)
-	if err := os.WriteFile(filepath.Join(root, "install.yml"), []byte("---\n- hosts: all\n  tasks: []\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "install.yml"), []byte("---\n- ansible.builtin.assert:\n    that: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, status := range []domain.ReleaseStatus{domain.ReleaseDraft, domain.ReleaseReleased, domain.ReleaseDeprecated} {
 		release := domain.ComponentRelease{ID: "unmanaged", Status: status, Actions: []domain.ActionDefinition{{Kind: domain.ActionInstall, Playbook: "install.yml"}}}
-		if err := platform.validateWorkspaceManifest(context.Background(), release); !errors.Is(err, domain.ErrInvalid) {
+		if err := platform.releaseRules.validateWorkspaceManifest(context.Background(), release); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("status %s accepted an entrypoint without a manifest: %v", status, err)
 		}
 	}
@@ -371,8 +373,8 @@ func TestDraftVersionChangePreservesReadableActionWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	empty := ""
-	content := "---\n- hosts: all\n  tasks: []\n"
-	entry, err := platform.SaveReleaseActionAtomic(ctx, owner, release.ID, domain.ActionDefinition{Name: "Install", Kind: domain.ActionInstall, HostGroup: "all"}, []byte(content), &empty, &empty)
+	content := "---\n- ansible.builtin.assert:\n    that: true\n"
+	entry, err := platform.catalog.SaveActionAtomic(ctx, owner, release.ID, domain.ActionDefinition{Name: "Install", Kind: domain.ActionInstall, HostGroup: "all"}, []byte(content), &empty, &empty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,18 +383,18 @@ func TestDraftVersionChangePreservesReadableActionWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch.Version = "1.0.1"
-	updated, err := platform.UpdateRelease(ctx, owner, release.ID, patch)
+	updated, err := platform.catalog.updateRelease(ctx, owner, release.ID, patch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(updated.Actions) != 1 || updated.Actions[0].ID != entry.Action.ID {
 		t.Fatalf("Action identity changed: %+v", updated.Actions)
 	}
-	read, err := platform.ReadReleasePlaybook(ctx, owner, release.ID, updated.Actions[0].Playbook)
+	read, err := platform.catalog.ReadPlaybook(ctx, owner, release.ID, updated.Actions[0].Playbook)
 	if err != nil || read.Content != content {
 		t.Fatalf("renamed Draft entrypoint is unreadable: %v", err)
 	}
-	if err := platform.validateWorkspaceManifest(ctx, updated); err != nil {
+	if err := platform.releaseRules.validateWorkspaceManifest(ctx, updated); err != nil {
 		t.Fatalf("renamed Draft manifest is invalid: %v", err)
 	}
 }

@@ -1,0 +1,279 @@
+[
+  {
+    "component": {
+      "name": "主机基础准备示例",
+      "slug": "host-foundation-example",
+      "description": "仅管理隔离示例目录；共享路径通过公开参数提供，回退拒绝删除已有、被替换或非空目录。",
+      "layer": "host_foundation",
+      "tags": [
+        "foundation",
+        "example"
+      ]
+    },
+    "release": {
+      "version": "1.0.0",
+      "releaseNotes": "导入后为草稿；使用新建隔离目录完成安装与回退验证后才可发布。",
+      "lineName": "隔离目录示例",
+      "riskLevel": "low",
+      "environmentConstraints": {},
+      "parameters": [
+        {
+          "name": "shared_root",
+          "description": "本样板准备的共享根目录，仅限 /tmp/clusterforge-foundation-example- 前缀。实际业务路径应另建组件并验证。",
+          "type": "string",
+          "required": true,
+          "visibility": "public",
+          "modifiable": true,
+          "valueProvider": "environment_owner",
+          "suggestedValue": "/tmp/clusterforge-foundation-example-demo",
+          "environmentBinding": {
+            "kind": "private"
+          }
+        }
+      ],
+      "dependencies": [],
+      "actions": [
+        {
+          "id": "install",
+          "name": "准备共享目录",
+          "type": "install",
+          "playbook": "tasks/install.yml",
+          "preCheckActionId": "install-pre",
+          "postCheckActionId": "install-post",
+          "hostGroup": "all",
+          "timeoutSeconds": 120,
+          "riskLevel": "low",
+          "destructive": false,
+          "idempotent": true,
+          "become": false
+        },
+        {
+          "id": "install-pre",
+          "name": "install-pre",
+          "type": "check",
+          "playbook": "tasks/checks/install-pre.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "install-post",
+          "name": "install-post",
+          "type": "check",
+          "playbook": "tasks/checks/install-post.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "rollback",
+          "name": "回收本次创建的空目录",
+          "type": "rollback",
+          "playbook": "tasks/rollback.yml",
+          "preCheckActionId": "rollback-pre",
+          "postCheckActionId": "rollback-post",
+          "hostGroup": "all",
+          "timeoutSeconds": 120,
+          "riskLevel": "low",
+          "destructive": false,
+          "idempotent": true,
+          "become": false
+        },
+        {
+          "id": "rollback-pre",
+          "name": "rollback-pre",
+          "type": "check",
+          "playbook": "tasks/checks/rollback-pre.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "rollback-post",
+          "name": "rollback-post",
+          "type": "check",
+          "playbook": "tasks/checks/rollback-post.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        }
+      ]
+    },
+    "playbooks": [
+      {
+        "filename": "tasks/install.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent = inspect()\\nif\\\n      \\ not Path(marker).exists():\\n    Path(marker).parent.mkdir(mode=0o700, parents=True,\\\n      \\ exist_ok=True)\\n    data = {'metadata':metadata,'path':path,'existed':current\\\n      \\ is not None, 'identity':[current.st_dev,current.st_ino] if current else None}\\n\\\n      \\    with open(marker, 'x') as output:\\n        json.dump(data,output)\\n   \\\n      \\ os.chmod(marker,0o600)\\ndata = baseline()\\nif current is None:\\n    if data['existed']\\\n      \\ or data['identity'] is not None:\\n        raise SystemExit('retained directory\\\n      \\ disappeared; stop and investigate')\\n    os.mkdir(path,0o700)\\n    current\\\n      \\ = inspect()\\n    data['identity']=[current.st_dev,current.st_ino]\\n    temporary=marker+'.tmp'\\n\\\n      \\    with open(temporary,'w') as output:\\n        json.dump(data,output)\\n \\\n      \\   os.chmod(temporary,0o600)\\n    os.replace(temporary,marker)\\nif data['identity']\\\n      \\ != [current.st_dev,current.st_ino]:\\n    raise SystemExit('directory identity\\\n      \\ changed or creation receipt is missing')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n"
+      },
+      {
+        "filename": "tasks/rollback.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if current is not None and data['identity'] != [current.st_dev,current.st_ino]:\\n\\\n      \\    raise SystemExit('directory replaced; refuse rollback')\\nif not data['existed']\\\n      \\ and current is not None and os.listdir(path):\\n    raise SystemExit('directory\\\n      \\ has consumers or data; roll back downstream first')\\nif data['existed'] and\\\n      \\ current is None:\\n    raise SystemExit('preexisting directory disappeared')\\n\\\n      if not data['existed'] and current is not None:\\n    os.rmdir(path)  # Atomic\\\n      \\ empty-directory removal; never recursive.\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n"
+      },
+      {
+        "filename": "tasks/checks/install-pre.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent = inspect()\\nif\\\n      \\ current and stat.S_IMODE(current.st_mode) != 0o700:\\n    raise SystemExit('existing\\\n      \\ directory permissions differ; preserve it and choose another example path')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
+      },
+      {
+        "filename": "tasks/checks/install-post.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if current is None or data['identity'] != [current.st_dev,current.st_ino] or\\\n      \\ stat.S_IMODE(current.st_mode)!=0o700:\\n    raise SystemExit('prepared directory\\\n      \\ failed independent verification')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
+      },
+      {
+        "filename": "tasks/checks/rollback-pre.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if current is not None and data['identity'] != [current.st_dev,current.st_ino]:\\n\\\n      \\    raise SystemExit('directory replaced; refuse rollback')\\nif not data['existed']\\\n      \\ and current is not None and os.listdir(path):\\n    raise SystemExit('directory\\\n      \\ has consumers or data; roll back downstream first')\\nif data['existed'] and\\\n      \\ current is None:\\n    raise SystemExit('preexisting directory disappeared')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
+      },
+      {
+        "filename": "tasks/checks/rollback-post.yml",
+        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if data['existed']:\\n    if current is None or data['identity'] != [current.st_dev,current.st_ino]:\\n\\\n      \\        raise SystemExit('preexisting directory was not preserved')\\nelif current\\\n      \\ is not None:\\n    raise SystemExit('new directory still exists')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
+      }
+    ]
+  },
+  {
+    "component": {
+      "name": "共享目录消费示例",
+      "slug": "shared-directory-consumer-example",
+      "description": "精确依赖主机基础准备，检查本机目录并建立消费标记。先回退消费者，再回退基础目录。",
+      "layer": "runtime_state",
+      "tags": [
+        "foundation",
+        "example"
+      ]
+    },
+    "release": {
+      "version": "1.0.0",
+      "releaseNotes": "导入后为草稿；使用新建隔离目录完成安装与回退验证后才可发布。",
+      "lineName": "隔离目录示例",
+      "riskLevel": "low",
+      "environmentConstraints": {},
+      "parameters": [
+        {
+          "name": "prepared_root",
+          "description": "映射上游公开的 shared_root；安装前须在本机检查，不把参数映射当作主机就绪证据。",
+          "type": "string",
+          "required": true,
+          "visibility": "internal",
+          "modifiable": false,
+          "valueProvider": "upstream_mapping"
+        }
+      ],
+      "dependencies": [
+        {
+          "componentSlug": "host-foundation-example",
+          "purpose": "必须先在相同目标主机准备目录；消费期间以标记保留目录",
+          "parameterMappings": [
+            {
+              "upstreamParameter": "shared_root",
+              "targetParameter": "prepared_root"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "id": "install",
+          "name": "准备共享目录",
+          "type": "install",
+          "playbook": "tasks/install.yml",
+          "preCheckActionId": "install-pre",
+          "postCheckActionId": "install-post",
+          "hostGroup": "all",
+          "timeoutSeconds": 120,
+          "riskLevel": "low",
+          "destructive": false,
+          "idempotent": false,
+          "become": false
+        },
+        {
+          "id": "install-pre",
+          "name": "install-pre",
+          "type": "check",
+          "playbook": "tasks/checks/install-pre.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "install-post",
+          "name": "install-post",
+          "type": "check",
+          "playbook": "tasks/checks/install-post.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "rollback",
+          "name": "回收本次创建的空目录",
+          "type": "rollback",
+          "playbook": "tasks/rollback.yml",
+          "preCheckActionId": "rollback-pre",
+          "postCheckActionId": "rollback-post",
+          "hostGroup": "all",
+          "timeoutSeconds": 120,
+          "riskLevel": "low",
+          "destructive": false,
+          "idempotent": true,
+          "become": false
+        },
+        {
+          "id": "rollback-pre",
+          "name": "rollback-pre",
+          "type": "check",
+          "playbook": "tasks/checks/rollback-pre.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        },
+        {
+          "id": "rollback-post",
+          "name": "rollback-post",
+          "type": "check",
+          "playbook": "tasks/checks/rollback-post.yml",
+          "hostGroup": "all",
+          "timeoutSeconds": 60,
+          "riskLevel": "low",
+          "become": false,
+          "destructive": false
+        }
+      ]
+    },
+    "playbooks": [
+      {
+        "filename": "tasks/install.yml",
+        "content": "- name: Check mapped directory on this actual host\n  ansible.builtin.stat:\n    path: '{{ cf.inputs.prepared_root }}'\n    follow: false\n  register: cf_local_root\n- name: Require prepared directory\n  ansible.builtin.assert:\n    that:\n    - cf_local_root.stat.isdir | default(false)\n    - not (cf_local_root.stat.islnk | default(false))\n- name: Hold explicit consumer marker\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - install\n"
+      },
+      {
+        "filename": "tasks/checks/install-pre.yml",
+        "content": "- name: Check mapped directory on this actual host\n  ansible.builtin.stat:\n    path: '{{ cf.inputs.prepared_root }}'\n    follow: false\n  register: cf_local_root\n- name: Require prepared directory\n  ansible.builtin.assert:\n    that:\n    - cf_local_root.stat.isdir | default(false)\n    - not (cf_local_root.stat.islnk | default(false))\n- name: Inspect consumer marker\n  ansible.builtin.stat:\n    path: '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    follow: false\n  register: cf_local_marker\n- name: Require absent marker\n  ansible.builtin.assert:\n    that: not cf_local_marker.stat.exists\n"
+      },
+      {
+        "filename": "tasks/checks/install-post.yml",
+        "content": "- name: Check mapped directory on this actual host\n  ansible.builtin.stat:\n    path: '{{ cf.inputs.prepared_root }}'\n    follow: false\n  register: cf_local_root\n- name: Require prepared directory\n  ansible.builtin.assert:\n    that:\n    - cf_local_root.stat.isdir | default(false)\n    - not (cf_local_root.stat.islnk | default(false))\n- name: Verify consumer identity\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - verify\n  changed_when: false\n"
+      },
+      {
+        "filename": "tasks/rollback.yml",
+        "content": "- name: Release only matching consumer marker\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - rollback\n"
+      },
+      {
+        "filename": "tasks/checks/rollback-pre.yml",
+        "content": "- name: Verify consumer identity\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - verify\n  changed_when: false\n"
+      },
+      {
+        "filename": "tasks/checks/rollback-post.yml",
+        "content": "- name: Inspect consumer marker\n  ansible.builtin.stat:\n    path: '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    follow: false\n  register: cf_local_marker\n- name: Require absent marker\n  ansible.builtin.assert:\n    that: not cf_local_marker.stat.exists\n"
+      }
+    ]
+  }
+]

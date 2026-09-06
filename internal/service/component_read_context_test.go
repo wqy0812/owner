@@ -1,13 +1,14 @@
 package service
 
 import (
-	"codex/platform-demo/internal/domain"
 	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"codex/platform-demo/internal/domain"
 )
 
 func TestComponentReadContextPreservesExactReadinessAndHistoricalEvidence(t *testing.T) {
@@ -42,7 +43,12 @@ func TestComponentReadContextPreservesExactReadinessAndHistoricalEvidence(t *tes
 		{"stale-rollback", "rollback_verify", "old-contract", domain.RunSucceeded, domain.ActionRollback},
 	} {
 		at := now.Add(time.Duration(i) * time.Minute)
-		run := domain.Run{ID: tc.id, Kind: domain.RunComponentTest, Status: tc.status, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: tc.action, CreatedAt: at, FinishedAt: &at, InputSnapshot: map[string]any{"componentReleaseSpecDigest": tc.digest, "componentTestEvidence": tc.kind, "secretLargeSnapshot": strings.Repeat("x", 10000)}}
+		snapshot := structToMap(lockedPlan{
+			ParentSteps: []lockedStep{{ActionID: "main-action", SourceNodeID: "node", Action: tc.action, Phase: "execute"}},
+			Steps:       []lockedStep{{ParentActionID: "main-action", SourceNodeID: "node", Phase: "post"}},
+		})
+		snapshot["componentReleaseSpecDigest"], snapshot["componentTestEvidence"], snapshot["secretLargeSnapshot"] = tc.digest, tc.kind, strings.Repeat("x", 10000)
+		run := domain.Run{ID: tc.id, Kind: domain.RunComponentTest, Status: tc.status, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: tc.action, CreatedAt: at, FinishedAt: &at, InputSnapshot: snapshot}
 		if err := db.CreateRun(ctx, run, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -63,10 +69,10 @@ func TestComponentReadContextPreservesExactReadinessAndHistoricalEvidence(t *tes
 			}
 			continue
 		}
-		if e.CurrentInstall == nil || e.CurrentInstall.ID != "current-install" || e.CurrentRollback.ID != "current-rollback" || e.CurrentTransition.ID != "current-transition" {
+		if e.CurrentInstall == nil || e.CurrentRollback == nil || e.CurrentTransition == nil || e.CurrentInstall.ID != "current-install" || e.CurrentRollback.ID != "current-rollback" || e.CurrentTransition.ID != "current-transition" {
 			t.Fatalf("changed current refs: %+v", e)
 		}
-		if e.HistoricalInstall.ID != "failed-install" || e.HistoricalInstall.Status != domain.RunFailed || !e.HistoricalInstall.MatchesContract || e.HistoricalRollback.ID != "stale-rollback" || e.HistoricalRollback.MatchesContract {
+		if e.HistoricalInstall == nil || e.HistoricalRollback == nil || e.HistoricalInstall.ID != "failed-install" || e.HistoricalInstall.Status != domain.RunFailed || !e.HistoricalInstall.MatchesContract || e.HistoricalRollback.ID != "stale-rollback" || e.HistoricalRollback.MatchesContract {
 			t.Fatalf("lost historical meaning: %+v", e)
 		}
 		bytes, _ := json.Marshal(result)

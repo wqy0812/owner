@@ -36,7 +36,7 @@ type EnvironmentExportDocument struct {
 	Snapshot                     EnvironmentTransferSnapshot `json:"snapshot"`
 }
 
-func (p *Platform) ExportEnvironmentRevision(ctx context.Context, user domain.User, environmentID, revisionID string, includeReferences bool) (EnvironmentExportDocument, error) {
+func (p *EnvironmentService) ExportRevision(ctx context.Context, user domain.User, environmentID, revisionID string, includeReferences bool) (EnvironmentExportDocument, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return EnvironmentExportDocument{}, err
@@ -67,7 +67,7 @@ func (p *Platform) ExportEnvironmentRevision(ctx context.Context, user domain.Us
 	if includeReferences {
 		action = "environment.revision_sensitive_exported"
 	}
-	p.audit(ctx, user, action, "environment", environmentID, map[string]any{"revisionId": revisionID, "includeCredentialReferences": includeReferences})
+	p.audit.Record(ctx, user, action, "environment", environmentID, map[string]any{"revisionId": revisionID, "includeCredentialReferences": includeReferences})
 	return document, nil
 }
 
@@ -162,7 +162,7 @@ func prepareEnvironmentImportDocument(document EnvironmentExportDocument) (Envir
 	return document, nil
 }
 
-func (p *Platform) PreviewEnvironmentImport(ctx context.Context, user domain.User, input EnvironmentImportRequest) (EnvironmentImportPlan, error) {
+func (p *EnvironmentService) PreviewImport(ctx context.Context, user domain.User, input EnvironmentImportRequest) (EnvironmentImportPlan, error) {
 	if err := domain.ValidateRole(user, domain.RoleEnvironmentOwner); err != nil {
 		return EnvironmentImportPlan{}, err
 	}
@@ -170,11 +170,11 @@ func (p *Platform) PreviewEnvironmentImport(ctx context.Context, user domain.Use
 	if err != nil {
 		return EnvironmentImportPlan{}, err
 	}
-	if err := p.validateEnvironmentFactsCatalog(ctx, document.Snapshot.Facts, true); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactsCatalog(ctx, document.Snapshot.Facts, true); err != nil {
 		return EnvironmentImportPlan{}, err
 	}
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: document.Snapshot.Hosts})
-	if err := p.validateEnvironmentInventoryCatalog(ctx, inventory); err != nil {
+	if err := p.catalogRules.validateEnvironmentInventoryCatalog(ctx, inventory); err != nil {
 		return EnvironmentImportPlan{}, err
 	}
 	if err := p.validateEnvironmentValues(ctx, document.Snapshot.Parameters, document.Snapshot.Variables, document.Snapshot.CredentialRefs); err != nil {
@@ -235,10 +235,10 @@ func (p *Platform) PreviewEnvironmentImport(ctx context.Context, user domain.Use
 	default:
 		return plan, fmt.Errorf("%w: import target kind must be new or existing", domain.ErrInvalid)
 	}
-	if err := p.validateEnvironmentFactRetiredReferences(ctx, document.Snapshot.Facts, previousFacts); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactRetiredReferences(ctx, document.Snapshot.Facts, previousFacts); err != nil {
 		return plan, err
 	}
-	options, err := p.platformOptionLookup(ctx)
+	options, err := p.catalogRules.platformOptionLookup(ctx)
 	if err != nil {
 		return plan, err
 	}
@@ -281,8 +281,8 @@ func environmentSnapshotDiff(current domain.EnvironmentRevision, incoming Enviro
 	return changes
 }
 
-func (p *Platform) ImportEnvironment(ctx context.Context, user domain.User, input EnvironmentImportRequest) (domain.Environment, error) {
-	plan, err := p.PreviewEnvironmentImport(ctx, user, input)
+func (p *EnvironmentService) Import(ctx context.Context, user domain.User, input EnvironmentImportRequest) (domain.Environment, error) {
+	plan, err := p.PreviewImport(ctx, user, input)
 	if err != nil {
 		return domain.Environment{}, err
 	}
@@ -310,13 +310,13 @@ func (p *Platform) ImportEnvironment(ctx context.Context, user domain.User, inpu
 		if err := p.store.CreateEnvironment(ctx, environment, revision, store.EnvironmentRevisionWrite{RequireCompleteFacts: true}); err != nil {
 			return environment, err
 		}
-		p.audit(ctx, user, "environment.imported", "environment", environment.ID, map[string]any{"revisionId": revision.ID, "planDigest": plan.PlanDigest, "sourceRevisionId": input.Document.Source.RevisionID})
+		p.audit.Record(ctx, user, "environment.imported", "environment", environment.ID, map[string]any{"revisionId": revision.ID, "planDigest": plan.PlanDigest, "sourceRevisionId": input.Document.Source.RevisionID})
 		return environment, nil
 	}
 	revision := domain.EnvironmentRevision{ID: newID("environment-revision"), EnvironmentID: plan.TargetEnvironmentID, Revision: plan.NextRevision, Facts: cloneMap(document.Snapshot.Facts), Inventory: inventory, Variables: cloneStringMap(document.Snapshot.Variables), Parameters: cloneMap(document.Snapshot.Parameters), CredentialRefs: append([]domain.CredentialRef(nil), document.Snapshot.CredentialRefs...), CreatedBy: user.ID, ChangeReason: strings.TrimSpace(input.ChangeReason), CreatedAt: now}
 	if err := p.store.CreateEnvironmentRevision(ctx, revision, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: plan.TargetCurrentRevisionID, ValidateAllValues: true, RequireCompleteFacts: true}); err != nil {
 		return domain.Environment{}, err
 	}
-	p.audit(ctx, user, "environment.revision_imported", "environment", plan.TargetEnvironmentID, map[string]any{"revisionId": revision.ID, "revision": revision.Revision, "planDigest": plan.PlanDigest, "sourceRevisionId": input.Document.Source.RevisionID, "changeReason": revision.ChangeReason})
+	p.audit.Record(ctx, user, "environment.revision_imported", "environment", plan.TargetEnvironmentID, map[string]any{"revisionId": revision.ID, "revision": revision.Revision, "planDigest": plan.PlanDigest, "sourceRevisionId": input.Document.Source.RevisionID, "changeReason": revision.ChangeReason})
 	return p.store.GetEnvironment(ctx, plan.TargetEnvironmentID, true)
 }

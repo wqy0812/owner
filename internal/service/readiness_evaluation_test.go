@@ -8,6 +8,7 @@ import (
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 func evaluationRelease(id string) domain.ComponentRelease {
@@ -15,6 +16,7 @@ func evaluationRelease(id string) domain.ComponentRelease {
 	for _, kind := range []domain.ActionKind{domain.ActionInstall, domain.ActionVerify, domain.ActionRollback} {
 		r.Actions = append(r.Actions, domain.ActionDefinition{ID: id + "-" + string(kind), ReleaseID: id, Kind: kind, Name: string(kind), Playbook: "fixtures/" + string(kind) + ".yml", HostGroup: "test_nodes", TimeoutSeconds: 60})
 	}
+	r.Actions = testutil.BoundFixtureActions(r.ID, r.Actions)
 	return r
 }
 
@@ -22,7 +24,7 @@ func TestReadinessEvaluationReusesDefinitionsOnlyWithinOneRead(t *testing.T) {
 	p, database := readinessTestPlatform(t)
 	defer p.Close()
 	ctx := context.Background()
-	evaluation := newReadinessEvaluation(p)
+	evaluation := newReadinessEvaluation(p.releaseRules)
 	reads := 0
 	evaluation.readCatalog = func(ctx context.Context) (store.CatalogValidationSnapshot, error) {
 		reads++
@@ -34,7 +36,7 @@ func TestReadinessEvaluationReusesDefinitionsOnlyWithinOneRead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		expected, err := p.releaseReadiness(ctx, r)
+		expected, err := p.releaseRules.releaseReadiness(ctx, r)
 		if err != nil || !reflect.DeepEqual(actual, expected) || readinessBlockerCodes(actual)["release_contract_invalid"] {
 			t.Fatalf("readiness changed: actual=%+v expected=%+v err=%v", actual, expected, err)
 		}
@@ -52,12 +54,12 @@ func TestReadinessEvaluationReusesDefinitionsOnlyWithinOneRead(t *testing.T) {
 	if err != nil || !readinessBlockerCodes(oldSnapshot)["release_contract_invalid"] {
 		t.Fatalf("old snapshot unexpectedly changed: %+v %v", oldSnapshot, err)
 	}
-	nextSnapshot, err := p.releaseReadiness(ctx, r)
+	nextSnapshot, err := p.releaseRules.releaseReadiness(ctx, r)
 	if err != nil || readinessBlockerCodes(nextSnapshot)["release_contract_invalid"] {
 		t.Fatalf("new read reused stale definitions: %+v %v", nextSnapshot, err)
 	}
 	// Mutation validation always loads current definitions independently.
-	if err := p.validateReleaseContract(ctx, r, false); err != nil {
+	if err := p.releaseRules.validateReleaseContract(ctx, r, false); err != nil {
 		t.Fatalf("write validation reused a read snapshot: %v", err)
 	}
 }
@@ -65,7 +67,7 @@ func TestReadinessEvaluationReusesDefinitionsOnlyWithinOneRead(t *testing.T) {
 func TestReadinessDefinitionFailureRemainsBlocked(t *testing.T) {
 	p, _ := readinessTestPlatform(t)
 	defer p.Close()
-	evaluation := newReadinessEvaluation(p)
+	evaluation := newReadinessEvaluation(p.releaseRules)
 	reads := 0
 	evaluation.readCatalog = func(context.Context) (store.CatalogValidationSnapshot, error) {
 		reads++

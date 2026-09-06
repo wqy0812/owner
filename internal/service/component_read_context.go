@@ -1,11 +1,11 @@
 package service
 
 import (
-	"codex/platform-demo/internal/domain"
 	"context"
 	"sort"
-	"strings"
 	"time"
+
+	"codex/platform-demo/internal/domain"
 )
 
 type EvidenceSummary struct {
@@ -41,7 +41,7 @@ type ComponentReadContext struct {
 
 func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, component domain.Component) (ComponentReadContext, error) {
 	result := ComponentReadContext{Evidence: map[string]ReleaseEvidenceSummary{}, WorkItems: []domain.WorkItem{}, ParameterConsumers: []ParameterConsumer{}}
-	runs, names, err := s.platform.store.ComponentEvidenceReads(ctx, user, component.ID)
+	runs, names, err := s.store.ComponentEvidenceReads(ctx, user, component.ID)
 	if err != nil {
 		return result, err
 	}
@@ -92,7 +92,7 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 	}
 	// Visibility includes digest-bound candidate checks; no Readiness recomputation
 	// is needed to format incoming parameter references.
-	visible, err := s.platform.store.ListComponents(ctx, user)
+	visible, err := s.store.ListComponents(ctx, user)
 	if err != nil {
 		return result, err
 	}
@@ -121,29 +121,22 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 }
 
 func orderedEvidenceActions(run domain.Run) (bool, bool) {
-	// The immutable evidence kind records the planned verification, including
-	// failures before verify and explicitly declared rollback self-verification.
-	switch snapshotString(run, "componentTestEvidence") {
-	case "install_verify":
-		return true, false
-	case "rollback_verify", "rollback_self_verify":
-		return false, true
-	case "evolution_round_trip":
-		return true, true
+	// Evidence is classified by the locked parent actions and explicit postchecks.
+	plan, err := mapToPlan(run.InputSnapshot)
+	if err != nil {
+		return false, false
 	}
-	primary, rollback, installVerified, rollbackVerified := false, false, false, false
-	for _, step := range run.Steps {
-		parts := strings.Split(step.Name, " · ")
-		action := parts[len(parts)-1]
-		switch action {
-		case "upgrade", "install", "configure", "preflight", "inspect":
-			primary = true
-		case "rollback":
-			rollback = true
-		case "verify":
-			installVerified = installVerified || primary
-			rollbackVerified = rollbackVerified || rollback
+	install, rollback := false, false
+	for _, step := range plan.Steps {
+		if step.Phase != "post" {
+			continue
 		}
+		parent := parentExecutionStep(plan.ParentSteps, step)
+		if parent == nil {
+			continue
+		}
+		rollback = rollback || parent.Action == domain.ActionRollback
+		install = install || parent.Action == domain.ActionInstall || parent.Action == domain.ActionUpgrade || parent.Action == domain.ActionConfigure
 	}
-	return installVerified, rollbackVerified
+	return install, rollback
 }

@@ -11,7 +11,7 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func readinessTestPlatform(t *testing.T) (*Platform, *store.Store) {
+func readinessTestPlatform(t testing.TB) (*Platform, *store.Store) {
 	t.Helper()
 	database, err := store.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -30,7 +30,7 @@ func readinessTestPlatform(t *testing.T) (*Platform, *store.Store) {
 	if err := database.CreateComponent(context.Background(), component); err != nil {
 		t.Fatal(err)
 	}
-	return NewPlatform(database, nil, nil), database
+	return newTestPlatform(t, database, nil, nil), database
 }
 
 func readinessBlockerCodes(readiness domain.ReleaseReadiness) map[string]bool {
@@ -47,7 +47,7 @@ func TestReleaseReadinessExplainsLifecycleContractAndEvidenceBlockers(t *testing
 		ID: "release-1", ComponentID: "component-1", Version: "1.0.0", Status: domain.ReleaseDraft, RiskLevel: domain.RiskLevel("invalid"),
 		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{}, Actions: []domain.ActionDefinition{}, CreatedAt: time.Now().UTC(),
 	}
-	readiness, err := platform.releaseReadiness(context.Background(), release)
+	readiness, err := platform.releaseRules.releaseReadiness(context.Background(), release)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,23 +67,31 @@ func TestReleaseReadinessExplainsLifecycleContractAndEvidenceBlockers(t *testing
 	}
 }
 
-func TestComponentTestEvidenceAcceptsOnlyDeclaredRollbackSelfVerification(t *testing.T) {
-	rollback := lockedStep{Action: domain.ActionRollback}
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_only" {
-		t.Fatalf("unmarked rollback evidence=%q", got)
+func TestComponentTestEvidenceRequiresAllBoundPhases(t *testing.T) {
+	main := lockedStep{ActionID: "rollback", ParentActionID: "rollback", Phase: "execute", Action: domain.ActionRollback, SourceNodeID: "node"}
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{main}); got != "incomplete" {
+		t.Fatalf("body alone gave evidence: %s", got)
 	}
-	rollback.Tags = []string{rollbackSelfVerifyTag}
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_self_verify" {
-		t.Fatalf("self-verifying rollback evidence=%q", got)
+	main.Tags = []string{rollbackSelfVerifyTag}
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{main}); got != "incomplete" {
+		t.Fatalf("tag gave evidence: %s", got)
 	}
-	rollback.FromReleaseID = "release-new"
-	rollback.ToReleaseID = "release-old"
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback}); got != "rollback_only" {
-		t.Fatalf("targeted self-verifying rollback evidence=%q", got)
+	pre := lockedStep{ParentActionID: "rollback", Phase: "pre", Action: domain.ActionCheck, SourceNodeID: "node"}
+	post := pre
+	post.Phase = "post"
+	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{pre, main, post}); got != "rollback_verify" {
+		t.Fatalf("full flow evidence: %s", got)
 	}
-	verify := lockedStep{Action: domain.ActionVerify}
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{rollback, verify}); got != "rollback_verify" {
-		t.Fatalf("explicit rollback verify evidence=%q", got)
+}
+
+func TestConfigureOnlyDoesNotProvideInstallEvidence(t *testing.T) {
+	steps := []lockedStep{
+		{ParentActionID: "configure", Phase: "pre", Action: domain.ActionCheck},
+		{ActionID: "configure", Phase: "execute", Action: domain.ActionConfigure},
+		{ParentActionID: "configure", Phase: "post", Action: domain.ActionCheck},
+	}
+	if got := componentTestEvidence(domain.ActionConfigure, steps); got == "install_verify" {
+		t.Fatal("configure-only test must not satisfy the required installation evidence")
 	}
 }
 
@@ -102,7 +110,7 @@ func TestRuntimeConstraintRejectsMissingAndCrossParentVersions(t *testing.T) {
 		"cross parent":    {"containerRuntime": []any{"docker"}, "containerRuntimeVersion": []any{"containerd@2.0.10"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := platform.validateEnvironmentConstraintsCatalog(ctx, constraints); !errors.Is(err, domain.ErrInvalid) {
+			if err := platform.catalogRules.validateEnvironmentConstraintsCatalog(ctx, constraints); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("error=%v", err)
 			}
 		})
@@ -110,10 +118,6 @@ func TestRuntimeConstraintRejectsMissingAndCrossParentVersions(t *testing.T) {
 }
 
 type digestFailureRunner struct{}
-
-func (digestFailureRunner) Run(context.Context, ActionRequest) (ActionResult, error) {
-	return ActionResult{}, nil
-}
 
 func (digestFailureRunner) Digest(string) (string, string, error) {
 	return "", "", errors.New("playbook missing")
@@ -141,25 +145,25 @@ func TestValidateReleaseTransitionContractsLocksDirectionAndExecutablePlaybooks(
 			{Name: "rollback", Kind: domain.ActionRollback, Playbook: "rollback.yml", FromReleaseID: "release-new", ToReleaseID: previous.ID},
 		},
 	}
-	if err := platform.validateReleaseTransitionContracts(context.Background(), current); err != nil {
+	if err := platform.releaseRules.validateReleaseTransitionContracts(context.Background(), current); err != nil {
 		t.Fatalf("valid transition contract=%v", err)
 	}
 
 	invalidUpgrade := current
 	invalidUpgrade.Actions = append([]domain.ActionDefinition(nil), current.Actions...)
 	invalidUpgrade.Actions[0].ToReleaseID = previous.ID
-	if err := platform.validateReleaseTransitionContracts(context.Background(), invalidUpgrade); !errors.Is(err, domain.ErrInvalid) {
+	if err := platform.releaseRules.validateReleaseTransitionContracts(context.Background(), invalidUpgrade); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("backward upgrade error=%v", err)
 	}
 	invalidRollback := current
 	invalidRollback.Actions = append([]domain.ActionDefinition(nil), current.Actions...)
 	invalidRollback.Actions[1].ToReleaseID = "missing"
-	if err := platform.validateReleaseTransitionContracts(context.Background(), invalidRollback); !errors.Is(err, domain.ErrInvalid) {
+	if err := platform.releaseRules.validateReleaseTransitionContracts(context.Background(), invalidRollback); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("missing rollback target error=%v", err)
 	}
 
-	platform.runner = digestFailureRunner{}
-	if err := platform.validateReleaseTransitionContracts(context.Background(), current); !errors.Is(err, domain.ErrInvalid) {
+	setTestRunner(t, platform, digestFailureRunner{})
+	if err := platform.releaseRules.validateReleaseTransitionContracts(context.Background(), current); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unexecutable playbook error=%v", err)
 	}
 }

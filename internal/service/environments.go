@@ -40,17 +40,17 @@ type EnvironmentLifecycle struct {
 	CanArchive            bool `json:"canArchive"`
 }
 
-func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, environment domain.Environment, facts map[string]any) (domain.Environment, error) {
+func (p *EnvironmentService) Create(ctx context.Context, user domain.User, environment domain.Environment, facts map[string]any) (domain.Environment, error) {
 	if err := domain.ValidateRole(user, domain.RoleEnvironmentOwner); err != nil {
 		return environment, err
 	}
 	if err := rejectSensitiveMap(facts, "environment fact"); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentFactsCatalog(ctx, facts, true); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactsCatalog(ctx, facts, true); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentFactRetiredReferences(ctx, facts, nil); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactRetiredReferences(ctx, facts, nil); err != nil {
 		return environment, err
 	}
 	if strings.TrimSpace(environment.Name) == "" {
@@ -68,11 +68,11 @@ func (p *Platform) CreateEnvironment(ctx context.Context, user domain.User, envi
 	if err := p.store.CreateEnvironment(ctx, environment, revision, store.EnvironmentRevisionWrite{RequireCompleteFacts: true}); err != nil {
 		return environment, err
 	}
-	p.audit(ctx, user, "environment.created", "environment", environment.ID, map[string]any{"revisionId": revision.ID})
+	p.audit.Record(ctx, user, "environment.created", "environment", environment.ID, map[string]any{"revisionId": revision.ID})
 	return p.store.GetEnvironment(ctx, environment.ID, false)
 }
 
-func (p *Platform) ListEnvironments(ctx context.Context, user domain.User, includeArchived ...bool) ([]domain.Environment, error) {
+func (p *EnvironmentService) List(ctx context.Context, user domain.User, includeArchived ...bool) ([]domain.Environment, error) {
 	include := len(includeArchived) > 0 && includeArchived[0] && (user.Role == domain.RoleEnvironmentOwner || user.Role == domain.RolePlatformAdmin)
 	environments, err := p.store.ListEnvironments(ctx, include)
 	if err != nil {
@@ -109,7 +109,7 @@ func environmentLifecycleFromImpact(environment domain.Environment, impact store
 	}
 }
 
-func (p *Platform) GetEnvironmentLifecycle(ctx context.Context, user domain.User, environmentID string) (EnvironmentLifecycle, error) {
+func (p *EnvironmentService) Lifecycle(ctx context.Context, user domain.User, environmentID string) (EnvironmentLifecycle, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return EnvironmentLifecycle{}, err
@@ -126,7 +126,7 @@ func (p *Platform) GetEnvironmentLifecycle(ctx context.Context, user domain.User
 	return environmentLifecycleFromImpact(environment, impact), nil
 }
 
-func (p *Platform) DeleteEnvironment(ctx context.Context, user domain.User, environmentID string) error {
+func (p *EnvironmentService) Delete(ctx context.Context, user domain.User, environmentID string) error {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func (p *Platform) DeleteEnvironment(ctx context.Context, user domain.User, envi
 	return nil
 }
 
-func (p *Platform) ArchiveEnvironment(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
+func (p *EnvironmentService) Archive(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return environment, err
@@ -199,7 +199,7 @@ func (p *Platform) ArchiveEnvironment(ctx context.Context, user domain.User, env
 	return environment, nil
 }
 
-func (p *Platform) UnarchiveEnvironment(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
+func (p *EnvironmentService) Unarchive(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return environment, err
@@ -231,7 +231,7 @@ func archivedEnvironmentError(environmentID string) error {
 	return actionableExistingError(fmt.Errorf("%w: environment is archived", domain.ErrConflict), "environment.archived", "该环境已归档，不能再创建 Revision、健康检查、构建或 Run", "恢复环境", "/environments?selected="+environmentID)
 }
 
-func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {
 	if len(hosts) > 256 {
 		return domain.Environment{}, fmt.Errorf("%w: inventory supports at most 256 hosts", domain.ErrInvalid)
 	}
@@ -250,7 +250,7 @@ func (p *Platform) UpdateInventory(ctx context.Context, user domain.User, enviro
 	}, "environment.inventory_updated", firstReason(changeReason))
 }
 
-func (p *Platform) UpdateEnvironmentFacts(ctx context.Context, user domain.User, environmentID string, facts map[string]any, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateFacts(ctx context.Context, user domain.User, environmentID string, facts map[string]any, changeReason ...string) (domain.Environment, error) {
 	if err := rejectSensitiveMap(facts, "environment fact"); err != nil {
 		return domain.Environment{}, err
 	}
@@ -266,7 +266,7 @@ func normalizeEnvironmentVariables(variables map[string]string, refs []domain.Cr
 	return domain.NormalizeEnvironmentVariables(variables, refs)
 }
 
-func (p *Platform) UpdateEnvironmentVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateVariables(ctx context.Context, user domain.User, environmentID string, variables map[string]string, changeReason ...string) (domain.Environment, error) {
 	if err := p.validateEnvironmentValues(ctx, nil, variables, nil); err != nil {
 		return domain.Environment{}, err
 	}
@@ -295,7 +295,7 @@ func findSensitiveValue(value any, prefix string) (string, bool) {
 	return domain.FindSensitiveValue(value, prefix)
 }
 
-func (p *Platform) UpdateCredentialRefs(ctx context.Context, user domain.User, environmentID string, refs []domain.CredentialRef, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateCredentialRefs(ctx context.Context, user domain.User, environmentID string, refs []domain.CredentialRef, changeReason ...string) (domain.Environment, error) {
 	if err := ValidateCredentialRefs(refs); err != nil {
 		return domain.Environment{}, err
 	}
@@ -315,7 +315,7 @@ func firstReason(reasons []string) string {
 	return strings.TrimSpace(reasons[0])
 }
 
-func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.User, environmentID string, mutate func(*domain.EnvironmentRevision) error, auditAction, changeReason string) (domain.Environment, error) {
+func (p *EnvironmentService) updateEnvironmentRevision(ctx context.Context, user domain.User, environmentID string, mutate func(*domain.EnvironmentRevision) error, auditAction, changeReason string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return environment, err
@@ -338,16 +338,16 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 	if err := mutate(&revision); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentFactsCatalog(ctx, revision.Facts, true); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactsCatalog(ctx, revision.Facts, true); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentFactRetiredReferences(ctx, revision.Facts, previousFacts); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactRetiredReferences(ctx, revision.Facts, previousFacts); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentInventoryCatalog(ctx, revision.Inventory); err != nil {
+	if err := p.catalogRules.validateEnvironmentInventoryCatalog(ctx, revision.Inventory); err != nil {
 		return environment, err
 	}
-	options, err := p.platformOptionLookup(ctx)
+	options, err := p.catalogRules.platformOptionLookup(ctx)
 	if err != nil {
 		return environment, err
 	}
@@ -364,11 +364,11 @@ func (p *Platform) updateEnvironmentRevision(ctx context.Context, user domain.Us
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = revision.ID, &revision, revision.CreatedAt
-	p.audit(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next, "changeReason": revision.ChangeReason})
+	p.audit.Record(ctx, user, auditAction, "environment", environmentID, map[string]any{"revisionId": revision.ID, "revision": next, "changeReason": revision.ChangeReason})
 	return p.store.GetEnvironment(ctx, environment.ID, false)
 }
 
-func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.User, environmentID, revisionID, changeReason string) (domain.Environment, error) {
+func (p *EnvironmentService) RestoreRevision(ctx context.Context, user domain.User, environmentID, revisionID, changeReason string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return environment, err
@@ -405,21 +405,21 @@ func (p *Platform) RestoreEnvironmentRevision(ctx context.Context, user domain.U
 	// A restore reproduces an immutable historical snapshot. It may predate a
 	// newly required catalog dimension; a Run still requires a complete current
 	// revision through the normal plan gate.
-	if err := p.validateEnvironmentFactsCatalog(ctx, restored.Facts, false); err != nil {
+	if err := p.catalogRules.validateEnvironmentFactsCatalog(ctx, restored.Facts, false); err != nil {
 		return environment, err
 	}
-	if err := p.validateEnvironmentInventoryCatalog(ctx, restored.Inventory); err != nil {
+	if err := p.catalogRules.validateEnvironmentInventoryCatalog(ctx, restored.Inventory); err != nil {
 		return environment, err
 	}
 	if err := p.store.CreateEnvironmentRevision(ctx, restored, store.EnvironmentRevisionWrite{ExpectedCurrentRevisionID: environment.CurrentRevisionID, RestoreSourceRevisionID: revisionID}); err != nil {
 		return environment, err
 	}
 	environment.CurrentRevisionID, environment.Revision, environment.UpdatedAt = restored.ID, &restored, restored.CreatedAt
-	p.audit(ctx, user, "environment.revision_restored", "environment", environmentID, map[string]any{"revisionId": restored.ID, "revision": next, "sourceRevisionId": revisionID, "sourceRevision": target.Revision, "changeReason": reason})
+	p.audit.Record(ctx, user, "environment.revision_restored", "environment", environmentID, map[string]any{"revisionId": restored.ID, "revision": next, "sourceRevisionId": revisionID, "sourceRevision": target.Revision, "changeReason": reason})
 	return environment, nil
 }
 
-func (p *Platform) CheckEnvironmentHealth(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentHealthCheck, error) {
+func (p *EnvironmentService) CheckHealth(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentHealthCheck, error) {
 	environment, err := p.loadEnvironmentConnectivityTarget(ctx, user, environmentID)
 	if err != nil {
 		return domain.EnvironmentHealthCheck{}, err
@@ -427,7 +427,7 @@ func (p *Platform) CheckEnvironmentHealth(ctx context.Context, user domain.User,
 	return p.checkEnvironmentHealth(ctx, user, environment)
 }
 
-func (p *Platform) loadEnvironmentConnectivityTarget(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
+func (p *EnvironmentService) loadEnvironmentConnectivityTarget(ctx context.Context, user domain.User, environmentID string) (domain.Environment, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return domain.Environment{}, err
@@ -444,7 +444,7 @@ func (p *Platform) loadEnvironmentConnectivityTarget(ctx context.Context, user d
 	return environment, nil
 }
 
-func (p *Platform) checkEnvironmentHealth(ctx context.Context, user domain.User, environment domain.Environment) (domain.EnvironmentHealthCheck, error) {
+func (p *EnvironmentService) checkEnvironmentHealth(ctx context.Context, user domain.User, environment domain.Environment) (domain.EnvironmentHealthCheck, error) {
 	checkContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var inventory InventoryDocument
@@ -525,7 +525,7 @@ func (p *Platform) checkEnvironmentHealth(ctx context.Context, user domain.User,
 			reachable++
 		}
 	}
-	p.audit(ctx, user, "environment.health_checked", "environment", environment.ID, map[string]any{"revisionId": environment.Revision.ID, "status": status, "reachable": reachable, "total": len(results)})
+	p.audit.Record(ctx, user, "environment.health_checked", "environment", environment.ID, map[string]any{"revisionId": environment.Revision.ID, "status": status, "reachable": reachable, "total": len(results)})
 	return check, nil
 }
 
@@ -534,7 +534,7 @@ type environmentSSHCredentials struct {
 	privateKeyPath string
 }
 
-func (p *Platform) CheckEnvironmentConnectivity(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentConnectivityCheck, error) {
+func (p *EnvironmentService) CheckConnectivity(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentConnectivityCheck, error) {
 	environment, err := p.loadEnvironmentConnectivityTarget(ctx, user, environmentID)
 	if err != nil {
 		return domain.EnvironmentConnectivityCheck{}, err
@@ -550,7 +550,7 @@ func (p *Platform) CheckEnvironmentConnectivity(ctx context.Context, user domain
 	return domain.EnvironmentConnectivityCheck{TCP: tcpCheck, SSH: sshCheck}, nil
 }
 
-func (p *Platform) CheckEnvironmentSSH(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentSSHCheck, error) {
+func (p *EnvironmentService) CheckEnvironmentSSH(ctx context.Context, user domain.User, environmentID string) (domain.EnvironmentSSHCheck, error) {
 	environment, err := p.loadEnvironmentConnectivityTarget(ctx, user, environmentID)
 	if err != nil {
 		return domain.EnvironmentSSHCheck{}, err
@@ -558,7 +558,7 @@ func (p *Platform) CheckEnvironmentSSH(ctx context.Context, user domain.User, en
 	return p.checkEnvironmentSSH(ctx, user, environment)
 }
 
-func (p *Platform) checkEnvironmentSSH(ctx context.Context, user domain.User, environment domain.Environment) (domain.EnvironmentSSHCheck, error) {
+func (p *EnvironmentService) checkEnvironmentSSH(ctx context.Context, user domain.User, environment domain.Environment) (domain.EnvironmentSSHCheck, error) {
 	started := time.Now()
 	checkContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -708,7 +708,7 @@ func classifyGoSSHFailure(err error) (string, string, string) {
 	}
 }
 
-func (p *Platform) saveEnvironmentSSHCheck(ctx context.Context, user domain.User, environment domain.Environment, started time.Time, results []domain.EnvironmentSSHHostCheck) (domain.EnvironmentSSHCheck, error) {
+func (p *EnvironmentService) saveEnvironmentSSHCheck(ctx context.Context, user domain.User, environment domain.Environment, started time.Time, results []domain.EnvironmentSSHHostCheck) (domain.EnvironmentSSHCheck, error) {
 	status := "healthy"
 	passed := 0
 	for _, result := range results {
@@ -731,7 +731,7 @@ func (p *Platform) saveEnvironmentSSHCheck(ctx context.Context, user domain.User
 		}
 		return domain.EnvironmentSSHCheck{}, err
 	}
-	p.audit(ctx, user, "environment.ssh_checked", "environment", environment.ID, map[string]any{"revisionId": environment.Revision.ID, "status": status, "passed": passed, "total": len(results)})
+	p.audit.Record(ctx, user, "environment.ssh_checked", "environment", environment.ID, map[string]any{"revisionId": environment.Revision.ID, "status": status, "passed": passed, "total": len(results)})
 	return check, nil
 }
 
@@ -748,4 +748,28 @@ func cloneMap(input map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return deepCopy(input).(map[string]any)
+}
+
+func (s *EnvironmentService) GetEnvironmentRecord(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error) {
+	return s.store.GetEnvironment(ctx, id, includeRevisions)
+}
+
+func (s *EnvironmentService) GetUser(ctx context.Context, id string) (domain.User, error) {
+	return s.store.GetUser(ctx, id)
+}
+
+func (s *EnvironmentService) ActiveRun(ctx context.Context, environmentID string) (store.ActiveEnvironmentRun, error) {
+	return s.store.GetActiveEnvironmentRun(ctx, environmentID)
+}
+
+func (s *EnvironmentService) ListAudit(ctx context.Context, limit int) ([]domain.AuditEvent, error) {
+	return s.store.ListAudit(ctx, limit)
+}
+
+func (s *EnvironmentService) LatestHealthCheck(ctx context.Context, environmentID string) (domain.EnvironmentHealthCheck, error) {
+	return s.store.LatestEnvironmentHealthCheck(ctx, environmentID)
+}
+
+func (s *EnvironmentService) LatestSSHCheck(ctx context.Context, environmentID string) (domain.EnvironmentSSHCheck, error) {
+	return s.store.LatestEnvironmentSSHCheck(ctx, environmentID)
 }

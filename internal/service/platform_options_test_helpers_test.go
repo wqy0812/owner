@@ -10,7 +10,7 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func seedPlatformOptionsForServiceTest(t *testing.T, database *store.Store) {
+func seedPlatformOptionsForServiceTest(t testing.TB, database *store.Store) {
 	t.Helper()
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	if err := (seed.Seeder{Store: database, Now: func() time.Time { return now }}).SeedUsers(context.Background()); err != nil {

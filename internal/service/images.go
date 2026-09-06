@@ -56,7 +56,7 @@ func immutableImageSourceRef(sourceRef, digest string) string {
 	return repository + "@" + digest
 }
 
-func (p *Platform) RegisterComponentImage(ctx context.Context, user domain.User, releaseID, logicalName, sourceRef, expectedDigest string) (domain.ComponentImage, error) {
+func (p *CatalogService) RegisterImage(ctx context.Context, user domain.User, releaseID, logicalName, sourceRef, expectedDigest string) (domain.ComponentImage, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.ComponentImage{}, err
@@ -110,11 +110,11 @@ func (p *Platform) RegisterComponentImage(ctx context.Context, user domain.User,
 	if err != nil {
 		return domain.ComponentImage{}, err
 	}
-	p.audit(ctx, user, "component.image_saved", "component_release", releaseID, map[string]any{"logicalName": logicalName, "digest": digest, "sourceRef": sourceRef})
+	p.audit.Record(ctx, user, "component.image_saved", "component_release", releaseID, map[string]any{"logicalName": logicalName, "digest": digest, "sourceRef": sourceRef})
 	return image, nil
 }
 
-func (p *Platform) UpdateComponentImageSource(ctx context.Context, user domain.User, releaseID, logicalName, sourceRef string) (domain.ComponentImage, error) {
+func (p *CatalogService) UpdateImageSource(ctx context.Context, user domain.User, releaseID, logicalName, sourceRef string) (domain.ComponentImage, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.ComponentImage{}, err
@@ -153,11 +153,11 @@ func (p *Platform) UpdateComponentImageSource(ctx context.Context, user domain.U
 	if err != nil {
 		return domain.ComponentImage{}, err
 	}
-	p.audit(ctx, user, "component.image_source_updated", "component_release", releaseID, map[string]any{"logicalName": logicalName, "digest": current.Digest, "sourceRef": sourceRef})
+	p.audit.Record(ctx, user, "component.image_source_updated", "component_release", releaseID, map[string]any{"logicalName": logicalName, "digest": current.Digest, "sourceRef": sourceRef})
 	return updated, nil
 }
 
-func (p *Platform) DeleteComponentImage(ctx context.Context, user domain.User, releaseID, logicalName string) error {
+func (p *CatalogService) DeleteImage(ctx context.Context, user domain.User, releaseID, logicalName string) error {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return err
@@ -179,15 +179,6 @@ func (p *Platform) DeleteComponentImage(ctx context.Context, user domain.User, r
 	if err := p.store.DeleteDraftComponentImage(ctx, releaseID, logicalName); err != nil {
 		return err
 	}
-	p.audit(ctx, user, "component.image_deleted", "component_release", releaseID, map[string]any{"logicalName": logicalName})
+	p.audit.Record(ctx, user, "component.image_deleted", "component_release", releaseID, map[string]any{"logicalName": logicalName})
 	return nil
-}
-
-func componentImageByName(images []domain.ComponentImage, name string) (domain.ComponentImage, bool) {
-	for _, image := range images {
-		if image.LogicalName == name {
-			return image, true
-		}
-	}
-	return domain.ComponentImage{}, false
 }

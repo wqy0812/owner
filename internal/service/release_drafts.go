@@ -58,7 +58,7 @@ func normalizeReleaseDraftRequest(input ReleaseDraftRequest) ReleaseDraftRequest
 	return input
 }
 
-func (p *Platform) PreviewReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (ReleaseDraftPlan, error) {
+func (p *CatalogService) PreviewReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (ReleaseDraftPlan, error) {
 	input = normalizeReleaseDraftRequest(input)
 	component, err := p.store.GetComponent(ctx, componentID, false)
 	if err != nil {
@@ -135,6 +135,9 @@ func (p *Platform) PreviewReleaseDraft(ctx context.Context, user domain.User, co
 		if retained {
 			return ReleaseDraftPlan{}, fmt.Errorf("%w: evolution parent already has a retained successor", domain.ErrConflict)
 		}
+		if input.EnvironmentConstraints != nil && !domain.SameEnvironmentConstraints(input.EnvironmentConstraints, source.EnvironmentConstraints) {
+			return ReleaseDraftPlan{}, fmt.Errorf("%w: 适配范围已固定，请新增分支", domain.ErrConflict)
+		}
 		plan.LineID, plan.LineName = source.LineID, source.LineName
 		plan.ParentReleaseID, plan.ParentVersion = source.ID, source.Version
 		plan.TemplateSourceReleaseID, plan.TemplateSourceVersion = source.ID, source.Version
@@ -156,13 +159,12 @@ func (p *Platform) PreviewReleaseDraft(ctx context.Context, user domain.User, co
 			}
 			plan.Actions = append(plan.Actions, action.Kind)
 			plan.Playbooks = append(plan.Playbooks, action.Playbook)
-			if digester, ok := p.runner.(digestRunner); ok {
-				playbookDigest, treeDigest, digestErr := digester.Digest(action.Playbook)
-				if digestErr != nil {
-					return ReleaseDraftPlan{}, digestErr
-				}
-				executableDigests[action.Playbook] = playbookDigest + ":" + treeDigest
+			playbookDigest, treeDigest, digestErr := p.inspector.Digest(action.Playbook)
+			if digestErr != nil {
+				return ReleaseDraftPlan{}, digestErr
 			}
+			executableDigests[action.Playbook] = playbookDigest + ":" + treeDigest
+
 		}
 	}
 	plan.PlanDigest = digestValue(struct {
@@ -173,7 +175,7 @@ func (p *Platform) PreviewReleaseDraft(ctx context.Context, user domain.User, co
 	return plan, nil
 }
 
-func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (domain.ComponentRelease, error) {
+func (p *CatalogService) createReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (domain.ComponentRelease, error) {
 	expected := input.ExpectedPlanDigest
 	input = normalizeReleaseDraftRequest(input)
 	plan, err := p.PreviewReleaseDraft(ctx, user, componentID, input)
@@ -250,10 +252,14 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 		release.Images[index].CreatedAt, release.Images[index].CreatedBy = now, user.ID
 		release.Images[index].SourceUpdatedAt, release.Images[index].SourceUpdatedBy = now, user.ID
 	}
-	// The template's child identities belong to the source Release. The clone
-	// receives fresh identities while later Draft updates preserve its own IDs.
+	ids := map[string]string{}
+	for _, action := range release.Actions {
+		ids[action.ID] = newID("action")
+	}
 	for index := range release.Actions {
-		release.Actions[index].ID = ""
+		action := &release.Actions[index]
+		action.ID, action.ReleaseID = ids[action.ID], release.ID
+		action.PreCheckActionID, action.PostCheckActionID = ids[action.PreCheckActionID], ids[action.PostCheckActionID]
 	}
 	manifest := componentImportManifest{}
 	if plan.TemplateSourceReleaseID != "" {
@@ -264,11 +270,11 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 	}
 	cleanup := func(deleteFinal bool) { _ = p.cleanupComponentImportManifest(manifest, deleteFinal) }
 	rewriteReleaseChildren(&release)
-	if err := p.validateReleaseContract(ctx, release, false); err != nil {
+	if err := p.releaseRules.validateReleaseContract(ctx, release, false); err != nil {
 		cleanup(true)
 		return release, err
 	}
-	if err := p.validateEnvironmentConstraintRetiredReferences(ctx, release.EnvironmentConstraints, nil); err != nil {
+	if err := p.catalogRules.validateEnvironmentConstraintRetiredReferences(ctx, release.EnvironmentConstraints, nil); err != nil {
 		cleanup(true)
 		return release, err
 	}
@@ -285,9 +291,9 @@ func (p *Platform) CreateReleaseDraft(ctx context.Context, user domain.User, com
 	return p.store.GetComponentRelease(ctx, release.ID)
 }
 
-func (p *Platform) RenameReleaseLine(ctx context.Context, user domain.User, lineID, name string) (domain.ComponentReleaseLine, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) RenameReleaseLine(ctx context.Context, user domain.User, lineID, name string) (domain.ComponentReleaseLine, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	line, err := p.store.GetReleaseLine(ctx, lineID)
 	if err != nil {
 		return line, err
@@ -315,7 +321,7 @@ func (p *Platform) RenameReleaseLine(ctx context.Context, user domain.User, line
 			draftAfter.LineName = name
 			draftAfter.PlaybookWorkspaceRoot = generatedManagedReleasePrefix(component, draftAfter)
 			for index := range draftAfter.Actions {
-				path, pathErr := actionPlaybookPath(component, draftAfter, draftAfter.Actions[index].Kind)
+				path, pathErr := actionSourcePath(component, draftAfter, draftAfter.Actions[index])
 				if pathErr != nil {
 					return line, pathErr
 				}
@@ -336,6 +342,14 @@ func (p *Platform) RenameReleaseLine(ctx context.Context, user domain.User, line
 		undo()
 		return line, err
 	}
-	p.audit(ctx, user, "component_release_line.renamed", "component_release_line", lineID, map[string]any{"componentId": component.ID, "oldName": line.Name, "newName": name})
+	p.audit.Record(ctx, user, "component_release_line.renamed", "component_release_line", lineID, map[string]any{"componentId": component.ID, "oldName": line.Name, "newName": name})
 	return p.store.GetReleaseLine(ctx, lineID)
+}
+
+func (s *CatalogService) CreateReleaseDraft(ctx context.Context, user domain.User, componentID string, input ReleaseDraftRequest) (domain.ComponentRelease, error) {
+	release, err := s.createReleaseDraft(ctx, user, componentID, input)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
 }

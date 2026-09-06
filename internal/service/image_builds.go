@@ -25,7 +25,7 @@ const imageRegistryVariable = "IMAGE_REGISTRY"
 
 var imageTagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
-func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.User, releaseID, environmentID, tag string, dockerfile []byte) (domain.ComponentImageBuild, error) {
+func (p *CatalogService) StartImageBuild(ctx context.Context, user domain.User, releaseID, environmentID, tag string, dockerfile []byte) (domain.ComponentImageBuild, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.ComponentImageBuild{}, err
@@ -82,7 +82,7 @@ func (p *Platform) StartComponentImageBuild(ctx context.Context, user domain.Use
 	if err := p.store.CreateComponentImageBuild(ctx, build); err != nil {
 		return domain.ComponentImageBuild{}, err
 	}
-	p.audit(ctx, user, "component.image_build_requested", "component_release", releaseID, map[string]any{"buildId": build.ID, "environmentId": environment.ID, "environmentRevisionId": environment.CurrentRevisionID, "imageRef": build.ImageRef, "dockerfileSha256": build.DockerfileSHA256})
+	p.audit.Record(ctx, user, "component.image_build_requested", "component_release", releaseID, map[string]any{"buildId": build.ID, "environmentId": environment.ID, "environmentRevisionId": environment.CurrentRevisionID, "imageRef": build.ImageRef, "dockerfileSha256": build.DockerfileSHA256})
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": releaseID, "status": build.Status})
 	contents := append([]byte(nil), dockerfile...)
 	go p.executeComponentImageBuild(build, contents)
@@ -103,7 +103,7 @@ func containsDockerfileFrom(dockerfile []byte) bool {
 	return false
 }
 
-func (p *Platform) GetComponentImageBuild(ctx context.Context, user domain.User, id string) (domain.ComponentImageBuild, error) {
+func (p *CatalogService) GetImageBuild(ctx context.Context, user domain.User, id string) (domain.ComponentImageBuild, error) {
 	build, err := p.store.GetComponentImageBuild(ctx, id)
 	if err != nil {
 		return build, err
@@ -114,7 +114,7 @@ func (p *Platform) GetComponentImageBuild(ctx context.Context, user domain.User,
 	return build, nil
 }
 
-func (p *Platform) ListComponentImageBuilds(ctx context.Context, user domain.User, releaseID string) ([]domain.ComponentImageBuild, error) {
+func (p *CatalogService) ListImageBuilds(ctx context.Context, user domain.User, releaseID string) ([]domain.ComponentImageBuild, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (p *Platform) ListComponentImageBuilds(ctx context.Context, user domain.Use
 	return p.store.ListComponentImageBuilds(ctx, releaseID, 20)
 }
 
-func (p *Platform) requireImageBuildVisible(ctx context.Context, user domain.User, build domain.ComponentImageBuild) error {
+func (p *CatalogService) requireImageBuildVisible(ctx context.Context, user domain.User, build domain.ComponentImageBuild) error {
 	release, err := p.store.GetComponentRelease(ctx, build.ReleaseID)
 	if err != nil {
 		return err
@@ -144,7 +144,7 @@ func (p *Platform) requireImageBuildVisible(ctx context.Context, user domain.Use
 	return nil
 }
 
-func (p *Platform) executeComponentImageBuild(build domain.ComponentImageBuild, dockerfile []byte) {
+func (p *CatalogService) executeComponentImageBuild(build domain.ComponentImageBuild, dockerfile []byte) {
 	ctx := p.rootCtx
 	now := time.Now().UTC()
 	if err := p.store.UpdateComponentImageBuildStatus(context.Background(), build.ID, []domain.ImageBuildStatus{domain.ImageBuildQueued}, domain.ImageBuildRunning, "", "", now); err != nil {
@@ -218,12 +218,12 @@ func (p *Platform) executeComponentImageBuild(build domain.ComponentImageBuild, 
 		return
 	}
 	actor, _ := p.store.GetUser(context.Background(), build.RequestedBy)
-	p.audit(context.Background(), actor, "component.image_saved", "component_release", build.ReleaseID, map[string]any{"logicalName": image.LogicalName, "digest": image.Digest, "sourceRef": image.SourceRef, "buildId": build.ID})
+	p.audit.Record(context.Background(), actor, "component.image_saved", "component_release", build.ReleaseID, map[string]any{"logicalName": image.LogicalName, "digest": image.Digest, "sourceRef": image.SourceRef, "buildId": build.ID})
 	p.emitImageBuildLog(build, "system", "published "+pushedDigest)
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": build.ReleaseID, "status": domain.ImageBuildSucceeded, "imageDigest": pushedDigest})
 }
 
-func (p *Platform) runImageBuildCommand(ctx context.Context, workdir, binary string, args []string, build domain.ComponentImageBuild) error {
+func (p *CatalogService) runImageBuildCommand(ctx context.Context, workdir, binary string, args []string, build domain.ComponentImageBuild) error {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workdir
 	stdout, err := cmd.StdoutPipe()
@@ -246,7 +246,7 @@ func (p *Platform) runImageBuildCommand(ctx context.Context, workdir, binary str
 	return waitErr
 }
 
-func (p *Platform) captureImageBuildOutput(reader io.Reader, stream string, build domain.ComponentImageBuild, wait *sync.WaitGroup) {
+func (p *CatalogService) captureImageBuildOutput(reader io.Reader, stream string, build domain.ComponentImageBuild, wait *sync.WaitGroup) {
 	defer wait.Done()
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
@@ -255,7 +255,7 @@ func (p *Platform) captureImageBuildOutput(reader io.Reader, stream string, buil
 	}
 }
 
-func (p *Platform) emitImageBuildLog(build domain.ComponentImageBuild, stream, message string) {
+func (p *CatalogService) emitImageBuildLog(build domain.ComponentImageBuild, stream, message string) {
 	if len(message) > 16*1024 {
 		message = message[:16*1024] + " [truncated]"
 	}
@@ -264,7 +264,7 @@ func (p *Platform) emitImageBuildLog(build domain.ComponentImageBuild, stream, m
 	p.hub.Publish("image_build.log", map[string]any{"buildId": build.ID, "releaseId": build.ReleaseID, "stream": stream, "line": message})
 }
 
-func (p *Platform) failImageBuild(build domain.ComponentImageBuild, cause error) {
+func (p *CatalogService) failImageBuild(build domain.ComponentImageBuild, cause error) {
 	message := Redact(cause.Error()).(string)
 	status := domain.ImageBuildFailed
 	if errors.Is(p.rootCtx.Err(), context.Canceled) {

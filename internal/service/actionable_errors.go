@@ -22,7 +22,7 @@ func actionableError(base error, code, message, causeSummary, label, href string
 	}
 }
 
-func (p *Platform) planRefreshHref(ctx context.Context, kind domain.RunKind, releaseID, revisionID, environmentID string) string {
+func (p *ExecutionService) planRefreshHref(ctx context.Context, kind domain.RunKind, releaseID, revisionID, environmentID string) string {
 	if releaseID != "" {
 		if release, err := p.store.GetComponentRelease(ctx, releaseID); err == nil {
 			return fmt.Sprintf("/components?selected=%s&release=%s&action=validate", release.ComponentID, release.ID)

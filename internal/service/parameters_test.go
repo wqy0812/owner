@@ -69,7 +69,7 @@ func TestValidateReleaseRejectsRollbackSelfVerificationTagOnOtherActions(t *test
 	release := domain.ComponentRelease{
 		Version: "1.0.0",
 		Actions: []domain.ActionDefinition{{
-			Name: "verify", Kind: domain.ActionVerify, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60,
+			Name: "verify", Kind: domain.ActionCheck, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60,
 			Tags: []string{rollbackSelfVerifyTag},
 		}},
 	}

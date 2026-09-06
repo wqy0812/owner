@@ -71,14 +71,6 @@ func normalizeSHA256(value string) (string, error) {
 	return value, nil
 }
 
-func parseSHA256File(contents []byte) (string, error) {
-	fields := strings.Fields(string(contents))
-	if len(fields) == 0 {
-		return "", fmt.Errorf("%w: checksum file is empty", domain.ErrInvalid)
-	}
-	return normalizeSHA256(fields[0])
-}
-
 func artifactSegment(value string) string {
 	value = strings.TrimSpace(value)
 	var builder strings.Builder
@@ -96,7 +88,7 @@ func artifactSegment(value string) string {
 	return clean
 }
 
-func (p *Platform) ownedReleaseForArtifact(ctx context.Context, user domain.User, releaseID, alias string, draftOnly bool) (domain.ComponentRelease, domain.Component, string, error) {
+func (p *CatalogService) ownedReleaseForArtifact(ctx context.Context, user domain.User, releaseID, alias string, draftOnly bool) (domain.ComponentRelease, domain.Component, string, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return release, domain.Component{}, "", err
@@ -122,7 +114,7 @@ func (p *Platform) ownedReleaseForArtifact(ctx context.Context, user domain.User
 	return release, component, alias, err
 }
 
-func (p *Platform) artifactUploadContext(ctx context.Context, user domain.User, releaseID, environmentID, alias string) (domain.ComponentRelease, domain.Component, domain.Environment, string, string, error) {
+func (p *CatalogService) artifactUploadContext(ctx context.Context, user domain.User, releaseID, environmentID, alias string) (domain.ComponentRelease, domain.Component, domain.Environment, string, string, error) {
 	release, component, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, true)
 	if err != nil {
 		return release, component, domain.Environment{}, "", "", err
@@ -148,7 +140,7 @@ func (p *Platform) artifactUploadContext(ctx context.Context, user domain.User, 
 	return release, component, environment, station, alias, nil
 }
 
-func (p *Platform) UploadComponentArtifact(ctx context.Context, user domain.User, releaseID, environmentID, alias, filename, expectedSHA string, input io.Reader) (domain.ComponentArtifact, error) {
+func (p *CatalogService) UploadArtifact(ctx context.Context, user domain.User, releaseID, environmentID, alias, filename, expectedSHA string, input io.Reader) (domain.ComponentArtifact, error) {
 	release, component, _, station, alias, err := p.artifactUploadContext(ctx, user, releaseID, environmentID, alias)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
@@ -184,7 +176,7 @@ func (p *Platform) UploadComponentArtifact(ctx context.Context, user domain.User
 	return p.saveComponentArtifact(ctx, user, release, alias, sourceURL, metadata)
 }
 
-func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.User, releaseID, alias, filename, sourceURL, expectedSHA string) (domain.ComponentArtifact, error) {
+func (p *CatalogService) RegisterArtifact(ctx context.Context, user domain.User, releaseID, alias, filename, sourceURL, expectedSHA string) (domain.ComponentArtifact, error) {
 	release, _, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, true)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
@@ -211,7 +203,7 @@ func (p *Platform) RegisterComponentArtifact(ctx context.Context, user domain.Us
 	return p.saveComponentArtifact(ctx, user, release, alias, sourceURL, fssFileMetadata{Filename: filename, SHA256: expectedSHA, SizeBytes: size})
 }
 
-func (p *Platform) saveComponentArtifact(ctx context.Context, user domain.User, release domain.ComponentRelease, alias, sourceURL string, metadata fssFileMetadata) (domain.ComponentArtifact, error) {
+func (p *CatalogService) saveComponentArtifact(ctx context.Context, user domain.User, release domain.ComponentRelease, alias, sourceURL string, metadata fssFileMetadata) (domain.ComponentArtifact, error) {
 	if metadata.SHA256 == "" || metadata.SHA256 != strings.ToLower(metadata.SHA256) {
 		return domain.ComponentArtifact{}, fmt.Errorf("%w: file station returned invalid artifact metadata", domain.ErrConflict)
 	}
@@ -230,11 +222,11 @@ func (p *Platform) saveComponentArtifact(ctx context.Context, user domain.User, 
 			break
 		}
 	}
-	p.audit(ctx, user, "component.artifact_saved", "component_release", release.ID, map[string]any{"alias": alias, "filename": metadata.Filename, "sha256": metadata.SHA256, "sourceUrl": sourceURL})
+	p.audit.Record(ctx, user, "component.artifact_saved", "component_release", release.ID, map[string]any{"alias": alias, "filename": metadata.Filename, "sha256": metadata.SHA256, "sourceUrl": sourceURL})
 	return artifact, nil
 }
 
-func (p *Platform) UpdateComponentArtifactSource(ctx context.Context, user domain.User, releaseID, alias, sourceURL string) (domain.ComponentArtifact, error) {
+func (p *CatalogService) UpdateArtifactSource(ctx context.Context, user domain.User, releaseID, alias, sourceURL string) (domain.ComponentArtifact, error) {
 	release, _, alias, err := p.ownedReleaseForArtifact(ctx, user, releaseID, alias, false)
 	if err != nil {
 		return domain.ComponentArtifact{}, err
@@ -267,11 +259,11 @@ func (p *Platform) UpdateComponentArtifactSource(ctx context.Context, user domai
 	if err != nil {
 		return domain.ComponentArtifact{}, err
 	}
-	p.audit(ctx, user, "component.artifact_source_updated", "component_release", release.ID, map[string]any{"alias": alias, "sourceUrl": sourceURL, "sha256": updated.SHA256})
+	p.audit.Record(ctx, user, "component.artifact_source_updated", "component_release", release.ID, map[string]any{"alias": alias, "sourceUrl": sourceURL, "sha256": updated.SHA256})
 	return updated, nil
 }
 
-func (p *Platform) DeleteComponentArtifact(ctx context.Context, user domain.User, releaseID, alias string) error {
+func (p *CatalogService) DeleteArtifact(ctx context.Context, user domain.User, releaseID, alias string) error {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return err
@@ -293,6 +285,6 @@ func (p *Platform) DeleteComponentArtifact(ctx context.Context, user domain.User
 	if err := p.store.DeleteDraftComponentArtifactAndInvalidate(ctx, releaseID, alias); err != nil {
 		return err
 	}
-	p.audit(ctx, user, "component.artifact_detached", "component_release", release.ID, map[string]any{"alias": alias})
+	p.audit.Record(ctx, user, "component.artifact_detached", "component_release", release.ID, map[string]any{"alias": alias})
 	return nil
 }

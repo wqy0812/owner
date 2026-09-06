@@ -12,16 +12,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-
-	ansiblerunner "codex/platform-demo/internal/ansible"
 )
-
-type ActionRequest = ansiblerunner.Request
-type ActionResult = ansiblerunner.Result
-
-type ActionRunner interface {
-	Run(context.Context, ActionRequest) (ActionResult, error)
-}
 
 type ArtifactLocation struct {
 	URL          string
@@ -77,7 +68,7 @@ func NewHTTPArtifactDelivery(client *http.Client) *HTTPArtifactDelivery {
 	return &HTTPArtifactDelivery{client: client}
 }
 
-func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocation, identity ArtifactIdentity) error {
+func (d *HTTPArtifactDelivery) probe(ctx context.Context, location ArtifactLocation, identity ArtifactIdentity) error {
 	if location.URL != "" {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, location.URL, nil)
 		if err != nil {
@@ -121,8 +112,11 @@ func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocat
 	if response.StatusCode == http.StatusOK {
 		return nil
 	}
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnprocessableEntity {
+	if response.StatusCode == http.StatusNotFound {
 		return ErrDeliveryTargetMissing
+	}
+	if response.StatusCode == http.StatusUnprocessableEntity {
+		return ErrArtifactIdentityMismatch
 	}
 	message, _ := io.ReadAll(io.LimitReader(response.Body, 8<<10))
 	return fmt.Errorf("file station returned %s: %s", response.Status, strings.TrimSpace(string(message)))
@@ -157,7 +151,6 @@ func (d *HTTPArtifactDelivery) Transfer(ctx context.Context, transfer ArtifactTr
 
 type DockerImageDelivery struct{ binary string }
 
-var _ ActionRunner = (*ansiblerunner.Runner)(nil)
 var _ ArtifactDelivery = (*HTTPArtifactDelivery)(nil)
 var _ ImageDelivery = (*DockerImageDelivery)(nil)
 
@@ -169,7 +162,7 @@ func NewDockerImageDelivery(binary string) *DockerImageDelivery {
 	return &DockerImageDelivery{binary: binary}
 }
 
-func (d *DockerImageDelivery) Probe(ctx context.Context, location ImageLocation, digest ImageDigest) error {
+func (d *DockerImageDelivery) probe(ctx context.Context, location ImageLocation, digest ImageDigest) error {
 	ref := location.Ref
 	if ref == "" {
 		ref = digest.Value

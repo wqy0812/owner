@@ -134,11 +134,17 @@ func releaseLocksFromRunSnapshot(snapshot map[string]any) (map[string]string, er
 	if !ok || len(rawSteps) == 0 {
 		return nil, fmt.Errorf("%w: scenario test has no locked steps", domain.ErrConflict)
 	}
+	if parents, ok := snapshot["parentSteps"].([]any); ok {
+		rawSteps = append(append([]any{}, rawSteps...), parents...)
+	}
 	locks := map[string]string{}
 	for _, raw := range rawSteps {
 		step, ok := raw.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("%w: scenario test contains an invalid locked step", domain.ErrConflict)
+		}
+		if step["sourceType"] == "scenario_acceptance" {
+			continue
 		}
 		releaseID, _ := step["releaseId"].(string)
 		digest, _ := step["releaseSpecDigest"].(string)
@@ -161,6 +167,15 @@ func getRunRecord(ctx context.Context, q queryer, id string) (domain.Run, error)
 func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run, revision domain.ScenarioRevision) (map[string]domain.ComponentRelease, error) {
 	if run.Kind != domain.RunScenarioTest || run.Status != domain.RunSucceeded || run.ScenarioRevisionID != revision.ID {
 		return nil, fmt.Errorf("%w: Run is not successful evidence for this scenario revision", domain.ErrConflict)
+	}
+	if revision.DigestVersion >= domain.ScenarioDigestVersion {
+		mode, _ := run.InputSnapshot["executionMode"].(string)
+		if mode != "install" && mode != "upgrade" {
+			return nil, domain.ErrConflict
+		}
+		if err := validateScenarioAcceptanceEvidence(ctx, tx, run, revision); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateScenarioAdaptationRead(ctx, tx, revision); err != nil {
 		return nil, err
@@ -256,6 +271,11 @@ func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionGuard Sc
 	evidence, err := getRunRecord(ctx, tx, evidenceRunID)
 	if err != nil {
 		return err
+	}
+	if revision.DigestVersion >= domain.ScenarioDigestVersion {
+		if _, err := scenarioRequiredEvidenceTx(ctx, tx, revision); err != nil {
+			return err
+		}
 	}
 	evidenceReleases, err := scenarioTestEvidenceMatches(ctx, tx, evidence, revision)
 	if err != nil {

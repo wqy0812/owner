@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
+	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
 	"codex/platform-demo/internal/store"
@@ -169,6 +169,15 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
 	}
+	for _, key := range []string{"executionMode", "sourceRevisionId", "baselineRunId"} {
+		if value, ok := run.InputSnapshot[key].(string); ok && value != "" {
+			output[key] = value
+		}
+	}
+	if digest, code := h.platform.Execution().RunJobSummary(r.Context(), run.ID); digest != "" {
+		output["jobDigest"] = digest
+		output["exitCode"] = code
+	}
 	if archive, err := h.platform.Execution().RunArchive(r.Context(), run.ID); err == nil && archive != nil {
 		output["archive"] = archive
 	}
@@ -195,7 +204,7 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	}
 	if run.Kind == domain.RunEnvironmentRollback {
 		name, _ := output["environmentName"].(string)
-		output["name"] = name + " · 整集群回滚至干净状态"
+		output["name"] = name + " · 按备份恢复组件"
 	}
 	locked := lockedStepMetadata(run.InputSnapshot)
 	steps := make([]map[string]any, 0, len(run.Steps))
@@ -208,16 +217,42 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		}
 		if metadata := locked[step.NodeID]; metadata != nil {
 			item["componentName"], item["action"] = metadata["componentName"], metadata["action"]
+			if parents, ok := run.InputSnapshot["parentSteps"].([]any); ok {
+				for _, raw := range parents {
+					parent, ok := raw.(map[string]any)
+					if ok && parent["actionId"] == metadata["parentActionId"] && parent["sourceNodeId"] == metadata["sourceNodeId"] {
+						item["parentAction"] = parent["action"]
+						break
+					}
+				}
+			}
+			if releaseID, ok := metadata["releaseId"].(string); ok {
+				item["role"] = ansible.RoleName(releaseID)
+			}
+			item["contentDigest"] = metadata["workspaceDigest"]
+			for _, key := range []string{"limit", "sourceType", "stage", "acceptanceJobId", "scenarioRevisionId", "phase", "parentActionId", "actionId", "sourceNodeId", "releaseId", "playbookDigest", "workspaceDigest"} {
+				item[key] = metadata[key]
+			}
 		}
-		if parts := strings.Split(step.Name, " · "); len(parts) >= 2 {
-			item["componentName"], item["action"] = parts[0], parts[len(parts)-1]
-		}
+
 		if step.Status == domain.RunSucceeded {
 			succeeded++
 		}
 		steps = append(steps, item)
 	}
 	output["steps"] = steps
+	purposeCounts := map[string]int{"components": 0, "finalVerification": 0, "acceptance": 0, "total": len(locked)}
+	for _, step := range locked {
+		purpose := "components"
+		if step["stage"] == "target_verify" {
+			purpose = "finalVerification"
+		}
+		if step["sourceType"] == "scenario_acceptance" || step["phase"] == "acceptance" {
+			purpose = "acceptance"
+		}
+		purposeCounts[purpose]++
+	}
+	output["purposeCounts"] = purposeCounts
 	if run.Status == domain.RunSucceeded {
 		output["progress"] = 100
 	} else if total := len(locked); total > 0 {
@@ -229,7 +264,7 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		imageTransfers, _ := run.InputSnapshot["imageTransfers"].([]any)
 		deliveryRequirements, _ := run.InputSnapshot["deliveryRequirements"].([]any)
 		if run.Kind == domain.RunEnvironmentRollback {
-			riskReason = "整集群回滚会按逆序执行所有已安装组件的 rollback，并在成功后删除安装清单与备份基线。"
+			riskReason = "按依赖逆序回滚所选组件，恢复后检查通过才确认完成；原始备份与恢复记录保留。"
 		} else if len(deliveryRequirements) > 0 {
 			riskReason = fmt.Sprintf("有 %d 项内容未命中环境目标；请逐项选择直接使用来源或平移到环境目标。", len(deliveryRequirements))
 		} else if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
@@ -253,12 +288,6 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 			output[key] = value
 		}
 	}
-	logs, _ := h.platform.Execution().ListRunLogTail(r.Context(), run.ID, 200)
-	tail := make([]string, 0, len(logs))
-	for _, logLine := range logs {
-		tail = append(tail, fmt.Sprintf("[%s] %s", logLine.Stream, logLine.Message))
-	}
-	output["logTail"] = tail
 	if resolved, ok := run.InputSnapshot["resolvedParametersByNode"]; ok {
 		output["resolvedParametersByNode"] = resolved
 	}
@@ -305,4 +334,13 @@ func lockedStepMetadata(snapshot map[string]any) map[string]map[string]any {
 		}
 	}
 	return output
+}
+
+func (h *Handler) verifiedJobEligibility(w http.ResponseWriter, r *http.Request) {
+	value, err := h.platform.Execution().VerifiedRunJobEligibility(r.Context(), currentUser(r), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, 200, value)
 }

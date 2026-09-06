@@ -1,10 +1,11 @@
 package service
 
 import (
-	"codex/platform-demo/internal/domain"
 	"context"
 	"fmt"
 	"sort"
+
+	"codex/platform-demo/internal/domain"
 )
 
 type parameterVertex struct{ NodeID, Name string }
@@ -133,7 +134,7 @@ func validateReferenceContracts(releases map[string]domain.ComponentRelease) err
 	_, err := scenarioParameterSources(normalized, releases)
 	return err
 }
-func (p *Platform) validateConfigurationReferenceClosure(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateConfigurationReferenceClosure(ctx context.Context, release domain.ComponentRelease) error {
 	hasConfiguration := false
 	releases := map[string]domain.ComponentRelease{release.ID: release}
 	queue := []domain.ComponentRelease{release}

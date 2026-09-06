@@ -84,22 +84,6 @@ func (s *Store) ListComponentPlaybookFiles(ctx context.Context, releaseID string
 	return listComponentPlaybookFiles(ctx, s.db, releaseID)
 }
 
-func (s *Store) SetDraftActionPlaybook(ctx context.Context, releaseID string, kind domain.ActionKind, path, digest string) error {
-	var actions int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM action_definitions WHERE release_id=? AND kind=?`, releaseID, kind).Scan(&actions); err != nil {
-		return err
-	}
-	result, err := s.db.ExecContext(ctx, `UPDATE action_definitions SET playbook=?,playbook_sha256=? WHERE release_id=? AND kind=? AND EXISTS (SELECT 1 FROM component_releases r WHERE r.id=? AND r.status='draft') AND EXISTS (SELECT 1 FROM component_playbook_files f WHERE f.release_id=? AND f.relative_path=? AND f.sha256=?)`, path, digest, releaseID, kind, releaseID, releaseID, string(kind)+".yml", digest)
-	if err != nil {
-		return mapSQLError(err)
-	}
-	rows, _ := result.RowsAffected()
-	if actions > 0 && rows != 1 {
-		return fmt.Errorf("%w: action no longer exists or its entrypoint manifest changed", domain.ErrConflict)
-	}
-	return nil
-}
-
 // ReplaceDraftPlaybookFilesAndInvalidate atomically publishes the metadata for
 // one staged workspace. The caller publishes the staged directory afterwards;
 // an interruption therefore leaves digest mismatch and fails closed.
@@ -117,11 +101,11 @@ func (s *Store) ReplaceDraftPlaybookFilesAndUpsertAction(ctx context.Context, re
 // ReplaceDraftPlaybookFilesAndDeleteAction commits entrypoint removal and its
 // Action metadata together, so readers cannot observe a persisted Action that
 // is absent from the new manifest.
-func (s *Store) ReplaceDraftPlaybookFilesAndDeleteAction(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, kind domain.ActionKind, mutationID string) error {
-	return s.replaceDraftPlaybookFilesAndAction(ctx, releaseID, workspaceRoot, treeSHA, files, actionDigests, nil, &kind, mutationID)
+func (s *Store) ReplaceDraftPlaybookFilesAndDeleteAction(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, actionID string, mutationID string) error {
+	return s.replaceDraftPlaybookFilesAndAction(ctx, releaseID, workspaceRoot, treeSHA, files, actionDigests, nil, &actionID, mutationID)
 }
 
-func (s *Store) replaceDraftPlaybookFilesAndAction(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, upsert *domain.ActionDefinition, deleteKind *domain.ActionKind, mutationID string) error {
+func (s *Store) replaceDraftPlaybookFilesAndAction(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, upsert *domain.ActionDefinition, deleteID *string, mutationID string) error {
 	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
@@ -149,27 +133,27 @@ func (s *Store) replaceDraftPlaybookFilesAndAction(ctx context.Context, releaseI
 			return err
 		}
 	}
-	if deleteKind != nil {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM action_definitions WHERE release_id=? AND kind=?`, releaseID, *deleteKind); err != nil {
+	if deleteID != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM action_definitions WHERE release_id=? AND id=?`, releaseID, *deleteID); err != nil {
 			return err
 		}
 	}
 	if upsert != nil {
 		var conflictingID string
-		err := tx.QueryRowContext(ctx, `SELECT id FROM action_definitions WHERE release_id=? AND kind=? AND id<>? LIMIT 1`, releaseID, upsert.Kind, upsert.ID).Scan(&conflictingID)
+		err := tx.QueryRowContext(ctx, `SELECT id FROM action_definitions WHERE release_id=? AND kind=? AND kind <> 'check' AND id<>? LIMIT 1`, releaseID, upsert.Kind, upsert.ID).Scan(&conflictingID)
 		if err == nil {
 			return fmt.Errorf("%w: action kind %s already exists as %s", domain.ErrConflict, upsert.Kind, conflictingID)
 		}
 		if err != sql.ErrNoRows {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE action_definitions SET name=?,playbook=?,playbook_sha256=?,tags_json=?,host_group=?,required_credentials_json=?,timeout_seconds=?,risk_level=?,destructive=?,idempotent=?,from_release_id=?,to_release_id=? WHERE id=? AND release_id=? AND kind=?`, upsert.Name, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.ID, releaseID, upsert.Kind)
+		result, err := tx.ExecContext(ctx, `UPDATE action_definitions SET name=?,playbook=?,playbook_sha256=?,tags_json=?,host_group=?,required_credentials_json=?,timeout_seconds=?,risk_level=?,destructive=?,idempotent=?,from_release_id=?,to_release_id=?,pre_check_action_id=?,post_check_action_id=?,become=?,gather_facts=?,resource_contract_json=? WHERE id=? AND release_id=? AND kind=?`, upsert.Name, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become, upsert.GatherFacts, resourceContractJSON(upsert.ResourceContract), upsert.ID, releaseID, upsert.Kind)
 		if err != nil {
 			return mapSQLError(err)
 		}
 		updated, _ := result.RowsAffected()
 		if updated == 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, upsert.ID, releaseID, upsert.Name, upsert.Kind, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, upsert.ID, releaseID, upsert.Name, upsert.Kind, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become, upsert.GatherFacts, resourceContractJSON(upsert.ResourceContract)); err != nil {
 				return mapSQLError(err)
 			}
 		}

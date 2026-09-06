@@ -64,14 +64,14 @@ func TestPlatformAdminWorkbenchReviewPreviewAndDigestGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adminWorkbench, err := platform.Workbench(ctx, admin)
+	adminWorkbench, err := platform.readModel.Workbench(ctx, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(adminWorkbench.Items) != 1 || adminWorkbench.Items[0].Kind != "component_review" || adminWorkbench.Items[0].PrimaryAction.Label != "预览并审核" || adminWorkbench.Summary.ActionRequired != 1 {
 		t.Fatalf("admin workbench=%+v", adminWorkbench)
 	}
-	ownerWorkbench, err := platform.Workbench(ctx, owner)
+	ownerWorkbench, err := platform.readModel.Workbench(ctx, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestPlatformAdminWorkbenchReviewPreviewAndDigestGuard(t *testing.T) {
 	if approved.Review.Status != domain.ReleaseReviewApproved {
 		t.Fatalf("approved review=%+v", approved.Review)
 	}
-	adminWorkbench, err = platform.Workbench(ctx, admin)
+	adminWorkbench, err = platform.readModel.Workbench(ctx, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestPlatformAdminWorkbenchSortsReviewsBySubmissionTime(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	workbench, err := platform.Workbench(ctx, admin)
+	workbench, err := platform.readModel.Workbench(ctx, admin)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,11 +15,7 @@ func (s *Store) CreateScenario(ctx context.Context, sc domain.Scenario, rev doma
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO scenarios(id,slug,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, sc.ID, sc.Slug, sc.Name, sc.Description, sc.OwnerID, rev.ID, timeText(sc.CreatedAt), timeText(sc.UpdatedAt))
-	if err != nil {
-		return mapSQLError(err)
-	}
-	if err = insertScenarioRevision(ctx, tx, rev); err != nil {
+	if err := insertScenarioTx(ctx, tx, sc, rev); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -109,7 +105,7 @@ func insertScenarioRevision(ctx context.Context, tx *sql.Tx, r domain.ScenarioRe
 	if err := validateScenarioCatalogTx(ctx, tx, r.Graph, domain.ScenarioGraph{}); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(r.EnvironmentConstraints), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO scenario_revisions(id,scenario_id,revision,status,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at,lifecycle_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ScenarioID, r.Revision, r.Status, jsonText(r.Graph), jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), timeText(r.CreatedAt), ptrTimeText(r.TestPassedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt), ptrTimeText(r.AbandonedAt), scenarioLifecycleJSON(r))
 	return mapSQLError(err)
 }
 
@@ -117,10 +113,8 @@ func (s *Store) CreateScenarioRevision(ctx context.Context, r domain.ScenarioRev
 	return s.CreateScenarioRevisionFromSource(ctx, "", r)
 }
 
-// CreateScenarioRevisionFromSource creates the next Draft atomically. A
-// Test Passed source still occupies the scenario's single active-revision
-// slot, so cloning it first retains the immutable record as an abandoned
-// historical revision while preserving test_passed_at and its Run links.
+// CreateScenarioRevisionFromSource atomically rechecks source eligibility and
+// the one-active-Draft constraint without changing the immutable source.
 func (s *Store) CreateScenarioRevisionFromSource(ctx context.Context, sourceRevisionID string, r domain.ScenarioRevision) error {
 	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
@@ -128,21 +122,15 @@ func (s *Store) CreateScenarioRevisionFromSource(ctx context.Context, sourceRevi
 	}
 	defer tx.Rollback()
 	if sourceRevisionID != "" {
-		res, err := tx.ExecContext(ctx, `
-UPDATE scenario_revisions
-SET status='deprecated',deprecated_at=?,abandoned_at=?
-WHERE id=? AND scenario_id=? AND status='test_passed'`, timeText(r.CreatedAt), timeText(r.CreatedAt), sourceRevisionID, r.ScenarioID)
+		source, err := getScenarioRevision(ctx, tx, sourceRevisionID)
 		if err != nil {
 			return err
 		}
-		if changed, _ := res.RowsAffected(); changed == 0 {
-			var status string
-			if err := tx.QueryRowContext(ctx, `SELECT status FROM scenario_revisions WHERE id=? AND scenario_id=?`, sourceRevisionID, r.ScenarioID).Scan(&status); err != nil {
-				return mapSQLError(err)
-			}
-			if status != string(domain.RevisionReleased) && status != string(domain.RevisionDeprecated) {
-				return fmt.Errorf("%w: source scenario revision is not immutable", domain.ErrConflict)
-			}
+		if source.ScenarioID != r.ScenarioID || source.Status != domain.RevisionReleased || r.SourceRevisionID != source.ID {
+			return fmt.Errorf("%w: source must be a released revision of this scenario", domain.ErrConflict)
+		}
+		if _, err = successfulScenarioSourceRun(ctx, tx, source, r.SourceRunID); err != nil {
+			return err
 		}
 	}
 	if err = insertScenarioRevision(ctx, tx, r); err != nil {
@@ -160,7 +148,17 @@ WHERE id=? AND scenario_id=? AND status='test_passed'`, timeText(r.CreatedAt), t
 }
 
 func (s *Store) UpdateScenario(ctx context.Context, sc domain.Scenario) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE scenarios SET slug=?,name=?,description=?,updated_at=? WHERE id=?`, sc.Slug, sc.Name, sc.Description, timeText(sc.UpdatedAt), sc.ID)
+	tx, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if sc.EnvironmentConstraints != nil {
+		if err := validateBranchScopeTx(ctx, tx, "scenarios", sc.ID, sc.EnvironmentConstraints); err != nil {
+			return err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE scenarios SET slug=?,name=?,description=?,updated_at=? WHERE id=?`, sc.Slug, sc.Name, sc.Description, timeText(sc.UpdatedAt), sc.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -168,17 +166,18 @@ func (s *Store) UpdateScenario(ctx context.Context, sc domain.Scenario) error {
 	if n == 0 {
 		return domain.ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) GetScenario(ctx context.Context, id string, includeRevisions bool) (domain.Scenario, error) {
 	var sc domain.Scenario
 	var current sql.NullString
-	var cr, up string
-	err := s.db.QueryRowContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios WHERE id=?`, id).Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up)
+	var cr, up, constraints string
+	err := s.db.QueryRowContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at,COALESCE(forked_from_scenario_id,''),COALESCE(forked_from_revision_id,''),forked_from_digest,environment_constraints_json FROM scenarios WHERE id=?`, id).Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up, &sc.ForkedFromScenarioID, &sc.ForkedFromRevisionID, &sc.ForkedFromDigest, &constraints)
 	if err != nil {
 		return sc, mapSQLError(err)
 	}
+	sc.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	sc.CurrentRevisionID = current.String
 	sc.CreatedAt = parseTime(cr)
 	sc.UpdatedAt = parseTime(up)
@@ -189,7 +188,7 @@ func (s *Store) GetScenario(ctx context.Context, id string, includeRevisions boo
 }
 
 func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain.Scenario, error) {
-	q := `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios`
+	q := `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at,COALESCE(forked_from_scenario_id,''),COALESCE(forked_from_revision_id,''),forked_from_digest,environment_constraints_json FROM scenarios`
 	args := []any{}
 	if viewer.Role == domain.RoleScenarioOwner {
 		q += ` WHERE owner_id=? OR EXISTS (SELECT 1 FROM scenario_revisions r WHERE r.scenario_id=scenarios.id AND r.status='released')`
@@ -207,10 +206,11 @@ func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain
 	for rows.Next() {
 		var sc domain.Scenario
 		var current sql.NullString
-		var cr, up string
-		if err := rows.Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up); err != nil {
+		var cr, up, constraints string
+		if err := rows.Scan(&sc.ID, &sc.Slug, &sc.Name, &sc.Description, &sc.OwnerID, &current, &cr, &up, &sc.ForkedFromScenarioID, &sc.ForkedFromRevisionID, &sc.ForkedFromDigest, &constraints); err != nil {
 			return nil, err
 		}
+		sc.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 		sc.CurrentRevisionID = current.String
 		sc.CreatedAt = parseTime(cr)
 		sc.UpdatedAt = parseTime(up)
@@ -238,7 +238,7 @@ func (s *Store) ListScenarios(ctx context.Context, viewer domain.User) ([]domain
 // publishes a new version. Callers must not expose these revisions through
 // ordinary read APIs.
 func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at FROM scenarios ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,name,description,owner_id,current_revision_id,created_at,updated_at,COALESCE(forked_from_scenario_id,''),COALESCE(forked_from_revision_id,''),forked_from_digest,environment_constraints_json FROM scenarios ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +247,11 @@ func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, 
 	for rows.Next() {
 		var scenario domain.Scenario
 		var current sql.NullString
-		var created, updated string
-		if err := rows.Scan(&scenario.ID, &scenario.Slug, &scenario.Name, &scenario.Description, &scenario.OwnerID, &current, &created, &updated); err != nil {
+		var created, updated, constraints string
+		if err := rows.Scan(&scenario.ID, &scenario.Slug, &scenario.Name, &scenario.Description, &scenario.OwnerID, &current, &created, &updated, &scenario.ForkedFromScenarioID, &scenario.ForkedFromRevisionID, &scenario.ForkedFromDigest, &constraints); err != nil {
 			return nil, err
 		}
+		scenario.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 		scenario.CurrentRevisionID = current.String
 		scenario.CreatedAt = parseTime(created)
 		scenario.UpdatedAt = parseTime(updated)
@@ -280,9 +281,10 @@ func (s *Store) ListScenariosForImpact(ctx context.Context) ([]domain.Scenario, 
 
 func scanScenarioRevision(row scanner) (domain.ScenarioRevision, error) {
 	var r domain.ScenarioRevision
-	var graph, constraints, created string
+	var graph, constraints, created, lifecycle string
 	var tested, released, deprecated, abandoned sql.NullString
-	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &r.PublicationGeneration, &graph, &constraints, &created, &tested, &released, &deprecated, &abandoned)
+	err := row.Scan(&r.ID, &r.ScenarioID, &r.Revision, &r.Status, &r.PublicationGeneration, &graph, &constraints, &created, &tested, &released, &deprecated, &abandoned, &lifecycle)
+	r = decodeScenarioLifecycle(lifecycle, r)
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	r.Graph = decodeJSON(graph, domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}})
 	r.CreatedAt = parseTime(created)
@@ -298,12 +300,12 @@ func (s *Store) GetScenarioRevision(ctx context.Context, id string) (domain.Scen
 }
 
 func getScenarioRevision(ctx context.Context, q queryer, id string) (domain.ScenarioRevision, error) {
-	r, err := scanScenarioRevision(q.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE id=?`, id))
+	r, err := scanScenarioRevision(q.QueryRowContext(ctx, `SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at,lifecycle_json FROM scenario_revisions WHERE id=?`, id))
 	return r, mapSQLError(err)
 }
 
 func (s *Store) ListScenarioRevisions(ctx context.Context, scenarioID string, releasedOnly bool) ([]domain.ScenarioRevision, error) {
-	q := `SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at FROM scenario_revisions WHERE scenario_id=?`
+	q := `SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at,lifecycle_json FROM scenario_revisions WHERE scenario_id=?`
 	if releasedOnly {
 		q += ` AND status='released'`
 	}
@@ -339,7 +341,11 @@ func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.Scena
 	if err != nil {
 		return err
 	}
+	if err := validateScenarioEditableTx(ctx, tx, prior); err != nil {
+		return err
+	}
 	next := prior
+	next.DigestVersion = domain.ScenarioDigestVersion
 	next.Graph = g
 	if len(constraints) > 0 {
 		next.EnvironmentConstraints = constraints[0]
@@ -350,7 +356,7 @@ func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.Scena
 	if err := validateScenarioCatalogTx(ctx, tx, g, previous); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,environment_constraints_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), jsonText(next.EnvironmentConstraints), id)
+	res, err := tx.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,environment_constraints_json=?,lifecycle_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=? AND status IN ('draft','testing','test_passed')`, jsonText(g), jsonText(domain.NormalizeEnvironmentConstraints(next.EnvironmentConstraints)), scenarioLifecycleJSON(next), id)
 	if err != nil {
 		return err
 	}
@@ -485,4 +491,30 @@ func (s *Store) ListReleasedScenarioReferences(ctx context.Context) ([]ScenarioR
 		}
 	}
 	return out, rows.Err()
+}
+
+func insertScenarioTx(ctx context.Context, tx *sql.Tx, sc domain.Scenario, rev domain.ScenarioRevision) error {
+	if sc.ForkedFromRevisionID != "" {
+		source, err := getScenarioRevision(ctx, tx, sc.ForkedFromRevisionID)
+		if err != nil {
+			return err
+		}
+		if source.ScenarioID != sc.ForkedFromScenarioID || source.Status != domain.RevisionReleased || domain.ScenarioRevisionSpecDigest(source) != sc.ForkedFromDigest {
+			return fmt.Errorf("%w: branch source changed; preview again", domain.ErrConflict)
+		}
+		if rev.SourceRevisionID != "" || rev.SourceRunID != "" || len(rev.UpgradeConstraints) > 0 {
+			return fmt.Errorf("%w: a branch cannot inherit upgrade lineage", domain.ErrInvalid)
+		}
+	}
+	if sc.EnvironmentConstraints != nil && !domain.SameEnvironmentConstraints(sc.EnvironmentConstraints, rev.EnvironmentConstraints) {
+		return fmt.Errorf("%w: branch and first version scope differ", domain.ErrConflict)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO scenarios(id,slug,name,description,owner_id,current_revision_id,created_at,updated_at,forked_from_scenario_id,forked_from_revision_id,forked_from_digest,environment_constraints_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, sc.ID, sc.Slug, sc.Name, sc.Description, sc.OwnerID, rev.ID, timeText(sc.CreatedAt), timeText(sc.UpdatedAt), nullString(sc.ForkedFromScenarioID), nullString(sc.ForkedFromRevisionID), sc.ForkedFromDigest, jsonText(domain.NormalizeEnvironmentConstraints(rev.EnvironmentConstraints)))
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if err := insertScenarioRevision(ctx, tx, rev); err != nil {
+		return err
+	}
+	return nil
 }

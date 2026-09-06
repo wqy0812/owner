@@ -29,7 +29,7 @@ func (s *PlatformOptionService) CreateEnvironmentVariableDefinition(ctx context.
 	if err := s.store.CreateEnvironmentVariableDefinition(ctx, input, audit); err != nil {
 		return input, err
 	}
-	s.platform.hub.Publish("platform_parameters.updated", map[string]any{"definitionId": input.ID, "action": "created"})
+	s.hub.Publish("platform_parameters.updated", map[string]any{"definitionId": input.ID, "action": "created"})
 	return input, nil
 }
 
@@ -41,6 +41,6 @@ func (s *PlatformOptionService) DeleteEnvironmentVariableDefinition(ctx context.
 	if err := s.store.DeleteEnvironmentVariableDefinition(ctx, id, audit); err != nil {
 		return err
 	}
-	s.platform.hub.Publish("platform_parameters.updated", map[string]any{"definitionId": id, "action": "deleted"})
+	s.hub.Publish("platform_parameters.updated", map[string]any{"definitionId": id, "action": "deleted"})
 	return nil
 }

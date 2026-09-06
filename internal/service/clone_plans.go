@@ -17,12 +17,14 @@ func digestValue(value any) string {
 
 type ScenarioCloneRequest struct {
 	SourceRevisionID   string `json:"sourceRevisionId"`
+	SourceRunID        string `json:"sourceRunId,omitempty"`
 	ExpectedPlanDigest string `json:"expectedPlanDigest,omitempty"`
 }
 
 type ScenarioClonePlan struct {
 	ScenarioID       string `json:"scenarioId"`
 	SourceRevisionID string `json:"sourceRevisionId"`
+	SourceRunID      string `json:"sourceRunId"`
 	SourceRevision   int    `json:"sourceRevision"`
 	NextRevision     int    `json:"nextRevision"`
 	NodeCount        int    `json:"nodeCount"`
@@ -30,7 +32,7 @@ type ScenarioClonePlan struct {
 	PlanDigest       string `json:"planDigest"`
 }
 
-func (p *Platform) PreviewScenarioClone(ctx context.Context, user domain.User, scenarioID string, input ScenarioCloneRequest) (ScenarioClonePlan, error) {
+func (p *ScenarioService) PreviewClone(ctx context.Context, user domain.User, scenarioID string, input ScenarioCloneRequest) (ScenarioClonePlan, error) {
 	scenario, err := p.store.GetScenario(ctx, scenarioID, true)
 	if err != nil {
 		return ScenarioClonePlan{}, err
@@ -48,8 +50,9 @@ func (p *Platform) PreviewScenarioClone(ctx context.Context, user domain.User, s
 	if source.ID == "" {
 		return ScenarioClonePlan{}, fmt.Errorf("%w: source revision does not belong to scenario", domain.ErrInvalid)
 	}
-	if source.Status != domain.RevisionReleased && source.Status != domain.RevisionDeprecated && source.Status != domain.RevisionTestPassed {
-		return ScenarioClonePlan{}, fmt.Errorf("%w: source revision must be test passed, released, or deprecated", domain.ErrConflict)
+	sourceRun, err := p.store.SuccessfulScenarioSourceRun(ctx, source, input.SourceRunID)
+	if err != nil {
+		return ScenarioClonePlan{}, err
 	}
 	for _, revision := range scenario.Revisions {
 		if revision.ID == source.ID {
@@ -63,11 +66,12 @@ func (p *Platform) PreviewScenarioClone(ctx context.Context, user domain.User, s
 	if err != nil {
 		return ScenarioClonePlan{}, err
 	}
-	plan := ScenarioClonePlan{ScenarioID: scenarioID, SourceRevisionID: source.ID, SourceRevision: source.Revision, NextRevision: next, NodeCount: len(source.Graph.Nodes), EdgeCount: len(source.Graph.Edges)}
+	plan := ScenarioClonePlan{ScenarioID: scenarioID, SourceRevisionID: source.ID, SourceRunID: sourceRun.ID, SourceRevision: source.Revision, NextRevision: next, NodeCount: len(source.Graph.Nodes), EdgeCount: len(source.Graph.Edges)}
 	plan.PlanDigest = digestValue(struct {
 		ScenarioID   string
 		Next         int
 		SourceDigest string
-	}{scenarioID, next, scenarioRevisionSpecDigest(source)})
+		SourceRunID  string
+	}{scenarioID, next, scenarioRevisionSpecDigest(source), sourceRun.ID})
 	return plan, nil
 }

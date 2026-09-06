@@ -11,7 +11,7 @@ import (
 
 // JSON references are explicit identity fields, not substring matches against
 // messages, parameters or backup paths. The same predicate fences all writers.
-const runReferenceKeySQL = `('installRunId','backupInstallRunId','sourceRunId','retryOfRunId','retryRootRunId','install_run_id','runId')`
+const runReferenceKeySQL = `('installRunId','backupInstallRunId','sourceRunId','baselineRunId','historicalBaselineRunId','retryOfRunId','retryRootRunId','install_run_id','runId')`
 
 // Locked step variables and resolved parameter values are user data. Even a
 // nested field named runId in those values is not a platform history reference.
@@ -44,7 +44,10 @@ func cleanupPreview(ctx context.Context, q queryer, id string, days int, now tim
 	checks := []struct{ query, reason string }{
 		{`SELECT EXISTS(SELECT 1 FROM environment_component_installations WHERE install_run_id=? OR EXISTS(SELECT 1 FROM json_tree(backup_metadata_json) j WHERE j.key IN ` + runReferenceKeySQL + ` AND j.type='text' AND j.value=?))`, "被环境安装记录或安装备份引用"},
 		{`SELECT EXISTS(SELECT 1 FROM runs WHERE id<>? AND (retry_of_run_id=? OR retry_root_run_id=?))`, "被其他 Run 的续跑链引用"},
+		{`SELECT EXISTS(SELECT 1 FROM action_execution_receipts WHERE run_id=? OR EXISTS(SELECT 1 FROM json_tree(backup_json) j WHERE j.key IN ` + runReferenceKeySQL + ` AND j.type='text' AND j.value=?))`, "被操作及恢复记录引用"},
 		{`SELECT EXISTS(SELECT 1 FROM runs WHERE id<>? AND EXISTS(SELECT 1 FROM json_tree(input_snapshot_json) j WHERE ` + runSnapshotReferenceSQL + ` AND j.value=?))`, "被执行快照中的安装来源或回滚备份引用"},
+		{`SELECT EXISTS(SELECT 1 FROM scenario_installations WHERE run_id=? OR mutating_run_id=?)`, "被场景完整版本或部分变更引用"},
+		{`SELECT EXISTS(SELECT 1 FROM scenario_execution_submissions WHERE run_id=? AND run_id=?)`, "被场景幂等提交记录引用"},
 	}
 	for i, c := range checks {
 		args := []any{id, id}
@@ -125,7 +128,7 @@ func (s *Store) CleanupRuns(ctx context.Context, ids []string, actor, source str
 		if rows, ok := r.InputSnapshot["steps"].([]any); ok {
 			for _, v := range rows {
 				if row, ok := v.(map[string]any); ok {
-					if release, ok := row["releaseId"].(string); ok && !seen[release] {
+					if release, ok := row["releaseId"].(string); ok && release != "" && !seen[release] {
 						steps = append(steps, map[string]any{"releaseId": release, "releaseSpecDigest": row["releaseSpecDigest"]})
 						seen[release] = true
 					}

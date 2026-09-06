@@ -17,7 +17,7 @@ import (
 // business data or accidentally retaining execution history.
 var foundationTables = []string{"run_retention_policy", "schema_contract", "publication_state", "users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "environment_variable_definitions"}
 var businessTables = []string{"components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "environments", "environment_revisions", "component_release_artifacts", "component_release_images", "component_artifact_mirrors", "component_image_mirrors"}
-var historyTables = []string{"run_archive_tasks", "run_archive_files", "run_cleanup_history", "run_retention_cursors", "sessions", "playbook_action_mutations", "runs", "run_steps", "run_logs", "approvals", "notifications", "audit_events", "component_image_builds", "component_image_build_logs", "environment_component_installations", "environment_health_checks", "environment_ssh_checks"}
+var historyTables = []string{"workflow_sessions", "scenario_installations", "scenario_execution_submissions", "action_execution_receipts", "run_jobs", "run_archive_tasks", "run_archive_files", "run_cleanup_history", "run_retention_cursors", "sessions", "playbook_action_mutations", "runs", "run_steps", "run_logs", "run_waiting_observations", "approvals", "notifications", "audit_events", "component_image_builds", "component_image_build_logs", "environment_component_installations", "environment_health_checks", "environment_ssh_checks"}
 
 func quoteIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 

@@ -50,6 +50,7 @@ OR (c.category_type='host_group' AND (
     SELECT 1 FROM scenario_revisions sr,json_each(sr.graph_json,'$.nodes') node
     WHERE sr.status IN ('released','deprecated') AND COALESCE(json_extract(node.value,'$.hostGroup'),'')<>''
   )
+  OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceJobs') job WHERE sr.status IN ('released','deprecated') AND COALESCE(json_extract(job.value,'$.hostGroup'),'')<>'')
 ))
 ORDER BY c.sort_order,c.id`},
 	{name: "platform_options", columns: []string{"id", "category_id", "parent_option_id", "technical_value", "label", "retired_at", "sort_order", "created_by", "created_at"}, query: `
@@ -72,6 +73,7 @@ OR (c.category_type='host_group' AND (
     SELECT 1 FROM scenario_revisions sr,json_each(sr.graph_json,'$.nodes') node
     WHERE sr.status IN ('released','deprecated') AND json_extract(node.value,'$.hostGroup')=o.technical_value
   )
+  OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceJobs') job WHERE sr.status IN ('released','deprecated') AND json_extract(job.value,'$.hostGroup')=o.technical_value)
 ))
 ORDER BY c.sort_order,o.sort_order,o.id`},
 	{name: "environment_parameter_definitions", columns: []string{"id", "technical_key", "label", "description", "parameter_type", "enum_json", "min_length", "created_by", "created_at"}, query: `
@@ -80,18 +82,22 @@ FROM environment_parameter_definitions d
 WHERE EXISTS (
   SELECT 1 FROM component_releases r,json_each(r.parameters_json) p
   WHERE r.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.id
-) ORDER BY d.id`},
+ ) OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceParameters') p WHERE sr.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.id)
+ OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceBindings') b WHERE sr.status IN ('released','deprecated') AND json_extract(b.value,'$.source')='environment' AND json_extract(b.value,'$.sourceParameter')=d.technical_key)
+ ORDER BY d.id`},
 	{name: "environment_parameter_defaults", columns: []string{"definition_id", "value_json"}, query: `
 SELECT d.definition_id,d.value_json FROM environment_parameter_defaults d
 WHERE EXISTS (
   SELECT 1 FROM component_releases r,json_each(r.parameters_json) p
   WHERE r.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.definition_id
-) ORDER BY d.definition_id`},
+ ) OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceParameters') p WHERE sr.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.definition_id)
+ OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceBindings') b JOIN environment_parameter_definitions def ON def.id=d.definition_id WHERE sr.status IN ('released','deprecated') AND json_extract(b.value,'$.source')='environment' AND json_extract(b.value,'$.sourceParameter')=def.technical_key)
+ ORDER BY d.definition_id`},
 	{name: "components", columns: []string{"id", "slug", "name", "description", "owner_id", "created_at", "updated_at", "layer", "tags_json"}, query: `
 SELECT id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json FROM components c
 WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND r.status IN ('released','deprecated')) ORDER BY slug,id`},
-	{name: "component_release_lines", columns: []string{"id", "component_id", "name", "created_at"}, query: `
-SELECT l.id,l.component_id,l.name,l.created_at FROM component_release_lines l
+	{name: "component_release_lines", columns: []string{"id", "component_id", "name", "created_at", "environment_constraints_json"}, query: `
+SELECT l.id,l.component_id,l.name,l.created_at,l.environment_constraints_json FROM component_release_lines l
 WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.line_id=l.id AND r.status IN ('released','deprecated')) ORDER BY l.component_id,l.created_at,l.id`},
 	{name: "component_releases", columns: []string{"id", "component_id", "line_id", "parent_release_id", "template_source_release_id", "version", "status", "release_notes", "compatibility", "candidate", "review_status", "review_contract_digest", "review_submitted_at", "reviewed_by", "reviewed_at", "review_comment", "publication_generation", "risk_level", "environment_constraints_json", "parameters_json", "playbook_tree_sha256", "playbook_workspace_root", "created_at", "released_at", "deprecated_at"}, query: `
 SELECT id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,0,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,publication_generation,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at
@@ -100,19 +106,19 @@ FROM component_releases WHERE status IN ('released','deprecated') ORDER BY compo
 SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,d.kind FROM component_dependencies d
 JOIN component_releases r ON r.id=d.release_id JOIN component_releases u ON u.id=d.upstream_release_id
 WHERE r.status IN ('released','deprecated') AND u.status IN ('released','deprecated') ORDER BY d.release_id,d.upstream_component_id,d.id`},
-	{name: "action_definitions", columns: []string{"id", "release_id", "name", "kind", "playbook", "playbook_sha256", "tags_json", "host_group", "required_credentials_json", "timeout_seconds", "risk_level", "destructive", "idempotent", "from_release_id", "to_release_id"}, query: `
-SELECT a.id,a.release_id,a.name,a.kind,a.playbook,a.playbook_sha256,a.tags_json,a.host_group,a.required_credentials_json,a.timeout_seconds,a.risk_level,a.destructive,a.idempotent,a.from_release_id,a.to_release_id
+	{name: "action_definitions", columns: []string{"id", "release_id", "name", "kind", "playbook", "playbook_sha256", "tags_json", "host_group", "required_credentials_json", "timeout_seconds", "risk_level", "destructive", "idempotent", "from_release_id", "to_release_id", "pre_check_action_id", "post_check_action_id", "become", "gather_facts", "resource_contract_json"}, query: `
+SELECT a.id,a.release_id,a.name,a.kind,a.playbook,a.playbook_sha256,a.tags_json,a.host_group,a.required_credentials_json,a.timeout_seconds,a.risk_level,a.destructive,a.idempotent,a.from_release_id,a.to_release_id,a.pre_check_action_id,a.post_check_action_id,a.become,a.gather_facts,a.resource_contract_json
 FROM action_definitions a JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','deprecated') ORDER BY a.release_id,a.kind,a.id`},
 	{name: "component_playbook_files", columns: []string{"release_id", "relative_path", "sha256", "size_bytes", "media_type", "updated_at"}, query: `
 SELECT f.release_id,f.relative_path,f.sha256,f.size_bytes,f.media_type,f.updated_at
 FROM component_playbook_files f JOIN component_releases r ON r.id=f.release_id
 WHERE r.status IN ('released','deprecated') ORDER BY f.release_id,f.relative_path`},
-	{name: "scenarios", columns: []string{"id", "slug", "name", "description", "owner_id", "current_revision_id", "created_at", "updated_at"}, query: `
+	{name: "scenarios", columns: []string{"id", "slug", "name", "description", "owner_id", "current_revision_id", "created_at", "updated_at", "forked_from_scenario_id", "forked_from_revision_id", "forked_from_digest", "environment_constraints_json"}, query: `
 SELECT s.id,s.slug,s.name,s.description,s.owner_id,
 COALESCE((SELECT sr.id FROM scenario_revisions sr WHERE sr.scenario_id=s.id AND sr.status IN ('released','deprecated') ORDER BY CASE sr.status WHEN 'released' THEN 0 ELSE 1 END,sr.revision DESC LIMIT 1),''),
-s.created_at,s.updated_at FROM scenarios s WHERE EXISTS (SELECT 1 FROM scenario_revisions sr WHERE sr.scenario_id=s.id AND sr.status IN ('released','deprecated')) ORDER BY s.slug,s.id`},
-	{name: "scenario_revisions", columns: []string{"id", "scenario_id", "revision", "status", "publication_generation", "graph_json", "environment_constraints_json", "created_at", "test_passed_at", "released_at", "deprecated_at", "abandoned_at"}, query: `
-SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at
+s.created_at,s.updated_at,s.forked_from_scenario_id,s.forked_from_revision_id,s.forked_from_digest,s.environment_constraints_json FROM scenarios s WHERE EXISTS (SELECT 1 FROM scenario_revisions sr WHERE sr.scenario_id=s.id AND sr.status IN ('released','deprecated')) ORDER BY s.slug,s.id`},
+	{name: "scenario_revisions", columns: []string{"id", "scenario_id", "revision", "status", "publication_generation", "graph_json", "environment_constraints_json", "created_at", "test_passed_at", "released_at", "deprecated_at", "abandoned_at", "lifecycle_json"}, query: `
+SELECT id,scenario_id,revision,status,publication_generation,graph_json,environment_constraints_json,created_at,test_passed_at,released_at,deprecated_at,abandoned_at,lifecycle_json
 FROM scenario_revisions WHERE status IN ('released','deprecated') ORDER BY scenario_id,revision,id`},
 	{name: "component_release_artifacts", columns: []string{"id", "release_id", "alias", "filename", "sha256", "size_bytes", "source_url", "source_updated_by", "source_updated_at", "created_by", "created_at"}, query: `
 SELECT a.id,a.release_id,a.alias,a.filename,a.sha256,a.size_bytes,a.source_url,a.source_updated_by,a.source_updated_at,a.created_by,a.created_at
@@ -146,7 +152,11 @@ func ExportCatalog(ctx context.Context, databasePath, playbookRoot, destination 
 	if err != nil {
 		return Catalog{}, nil, err
 	}
-	catalog.Playbooks = playbooks
+	acceptance, err := exportScenarioAcceptancePlaybooks(ctx, database, playbookRoot, destination)
+	if err != nil {
+		return Catalog{}, nil, err
+	}
+	catalog.Playbooks = append(playbooks, acceptance...)
 	sortCatalog(&catalog)
 	encoded, err := canonicalJSON(catalog)
 	if err != nil {

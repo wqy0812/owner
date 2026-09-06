@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/store"
 )
 
 type CandidateReleaseSetItem struct {
@@ -24,7 +25,7 @@ type CandidateReleaseSet struct {
 	Issues             []domain.ValidationIssue  `json:"issues"`
 }
 
-func (p *Platform) CreateScenario(ctx context.Context, user domain.User, scenario domain.Scenario) (domain.Scenario, error) {
+func (p *ScenarioService) Create(ctx context.Context, user domain.User, scenario domain.Scenario) (domain.Scenario, error) {
 	if err := domain.ValidateRole(user, domain.RoleScenarioOwner); err != nil {
 		return scenario, err
 	}
@@ -34,22 +35,27 @@ func (p *Platform) CreateScenario(ctx context.Context, user domain.User, scenari
 	if err := validateSlug(scenario.Slug); err != nil {
 		return scenario, err
 	}
+	if err := p.catalogRules.validateEnvironmentConstraintRetiredReferences(ctx, scenario.EnvironmentConstraints, nil); err != nil {
+		return scenario, err
+	}
+	scenario.EnvironmentConstraints = domain.NormalizeEnvironmentConstraints(scenario.EnvironmentConstraints)
 	now := time.Now().UTC()
 	scenario.ID, scenario.OwnerID, scenario.CreatedAt, scenario.UpdatedAt = newID("scenario"), user.ID, now, now
+	scenario.ForkedFromScenarioID, scenario.ForkedFromRevisionID, scenario.ForkedFromDigest = "", "", ""
 	revision := domain.ScenarioRevision{
-		ID: newID("scenario-revision"), ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft,
-		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, CreatedAt: now,
+		ID: newID("scenario-revision"), ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, DigestVersion: domain.ScenarioDigestVersion,
+		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, CreatedAt: now, EnvironmentConstraints: scenario.EnvironmentConstraints,
 	}
 	scenario.CurrentRevisionID = revision.ID
 	if err := p.store.CreateScenario(ctx, scenario, revision); err != nil {
 		return scenario, err
 	}
 	scenario.Revisions = []domain.ScenarioRevision{revision}
-	p.audit(ctx, user, "scenario.created", "scenario", scenario.ID, map[string]any{"slug": scenario.Slug, "revisionId": revision.ID})
+	p.audit.Record(ctx, user, "scenario.created", "scenario", scenario.ID, map[string]any{"slug": scenario.Slug, "revisionId": revision.ID})
 	return scenario, nil
 }
 
-func (p *Platform) DeleteScenario(ctx context.Context, user domain.User, scenarioID string) error {
+func (p *ScenarioService) Delete(ctx context.Context, user domain.User, scenarioID string) error {
 	scenario, err := p.store.GetScenario(ctx, scenarioID, true)
 	if err != nil {
 		return err
@@ -79,8 +85,8 @@ func (p *Platform) DeleteScenario(ctx context.Context, user domain.User, scenari
 	return nil
 }
 
-func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, scenarioID string, input ScenarioCloneRequest) (domain.ScenarioRevision, error) {
-	plan, err := p.PreviewScenarioClone(ctx, user, scenarioID, input)
+func (p *ScenarioService) CloneRevision(ctx context.Context, user domain.User, scenarioID string, input ScenarioCloneRequest) (domain.ScenarioRevision, error) {
+	plan, err := p.PreviewClone(ctx, user, scenarioID, input)
 	if err != nil {
 		return domain.ScenarioRevision{}, err
 	}
@@ -91,7 +97,12 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 	if err != nil {
 		return source, err
 	}
+	original := source
 	next := plan.NextRevision
+	source.SourceRevisionID, source.SourceRunID = input.SourceRevisionID, plan.SourceRunID
+	source.UpgradeConstraints = nil
+	source.DigestVersion = domain.ScenarioDigestVersion
+	source.PublicationGeneration = 0
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
 	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
 	source.Graph, err = p.deriveScenarioHostGroups(ctx, source.Graph)
@@ -107,14 +118,19 @@ func (p *Platform) CloneScenarioRevision(ctx context.Context, user domain.User, 
 		releaseByNode[node.ID] = release
 	}
 	source.Graph, _ = normalizeScenarioGraph(source.Graph, releaseByNode)
-	if err := p.store.CreateScenarioRevisionFromSource(ctx, input.SourceRevisionID, source); err != nil {
+	cleanup, err := p.CloneScenarioAcceptanceWorkspace(ctx, original, &source)
+	if err != nil {
 		return source, err
 	}
-	p.audit(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next, "sourceRevisionId": input.SourceRevisionID, "planDigest": plan.PlanDigest})
+	if err := p.store.CreateScenarioRevisionFromSource(ctx, input.SourceRevisionID, source); err != nil {
+		cleanup()
+		return source, err
+	}
+	p.audit.Record(ctx, user, "scenario_revision.cloned", "scenario_revision", source.ID, map[string]any{"scenarioId": scenarioID, "revision": next, "sourceRevisionId": input.SourceRevisionID, "planDigest": plan.PlanDigest})
 	return source, nil
 }
 
-func (p *Platform) AbandonScenarioRevision(ctx context.Context, user domain.User, revisionID string) (domain.Scenario, error) {
+func (p *ScenarioService) AbandonRevision(ctx context.Context, user domain.User, revisionID string) (domain.Scenario, error) {
 	revision, scenario, err := p.ownedScenarioRevision(ctx, user, revisionID)
 	if err != nil {
 		return scenario, err
@@ -126,17 +142,17 @@ func (p *Platform) AbandonScenarioRevision(ctx context.Context, user domain.User
 	if err != nil {
 		return scenario, err
 	}
-	p.audit(ctx, user, "scenario_revision.abandoned", "scenario_revision", revisionID, map[string]any{
+	p.audit.Record(ctx, user, "scenario_revision.abandoned", "scenario_revision", revisionID, map[string]any{
 		"scenarioId": scenario.ID, "revision": revision.Revision, "restoredRevisionId": restoredID,
 	})
 	return p.store.GetScenario(ctx, scenario.ID, true)
 }
 
-func (p *Platform) ListScenarios(ctx context.Context, user domain.User) ([]domain.Scenario, error) {
+func (p *ScenarioService) List(ctx context.Context, user domain.User) ([]domain.Scenario, error) {
 	return p.store.ListScenarios(ctx, user)
 }
 
-func (p *Platform) GetScenario(ctx context.Context, user domain.User, id string) (domain.Scenario, error) {
+func (p *ScenarioService) Get(ctx context.Context, user domain.User, id string) (domain.Scenario, error) {
 	scenario, err := p.store.GetScenario(ctx, id, true)
 	if err != nil {
 		return scenario, err
@@ -160,13 +176,30 @@ func (p *Platform) GetScenario(ctx context.Context, user domain.User, id string)
 	return scenario, nil
 }
 
-func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph, constraints ...map[string]any) (domain.ScenarioRevision, error) {
+func (p *ScenarioService) SaveGraph(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph, constraints ...map[string]any) (domain.ScenarioRevision, error) {
+	return p.saveScenarioGraph(ctx, user, revisionID, graph, "", constraints...)
+}
+
+func (p *ScenarioService) SaveGraphWithDigest(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph, expectedDigest string, constraints ...map[string]any) (domain.ScenarioRevision, error) {
+	if expectedDigest == "" {
+		return domain.ScenarioRevision{}, fmt.Errorf("%w: expected scenario digest is required", domain.ErrInvalid)
+	}
+	return p.saveScenarioGraph(ctx, user, revisionID, graph, expectedDigest, constraints...)
+}
+
+func (p *ScenarioService) saveScenarioGraph(ctx context.Context, user domain.User, revisionID string, graph domain.ScenarioGraph, expectedDigest string, constraints ...map[string]any) (domain.ScenarioRevision, error) {
 	revision, scenario, err := p.ownedScenarioRevision(ctx, user, revisionID)
 	if err != nil {
 		return revision, err
 	}
 	if scenario.CurrentRevisionID != revisionID {
 		return revision, fmt.Errorf("%w: only the current scenario revision can be edited", domain.ErrConflict)
+	}
+	for _, node := range append(append([]domain.ScenarioNode{}, revision.Graph.Nodes...), graph.Nodes...) {
+		release, e := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if e != nil || release.Status == domain.ReleaseDraft && !release.Candidate {
+			return revision, &domain.CodedError{Code: "scenario.contract_unavailable", Message: "场景合同未齐，已保存的依赖、顺序与参数保持原样；请等待组件共享后编辑", Cause: domain.ErrConflict}
+		}
 	}
 	graph, err = p.deriveScenarioHostGroups(ctx, graph)
 	if err != nil {
@@ -195,20 +228,30 @@ func (p *Platform) SaveScenarioGraph(ctx context.Context, user domain.User, revi
 	if len(graphIssues) > 0 {
 		return revision, &domain.ValidationError{Message: "scenario graph is invalid", Details: graphIssues}
 	}
-	if err := p.store.SaveScenarioGraph(ctx, revisionID, graph, constraints...); err != nil {
-		return revision, err
+	if expectedDigest == "" {
+		expectedDigest = domain.ScenarioRevisionSpecDigest(revision)
 	}
-	revision.Graph, revision.Status, revision.TestPassedAt = graph, domain.RevisionDraft, nil
+	revision.Graph = graph
 	if len(constraints) > 0 {
 		revision.EnvironmentConstraints = constraints[0]
 	}
-	p.audit(ctx, user, "scenario_revision.graph_updated", "scenario_revision", revisionID, map[string]any{
+	if err := p.store.SaveScenarioRevisionDefinition(ctx, revision, expectedDigest); err != nil {
+		return revision, err
+	}
+	revision, err = p.store.GetScenarioRevision(ctx, revisionID)
+	if err != nil {
+		return revision, err
+	}
+	if len(constraints) > 0 {
+		revision.EnvironmentConstraints = constraints[0]
+	}
+	p.audit.Record(ctx, user, "scenario_revision.graph_updated", "scenario_revision", revisionID, map[string]any{
 		"scenarioId": scenario.ID, "nodes": len(graph.Nodes), "edges": len(graph.Edges),
 	})
 	return revision, nil
 }
 
-func (p *Platform) deriveScenarioHostGroups(ctx context.Context, graph domain.ScenarioGraph) (domain.ScenarioGraph, error) {
+func (p *ScenarioService) deriveScenarioHostGroups(ctx context.Context, graph domain.ScenarioGraph) (domain.ScenarioGraph, error) {
 	graph.Nodes = append([]domain.ScenarioNode(nil), graph.Nodes...)
 	for index := range graph.Nodes {
 		node := &graph.Nodes[index]
@@ -220,7 +263,7 @@ func (p *Platform) deriveScenarioHostGroups(ctx context.Context, graph domain.Sc
 		if err != nil {
 			return graph, fmt.Errorf("node %s: %w", node.ID, err)
 		}
-		if err := p.validateHostGroupCatalog(ctx, action.HostGroup); err != nil {
+		if err := p.catalogRules.validateHostGroupCatalog(ctx, action.HostGroup); err != nil {
 			return graph, fmt.Errorf("node %s: %w", node.ID, err)
 		}
 		node.HostGroup = action.HostGroup
@@ -228,7 +271,7 @@ func (p *Platform) deriveScenarioHostGroups(ctx context.Context, graph domain.Sc
 	return graph, nil
 }
 
-func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revisionID string) ([]domain.ValidationIssue, error) {
+func (p *ScenarioService) Validate(ctx context.Context, user domain.User, revisionID string) ([]domain.ValidationIssue, error) {
 	revision, _, err := p.ownedScenarioRevision(ctx, user, revisionID)
 	if err != nil {
 		return nil, err
@@ -238,6 +281,19 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 	}
 
 	issues := make([]domain.ValidationIssue, 0)
+	for _, node := range revision.Graph.Nodes {
+		release, e := p.store.GetComponentRelease(ctx, node.ReleaseID)
+		if e != nil {
+			issues = append(issues, domain.ValidationIssue{Code: "contract_missing", Message: "组件不存在，保留当前草稿等待 Owner 处理", NodeID: node.ID})
+			continue
+		}
+		if release.Status == domain.ReleaseDraft && !release.Candidate {
+			issues = append(issues, domain.ValidationIssue{Code: "contract_unshared", Message: "组件尚未共享，暂停依赖、参数与执行顺序校验", NodeID: node.ID})
+		}
+	}
+	if len(issues) > 0 {
+		return issues, nil
+	}
 	releaseByNode := map[string]domain.ComponentRelease{}
 	for _, node := range revision.Graph.Nodes {
 		release, releaseErr := p.store.GetComponentRelease(ctx, node.ReleaseID)
@@ -249,7 +305,7 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 		if release.Status != domain.ReleaseReleased && !candidateDraft && !(revision.Status == domain.RevisionReleased && release.Status == domain.ReleaseDeprecated) {
 			issues = append(issues, domain.ValidationIssue{Code: "release_not_released", Message: "scenario nodes may only use released versions or ready shared candidates", NodeID: node.ID})
 		} else if candidateDraft {
-			if readinessErr := p.validateReleaseForCandidate(ctx, release); readinessErr != nil {
+			if readinessErr := p.releaseRules.validateReleaseForCandidate(ctx, release); readinessErr != nil {
 				issues = append(issues, domain.ValidationIssue{Code: "candidate_not_ready", Message: readinessErr.Error(), NodeID: node.ID})
 			}
 		}
@@ -272,11 +328,17 @@ func (p *Platform) ValidateScenario(ctx context.Context, user domain.User, revis
 			issues = append(issues, domain.ScenarioAdaptationIssues(revision.EnvironmentConstraints, release.EnvironmentConstraints, node.ID, node.Name, true)...)
 		}
 	}
+	resourceReleases := map[string]domain.ComponentRelease{}
+	for _, release := range releaseByNode {
+		resourceReleases[release.ID] = release
+	}
+	issues = append(issues, scenarioResourceIssues(revision.Graph, resourceReleases)...)
 	normalizedGraph, dependencyIssues := normalizeScenarioGraph(revision.Graph, releaseByNode)
 	issues = append(issues, domain.ValidateGraph(normalizedGraph)...)
 	issues = append(issues, scenarioSequenceDependencyIssues(normalizedGraph)...)
 	issues = append(issues, scenarioSequenceTopologyIssues(normalizedGraph)...)
 	issues = append(issues, dependencyIssues...)
+	issues = append(issues, scenarioExecutionOrderIssues(normalizedGraph)...)
 	for _, node := range normalizedGraph.Nodes {
 		release, ok := releaseByNode[node.ID]
 		if !ok {
@@ -390,7 +452,7 @@ func graphReachability(graph domain.ScenarioGraph) map[string]map[string]bool {
 	return result
 }
 
-func (p *Platform) DeprecateScenario(ctx context.Context, user domain.User, revisionID string) (domain.ScenarioRevision, error) {
+func (p *ScenarioService) Deprecate(ctx context.Context, user domain.User, revisionID string) (domain.ScenarioRevision, error) {
 	revision, scenario, err := p.ownedScenarioRevision(ctx, user, revisionID)
 	if err != nil {
 		return revision, err
@@ -400,12 +462,12 @@ func (p *Platform) DeprecateScenario(ctx context.Context, user domain.User, revi
 		return revision, err
 	}
 	revision.Status, revision.DeprecatedAt = domain.RevisionDeprecated, &now
-	p.requestPublicationBackup("scenario-revision-deprecated:" + revisionID)
-	p.audit(ctx, user, "scenario_revision.deprecated", "scenario_revision", revisionID, map[string]any{"scenarioId": scenario.ID, "revision": revision.Revision})
+	p.publication.requestPublicationBackup("scenario-revision-deprecated:" + revisionID)
+	p.audit.Record(ctx, user, "scenario_revision.deprecated", "scenario_revision", revisionID, map[string]any{"scenarioId": scenario.ID, "revision": revision.Revision})
 	return revision, nil
 }
 
-func (p *Platform) ownedScenarioRevision(ctx context.Context, user domain.User, revisionID string) (domain.ScenarioRevision, domain.Scenario, error) {
+func (p *ScenarioService) ownedScenarioRevision(ctx context.Context, user domain.User, revisionID string) (domain.ScenarioRevision, domain.Scenario, error) {
 	revision, err := p.store.GetScenarioRevision(ctx, revisionID)
 	if err != nil {
 		return revision, domain.Scenario{}, err
@@ -418,4 +480,20 @@ func (p *Platform) ownedScenarioRevision(ctx context.Context, user domain.User, 
 		return revision, scenario, err
 	}
 	return revision, scenario, nil
+}
+
+func (s *ScenarioService) GetRevision(ctx context.Context, id string) (domain.ScenarioRevision, error) {
+	return s.store.GetScenarioRevision(ctx, id)
+}
+
+func (s *ScenarioService) GetScenarioRecord(ctx context.Context, id string, includeRevisions bool) (domain.Scenario, error) {
+	return s.store.GetScenario(ctx, id, includeRevisions)
+}
+
+func (s *ScenarioService) GetUser(ctx context.Context, id string) (domain.User, error) {
+	return s.store.GetUser(ctx, id)
+}
+
+func (s *ScenarioService) ListReleaseDisplayMetadata(ctx context.Context) (map[string]store.ReleaseDisplayMetadata, error) {
+	return s.store.ListReleaseDisplayMetadata(ctx)
 }

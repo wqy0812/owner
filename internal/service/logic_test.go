@@ -12,7 +12,7 @@ import (
 )
 
 func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
-	platform := &Platform{}
+	platform := &DeliveryService{}
 	plan := lockedPlan{
 		DeliveryRequirements: []DeliveryRequirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
 		DeliveryDecisions:    []DeliveryDecision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
@@ -40,7 +40,7 @@ func (presentArtifactDelivery) Transfer(context.Context, ArtifactTransfer) error
 }
 
 func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
-	platform := &Platform{artifactDelivery: presentArtifactDelivery{}}
+	platform := &DeliveryService{artifactDelivery: presentArtifactDelivery{}}
 	plan := lockedPlan{
 		Steps: []lockedStep{{ID: "step-1", Variables: map[string]any{}}},
 		DeliveryRequirements: []DeliveryRequirement{{
@@ -226,21 +226,26 @@ func TestIdempotentInstallCanServeUpgradeWithoutDuplicateAction(t *testing.T) {
 	}
 }
 
-func TestIdempotentUpgradeReuseIsOnlyValidForInstall(t *testing.T) {
+func TestCheckCannotDeclareExecutableRetryCapability(t *testing.T) {
 	release := domain.ComponentRelease{Version: "1.0.0", Actions: []domain.ActionDefinition{{
-		Kind: domain.ActionVerify, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60, Idempotent: true,
+		Kind: domain.ActionCheck, Playbook: "verify.yml", HostGroup: "all", TimeoutSeconds: 60, Idempotent: true,
 	}}}
-	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), "only valid for install") {
+	if err := validateRelease(release); err == nil || !strings.Contains(err.Error(), "check") {
 		t.Fatalf("invalid idempotent capability validation=%v", err)
 	}
 }
 
-func TestComponentTestAcceptsConfigureAndPreflightPrimaryActions(t *testing.T) {
-	for _, kind := range []domain.ActionKind{domain.ActionConfigure, domain.ActionPreflight} {
+func TestComponentTestRequiresAnExecutablePrimaryAction(t *testing.T) {
+	for _, kind := range []domain.ActionKind{domain.ActionConfigure, domain.ActionInstall, domain.ActionUpgrade} {
 		release := domain.ComponentRelease{Actions: []domain.ActionDefinition{{Kind: domain.ActionVerify}, {Kind: kind}}}
 		action, found := primaryActionForComponentTest(release)
 		if !found || action.Kind != kind {
 			t.Fatalf("primary action for %s = %+v, found=%v", kind, action, found)
+		}
+	}
+	for _, kind := range []domain.ActionKind{domain.ActionCheck, domain.ActionPreflight, domain.ActionVerify} {
+		if _, found := primaryActionForComponentTest(domain.ComponentRelease{Actions: []domain.ActionDefinition{{Kind: kind}}}); found {
+			t.Fatalf("check-only release acquired an executable primary action: %s", kind)
 		}
 	}
 	release := domain.ComponentRelease{Actions: []domain.ActionDefinition{{Kind: domain.ActionPreflight}, {Kind: domain.ActionConfigure}}}

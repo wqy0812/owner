@@ -2,11 +2,8 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -14,12 +11,12 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]domain.Component, error) {
+func (p *CatalogService) ListComponents(ctx context.Context, user domain.User) ([]domain.Component, error) {
 	components, err := p.store.ListComponents(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	evaluation := newReadinessEvaluation(p)
+	evaluation := newReadinessEvaluation(p.releaseRules)
 	evaluation.preparePlaybooks(components)
 	for i := range components {
 		components[i], err = evaluation.decorateComponent(ctx, components[i])
@@ -37,16 +34,29 @@ func (p *Platform) ListComponents(ctx context.Context, user domain.User) ([]doma
 	return components, nil
 }
 
-func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string) (domain.Component, error) {
+func (p *CatalogService) WorkbenchReadiness(ctx context.Context, components []domain.Component) ([]domain.Component, error) {
+	evaluation := newReadinessEvaluation(p.releaseRules)
+	evaluation.preparePlaybooks(components)
+	for i := range components {
+		var err error
+		components[i], err = evaluation.decorateComponent(ctx, components[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return components, nil
+}
+
+func (p *CatalogService) Get(ctx context.Context, user domain.User, id string) (domain.Component, error) {
 	component, err := p.store.GetComponent(ctx, id, true)
 	if err != nil {
 		return component, err
 	}
 	if user.Role == domain.RoleComponentOwner && user.ID == component.OwnerID {
-		return p.decorateComponentReadiness(ctx, component)
+		return p.releaseRules.decorateComponentReadiness(ctx, component)
 	}
 	if user.Role == domain.RolePlatformAdmin {
-		return p.decorateComponentReadiness(ctx, component)
+		return p.releaseRules.decorateComponentReadiness(ctx, component)
 	}
 	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
@@ -58,10 +68,10 @@ func (p *Platform) GetComponent(ctx context.Context, user domain.User, id string
 	if len(filtered) == 0 {
 		return domain.Component{}, domain.ErrNotFound
 	}
-	return p.decorateComponentReadiness(ctx, component)
+	return p.releaseRules.decorateComponentReadiness(ctx, component)
 }
 
-func (p *Platform) CreateComponent(ctx context.Context, user domain.User, component domain.Component) (domain.Component, error) {
+func (p *CatalogService) Create(ctx context.Context, user domain.User, component domain.Component) (domain.Component, error) {
 	if err := domain.ValidateRole(user, domain.RoleComponentOwner); err != nil {
 		return component, err
 	}
@@ -81,13 +91,13 @@ func (p *Platform) CreateComponent(ctx context.Context, user domain.User, compon
 	if err := p.store.CreateComponent(ctx, component); err != nil {
 		return component, err
 	}
-	p.audit(ctx, user, "component.created", "component", component.ID, map[string]any{
+	p.audit.Record(ctx, user, "component.created", "component", component.ID, map[string]any{
 		"slug": component.Slug, "layer": component.Layer, "tags": component.Tags,
 	})
 	return component, nil
 }
 
-func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id string, patch domain.Component) (domain.Component, error) {
+func (p *CatalogService) Update(ctx context.Context, user domain.User, id string, patch domain.Component) (domain.Component, error) {
 	component, err := p.store.GetComponent(ctx, id, true)
 	if err != nil {
 		return component, err
@@ -117,7 +127,7 @@ func (p *Platform) UpdateComponent(ctx context.Context, user domain.User, id str
 	if err := p.store.UpdateComponent(ctx, component); err != nil {
 		return component, err
 	}
-	p.audit(ctx, user, "component.updated", "component", component.ID, map[string]any{
+	p.audit.Record(ctx, user, "component.updated", "component", component.ID, map[string]any{
 		"slug": component.Slug, "layer": component.Layer, "tags": component.Tags,
 	})
 	return component, nil
@@ -142,34 +152,9 @@ func rewriteReleaseChildren(release *domain.ComponentRelease) {
 	}
 }
 
-func (p *Platform) populatePlaybookDigests(component domain.Component, release *domain.ComponentRelease, previous []domain.ActionDefinition) {
-	known := make(map[string]string, len(previous))
-	for _, action := range previous {
-		if action.PlaybookSHA256 != "" {
-			known[action.Playbook] = action.PlaybookSHA256
-		}
-	}
-	for index := range release.Actions {
-		action := &release.Actions[index]
-		if action.PlaybookSHA256 = known[action.Playbook]; action.PlaybookSHA256 != "" {
-			continue
-		}
-		_, resolved, err := p.resolveManagedPlaybookPath(component, *release, action.Playbook, false)
-		if err != nil {
-			continue
-		}
-		contents, err := os.ReadFile(resolved)
-		if err != nil {
-			continue
-		}
-		digest := sha256.Sum256(contents)
-		action.PlaybookSHA256 = hex.EncodeToString(digest[:])
-	}
-}
-
-func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id string, patch domain.ComponentRelease) (domain.ComponentRelease, error) {
-	p.workspaceMu.Lock()
-	defer p.workspaceMu.Unlock()
+func (p *CatalogService) updateRelease(ctx context.Context, user domain.User, id string, patch domain.ComponentRelease) (domain.ComponentRelease, error) {
+	p.workspace.mu.Lock()
+	defer p.workspace.mu.Unlock()
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
@@ -191,6 +176,13 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		base := fmt.Errorf("%w: wait for the active component test before editing this draft", domain.ErrConflict)
 		return release, actionableExistingError(base, "release.validation_in_progress", "活动测试 Run 已锁定当前 Draft 定义", "查看运行", "/runs")
 	}
+	if patch.ExpectedPublicationGeneration != nil && *patch.ExpectedPublicationGeneration != release.PublicationGeneration {
+		return release, fmt.Errorf("%w: 合同已更新，请重新载入后保存", domain.ErrConflict)
+	}
+	if !domain.SameEnvironmentConstraints(patch.EnvironmentConstraints, release.EnvironmentConstraints) {
+		return release, fmt.Errorf("%w: 适配范围已固定，请新增分支", domain.ErrConflict)
+	}
+	patch.ExpectedPublicationGeneration = &release.PublicationGeneration
 	patch.ID, patch.ComponentID, patch.Status, patch.CreatedAt = release.ID, release.ComponentID, release.Status, release.CreatedAt
 	patch.LineID, patch.LineName = release.LineID, release.LineName
 	patch.ParentReleaseID, patch.TemplateSourceReleaseID = release.ParentReleaseID, release.TemplateSourceReleaseID
@@ -215,6 +207,12 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		if patch.Actions[index].ID == "" {
 			return release, fmt.Errorf("%w: save new actions with their Playbook before saving the Draft", domain.ErrConflict)
 		}
+		if patch.Actions[index].NeedsYAMLMigration() {
+			return release, fmt.Errorf("%w: 旧 facts 与固定探测不可写入，请直接编写 YAML", domain.ErrInvalid)
+		}
+		if previous, ok := release.ActionByID(patch.Actions[index].ID); ok {
+			preserveActionLegacy(&patch.Actions[index], previous)
+		}
 		kind, exists := existingActions[patch.Actions[index].ID]
 		if !exists {
 			return release, fmt.Errorf("%w: action %s no longer exists", domain.ErrConflict, patch.Actions[index].ID)
@@ -230,7 +228,7 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 	// save must not replay a stale browser copy over a newer Action mutation.
 	patch.Actions = append([]domain.ActionDefinition(nil), release.Actions...)
 	for index := range patch.Actions {
-		path, err := actionPlaybookPath(component, patch, patch.Actions[index].Kind)
+		path, err := actionSourcePath(component, patch, patch.Actions[index])
 		if err != nil {
 			return release, err
 		}
@@ -248,34 +246,34 @@ func (p *Platform) UpdateRelease(ctx context.Context, user domain.User, id strin
 		}
 	}()
 	rewriteReleaseChildren(&patch)
-	if err := p.validateReleaseContract(ctx, patch, false); err != nil {
+	if err := p.releaseRules.validateReleaseContract(ctx, patch, false); err != nil {
 		return release, err
 	}
-	if err := p.validateEnvironmentConstraintRetiredReferences(ctx, patch.EnvironmentConstraints, release.EnvironmentConstraints); err != nil {
+	if err := p.catalogRules.validateEnvironmentConstraintRetiredReferences(ctx, patch.EnvironmentConstraints, release.EnvironmentConstraints); err != nil {
 		return release, err
 	}
 	if err := p.store.UpdateDraftRelease(ctx, patch); err != nil {
 		return release, err
 	}
 	committed = true
-	p.audit(ctx, user, "component_release.updated", "component_release", id, map[string]any{"version": patch.Version})
+	p.audit.Record(ctx, user, "component_release.updated", "component_release", id, map[string]any{"version": patch.Version})
 	return p.store.GetComponentRelease(ctx, id)
 }
 
 // UpdateReleaseContract replaces only a Draft release's dependency and
 // parameter contract. The remaining release definition is loaded from the
 // store so a focused UI edit cannot accidentally erase action metadata.
-func (p *Platform) UpdateReleaseContract(ctx context.Context, user domain.User, id string, parameters []domain.ParameterDefinition, dependencies []domain.ComponentDependency) (domain.ComponentRelease, error) {
+func (p *CatalogService) updateReleaseContract(ctx context.Context, user domain.User, id string, parameters []domain.ParameterDefinition, dependencies []domain.ComponentDependency) (domain.ComponentRelease, error) {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
 	}
 	release.Parameters = parameters
 	release.Dependencies = dependencies
-	return p.UpdateRelease(ctx, user, id, release)
+	return p.updateRelease(ctx, user, id, release)
 }
 
-func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id string, candidate bool) (domain.ComponentRelease, error) {
+func (p *CatalogService) setReleaseCandidate(ctx context.Context, user domain.User, id string, candidate bool) (domain.ComponentRelease, error) {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
@@ -291,18 +289,18 @@ func (p *Platform) SetReleaseCandidate(ctx context.Context, user domain.User, id
 		if release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != componentReleaseSpecDigest(release) {
 			return release, fmt.Errorf("%w: component release contract must be approved before candidate sharing", domain.ErrConflict)
 		}
-		if err := p.validateReleaseForCandidate(ctx, release); err != nil {
+		if err := p.releaseRules.validateReleaseForCandidate(ctx, release); err != nil {
 			return release, err
 		}
 	}
 	if err := p.store.SetReleaseCandidate(ctx, id, candidate, release.PublicationGeneration, componentReleaseSpecDigest(release)); err != nil {
 		return release, err
 	}
-	p.audit(ctx, user, "component_release.candidate_updated", "component_release", id, map[string]any{"candidate": candidate})
+	p.audit.Record(ctx, user, "component_release.candidate_updated", "component_release", id, map[string]any{"candidate": candidate})
 	return p.store.GetComponentRelease(ctx, id)
 }
 
-func (p *Platform) validateReleaseForCandidate(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseForCandidate(ctx context.Context, release domain.ComponentRelease) error {
 	readiness, err := p.releaseReadiness(ctx, release)
 	if err != nil {
 		return err
@@ -310,15 +308,15 @@ func (p *Platform) validateReleaseForCandidate(ctx context.Context, release doma
 	return readinessError(readiness)
 }
 
-func (p *Platform) Impact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
+func (p *CatalogService) Impact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
 	return p.releaseImpact(ctx, user, releaseID, false)
 }
 
-func (p *Platform) PublicationImpact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
+func (p *CatalogService) PublicationImpact(ctx context.Context, user domain.User, releaseID string) (domain.ImpactReport, error) {
 	return p.releaseImpact(ctx, user, releaseID, true)
 }
 
-func (p *Platform) releaseImpact(ctx context.Context, user domain.User, releaseID string, publication bool) (domain.ImpactReport, error) {
+func (p *CatalogService) releaseImpact(ctx context.Context, user domain.User, releaseID string, publication bool) (domain.ImpactReport, error) {
 	release, err := p.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
 		return domain.ImpactReport{}, err
@@ -373,7 +371,7 @@ func (p *Platform) releaseImpact(ctx context.Context, user domain.User, releaseI
 	return report, nil
 }
 
-func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+func (p *CatalogService) deprecateRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
@@ -405,14 +403,14 @@ func (p *Platform) DeprecateRelease(ctx context.Context, user domain.User, id st
 	}
 	release.Status, release.Candidate, release.DeprecatedAt = domain.ReleaseDeprecated, false, &now
 	if previousStatus == domain.ReleaseReleased {
-		p.requestPublicationBackup("component-release-deprecated:" + id)
+		p.publication.requestPublicationBackup("component-release-deprecated:" + id)
 	}
-	p.audit(ctx, user, "component_release.deprecated", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "previousStatus": previousStatus})
+	p.audit.Record(ctx, user, "component_release.deprecated", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "previousStatus": previousStatus})
 	p.hub.Publish("component_release.deprecated", map[string]any{"componentId": component.ID, "releaseId": release.ID})
 	return release, nil
 }
 
-func (p *Platform) RestoreRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+func (p *CatalogService) restoreRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return release, err
@@ -435,12 +433,12 @@ func (p *Platform) RestoreRelease(ctx context.Context, user domain.User, id stri
 		return release, err
 	}
 	release.Status, release.Candidate, release.DeprecatedAt = domain.ReleaseDraft, false, nil
-	p.audit(ctx, user, "component_release.restored", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version})
+	p.audit.Record(ctx, user, "component_release.restored", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version})
 	p.hub.Publish("component_release.restored", map[string]any{"componentId": component.ID, "releaseId": release.ID})
 	return release, nil
 }
 
-func (p *Platform) DeleteRelease(ctx context.Context, user domain.User, id string) error {
+func (p *CatalogService) DeleteRelease(ctx context.Context, user domain.User, id string) error {
 	release, err := p.store.GetComponentRelease(ctx, id)
 	if err != nil {
 		return err
@@ -479,17 +477,30 @@ func (p *Platform) DeleteRelease(ctx context.Context, user domain.User, id strin
 		return err
 	}
 	if err := p.removeManagedReleasePlaybooks(component, release); err != nil {
-		p.audit(ctx, user, "component_release.playbook_cleanup_failed", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "error": err.Error()})
+		p.audit.Record(ctx, user, "component_release.playbook_cleanup_failed", "component_release", id, map[string]any{"componentId": component.ID, "version": release.Version, "error": err.Error()})
 	}
 	p.hub.Publish("component_release.deleted", map[string]any{"componentId": component.ID, "releaseId": release.ID})
 	return nil
 }
 
-func (p *Platform) validateReleaseContract(ctx context.Context, release domain.ComponentRelease, publishing bool) error {
+func (p *ReleaseRules) validateReleaseContract(ctx context.Context, release domain.ComponentRelease, publishing bool) error {
 	return p.validateReleaseContractWithCatalog(ctx, release, publishing, p.store.ReadCatalogDefinitions)
 }
 
-func (p *Platform) validateReleaseContractWithCatalog(ctx context.Context, release domain.ComponentRelease, publishing bool, loadCatalog func(context.Context) (store.CatalogValidationSnapshot, error)) error {
+func (p *ReleaseRules) validateReleaseContractWithCatalog(ctx context.Context, release domain.ComponentRelease, publishing bool, loadCatalog func(context.Context) (store.CatalogValidationSnapshot, error)) error {
+	if publishing {
+		if err := domain.ValidateReleaseYAMLAuthoring(release); err != nil {
+			return err
+		}
+	}
+	for _, action := range release.Actions {
+		if err := domain.ValidateResourceContract(action.ResourceContract, release.Parameters, publishing); err != nil {
+			return err
+		}
+	}
+	if err := domain.ValidateActionBindings(release, publishing); err != nil {
+		return err
+	}
 	if !publishing || release.Status == domain.ReleaseDraft {
 		if err := domain.ValidateComponentParameterAuthoring(release.Parameters); err != nil {
 			return err
@@ -517,7 +528,7 @@ func (p *Platform) validateReleaseContractWithCatalog(ctx context.Context, relea
 	return nil
 }
 
-func (p *Platform) validateReleaseCatalogValues(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseCatalogValues(ctx context.Context, release domain.ComponentRelease) error {
 	catalog, err := p.store.ReadCatalogDefinitions(ctx)
 	if err != nil {
 		return err
@@ -537,7 +548,7 @@ func validateReleaseCatalogValues(release domain.ComponentRelease, catalog store
 	return domain.ValidateComponentParameterAuthoring(release.Parameters)
 }
 
-func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseMappings(ctx context.Context, release domain.ComponentRelease) error {
 	var downstreamOwnerID string
 	for _, dependency := range release.Dependencies {
 		upstream, err := p.store.GetComponentRelease(ctx, dependency.UpstreamReleaseID)
@@ -582,7 +593,7 @@ func (p *Platform) validateReleaseMappings(ctx context.Context, release domain.C
 	return nil
 }
 
-func (p *Platform) validateUpgradeRollbackMappingContracts(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateUpgradeRollbackMappingContracts(ctx context.Context, release domain.ComponentRelease) error {
 	for _, action := range release.Actions {
 		var peer domain.ComponentRelease
 		var err error
@@ -600,8 +611,13 @@ func (p *Platform) validateUpgradeRollbackMappingContracts(ctx context.Context, 
 		if err != nil {
 			return err
 		}
-		if !mappingContractsEqual(release.Dependencies, peer.Dependencies) {
-			return fmt.Errorf("%w: %s action requires an identical parameter mapping contract", domain.ErrInvalid, action.Kind)
+		if peer.ComponentID != release.ComponentID || peer.LineID != release.LineID {
+			return fmt.Errorf("%w: version transition must stay within the component release line", domain.ErrInvalid)
+		}
+		// Source inputs come from the baseline Run; target mappings are resolved
+		// independently against its exact dependency contract.
+		if err := p.validateReleaseMappings(ctx, release); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -611,7 +627,7 @@ func mappingContractsEqual(left, right []domain.ComponentDependency) bool {
 	return strings.Join(domain.MappingContract(left), "\n") == strings.Join(domain.MappingContract(right), "\n")
 }
 
-func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseForPublish(ctx context.Context, release domain.ComponentRelease) error {
 	if err := p.validateReleaseContract(ctx, release, true); err != nil {
 		return err
 	}
@@ -641,7 +657,7 @@ func (p *Platform) validateReleaseForPublish(ctx context.Context, release domain
 	return nil
 }
 
-func (p *Platform) validateReleaseEvidence(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseEvidence(ctx context.Context, release domain.ComponentRelease) error {
 	readiness, err := p.releaseReadiness(ctx, release)
 	if err != nil {
 		return err
@@ -672,4 +688,72 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func (s *CatalogService) ListComponentSummaries(ctx context.Context, user domain.User) ([]domain.ComponentSummary, error) {
+	return s.store.ListComponentSummaries(ctx, user)
+}
+
+func (s *CatalogService) UpdateRelease(ctx context.Context, user domain.User, id string, input domain.ComponentRelease) (domain.ComponentRelease, error) {
+	release, err := s.updateRelease(ctx, user, id, input)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) UpdateReleaseContract(ctx context.Context, user domain.User, id string, parameters []domain.ParameterDefinition, dependencies []domain.ComponentDependency) (domain.ComponentRelease, error) {
+	release, err := s.updateReleaseContract(ctx, user, id, parameters, dependencies)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) DeprecateRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+	release, err := s.deprecateRelease(ctx, user, id)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) RestoreRelease(ctx context.Context, user domain.User, id string) (domain.ComponentRelease, error) {
+	release, err := s.restoreRelease(ctx, user, id)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) SetReleaseCandidate(ctx context.Context, user domain.User, id string, candidate bool) (domain.ComponentRelease, error) {
+	release, err := s.setReleaseCandidate(ctx, user, id, candidate)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error) {
+	release, err := s.store.GetComponentRelease(ctx, id)
+	if err != nil {
+		return release, err
+	}
+	return s.releaseRules.decorateReleaseReadiness(ctx, release)
+}
+
+func (s *CatalogService) GetComponent(ctx context.Context, id string, includeReleases bool) (domain.Component, error) {
+	component, err := s.store.GetComponent(ctx, id, includeReleases)
+	if err != nil || !includeReleases {
+		return component, err
+	}
+	return s.releaseRules.decorateComponentReadiness(ctx, component)
+}
+
+func (s *CatalogService) GetUser(ctx context.Context, id string) (domain.User, error) {
+	return s.store.GetUser(ctx, id)
+}
+
+func (s *CatalogService) ListReleaseDisplayMetadata(ctx context.Context) (map[string]store.ReleaseDisplayMetadata, error) {
+	return s.store.ListReleaseDisplayMetadata(ctx)
 }

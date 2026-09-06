@@ -102,9 +102,13 @@ func (s *Store) InitializeSchema(ctx context.Context) error {
 }
 
 func (s *Store) Reset(ctx context.Context) error {
-	tables := []string{"run_archive_files", "run_archive_tasks", "run_cleanup_history", "run_retention_cursors", "sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "playbook_action_mutations", "component_playbook_files", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "environment_variable_definitions", "environment_parameter_definitions", "platform_options", "platform_option_categories", "users"}
+	tables := []string{"workflow_sessions", "scenario_execution_submissions", "scenario_installations", "action_execution_receipts", "run_jobs", "run_archive_files", "run_archive_tasks", "run_cleanup_history", "run_retention_cursors", "sessions", "component_image_build_logs", "component_image_mirrors", "component_image_builds", "component_artifact_mirrors", "component_release_artifacts", "environment_component_installations", "environment_ssh_checks", "environment_health_checks", "run_logs", "run_steps", "approvals", "runs", "notifications", "audit_events", "scenario_revisions", "scenarios", "environment_revisions", "environments", "playbook_action_mutations", "component_playbook_files", "action_definitions", "component_dependencies", "component_releases", "component_release_lines", "components", "environment_variable_definitions", "environment_parameter_definitions", "platform_options", "platform_option_categories", "users"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE scenarios SET forked_from_scenario_id=NULL,forked_from_revision_id=NULL,forked_from_digest=''`); err != nil {
+		tx.Rollback()
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS run_cleanup_history_no_update; DROP TRIGGER IF EXISTS run_cleanup_history_no_delete; DROP TRIGGER IF EXISTS audit_events_no_update; DROP TRIGGER IF EXISTS audit_events_no_delete;`); err != nil {

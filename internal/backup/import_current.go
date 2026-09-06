@@ -215,6 +215,11 @@ func restoreUsers(ctx context.Context, tx *sql.Tx, catalog Catalog) error {
 }
 
 func restoreDefinitionTables(ctx context.Context, tx *sql.Tx, catalog Catalog, currentGeneration int64) error {
+	// Branch scenarios refer to source revisions inserted later in this same
+	// restore transaction. Validate the complete relationship set before commit.
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON`); err != nil {
+		return err
+	}
 	tables := catalogTableMap(catalog)
 	for _, name := range []string{"environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"} {
 		for _, row := range tables[name].Rows {

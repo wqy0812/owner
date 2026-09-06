@@ -60,7 +60,7 @@ func run() error {
 		}
 	}
 	seeder := seed.Seeder{Store: database}
-	if strings.EqualFold(envOr("NEWPLATFORM_SEED_PROFILE", "demo"), "identities") {
+	if strings.EqualFold(envOr("NEWPLATFORM_SEED_PROFILE", "identities"), "identities") {
 		if err := seeder.SeedUsers(ctx); err != nil {
 			return fmt.Errorf("seed identities: %w", err)
 		}
@@ -83,12 +83,19 @@ func run() error {
 	runner.KillGrace = runnerTemplate.KillGrace
 	runner.MaxLogBytes = runnerTemplate.MaxLogBytes
 
-	platform := service.NewPlatform(database, runner, service.NewEventHub())
+	platform, err := service.NewPlatform(database, service.RunnerDependencies{Workspaces: runner, Runtime: runner, Jobs: runner}, service.NewEventHub())
+	if err != nil {
+		log.Fatal(err)
+	}
 	platform.ConfigureEnvironmentSSHChecker(
 		sshcheck.New(),
 		envOr("NEWPLATFORM_SSH_KNOWN_HOSTS", sshcheck.DefaultKnownHostsPath()),
 	)
 	platform.ConfigurePlaybookRoot(allowedRoot)
+	if err := platform.Preparations().Recover(context.Background()); err != nil {
+		return fmt.Errorf("recover execution preparations: %w", err)
+	}
+	go platform.Preparations().Health(context.Background())
 	if err := platform.ConfigureRunArchives(os.Getenv("CLUSTERFORGE_RUN_ARCHIVE_DIR")); err != nil {
 		log.Printf("Run archive unavailable: %v", err)
 	}

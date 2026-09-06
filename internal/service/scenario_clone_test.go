@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-func TestScenarioCloneAllowsTestPassedRevisionAndPreservesSource(t *testing.T) {
+func TestScenarioCloneRejectsTestPassedRevisionAndPreservesSource(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -32,25 +33,20 @@ func TestScenarioCloneAllowsTestPassedRevisionAndPreservesSource(t *testing.T) {
 	if err := database.CreateScenario(ctx, scenario, revision); err != nil {
 		t.Fatal(err)
 	}
-	platform := NewPlatform(database, nil, nil)
-	plan, err := platform.PreviewScenarioClone(ctx, owner, scenario.ID, ScenarioCloneRequest{SourceRevisionID: revision.ID})
-	if err != nil {
-		t.Fatal(err)
+	platform := newTestPlatform(t, database, nil, nil)
+	_, err = platform.scenarios.PreviewClone(ctx, owner, scenario.ID, ScenarioCloneRequest{SourceRevisionID: revision.ID})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("test-only source accepted: %v", err)
 	}
-	created, err := platform.CloneScenarioRevision(ctx, owner, scenario.ID, ScenarioCloneRequest{
-		SourceRevisionID: revision.ID, ExpectedPlanDigest: plan.PlanDigest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created.Revision != 2 || created.Status != domain.RevisionDraft || created.TestPassedAt != nil {
-		t.Fatalf("created revision=%+v", created)
+	_, err = platform.scenarios.CloneRevision(ctx, owner, scenario.ID, ScenarioCloneRequest{SourceRevisionID: revision.ID, ExpectedPlanDigest: "stale"})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("test-only clone accepted: %v", err)
 	}
 	preserved, err := database.GetScenarioRevision(ctx, revision.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preserved.Status != domain.RevisionDeprecated || preserved.TestPassedAt == nil || preserved.AbandonedAt == nil {
+	if preserved.Status != domain.RevisionTestPassed || preserved.TestPassedAt == nil || preserved.AbandonedAt != nil {
 		t.Fatalf("source revision changed=%+v", preserved)
 	}
 }

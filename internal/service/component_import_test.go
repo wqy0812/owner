@@ -25,7 +25,7 @@ func componentImportRecoveryPlatform(t *testing.T) (*Platform, *store.Store, str
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	platform := NewPlatform(database, nil, nil)
+	platform := newTestPlatform(t, database, nil, nil)
 	platform.ConfigurePlaybookRoot(root)
 	return platform, database, root
 }
@@ -35,26 +35,26 @@ func recoveryImportFile(componentID, releaseID, slug string) componentImportFile
 	release := domain.ComponentRelease{ID: releaseID, ComponentID: componentID, LineName: "Baseline", Version: "1.0.0"}
 	return componentImportFile{
 		Component: component, Release: release,
-		RelativePath: managedReleasePrefix(component, release) + "install.yml",
-		Content:      "---\n- hosts: all\n  tasks: []\n",
+		RelativePath: managedReleasePrefix(component, release) + "tasks/install.yml",
+		Content:      "---\n- ansible.builtin.assert:\n    that: true\n",
 	}
 }
 
 func TestRecoverComponentImportFilesRemovesUncommittedPromotion(t *testing.T) {
 	platform, _, root := componentImportRecoveryPlatform(t)
 	file := recoveryImportFile("component-orphan", "release-orphan", "orphan")
-	manifest, err := platform.stageComponentImportFiles([]componentImportFile{file})
+	manifest, err := platform.catalog.stageComponentImportFiles([]componentImportFile{file})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.promoteComponentImportFiles(manifest); err != nil {
+	if err := platform.catalog.promoteComponentImportFiles(manifest); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, filepath.FromSlash(file.RelativePath))
 	if _, err := os.Stat(target); err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.RecoverComponentImportFiles(context.Background()); err != nil {
+	if err := platform.catalog.RecoverComponentImportFiles(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -67,11 +67,11 @@ func TestRecoverComponentImportFilesKeepsCommittedPromotion(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	file := recoveryImportFile("component-committed", "release-committed", "committed")
-	manifest, err := platform.stageComponentImportFiles([]componentImportFile{file})
+	manifest, err := platform.catalog.stageComponentImportFiles([]componentImportFile{file})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.promoteComponentImportFiles(manifest); err != nil {
+	if err := platform.catalog.promoteComponentImportFiles(manifest); err != nil {
 		t.Fatal(err)
 	}
 	component := domain.Component{ID: file.Component.ID, Slug: file.Component.Slug, Name: "Committed", Layer: domain.LayerRuntimeState, Tags: []string{"runtime"}, OwnerID: "component-import-owner", CreatedAt: now, UpdatedAt: now}
@@ -82,7 +82,7 @@ func TestRecoverComponentImportFilesKeepsCommittedPromotion(t *testing.T) {
 	if err := database.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.RecoverComponentImportFiles(ctx); err != nil {
+	if err := platform.catalog.RecoverComponentImportFiles(ctx); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, filepath.FromSlash(file.RelativePath))
@@ -104,12 +104,12 @@ func TestComponentImportPromotionRejectsManagedDirectorySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := recoveryImportFile("component-redirected", "release-redirected", "redirected")
-	manifest, err := platform.stageComponentImportFiles([]componentImportFile{file})
+	manifest, err := platform.catalog.stageComponentImportFiles([]componentImportFile{file})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(manifest.BatchDir)
-	if err := platform.promoteComponentImportFiles(manifest); err == nil {
+	if err := platform.catalog.promoteComponentImportFiles(manifest); err == nil {
 		t.Fatal("promotion through a managed-directory symlink succeeded")
 	}
 	entries, err := os.ReadDir(outside)
@@ -126,14 +126,14 @@ func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
 	component := domain.Component{ID: "component-clone-symlink", Slug: "clone-symlink"}
 	source := domain.ComponentRelease{ID: "release-clone-source", ComponentID: component.ID, LineName: "Baseline", Version: "1.0.0"}
 	target := domain.ComponentRelease{ID: "release-clone-target", ComponentID: component.ID, LineName: "Baseline", Version: "2.0.0", Actions: []domain.ActionDefinition{
-		{Playbook: managedReleasePrefix(component, source) + "install.yml"},
+		{Playbook: managedReleasePrefix(component, source) + "tasks/install.yml"},
 	}}
 	component.Name, component.OwnerID, component.Layer, component.CreatedAt, component.UpdatedAt = component.Slug, "component-import-owner", domain.LayerRuntimeState, time.Now().UTC(), time.Now().UTC()
 	if err := db.CreateComponent(context.Background(), component); err != nil {
 		t.Fatal(err)
 	}
 	source.Status, source.RiskLevel, source.CreatedAt = domain.ReleaseDraft, domain.RiskLow, time.Now().UTC()
-	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "install.yml"}}
+	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "tasks/install.yml"}}
 	if err := db.CreateComponentRelease(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
 	if err := os.MkdirAll(sourceDirectory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDirectory, "install.yml"), []byte("---\n- hosts: all\n  tasks: []\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDirectory, "tasks", "install.yml"), []byte(testutil.Playbook), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
@@ -154,7 +154,7 @@ func TestReleaseCloneCopyRejectsManagedTargetSymlink(t *testing.T) {
 	if err := os.Symlink(out, filepath.Clean(filepath.Join(root, filepath.FromSlash(managedReleasePrefix(component, target))))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.copyManagedPlaybooksForClone(component, source.ID, &target); err == nil {
+	if _, err := platform.catalog.copyManagedPlaybooksForClone(component, source.ID, &target); err == nil {
 		t.Fatal("release clone copied a Playbook through a managed target symlink")
 	}
 	entries, err := os.ReadDir(out)
@@ -171,14 +171,14 @@ func TestReleaseCloneCopyRecoveryRemovesUncommittedPromotion(t *testing.T) {
 	component := domain.Component{ID: "component-clone-recovery", Slug: "clone-recovery"}
 	source := domain.ComponentRelease{ID: "release-clone-recovery-source", ComponentID: component.ID, LineName: "Baseline", Version: "1.0.0"}
 	target := domain.ComponentRelease{ID: "release-clone-recovery-target", ComponentID: component.ID, LineName: "Baseline", Version: "2.0.0", Actions: []domain.ActionDefinition{
-		{Playbook: managedReleasePrefix(component, source) + "install.yml"},
+		{Playbook: managedReleasePrefix(component, source) + "tasks/install.yml"},
 	}}
 	component.Name, component.OwnerID, component.Layer, component.CreatedAt, component.UpdatedAt = component.Slug, "component-import-owner", domain.LayerRuntimeState, time.Now().UTC(), time.Now().UTC()
 	if err := db.CreateComponent(context.Background(), component); err != nil {
 		t.Fatal(err)
 	}
 	source.Status, source.RiskLevel, source.CreatedAt = domain.ReleaseDraft, domain.RiskLow, time.Now().UTC()
-	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "install.yml"}}
+	source.Actions = []domain.ActionDefinition{{ID: source.ID + "-install", ReleaseID: source.ID, Kind: domain.ActionInstall, Name: "Install", Playbook: managedReleasePrefix(component, source) + "tasks/install.yml"}}
 	if err := db.CreateComponentRelease(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +189,10 @@ func TestReleaseCloneCopyRecoveryRemovesUncommittedPromotion(t *testing.T) {
 	if err := os.MkdirAll(sourceDirectory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDirectory, "install.yml"), []byte("---\n- hosts: all\n  tasks: []\n"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDirectory, "tasks", "install.yml"), []byte(testutil.Playbook), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := platform.copyManagedPlaybooksForClone(component, source.ID, &target)
+	manifest, err := platform.catalog.copyManagedPlaybooksForClone(component, source.ID, &target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestReleaseCloneCopyRecoveryRemovesUncommittedPromotion(t *testing.T) {
 	if _, err := os.Stat(targetPath); err != nil {
 		t.Fatalf("cloned Playbook was not promoted: %v", err)
 	}
-	if err := platform.RecoverComponentImportFiles(context.Background()); err != nil {
+	if err := platform.catalog.RecoverComponentImportFiles(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {

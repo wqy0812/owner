@@ -40,17 +40,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, e domain.Environment, r d
 		return err
 	}
 	defer tx.Rollback()
-	requireComplete := len(writes) > 0 && writes[0].RequireCompleteFacts
-	if len(writes) > 0 {
-	}
-	if err := validateEnvironmentCatalogTx(ctx, tx, r, domain.EnvironmentRevision{}, false, true, requireComplete); err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO environments(id,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, e.ID, e.Name, e.Description, e.OwnerID, r.ID, timeText(e.CreatedAt), timeText(e.UpdatedAt))
-	if err != nil {
-		return mapSQLError(err)
-	}
-	if err = insertEnvironmentRevision(ctx, tx, r); err != nil {
+	if err := insertEnvironmentTx(ctx, tx, e, r, writes...); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -438,4 +428,21 @@ func (s *Store) NextScenarioRevision(ctx context.Context, scenarioID string) (in
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0)+1 FROM scenario_revisions WHERE scenario_id=?`, scenarioID).Scan(&n)
 	return n, err
+}
+
+func insertEnvironmentTx(ctx context.Context, tx *sql.Tx, e domain.Environment, r domain.EnvironmentRevision, writes ...EnvironmentRevisionWrite) error {
+	requireComplete := len(writes) > 0 && writes[0].RequireCompleteFacts
+	if len(writes) > 0 {
+	}
+	if err := validateEnvironmentCatalogTx(ctx, tx, r, domain.EnvironmentRevision{}, false, true, requireComplete); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO environments(id,name,description,owner_id,current_revision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, e.ID, e.Name, e.Description, e.OwnerID, r.ID, timeText(e.CreatedAt), timeText(e.UpdatedAt))
+	if err != nil {
+		return mapSQLError(err)
+	}
+	if err := insertEnvironmentRevision(ctx, tx, r); err != nil {
+		return err
+	}
+	return nil
 }

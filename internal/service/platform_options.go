@@ -59,7 +59,7 @@ func (s *PlatformOptionService) CreateCategory(ctx context.Context, actor domain
 	if err := s.store.CreatePlatformOptionCategory(ctx, category, audit); err != nil {
 		return domain.PlatformOptionCategory{}, err
 	}
-	s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "action": "created"})
+	s.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "action": "created"})
 	return category, nil
 }
 
@@ -71,7 +71,7 @@ func (s *PlatformOptionService) DeleteCategory(ctx context.Context, actor domain
 	if err := s.store.DeletePlatformOptionCategory(ctx, id, audit); err != nil {
 		return err
 	}
-	s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": "deleted"})
+	s.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": "deleted"})
 	return nil
 }
 
@@ -101,7 +101,7 @@ func (s *PlatformOptionService) RenameCategory(ctx context.Context, actor domain
 			return domain.PlatformOptionCategory{}, err
 		}
 		category.Label = label
-		s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": "renamed"})
+		s.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": "renamed"})
 		return category, nil
 	}
 	return domain.PlatformOptionCategory{}, domain.ErrNotFound
@@ -178,7 +178,7 @@ func (s *PlatformOptionService) CreateOption(ctx context.Context, actor domain.U
 	if err := s.store.CreatePlatformOption(ctx, option, audit); err != nil {
 		return domain.PlatformOption{}, err
 	}
-	s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": target.ID, "optionId": option.ID, "action": "created"})
+	s.hub.Publish("platform_options.updated", map[string]any{"categoryId": target.ID, "optionId": option.ID, "action": "created"})
 	return option, nil
 }
 
@@ -223,7 +223,7 @@ func (s *PlatformOptionService) SetCategoryRetired(ctx context.Context, actor do
 			return domain.PlatformOptionCategory{}, err
 		}
 		category.RetiredAt = at
-		s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": action})
+		s.hub.Publish("platform_options.updated", map[string]any{"categoryId": id, "action": action})
 		return category, nil
 	}
 	return domain.PlatformOptionCategory{}, domain.ErrNotFound
@@ -266,7 +266,7 @@ func (s *PlatformOptionService) SetOptionRetired(ctx context.Context, actor doma
 				return domain.PlatformOption{}, err
 			}
 			option.RetiredAt = at
-			s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "optionId": id, "action": action})
+			s.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "optionId": id, "action": action})
 			return option, nil
 		}
 	}
@@ -281,7 +281,7 @@ func (s *PlatformOptionService) DeleteOption(ctx context.Context, actor domain.U
 	if err := s.store.DeletePlatformOption(ctx, id, audit); err != nil {
 		return err
 	}
-	s.platform.hub.Publish("platform_options.updated", map[string]any{"optionId": id, "action": "deleted"})
+	s.hub.Publish("platform_options.updated", map[string]any{"optionId": id, "action": "deleted"})
 	return nil
 }
 
@@ -312,7 +312,7 @@ func (s *PlatformOptionService) RenameOption(ctx context.Context, actor domain.U
 				return domain.PlatformOption{}, err
 			}
 			option.Label = label
-			s.platform.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "optionId": id, "action": "renamed"})
+			s.hub.Publish("platform_options.updated", map[string]any{"categoryId": category.ID, "optionId": id, "action": "renamed"})
 			return option, nil
 		}
 	}
@@ -331,49 +331,45 @@ func validatePlatformOptionLabel(label string) (string, error) {
 	return label, nil
 }
 
-func (p *Platform) platformOptionLookup(ctx context.Context) (domain.CatalogOptions, error) {
+func (p *CatalogRules) platformOptionLookup(ctx context.Context) (domain.CatalogOptions, error) {
 	return p.store.ReadCatalogOptions(ctx)
 }
-func platformCategoryOption(category domain.PlatformOptionCategory, value string) (domain.PlatformOption, bool) {
-	return domain.PlatformCategoryOption(category, value)
-}
-func constraintValues(raw any) []string { return domain.ConstraintValues(raw) }
-func (p *Platform) validateEnvironmentConstraintsCatalog(ctx context.Context, constraints map[string]any) error {
+func (p *CatalogRules) validateEnvironmentConstraintsCatalog(ctx context.Context, constraints map[string]any) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err
 	}
 	return lookup.ValidateConstraints(constraints)
 }
-func (p *Platform) validateEnvironmentConstraintRetiredReferences(ctx context.Context, constraints, previous map[string]any) error {
+func (p *CatalogRules) validateEnvironmentConstraintRetiredReferences(ctx context.Context, constraints, previous map[string]any) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err
 	}
 	return lookup.ValidateConstraintChanges(constraints, previous)
 }
-func (p *Platform) validateEnvironmentFactsCatalog(ctx context.Context, facts map[string]any, requireComplete bool) error {
+func (p *CatalogRules) validateEnvironmentFactsCatalog(ctx context.Context, facts map[string]any, requireComplete bool) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err
 	}
 	return lookup.ValidateFacts(facts, requireComplete)
 }
-func (p *Platform) validateEnvironmentFactRetiredReferences(ctx context.Context, facts, previous map[string]any) error {
+func (p *CatalogRules) validateEnvironmentFactRetiredReferences(ctx context.Context, facts, previous map[string]any) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err
 	}
 	return lookup.ValidateFactChanges(facts, previous)
 }
-func (p *Platform) validateHostGroupCatalog(ctx context.Context, value string) error {
+func (p *CatalogRules) validateHostGroupCatalog(ctx context.Context, value string) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err
 	}
 	return lookup.ValidateHostGroup(value)
 }
-func (p *Platform) validateEnvironmentInventoryCatalog(ctx context.Context, inventory json.RawMessage) error {
+func (p *CatalogRules) validateEnvironmentInventoryCatalog(ctx context.Context, inventory json.RawMessage) error {
 	lookup, err := p.platformOptionLookup(ctx)
 	if err != nil {
 		return err

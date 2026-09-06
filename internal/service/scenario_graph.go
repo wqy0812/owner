@@ -199,3 +199,45 @@ func containsNodeID(values []string, target string) bool {
 	}
 	return false
 }
+
+// scenarioExecutionOrderIssues stops at the first choice the Scenario Owner
+// has not made. Generic contract topology checks may still allow partial orders.
+func scenarioExecutionOrderIssues(graph domain.ScenarioGraph) []domain.ValidationIssue {
+	if len(domain.ValidateGraph(graph)) > 0 {
+		return nil
+	}
+	indegree := map[string]int{}
+	next := map[string][]string{}
+	for _, node := range graph.Nodes {
+		indegree[node.ID] = 0
+	}
+	for _, edge := range graph.Edges {
+		indegree[edge.Target]++
+		next[edge.Source] = append(next[edge.Source], edge.Target)
+	}
+	ready := []string{}
+	for id, degree := range indegree {
+		if degree == 0 {
+			ready = append(ready, id)
+		}
+	}
+	for len(ready) > 0 {
+		if len(ready) > 1 {
+			sort.Strings(ready) // Stable diagnostics only; never select an execution order.
+			issues := make([]domain.ValidationIssue, 0, len(ready))
+			for _, id := range ready {
+				issues = append(issues, domain.ValidationIssue{Code: "execution_order_undetermined", NodeID: id, Message: "执行顺序尚未确定，请由场景 Owner 补充手工顺序线；已发布版本需复制为新 Revision，补线并重新测试发布"})
+			}
+			return issues
+		}
+		id := ready[0]
+		ready = ready[1:]
+		for _, target := range next[id] {
+			indegree[target]--
+			if indegree[target] == 0 {
+				ready = append(ready, target)
+			}
+		}
+	}
+	return nil
+}

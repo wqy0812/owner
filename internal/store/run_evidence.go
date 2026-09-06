@@ -75,14 +75,5 @@ WHERE kind='component_test' AND status='succeeded'
 	query += ` AND component_evidence_kind=?
 ORDER BY evidence_at DESC,created_at DESC,id DESC LIMIT 1`
 	args = append(args, evidence)
-	if evidence != "rollback_verify" {
-		return `SELECT id FROM (` + query + `)`, args
-	}
-	secondArgs := append([]any(nil), args...)
-	secondArgs[len(secondArgs)-1] = "rollback_self_verify"
-	return `SELECT id FROM (
-SELECT * FROM (` + query + `)
-UNION ALL
-SELECT * FROM (` + query + `)
-) ORDER BY evidence_at DESC,created_at DESC,id DESC LIMIT 1`, append(args, secondArgs...)
+	return `SELECT id FROM (` + query + `)`, args
 }

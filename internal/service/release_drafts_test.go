@@ -19,7 +19,7 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 	root := domain.ComponentRelease{
 		ID: "release-root", ComponentID: "component-1", LineID: "line-stable", LineName: "Stable",
 		Version: "1.0.0", Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable,
-		RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, CreatedAt: now, ReleasedAt: &now,
+		RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}}, CreatedAt: now, ReleasedAt: &now,
 	}
 	if err := database.CreateComponentRelease(ctx, root); err != nil {
 		t.Fatal(err)
@@ -47,16 +47,16 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 		Mode: ReleaseDraftNewLine, LineName: "Next baseline", TemplateSourceReleaseID: child.ID,
 		Version: "3.0-template", ReleaseNotes: "independent baseline", RiskLevel: domain.RiskLow,
 	}
-	newLinePlan, err := platform.PreviewReleaseDraft(ctx, owner, "component-1", newLineRequest)
+	newLinePlan, err := platform.catalog.PreviewReleaseDraft(ctx, owner, "component-1", newLineRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	newLineRequest.ExpectedPlanDigest = "stale"
-	if _, err := platform.CreateReleaseDraft(ctx, owner, "component-1", newLineRequest); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.createReleaseDraft(ctx, owner, "component-1", newLineRequest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale plan error=%v", err)
 	}
 	newLineRequest.ExpectedPlanDigest = newLinePlan.PlanDigest
-	baseline, err := platform.CreateReleaseDraft(ctx, owner, "component-1", newLineRequest)
+	baseline, err := platform.catalog.createReleaseDraft(ctx, owner, "component-1", newLineRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 			t.Fatalf("new baseline retained bound Rollback: %+v", action)
 		}
 	}
-	impact, err := platform.PublicationImpact(ctx, owner, baseline.ID)
+	impact, err := platform.catalog.PublicationImpact(ctx, owner, baseline.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,12 +83,12 @@ func TestReleaseDraftModesKeepTemplateAndEvolutionRelationshipsSeparate(t *testi
 		Mode: ReleaseDraftEvolution, ParentReleaseID: child.ID, Compatibility: domain.CompatibilityCompatible,
 		Version: "3.0.0", ReleaseNotes: "line evolution", RiskLevel: domain.RiskMedium,
 	}
-	evolutionPlan, err := platform.PreviewReleaseDraft(ctx, owner, "component-1", evolutionRequest)
+	evolutionPlan, err := platform.catalog.PreviewReleaseDraft(ctx, owner, "component-1", evolutionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	evolutionRequest.ExpectedPlanDigest = evolutionPlan.PlanDigest
-	evolution, err := platform.CreateReleaseDraft(ctx, owner, "component-1", evolutionRequest)
+	evolution, err := platform.catalog.createReleaseDraft(ctx, owner, "component-1", evolutionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestReleaseDraftPreviewRejectsDeprecatedPublishedSuccessor(t *testing.T) {
 	if err := database.DeprecateComponentRelease(ctx, child.ID, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := platform.PreviewReleaseDraft(ctx, owner, "component-1", ReleaseDraftRequest{
+	_, err := platform.catalog.PreviewReleaseDraft(ctx, owner, "component-1", ReleaseDraftRequest{
 		Mode: ReleaseDraftEvolution, ParentReleaseID: root.ID, Compatibility: domain.CompatibilityCompatible,
 		Version: "3.0.0", ReleaseNotes: "must not preview", EnvironmentConstraints: map[string]any{},
 	})

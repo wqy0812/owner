@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260905-adaptation-run-archive');
+VALUES(1, 'clusterforge-v1-20260906-workbench-run-observations');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS components (
 );
 
 CREATE TABLE IF NOT EXISTS component_release_lines (
+  environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   id TEXT PRIMARY KEY,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
@@ -157,6 +158,11 @@ CREATE TABLE IF NOT EXISTS action_definitions (
   kind TEXT NOT NULL,
   playbook TEXT NOT NULL,
   playbook_sha256 TEXT NOT NULL DEFAULT '',
+  pre_check_action_id TEXT NOT NULL DEFAULT '',
+  post_check_action_id TEXT NOT NULL DEFAULT '',
+  become INTEGER NOT NULL DEFAULT 0 CHECK (become IN (0,1)),
+  gather_facts INTEGER NOT NULL DEFAULT 0 CHECK (gather_facts IN (0,1)),
+  resource_contract_json TEXT CHECK(resource_contract_json IS NULL OR json_valid(resource_contract_json)),
   tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
   host_group TEXT NOT NULL DEFAULT '',
   required_credentials_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(required_credentials_json)),
@@ -200,11 +206,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_one_successor
 CREATE UNIQUE INDEX IF NOT EXISTS idx_releases_playbook_workspace_root
   ON component_releases(playbook_workspace_root) WHERE playbook_workspace_root <> '';
 CREATE INDEX IF NOT EXISTS idx_dependencies_upstream ON component_dependencies(upstream_component_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_executable_action_kind ON action_definitions(release_id,kind) WHERE kind <> 'check';
 CREATE INDEX IF NOT EXISTS idx_actions_release ON action_definitions(release_id, kind, name);
 CREATE INDEX IF NOT EXISTS idx_playbook_files_release ON component_playbook_files(release_id, relative_path);
 
 CREATE TABLE IF NOT EXISTS scenarios (
+  environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
   id TEXT PRIMARY KEY,
+  forked_from_scenario_id TEXT REFERENCES scenarios(id),
+  forked_from_revision_id TEXT REFERENCES scenario_revisions(id),
+  forked_from_digest TEXT NOT NULL DEFAULT '',
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
@@ -216,6 +227,7 @@ CREATE TABLE IF NOT EXISTS scenarios (
 
 CREATE TABLE IF NOT EXISTS scenario_revisions (
   id TEXT PRIMARY KEY,
+  lifecycle_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(lifecycle_json)),
   scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('draft','testing','test_passed','released','deprecated')),
@@ -299,7 +311,11 @@ CREATE TABLE IF NOT EXISTS runs (
     CASE WHEN json_type(input_snapshot_json,'$.componentTestEvidence')='text'
       THEN json_extract(input_snapshot_json,'$.componentTestEvidence') END
   ) VIRTUAL,
-  evidence_at TEXT GENERATED ALWAYS AS (COALESCE(finished_at,created_at)) VIRTUAL
+  evidence_at TEXT GENERATED ALWAYS AS (COALESCE(finished_at,created_at)) VIRTUAL,
+  scenario_spec_digest TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_type(input_snapshot_json,'$.scenarioRevisionSpecDigest')='text'
+      THEN json_extract(input_snapshot_json,'$.scenarioRevisionSpecDigest') END
+  ) VIRTUAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
@@ -308,8 +324,13 @@ CREATE INDEX IF NOT EXISTS idx_runs_component_evidence
 ON runs(component_release_id, component_spec_digest, component_evidence_kind, evidence_at DESC, created_at DESC, id DESC)
 WHERE kind='component_test' AND status='succeeded';
 CREATE INDEX IF NOT EXISTS idx_runs_active_component
-ON runs(component_release_id)
+ON runs(component_release_id,status)
 WHERE kind='component_test' AND status IN ('awaiting_approval','queued','running');
+
+CREATE INDEX IF NOT EXISTS idx_runs_workbench_component ON runs(component_release_id,component_spec_digest,created_at DESC,id DESC) WHERE kind='component_test';
+CREATE INDEX IF NOT EXISTS idx_runs_workbench_scenario ON runs(scenario_revision_id,scenario_spec_digest,created_at DESC,id DESC) WHERE kind='scenario_test';
+CREATE INDEX IF NOT EXISTS idx_runs_workbench_scenario_success ON runs(scenario_revision_id,scenario_spec_digest,created_at DESC,id DESC) WHERE kind='scenario_test' AND status='succeeded';
+CREATE INDEX IF NOT EXISTS idx_runs_workbench_identity ON runs(kind,environment_id,component_release_id,scenario_revision_id,action_kind,created_at DESC,id DESC);
 
 CREATE TRIGGER IF NOT EXISTS runs_active_environment_insert
 BEFORE INSERT ON runs
@@ -396,6 +417,56 @@ CREATE TABLE IF NOT EXISTS run_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_logs_run ON run_logs(run_id, id);
+
+-- A transactional read model of pending waits. Audit events remain in run_logs.
+CREATE TABLE IF NOT EXISTS run_waiting_observations (
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  step_id TEXT NOT NULL,
+  host TEXT NOT NULL,
+  task TEXT NOT NULL,
+  log_id INTEGER NOT NULL REFERENCES run_logs(id) ON DELETE CASCADE,
+  message TEXT NOT NULL CHECK(json_valid(message)),
+  PRIMARY KEY(run_id, step_id, host, task)
+);
+
+CREATE TRIGGER IF NOT EXISTS run_log_waiting_observation
+AFTER INSERT ON run_logs
+WHEN NEW.stream='event' AND EXISTS(SELECT 1 FROM runs WHERE id=NEW.run_id AND status='running')
+BEGIN
+  INSERT INTO run_waiting_observations(run_id,step_id,host,task,log_id,message)
+  SELECT NEW.run_id,json_extract(event,'$.stepId'),COALESCE(json_extract(event,'$.host'),''),COALESCE(json_extract(event,'$.task'),''),NEW.id,event
+  FROM (SELECT CASE WHEN json_valid(NEW.message) THEN NEW.message ELSE '{}' END AS event)
+  WHERE json_extract(event,'$.kind')='waiting'
+    AND json_type(event,'$.stepId')='text' AND json_extract(event,'$.stepId')<>''
+    AND COALESCE(json_type(event,'$.host'),'text')='text'
+    AND COALESCE(json_type(event,'$.task'),'text')='text'
+    AND json_type(event,'$.result.waiting')='object'
+    AND COALESCE(json_type(event,'$.result.waiting.object'),'text')='text'
+    AND COALESCE(json_type(event,'$.result.waiting.expected'),'text')='text'
+    AND COALESCE(json_type(event,'$.result.waiting.observed'),'text')='text'
+    AND COALESCE(json_type(event,'$.result.waiting.deadline'),'text')='text'
+    AND COALESCE(json_type(event,'$.result.waiting.attempt'),'integer') IN ('integer','real')
+    AND COALESCE(json_extract(event,'$.result._ansible_no_log'),0)<>1
+    AND json_type(event,'$.result.censored') IS NULL
+  ON CONFLICT(run_id,step_id,host,task) DO UPDATE SET log_id=excluded.log_id,message=excluded.message
+  WHERE excluded.log_id>run_waiting_observations.log_id;
+
+  DELETE FROM run_waiting_observations
+  WHERE run_id=NEW.run_id AND log_id<NEW.id
+    AND (step_id,host,task) IN (
+      SELECT json_extract(event,'$.stepId'),COALESCE(json_extract(event,'$.host'),''),COALESCE(json_extract(event,'$.task'),'')
+      FROM (SELECT CASE WHEN json_valid(NEW.message) THEN NEW.message ELSE '{}' END AS event)
+      WHERE json_extract(event,'$.kind')='result' AND json_type(event,'$.stepId')='text'
+        AND COALESCE(json_type(event,'$.host'),'text')='text' AND COALESCE(json_type(event,'$.task'),'text')='text'
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS run_terminal_waiting_cleanup
+AFTER UPDATE OF status ON runs
+WHEN NEW.status NOT IN ('running','queued','awaiting_approval')
+BEGIN
+  DELETE FROM run_waiting_observations WHERE run_id=NEW.id;
+END;
 
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
@@ -498,6 +569,7 @@ CREATE INDEX IF NOT EXISTS idx_component_image_build_logs_build_id
 ON component_image_build_logs(build_id, id);
 
 CREATE TABLE IF NOT EXISTS environment_component_installations (
+  source_node_id TEXT NOT NULL DEFAULT '',
   environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
   release_id TEXT NOT NULL REFERENCES component_releases(id),
@@ -506,7 +578,7 @@ CREATE TABLE IF NOT EXISTS environment_component_installations (
   backup_metadata_json TEXT NOT NULL CHECK (json_valid(backup_metadata_json)),
   test_only INTEGER NOT NULL DEFAULT 0,
   installed_at TEXT NOT NULL,
-  PRIMARY KEY(environment_id, component_id)
+  PRIMARY KEY(environment_id, component_id, source_node_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_environment_component_install_backup_ref
@@ -703,11 +775,78 @@ CREATE TABLE IF NOT EXISTS run_cleanup_history (
 CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_update BEFORE UPDATE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_delete BEFORE DELETE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
 CREATE VIEW IF NOT EXISTS retained_run_history AS
- SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at FROM runs
- UNION ALL SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,0,identity_json,'',NULL,NULL,0,0,'记录已按保留策略清理',created_at,NULL,finished_at FROM run_cleanup_history;
+ SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at,component_spec_digest,scenario_spec_digest FROM runs
+ UNION ALL SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,0,identity_json,'',NULL,NULL,0,0,'记录已按保留策略清理',created_at,NULL,finished_at,json_extract(identity_json,'$.componentReleaseSpecDigest'),json_extract(identity_json,'$.scenarioRevisionSpecDigest') FROM run_cleanup_history;
 CREATE TABLE IF NOT EXISTS run_retention_cursors(status TEXT PRIMARY KEY,finished_at TEXT NOT NULL,run_id TEXT NOT NULL);
 CREATE TRIGGER IF NOT EXISTS archived_run_no_log_insert BEFORE INSERT ON run_logs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'Run logs have been archived'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_update BEFORE UPDATE ON runs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.id) BEGIN SELECT RAISE(ABORT,'archived Run core is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_step_update BEFORE UPDATE ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_step_insert BEFORE INSERT ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_approval_update BEFORE UPDATE ON approvals WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run approvals are immutable'); END;
+
+CREATE TABLE IF NOT EXISTS run_jobs (
+ run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+ digest TEXT NOT NULL,
+ bundle BLOB NOT NULL,
+ exit_code INTEGER
+);
+CREATE TABLE IF NOT EXISTS action_execution_receipts (
+ run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+ step_id TEXT NOT NULL,
+ environment_id TEXT NOT NULL REFERENCES environments(id),
+ component_id TEXT NOT NULL REFERENCES components(id),
+ release_id TEXT NOT NULL REFERENCES component_releases(id),
+ action_id TEXT NOT NULL,
+ source_node_id TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('started','main_succeeded','verified')),
+ backup_ref TEXT NOT NULL,
+ backup_json TEXT NOT NULL CHECK(json_valid(backup_json)),
+ started_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,step_id)
+);
+CREATE INDEX IF NOT EXISTS idx_action_receipts_component ON action_execution_receipts(environment_id,component_id,updated_at);
+
+CREATE TABLE IF NOT EXISTS scenario_installations (
+ environment_id TEXT NOT NULL REFERENCES environments(id),
+ scenario_id TEXT NOT NULL REFERENCES scenarios(id),
+ revision_id TEXT REFERENCES scenario_revisions(id),
+ run_id TEXT,
+ mutating_run_id TEXT,
+ state TEXT NOT NULL CHECK(state IN ('complete','test','partial','unverified')),
+ test_only INTEGER NOT NULL DEFAULT 0 CHECK(test_only IN (0,1)),
+ installation_digest TEXT NOT NULL DEFAULT '',
+ generation INTEGER NOT NULL DEFAULT 1 CHECK(generation > 0),
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(environment_id,scenario_id)
+);
+CREATE TABLE IF NOT EXISTS scenario_execution_submissions (
+ user_id TEXT NOT NULL REFERENCES users(id),
+ key TEXT NOT NULL,
+ request_digest TEXT NOT NULL,
+ run_id TEXT NOT NULL,
+ PRIMARY KEY(user_id,key)
+);
+
+CREATE TABLE IF NOT EXISTS workflow_sessions (
+ id TEXT PRIMARY KEY,
+ kind TEXT NOT NULL CHECK(kind IN ('preparation','reference_rebuild')),
+ owner_id TEXT NOT NULL REFERENCES users(id),
+ request_key TEXT NOT NULL,
+ request_digest TEXT NOT NULL,
+ status TEXT NOT NULL,
+ version INTEGER NOT NULL DEFAULT 1,
+ input_json TEXT NOT NULL CHECK(json_valid(input_json)),
+ output_json TEXT NOT NULL CHECK(json_valid(output_json)),
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ UNIQUE(owner_id,kind,request_key)
+);
+CREATE INDEX IF NOT EXISTS workflow_sessions_owner_kind ON workflow_sessions(owner_id,kind,updated_at);
+
+CREATE TRIGGER IF NOT EXISTS release_line_scope_immutable BEFORE UPDATE OF environment_constraints_json ON component_release_lines
+WHEN NEW.environment_constraints_json <> OLD.environment_constraints_json
+BEGIN SELECT RAISE(ABORT,'branch adaptation scope is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS scenario_scope_immutable BEFORE UPDATE OF environment_constraints_json ON scenarios
+WHEN NEW.environment_constraints_json <> OLD.environment_constraints_json
+BEGIN SELECT RAISE(ABORT,'branch adaptation scope is immutable'); END;

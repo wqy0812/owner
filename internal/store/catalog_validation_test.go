@@ -133,10 +133,12 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 					}
 					release := releaseFixture("ref-release", component.ID, "1.0.0", domain.ReleaseDraft)
 					release.EnvironmentConstraints = map[string]any{}
-					if err := a.CreateComponentRelease(ctx, release); err != nil {
-						t.Fatal(err)
+					if resource != "release" && resource != "category" {
+						if err := a.CreateComponentRelease(ctx, release); err != nil {
+							t.Fatal(err)
+						}
+						release, _ = a.GetComponentRelease(ctx, release.ID)
 					}
-					release, _ = a.GetComponentRelease(ctx, release.ID)
 					if resource == "release" || resource == "category" {
 						release.EnvironmentConstraints = map[string]any{"architecture": []string{option.Value}}
 					}
@@ -153,7 +155,7 @@ func TestCatalogReferenceDeletionAndRetirementRace(t *testing.T) {
 					write := func() error {
 						switch resource {
 						case "release", "category":
-							return a.UpdateDraftRelease(ctx, release)
+							return a.CreateComponentRelease(ctx, release)
 						case "environment", "variable":
 							e := domain.Environment{ID: "ref-environment", Name: "Environment", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
 							r := domain.EnvironmentRevision{ID: "ref-environment-r1", EnvironmentID: e.ID, Revision: 1, Facts: map[string]any{}, Inventory: json.RawMessage(`{"hosts":[]}`), Variables: map[string]string{}, CreatedAt: testNow}
@@ -262,8 +264,8 @@ func TestRetiredReferencesPreservedButCopiesRejected(t *testing.T) {
 		t.Fatalf("partial clone=%v", err)
 	}
 	r.EnvironmentConstraints = map[string]any{}
-	if err := a.UpdateDraftRelease(ctx, r); err != nil {
-		t.Fatal(err)
+	if err := a.UpdateDraftRelease(ctx, r); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("fixed branch must retain retired scope: %v", err)
 	}
 }
 

@@ -10,13 +10,12 @@ import (
 )
 
 func (a *ApprovalService) CancelRun(ctx context.Context, user domain.User, runID string) (domain.Run, error) {
-	p := a.platform
-	run, err := p.store.GetRun(ctx, runID)
+	run, err := a.store.GetRun(ctx, runID)
 	if err != nil {
 		return run, err
 	}
 	if user.ID != run.RequestedBy {
-		environment, environmentErr := p.store.GetEnvironment(ctx, run.EnvironmentID, false)
+		environment, environmentErr := a.store.GetEnvironment(ctx, run.EnvironmentID, false)
 		if environmentErr != nil {
 			return run, environmentErr
 		}
@@ -26,45 +25,41 @@ func (a *ApprovalService) CancelRun(ctx context.Context, user domain.User, runID
 	}
 	switch run.Status {
 	case domain.RunQueued, domain.RunAwaitingApproval:
-		if err := p.store.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{run.Status}, domain.RunCancelled, "cancelled by user", time.Now().UTC()); err != nil {
+		if err := a.store.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{run.Status}, domain.RunCancelled, "cancelled by user", time.Now().UTC()); err != nil {
 			return run, err
 		}
 		run.Status = domain.RunCancelled
 		if run.Kind == domain.RunScenarioTest {
-			_ = p.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
+			_ = a.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 		}
 	case domain.RunRunning:
-		p.mu.Lock()
-		cancel := p.active[run.ID]
-		p.mu.Unlock()
-		if cancel == nil {
+		if !a.control.cancelRun(run.ID) {
 			return run, fmt.Errorf("%w: active process is not attached to this server", domain.ErrConflict)
 		}
-		cancel()
+
 	default:
 		base := fmt.Errorf("%w: run is already terminal", domain.ErrConflict)
 		return run, actionableExistingError(base, "run.already_terminal", "该 Run 已进入终态，不能再次取消", "刷新运行详情", "/runs?selected="+run.ID)
 	}
-	p.audit(ctx, user, "run.cancel_requested", "run", run.ID, nil)
-	p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
+	a.audit.Record(ctx, user, "run.cancel_requested", "run", run.ID, nil)
+	a.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
 	return run, nil
 }
 
 func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, approvalID, decision, reason string, deliveryDecisions []DeliveryDecisionInput) (domain.Run, error) {
-	p := a.platform
 	if user.Role != domain.RoleEnvironmentOwner {
 		base := fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
 		return domain.Run{}, actionableExistingError(base, "permission.environment_owner_required", "只有目标环境的环境 Owner 可以审批危险作业", "返回我的工作", "/")
 	}
-	approval, err := p.store.GetApproval(ctx, approvalID)
+	approval, err := a.store.GetApproval(ctx, approvalID)
 	if err != nil {
 		return domain.Run{}, err
 	}
-	run, err := p.store.GetRun(ctx, approval.RunID)
+	run, err := a.store.GetRun(ctx, approval.RunID)
 	if err != nil {
 		return run, err
 	}
-	environment, err := p.store.GetEnvironment(ctx, run.EnvironmentID, false)
+	environment, err := a.store.GetEnvironment(ctx, run.EnvironmentID, false)
 	if err != nil {
 		return run, err
 	}
@@ -89,7 +84,7 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 		if planErr != nil {
 			return run, planErr
 		}
-		plan, planErr = p.finalizeDeliveryPlan(ctx, plan, deliveryDecisions, user, now)
+		plan, planErr = a.delivery.finalizeDeliveryPlan(ctx, plan, deliveryDecisions, user, now)
 		if planErr != nil {
 			return run, planErr
 		}
@@ -100,7 +95,7 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 	} else if len(deliveryDecisions) > 0 {
 		return run, fmt.Errorf("%w: rejected approvals must not include delivery decisions", domain.ErrInvalid)
 	}
-	if err := p.store.DecideApprovalWithSnapshot(ctx, approvalID, user.ID, decision, reason, snapshot, now); err != nil {
+	if err := a.store.DecideApprovalWithSnapshot(ctx, approvalID, user.ID, decision, reason, snapshot, now); err != nil {
 		return run, err
 	}
 	if decision == "approved" {
@@ -108,20 +103,19 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 		if snapshot != nil {
 			run.InputSnapshot = snapshot
 		}
-		p.schedule(run.EnvironmentID)
+		a.scheduler.schedule(run.EnvironmentID)
 	} else {
 		run.Status = domain.RunRejected
 		if run.Kind == domain.RunScenarioTest {
-			_ = p.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
+			_ = a.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 		}
 	}
-	p.audit(ctx, user, "approval."+decision, "approval", approvalID, map[string]any{"runId": run.ID, "reason": reason})
-	p.hub.Publish("approval.updated", map[string]any{"approvalId": approvalID, "runId": run.ID, "decision": decision})
-	return p.store.GetRun(ctx, run.ID)
+	a.audit.Record(ctx, user, "approval."+decision, "approval", approvalID, map[string]any{"runId": run.ID, "reason": reason})
+	a.hub.Publish("approval.updated", map[string]any{"approvalId": approvalID, "runId": run.ID, "decision": decision})
+	return a.store.GetRun(ctx, run.ID)
 }
 
 func (a *ApprovalService) BatchDecideApprovals(ctx context.Context, user domain.User, approvalIDs []string, decision, reason string) ([]domain.Run, error) {
-	p := a.platform
 	if user.Role != domain.RoleEnvironmentOwner {
 		return nil, fmt.Errorf("%w: only an environment owner may decide destructive runs", domain.ErrForbidden)
 	}
@@ -131,11 +125,11 @@ func (a *ApprovalService) BatchDecideApprovals(ctx context.Context, user domain.
 	}
 	if decision == "approved" {
 		for _, approvalID := range approvalIDs {
-			approval, approvalErr := p.store.GetApproval(ctx, approvalID)
+			approval, approvalErr := a.store.GetApproval(ctx, approvalID)
 			if approvalErr != nil {
 				return nil, approvalErr
 			}
-			run, runErr := p.store.GetRun(ctx, approval.RunID)
+			run, runErr := a.store.GetRun(ctx, approval.RunID)
 			if runErr != nil {
 				return nil, runErr
 			}
@@ -148,23 +142,35 @@ func (a *ApprovalService) BatchDecideApprovals(ctx context.Context, user domain.
 			}
 		}
 	}
-	runs, err := p.store.BatchDecideApprovals(ctx, approvalIDs, user.ID, decision, reason, time.Now().UTC())
+	runs, err := a.store.BatchDecideApprovals(ctx, approvalIDs, user.ID, decision, reason, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
 	environments := map[string]bool{}
 	for _, run := range runs {
 		if decision == "rejected" && run.Kind == domain.RunScenarioTest {
-			_ = p.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
+			_ = a.store.SetScenarioRevisionStatus(ctx, run.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, time.Now().UTC())
 		}
-		p.audit(ctx, user, "approval.batch_"+decision, "run", run.ID, map[string]any{"reason": reason, "batchSize": len(runs)})
-		p.hub.Publish("approval.updated", map[string]any{"runId": run.ID, "decision": decision, "batch": true})
+		a.audit.Record(ctx, user, "approval.batch_"+decision, "run", run.ID, map[string]any{"reason": reason, "batchSize": len(runs)})
+		a.hub.Publish("approval.updated", map[string]any{"runId": run.ID, "decision": decision, "batch": true})
 		environments[run.EnvironmentID] = true
 	}
 	if decision == "approved" {
 		for environmentID := range environments {
-			p.schedule(environmentID)
+			a.scheduler.schedule(environmentID)
 		}
 	}
 	return runs, nil
+}
+
+func (s *ExecutionService) Cancel(ctx context.Context, user domain.User, id string) (domain.Run, error) {
+	return s.approvals.CancelRun(ctx, user, id)
+}
+
+func (s *ExecutionService) DecideApproval(ctx context.Context, user domain.User, id, decision, reason string, deliveryDecisions []DeliveryDecisionInput) (domain.Run, error) {
+	return s.approvals.DecideApproval(ctx, user, id, decision, reason, deliveryDecisions)
+}
+
+func (s *ExecutionService) BatchDecideApprovals(ctx context.Context, user domain.User, ids []string, decision, reason string) ([]domain.Run, error) {
+	return s.approvals.BatchDecideApprovals(ctx, user, ids, decision, reason)
 }

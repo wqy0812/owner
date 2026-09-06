@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"sort"
+	"strings"
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/service"
@@ -129,6 +130,7 @@ func (h *Handler) getScenario(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Graph                  graphInput     `json:"graph"`
+		ExpectedDigest         string         `json:"expectedDigest"`
 		EnvironmentConstraints map[string]any `json:"environmentConstraints"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
@@ -136,7 +138,7 @@ func (h *Handler) saveScenarioGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	graph := input.Graph.domain()
-	revision, err := h.platform.Scenarios().SaveGraph(r.Context(), currentUser(r), r.PathValue("id"), graph, input.EnvironmentConstraints)
+	revision, err := h.platform.Scenarios().SaveGraphWithDigest(r.Context(), currentUser(r), r.PathValue("id"), graph, input.ExpectedDigest, input.EnvironmentConstraints)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -158,7 +160,7 @@ func (h *Handler) validateScenario(w http.ResponseWriter, r *http.Request) {
 		}
 		messages = append(messages, message)
 	}
-	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages})
+	writeData(w, http.StatusOK, map[string]any{"valid": len(issues) == 0, "errors": messages, "issues": issues})
 }
 
 func (h *Handler) scenarioParameterOverview(w http.ResponseWriter, r *http.Request) {
@@ -177,34 +179,6 @@ func (h *Handler) candidateReleaseSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, set)
-}
-
-func (h *Handler) testScenario(w http.ResponseWriter, r *http.Request) {
-	var input scenarioRunRequest
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	run, err := h.platform.Execution().StartScenarioTest(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusAccepted, h.runDTO(r, run))
-}
-
-func (h *Handler) runScenario(w http.ResponseWriter, r *http.Request) {
-	var input scenarioRunRequest
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	run, err := h.platform.Execution().StartScenarioRun(r.Context(), currentUser(r), r.PathValue("id"), input.EnvironmentID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusAccepted, h.runDTO(r, run))
 }
 
 func (h *Handler) publishScenario(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +214,7 @@ func (h *Handler) writeRevisionDTO(w http.ResponseWriter, r *http.Request, statu
 		writeError(w, err)
 		return
 	}
-	writeData(w, status, h.revisionDTO(revision, metadata))
+	writeData(w, status, h.revisionDTO(r, revision, metadata))
 }
 
 func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
@@ -249,7 +223,7 @@ func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario, release
 	revisions := make([]map[string]any, 0, len(scenario.Revisions))
 	var current map[string]any
 	for _, revision := range scenario.Revisions {
-		dto := h.revisionDTO(revision, releases)
+		dto := h.revisionDTO(r, revision, releases)
 		revisions = append(revisions, dto)
 		if revision.ID == scenario.CurrentRevisionID {
 			current = dto
@@ -260,21 +234,29 @@ func (h *Handler) scenarioDTO(r *http.Request, scenario domain.Scenario, release
 	}
 	return map[string]any{
 		"id": scenario.ID, "slug": scenario.Slug, "name": scenario.Name, "description": scenario.Description,
-		"ownerId": scenario.OwnerID, "ownerName": owner.Name, "currentRevisionId": scenario.CurrentRevisionID,
+		"environmentConstraints": scenario.EnvironmentConstraints,
+		"ownerId":                scenario.OwnerID, "ownerName": owner.Name, "currentRevisionId": scenario.CurrentRevisionID,
+		"forkedFromScenarioId": scenario.ForkedFromScenarioID, "forkedFromRevisionId": scenario.ForkedFromRevisionID, "forkedFromDigest": scenario.ForkedFromDigest,
 		"currentRevision": current, "revisions": revisions, "createdAt": scenario.CreatedAt, "updatedAt": scenario.UpdatedAt,
 	}
 }
 
-func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
+func (h *Handler) revisionDTO(r *http.Request, revision domain.ScenarioRevision, releases map[string]store.ReleaseDisplayMetadata) map[string]any {
 	nodes := make([]map[string]any, 0, len(revision.Graph.Nodes))
 	for _, node := range revision.Graph.Nodes {
 		data := map[string]any{
-			"label": node.Name, "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
+			"label": node.Name, "componentId": "", "contractAvailability": "missing", "releaseId": node.ReleaseID, "action": node.Action, "hostGroup": node.HostGroup,
 			"parameterValues":   node.ParameterValues,
 			"dependencySources": node.DependencySources,
 		}
 		if release, ok := releases[node.ReleaseID]; ok {
 			data["componentId"], data["version"] = release.ComponentID, release.Version
+			data["componentOwnerId"], data["componentOwnerName"] = release.OwnerID, release.OwnerName
+			data["contractAvailability"] = "available"
+			viewer := currentUser(r)
+			if release.Status == domain.ReleaseDraft && !release.Candidate && viewer.ID != release.OwnerID && viewer.Role != domain.RolePlatformAdmin {
+				data["contractAvailability"] = "unshared"
+			}
 			if node.Name == "" {
 				data["label"] = release.ComponentName
 			}
@@ -285,13 +267,28 @@ func (h *Handler) revisionDTO(revision domain.ScenarioRevision, releases map[str
 	if revision.AbandonedAt != nil {
 		state = "abandoned"
 	}
+	evidence, evidenceErr := h.platform.Scenarios().TestEvidence(r.Context(), revision.ID)
+	evidenceDTO := func(mode string) map[string]any {
+		runID := evidence[mode]
+		item := map[string]any{"valid": runID != "", "runId": runID}
+		if runID == "" {
+			if evidenceErr != nil {
+				item["reason"] = strings.TrimPrefix(evidenceErr.Error(), "conflict: ")
+			} else {
+				item["reason"] = "尚无有效测试证据"
+			}
+		}
+		return item
+	}
 	return map[string]any{
 		"id": revision.ID, "scenarioId": revision.ScenarioID, "revision": revision.Revision,
+		"installationTest": evidenceDTO("install"), "upgradeTest": evidenceDTO("upgrade"),
+		"sourceRevisionId": revision.SourceRevisionID, "sourceRunId": revision.SourceRunID,
+		"upgradeConstraints": revision.UpgradeConstraints, "acceptanceJobs": revision.AcceptanceJobs,
+		"acceptanceParameters": revision.AcceptanceParameters, "acceptanceValues": revision.AcceptanceValues, "acceptanceBindings": revision.AcceptanceBindings,
+		"acceptanceWorkspaceRoot": revision.AcceptanceWorkspaceRoot, "acceptanceTreeSha256": revision.AcceptanceTreeSHA256,
+		"revisionDigest": domain.ScenarioRevisionSpecDigest(revision), "digestVersion": revision.DigestVersion,
 		"environmentConstraints": revision.EnvironmentConstraints, "state": state, "nodes": nodes, "edges": revision.Graph.Edges,
 		"testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}
-}
-
-type scenarioRunRequest struct {
-	EnvironmentID string `json:"environmentId"`
 }

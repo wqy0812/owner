@@ -189,3 +189,13 @@ printf 'completed %s\n' "$1"
 		t.Fatalf("push failure error=%v", err)
 	}
 }
+
+func TestHTTPArtifactTargetDigestMismatchIsNotMissing(t *testing.T) {
+	delivery := NewHTTPArtifactDelivery(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return adapterResponse(http.StatusUnprocessableEntity, "checksum mismatch"), nil
+	})})
+	err := delivery.Probe(context.Background(), ArtifactLocation{FileStation: "files.test", RelativePath: "components/a"}, ArtifactIdentity{SHA256: strings.Repeat("a", 64)})
+	if !errors.Is(err, ErrArtifactIdentityMismatch) || errors.Is(err, ErrDeliveryTargetMissing) {
+		t.Fatalf("wrong bytes treated as missing: %v", err)
+	}
+}

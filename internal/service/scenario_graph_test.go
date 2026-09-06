@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestSaveScenarioGraphPersistsGeneratedDependencyAndRejectsReverseSequence(t
 	if err := database.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	scenario, err := platform.CreateScenario(ctx, owner, domain.Scenario{Name: "Automatic dependencies", Slug: "automatic-dependencies"})
+	scenario, err := platform.scenarios.Create(ctx, owner, domain.Scenario{Name: "Automatic dependencies", Slug: "automatic-dependencies"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +45,7 @@ func TestSaveScenarioGraphPersistsGeneratedDependencyAndRejectsReverseSequence(t
 		{ID: "upstream", ReleaseID: upstream.ID, Action: domain.ActionInstall},
 		{ID: "downstream", ReleaseID: downstream.ID, Action: domain.ActionInstall},
 	}}
-	saved, err := platform.SaveScenarioGraph(ctx, owner, scenario.CurrentRevisionID, graph)
+	saved, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, graph)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +53,69 @@ func TestSaveScenarioGraphPersistsGeneratedDependencyAndRejectsReverseSequence(t
 		t.Fatalf("saved graph=%+v", saved.Graph)
 	}
 
+	// An incomplete order is saveable, but validation rejects execution readiness.
+	ambiguous := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{
+		{ID: "first", ReleaseID: upstream.ID, Action: domain.ActionInstall, HostGroup: "test_nodes"},
+		{ID: "second", ReleaseID: upstream.ID, Action: domain.ActionInstall, HostGroup: "test_nodes"},
+	}}
+	if _, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, ambiguous); err != nil {
+		t.Fatal(err)
+	}
+	issues, err := platform.scenarios.Validate(ctx, owner, scenario.CurrentRevisionID)
+	if err != nil || !hasValidationIssue(issues, "execution_order_undetermined") {
+		t.Fatalf("issues=%v err=%v", issues, err)
+	}
+
+	env := domain.Environment{ID: "order-env", Name: "Order test", OwnerID: owner.ID, CreatedAt: now, UpdatedAt: now}
+	envRevision := domain.EnvironmentRevision{ID: "order-env-r1", EnvironmentID: env.ID, Revision: 1, Facts: map[string]any{}, Inventory: []byte(`{"hosts":[]}`), CreatedAt: now}
+	if err := database.CreateEnvironment(ctx, env, envRevision); err != nil {
+		t.Fatal(err)
+	}
+	assertOrderError := func(err error) {
+		t.Helper()
+		var validation *domain.ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("expected order validation, got %v", err)
+		}
+		details, ok := validation.Details.([]domain.ValidationIssue)
+		if !ok || !hasValidationIssue(details, "execution_order_undetermined") {
+			t.Fatalf("unexpected details: %v", validation.Details)
+		}
+	}
+	_, err = platform.execution.StartScenarioTest(ctx, owner, scenario.CurrentRevisionID, env.ID)
+	assertOrderError(err)
+	set, err := platform.releases.CandidateReleaseSet(ctx, owner, scenario.CurrentRevisionID)
+	if err != nil || set.Ready || !hasValidationIssue(set.Issues, "execution_order_undetermined") {
+		t.Fatalf("candidate set=%+v err=%v", set, err)
+	}
+	if err := database.SetScenarioRevisionStatus(ctx, scenario.CurrentRevisionID, []domain.RevisionStatus{domain.RevisionDraft}, domain.RevisionTestPassed, now); err != nil {
+		t.Fatal(err)
+	}
+	_, err = platform.releases.PublishScenario(ctx, owner, scenario.CurrentRevisionID)
+	// A legacy test_passed label cannot bypass current acceptance evidence.
+	// Graph ordering is independently asserted by validation and both run paths.
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "场景业务验收作业必填") {
+		t.Fatalf("unproven scenario publication=%v", err)
+	}
+	if err := database.SetScenarioRevisionStatus(ctx, scenario.CurrentRevisionID, []domain.RevisionStatus{domain.RevisionTestPassed}, domain.RevisionReleased, now); err != nil {
+		t.Fatal(err)
+	}
+	_, err = platform.execution.StartScenarioRun(ctx, owner, scenario.CurrentRevisionID, env.ID)
+	assertOrderError(err)
+	// Restore the fixture to exercise editing; production never rewrites a released graph.
+	if err := database.SetScenarioRevisionStatus(ctx, scenario.CurrentRevisionID, []domain.RevisionStatus{domain.RevisionReleased}, domain.RevisionDraft, now); err != nil {
+		t.Fatal(err)
+	}
+	ambiguous.Edges = []domain.ScenarioEdge{{ID: "owner-choice", Source: "second", Target: "first", Kind: domain.ScenarioEdgeSequence}}
+	if _, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, ambiguous); err != nil {
+		t.Fatal(err)
+	}
+	issues, err = platform.scenarios.Validate(ctx, owner, scenario.CurrentRevisionID)
+	if err != nil || hasValidationIssue(issues, "execution_order_undetermined") {
+		t.Fatalf("resolved issues=%v err=%v", issues, err)
+	}
 	graph.Edges = []domain.ScenarioEdge{{ID: "reverse", Source: "downstream", Target: "upstream", Kind: domain.ScenarioEdgeSequence}}
-	if _, err := platform.SaveScenarioGraph(ctx, owner, scenario.CurrentRevisionID, graph); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := platform.scenarios.SaveGraph(ctx, owner, scenario.CurrentRevisionID, graph); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("reverse sequence error=%v", err)
 	} else {
 		var validation *domain.ValidationError
@@ -246,5 +308,46 @@ func TestTypedSequenceEdgeCannotSupplyMappedDependency(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("sequence edge unexpectedly satisfied a mapped dependency")
+	}
+}
+
+func TestScenarioExecutionOrderRequiresOwnerChoice(t *testing.T) {
+	nodes := []domain.ScenarioNode{}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		nodes = append(nodes, domain.ScenarioNode{ID: id, ReleaseID: "release", Action: domain.ActionInstall, HostGroup: "test_nodes"})
+	}
+	edge := func(a, b string) domain.ScenarioEdge {
+		return domain.ScenarioEdge{ID: a + b, Source: a, Target: b, Kind: domain.ScenarioEdgeSequence}
+	}
+	for _, test := range []struct {
+		name  string
+		graph domain.ScenarioGraph
+		want  string
+	}{
+		{"independent", domain.ScenarioGraph{Nodes: nodes[:2]}, "ab"},
+		{"fork", domain.ScenarioGraph{Nodes: nodes, Edges: []domain.ScenarioEdge{edge("a", "b"), edge("a", "c"), edge("b", "d"), edge("c", "d")}}, "bc"},
+		{"join", domain.ScenarioGraph{Nodes: nodes[:3], Edges: []domain.ScenarioEdge{edge("a", "c"), edge("b", "c")}}, "ab"},
+		{"chain", domain.ScenarioGraph{Nodes: nodes[:3], Edges: []domain.ScenarioEdge{edge("a", "b"), edge("b", "c")}}, ""},
+		{"single", domain.ScenarioGraph{Nodes: nodes[:1]}, ""},
+		{"cycle", domain.ScenarioGraph{Nodes: nodes, Edges: []domain.ScenarioEdge{edge("a", "b"), edge("b", "a")}}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for attempt := 0; attempt < 2; attempt++ {
+				issues := scenarioExecutionOrderIssues(test.graph)
+				got := ""
+				for _, issue := range issues {
+					if issue.Code != "execution_order_undetermined" {
+						t.Fatal(issue)
+					}
+					got += issue.NodeID
+				}
+				if got != test.want {
+					t.Fatalf("got %q want %q", got, test.want)
+				}
+				for i, j := 0, len(test.graph.Nodes)-1; i < j; i, j = i+1, j-1 {
+					test.graph.Nodes[i], test.graph.Nodes[j] = test.graph.Nodes[j], test.graph.Nodes[i]
+				}
+			}
+		})
 	}
 }

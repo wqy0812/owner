@@ -17,7 +17,18 @@ func (s *Store) ComponentEvidenceReads(ctx context.Context, user domain.User, co
 	where, args := runVisibility(user)
 	where += ` AND runs.kind='component_test' AND runs.component_release_id IN (SELECT id FROM component_releases WHERE component_id=?)`
 	args = append(args, componentID)
-	selection := strings.Replace(runSelect, "input_snapshot_json", `json_object('componentReleaseSpecDigest',component_spec_digest,'componentTestEvidence',component_evidence_kind)`, 1)
+	selection := strings.Replace(runSelect, "input_snapshot_json", `json_object(
+  'componentReleaseSpecDigest',component_spec_digest,
+  'componentTestEvidence',component_evidence_kind,
+  'parentSteps',json((SELECT json_group_array(json_object(
+    'actionId',json_extract(value,'$.actionId'),'sourceNodeId',json_extract(value,'$.sourceNodeId'),
+    'action',json_extract(value,'$.action'),'phase',json_extract(value,'$.phase')
+  )) FROM json_each(runs.input_snapshot_json,'$.parentSteps'))),
+  'steps',json((SELECT json_group_array(json_object(
+    'parentActionId',json_extract(value,'$.parentActionId'),'sourceNodeId',json_extract(value,'$.sourceNodeId'),
+    'phase',json_extract(value,'$.phase')
+  )) FROM json_each(runs.input_snapshot_json,'$.steps')))
+)`, 1)
 	rows, err := tx.QueryContext(ctx, selection+` WHERE `+where+` ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC,id DESC`, args...)
 	if err != nil {
 		return nil, nil, err

@@ -47,7 +47,7 @@ func TestComponentImageLifecyclePreservesImmutableDigest(t *testing.T) {
 	delivery := &imageDeliveryStub{resolved: "registry.test/runtime@" + digest}
 	platform.ConfigureDeliveryAdapters(nil, delivery)
 
-	image, err := platform.RegisterComponentImage(ctx, owner, release.ID, " Main_Image ", "registry.test/runtime:1.0.0", digest)
+	image, err := platform.catalog.RegisterImage(ctx, owner, release.ID, " Main_Image ", "registry.test/runtime:1.0.0", digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestComponentImageLifecyclePreservesImmutableDigest(t *testing.T) {
 	}
 
 	delivery.resolved = "registry.mirror.test/runtime@" + digest
-	updated, err := platform.UpdateComponentImageSource(ctx, owner, release.ID, image.LogicalName, "registry.mirror.test/runtime:stable")
+	updated, err := platform.catalog.UpdateImageSource(ctx, owner, release.ID, image.LogicalName, "registry.mirror.test/runtime:stable")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestComponentImageLifecyclePreservesImmutableDigest(t *testing.T) {
 	}
 
 	delivery.resolved = "registry.mirror.test/runtime@sha256:" + strings.Repeat("b", 64)
-	if _, err := platform.UpdateComponentImageSource(ctx, owner, release.ID, image.LogicalName, "registry.mirror.test/runtime:other"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.UpdateImageSource(ctx, owner, release.ID, image.LogicalName, "registry.mirror.test/runtime:other"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("mutable source changed content identity: %v", err)
 	}
 	stored, err := database.GetComponentImage(ctx, release.ID, image.LogicalName)
@@ -79,7 +79,7 @@ func TestComponentImageLifecyclePreservesImmutableDigest(t *testing.T) {
 		t.Fatalf("failed source update changed stored image=%+v err=%v", stored, err)
 	}
 
-	if err := platform.DeleteComponentImage(ctx, owner, release.ID, image.LogicalName); err != nil {
+	if err := platform.catalog.DeleteImage(ctx, owner, release.ID, image.LogicalName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.GetComponentImage(ctx, release.ID, image.LogicalName); !errors.Is(err, domain.ErrNotFound) {
@@ -114,7 +114,7 @@ func TestComponentImageLifecycleRejectsInvalidOrUnsafeChanges(t *testing.T) {
 		"digest":       {"main", "registry.test/runtime:1", "sha256:short"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := platform.RegisterComponentImage(ctx, owner, draft.ID, input.logicalName, input.sourceRef, input.expectedDigest); !errors.Is(err, domain.ErrInvalid) {
+			if _, err := platform.catalog.RegisterImage(ctx, owner, draft.ID, input.logicalName, input.sourceRef, input.expectedDigest); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("invalid image input error=%v", err)
 			}
 		})
@@ -122,25 +122,25 @@ func TestComponentImageLifecycleRejectsInvalidOrUnsafeChanges(t *testing.T) {
 
 	delivery.resolved = "registry.test/runtime@" + digest
 	mismatchedDigest := "sha256:" + strings.Repeat("d", 64)
-	if _, err := platform.RegisterComponentImage(ctx, owner, draft.ID, "mismatch", "registry.test/runtime:1", mismatchedDigest); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.RegisterImage(ctx, owner, draft.ID, "mismatch", "registry.test/runtime:1", mismatchedDigest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("expected digest mismatch error=%v", err)
 	}
 	if _, err := database.GetComponentImage(ctx, draft.ID, "mismatch"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("digest mismatch persisted image: %v", err)
 	}
 
-	if _, err := platform.RegisterComponentImage(ctx, domain.User{ID: "other", Role: domain.RoleComponentOwner}, draft.ID, "main", "registry.test/runtime:1", digest); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := platform.catalog.RegisterImage(ctx, domain.User{ID: "other", Role: domain.RoleComponentOwner}, draft.ID, "main", "registry.test/runtime:1", digest); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("non-owner registration error=%v", err)
 	}
-	if _, err := platform.RegisterComponentImage(ctx, owner, released.ID, "main", "registry.test/runtime:1", digest); !errors.Is(err, domain.ErrConflict) {
+	if _, err := platform.catalog.RegisterImage(ctx, owner, released.ID, "main", "registry.test/runtime:1", digest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("released image registration error=%v", err)
 	}
-	if err := platform.DeleteComponentImage(ctx, owner, released.ID, "main"); !errors.Is(err, domain.ErrConflict) {
+	if err := platform.catalog.DeleteImage(ctx, owner, released.ID, "main"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("released image deletion error=%v", err)
 	}
 
 	delivery.err = errors.New("registry unavailable")
-	if _, err := platform.RegisterComponentImage(ctx, owner, draft.ID, "main", "registry.test/runtime:1", digest); err == nil || !strings.Contains(err.Error(), "probe image source") {
+	if _, err := platform.catalog.RegisterImage(ctx, owner, draft.ID, "main", "registry.test/runtime:1", digest); err == nil || !strings.Contains(err.Error(), "probe image source") {
 		t.Fatalf("registry failure error=%v", err)
 	}
 }

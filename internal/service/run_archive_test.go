@@ -2,10 +2,6 @@ package service
 
 import (
 	"archive/tar"
-	"codex/platform-demo/internal/backup"
-	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/runarchive"
-	"codex/platform-demo/internal/store"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -17,6 +13,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex/platform-demo/internal/backup"
+	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/runarchive"
+	"codex/platform-demo/internal/store"
 )
 
 func TestRunArchiveRoundTripRedactionAndRecovery(t *testing.T) {
@@ -27,7 +28,7 @@ func TestRunArchiveRoundTripRedactionAndRecovery(t *testing.T) {
 	if err := db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	env, err := p.CreateEnvironment(ctx, owner, domain.Environment{Name: "Archive test"}, completeServiceTestFacts())
+	env, err := p.environments.Create(ctx, owner, domain.Environment{Name: "Archive test"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestRunArchiveRoundTripRedactionAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = p.archiveOne(ctx, task); err != nil {
+	if err = p.archives.archiveOne(ctx, task); err != nil {
 		t.Fatal(err)
 	}
 	a, err := db.GetRunArchive(ctx, r.ID)
@@ -123,7 +124,7 @@ func TestRunArchiveRoundTripRedactionAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restoredDB.Close()
-	restoredPlatform := NewPlatform(restoredDB, nil, nil)
+	restoredPlatform := newTestPlatform(t, restoredDB, nil, nil)
 	defer restoredPlatform.Close()
 	if err = restoredPlatform.ConfigureRunArchives(filepath.Join(restored, "archives")); err != nil {
 		t.Fatal(err)
@@ -161,7 +162,7 @@ func TestArchiveStorageAndCancellationPreserveOnlineData(t *testing.T) {
 	if err := db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	env, err := p.CreateEnvironment(ctx, owner, domain.Environment{Name: "Storage test"}, completeServiceTestFacts())
+	env, err := p.environments.Create(ctx, owner, domain.Environment{Name: "Storage test"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func TestArchiveStorageAndCancellationPreserveOnlineData(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err = p.archiveOne(cancelled, task); !errors.Is(err, context.Canceled) {
+	if err = p.archives.archiveOne(cancelled, task); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if logs, err := db.ListRunLogs(ctx, r.ID, 0, 100); err != nil || len(logs) != 1 {
@@ -208,7 +209,7 @@ func TestAutomaticRetentionProgressesPastProtectedRecords(t *testing.T) {
 	if err := db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	env, err := p.CreateEnvironment(ctx, owner, domain.Environment{Name: "Retention cursor test"}, completeServiceTestFacts())
+	env, err := p.environments.Create(ctx, owner, domain.Environment{Name: "Retention cursor test"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +234,13 @@ func TestAutomaticRetentionProgressesPastProtectedRecords(t *testing.T) {
 	if err = db.SaveRunRetentionPolicy(ctx, domain.RunRetentionPolicy{AutoArchive: true, AutoCleanup: true, ArchiveDays: 90, CleanupDays: 90}, "system", now); err != nil {
 		t.Fatal(err)
 	}
-	p.scanRunRetention(ctx)
+	p.archives.scanRunRetention(ctx)
 	var skipped int
 	if err = db.DB().QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='run.cleanup_skipped'`).Scan(&skipped); err != nil || skipped != 50 {
 		t.Fatal("shared scan budget", skipped, err)
 	}
-	p.scanRunRetention(ctx)
-	p.scanRunRetention(ctx)
+	p.archives.scanRunRetention(ctx)
+	p.archives.scanRunRetention(ctx)
 	if _, err = db.GetRun(ctx, "retention-100"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal("protected records starved later candidate", err)
 	}
@@ -269,7 +270,7 @@ func TestCleanupDoesNotResurfaceAnOlderWorkbenchFailure(t *testing.T) {
 	if err := db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	env, err := p.CreateEnvironment(ctx, owner, domain.Environment{Name: "History workbench"}, completeServiceTestFacts())
+	env, err := p.environments.Create(ctx, owner, domain.Environment{Name: "History workbench"}, completeServiceTestFacts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +292,7 @@ func TestCleanupDoesNotResurfaceAnOlderWorkbenchFailure(t *testing.T) {
 	if err = db.CleanupRuns(ctx, []string{"workbench-latest-failure"}, "system", "manual", now); err != nil {
 		t.Fatal(err)
 	}
-	work, err := p.Workbench(ctx, domain.User{ID: "component-owner", Role: domain.RoleComponentOwner})
+	work, err := p.readModel.Workbench(ctx, domain.User{ID: "component-owner", Role: domain.RoleComponentOwner})
 	if err != nil {
 		t.Fatal(err)
 	}

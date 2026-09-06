@@ -32,6 +32,9 @@ func (s *Store) CreateRun(ctx context.Context, r domain.Run, approval *domain.Ap
 		return err
 	}
 	defer tx.Rollback()
+	if err := validateRetryState(ctx, tx, r); err != nil {
+		return err
+	}
 	if r.Kind == domain.RunEnvironmentRollback {
 		var active int
 		if err := tx.QueryRowContext(ctx, `
@@ -44,6 +47,9 @@ SELECT EXISTS(
 		if active != 0 {
 			return fmt.Errorf("%w: environment has an active run", domain.ErrConflict)
 		}
+	}
+	if err := validateScenarioRunCreationTx(ctx, tx, r); err != nil {
+		return err
 	}
 	if err := validateNewRunReferences(ctx, tx, r); err != nil {
 		return err
@@ -90,7 +96,7 @@ SELECT EXISTS(
   FROM json_each(?, '$.steps') AS step
   LEFT JOIN component_releases release
     ON release.id=json_extract(step.value, '$.releaseId')
-  WHERE release.id IS NULL
+  WHERE COALESCE(json_extract(step.value, '$.sourceType'),'') != 'scenario_acceptance' AND (release.id IS NULL
      OR CASE
           WHEN ?='scenario_test' THEN NOT (
             (release.status='draft' AND release.candidate=1)
@@ -100,7 +106,7 @@ SELECT EXISTS(
             release.status IN ('released','deprecated')
             AND release.released_at IS NOT NULL
           )
-        END
+        END)
 )`, jsonText(r.InputSnapshot), r.Kind).Scan(&invalid); err != nil {
 		return err
 	}
@@ -307,13 +313,35 @@ func (s *Store) UpdateRunStatus(ctx context.Context, id string, from []domain.Ru
 		if err != nil {
 			return err
 		}
+		if run.Kind == domain.RunEnvironmentRollback {
+			var remaining int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_component_installations WHERE environment_id=?`, run.EnvironmentID).Scan(&remaining); err != nil {
+				return err
+			}
+			if remaining == 0 {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM scenario_installations WHERE environment_id=?`, run.EnvironmentID); err != nil {
+					return err
+				}
+			} else {
+				if _, err := tx.ExecContext(ctx, `UPDATE scenario_installations SET state='unverified',generation=generation+1,updated_at=? WHERE environment_id=?`, timeText(at), run.EnvironmentID); err != nil {
+					return err
+				}
+			}
+		}
+		if err := finishScenarioLifecycleTx(ctx, tx, run, at); err != nil {
+			return err
+		}
 		if run.Kind == domain.RunScenarioTest {
 			revision, err := getScenarioRevision(ctx, tx, run.ScenarioRevisionID)
 			if err != nil {
 				return err
 			}
 			if revision.Status == domain.RevisionTesting {
-				if _, evidenceErr := scenarioTestEvidenceMatches(ctx, tx, run, revision); evidenceErr != nil {
+				_, evidenceErr := scenarioTestEvidenceMatches(ctx, tx, run, revision)
+				if evidenceErr == nil && isScenarioLifecycleRun(run) {
+					_, evidenceErr = scenarioRequiredEvidenceTx(ctx, tx, revision)
+				}
+				if evidenceErr != nil {
 					_, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='draft',test_passed_at=NULL WHERE id=?`, revision.ID)
 				} else {
 					_, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='test_passed',test_passed_at=? WHERE id=?`, timeText(at), revision.ID)
@@ -342,6 +370,21 @@ func (s *Store) MarkRunningInterrupted(ctx context.Context, at time.Time) (int64
 		return 0, err
 	}
 	defer tx.Rollback()
+	// A restarted process cannot vouch for a cluster it was still validating.
+	// Preserve the last complete version/Run identity, but require a fresh
+	// baseline verification. A previously persisted mutation marker stays
+	// partial, including its Run and generation, for recovery diagnostics.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE scenario_installations
+SET state='unverified',generation=generation+1,updated_at=?
+WHERE state IN ('complete','test') AND EXISTS (
+  SELECT 1 FROM runs r JOIN scenario_revisions sr ON sr.id=r.scenario_revision_id
+  WHERE r.status='running' AND json_extract(r.input_snapshot_json,'$.scenarioContractVersion')=2
+    AND r.environment_id=scenario_installations.environment_id
+    AND sr.scenario_id=scenario_installations.scenario_id
+)`, timeText(at)); err != nil {
+		return 0, err
+	}
 	// A scenario test owns the Testing state while it is queued/running. A
 	// process restart makes that test inconclusive, so release the revision
 	// back to Draft before marking the run Interrupted.
@@ -392,11 +435,34 @@ runs.status IN ('awaiting_approval','queued') AND (
   OR json_array_length(runs.input_snapshot_json, '$.steps')=0
   OR EXISTS (
     SELECT 1 FROM json_each(runs.input_snapshot_json, '$.steps') locked_step
-    WHERE COALESCE(json_extract(locked_step.value, '$.releaseId'), '')=''
-       OR NOT EXISTS (
-         SELECT 1 FROM component_releases cr
-         WHERE cr.id=json_extract(locked_step.value, '$.releaseId')
-       )
+    WHERE CASE WHEN locked_step.type != 'object' THEN 1
+      WHEN json_extract(locked_step.value,'$.sourceType')='scenario_acceptance' THEN
+        CASE WHEN (
+          runs.kind IN ('scenario_test','scenario_run')
+          AND runs.scenario_revision_id IS NOT NULL
+          AND json_extract(runs.input_snapshot_json,'$.scenarioContractVersion')=2
+          AND COALESCE(json_extract(locked_step.value,'$.releaseId'),'')=''
+          AND COALESCE(json_extract(locked_step.value,'$.componentId'),'')=''
+          AND json_extract(locked_step.value,'$.scenarioRevisionId')=runs.scenario_revision_id
+          AND json_extract(locked_step.value,'$.stage')='acceptance'
+          AND json_extract(locked_step.value,'$.phase')='acceptance'
+          AND json_extract(locked_step.value,'$.action')='acceptance'
+          AND json_type(locked_step.value,'$.acceptanceJobId')='text'
+          AND json_extract(locked_step.value,'$.actionId')=json_extract(locked_step.value,'$.acceptanceJobId')
+          AND json_extract(locked_step.value,'$.nodeId')='acceptance:'||json_extract(locked_step.value,'$.acceptanceJobId')
+          AND EXISTS (
+            SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceJobs') job
+            WHERE sr.id=runs.scenario_revision_id
+              AND json_extract(job.value,'$.id')=json_extract(locked_step.value,'$.acceptanceJobId')
+              AND json_extract(job.value,'$.playbook')=json_extract(locked_step.value,'$.playbook')
+              AND COALESCE(json_extract(job.value,'$.playbookSha256'),'')<>''
+              AND json_extract(job.value,'$.playbookSha256')=json_extract(locked_step.value,'$.playbookDigest')
+          )
+        ) THEN 0 ELSE 1 END
+      ELSE COALESCE(json_extract(locked_step.value,'$.sourceType'),'') NOT IN ('','component_action')
+        OR COALESCE(json_extract(locked_step.value,'$.releaseId'),'')=''
+        OR NOT EXISTS (SELECT 1 FROM component_releases cr WHERE cr.id=json_extract(locked_step.value,'$.releaseId'))
+      END
   )
   OR (runs.status='awaiting_approval' AND NOT EXISTS (
     SELECT 1 FROM approvals a WHERE a.run_id=runs.id AND a.status='pending'
@@ -534,7 +600,11 @@ func (s *Store) UpdateRunStep(ctx context.Context, st domain.RunStep) error {
 	return nil
 }
 func (s *Store) ListRunSteps(ctx context.Context, runID string) ([]domain.RunStep, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,node_id,name,status,exit_code,summary,started_at,finished_at FROM run_steps WHERE run_id=? ORDER BY rowid`, runID)
+	return listRunSteps(ctx, s.db, runID)
+}
+
+func listRunSteps(ctx context.Context, q queryer, runID string) ([]domain.RunStep, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id,run_id,node_id,name,status,exit_code,summary,started_at,finished_at FROM run_steps WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +629,7 @@ func (s *Store) ListRunSteps(ctx context.Context, runID string) ([]domain.RunSte
 }
 
 func (s *Store) AppendRunLog(ctx context.Context, l domain.RunLog) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO run_logs(run_id,step_id,stream,message,created_at) VALUES(?,?,?,?,?)`, l.RunID, l.StepID, l.Stream, l.Message, timeText(l.CreatedAt))
+	res, err := s.execWithBusyRetry(ctx, `INSERT INTO run_logs(run_id,step_id,stream,message,created_at) VALUES(?,?,?,?,?)`, l.RunID, l.StepID, l.Stream, l.Message, timeText(l.CreatedAt))
 	if err != nil {
 		return 0, err
 	}
@@ -605,6 +675,28 @@ func (s *Store) ListRunLogTail(ctx context.Context, runID string, limit int) ([]
 		}
 		l.CreatedAt = parseTime(created)
 		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// The log insertion transaction maintains this bounded projection.
+func (s *Store) ListRunWaitingObservations(ctx context.Context, runID string) ([]json.RawMessage, error) {
+	return listRunWaitingObservations(ctx, s.db, runID)
+}
+
+func listRunWaitingObservations(ctx context.Context, q queryer, runID string) ([]json.RawMessage, error) {
+	rows, err := q.QueryContext(ctx, `SELECT message FROM run_waiting_observations WHERE run_id=? ORDER BY step_id,host,task`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []json.RawMessage{}
+	for rows.Next() {
+		var message string
+		if err := rows.Scan(&message); err != nil {
+			return nil, err
+		}
+		out = append(out, json.RawMessage(message))
 	}
 	return out, rows.Err()
 }

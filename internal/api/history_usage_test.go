@@ -85,7 +85,7 @@ func TestScenarioLabelsCannotBypassGraphWriteValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This fixture's component restricts amd64, independently of the browser.
-	if _, err = f.database.DB().Exec(`UPDATE component_releases SET environment_constraints_json='{"architecture":["amd64"]}' WHERE id='release-test-runtime-1.1.0'`); err != nil {
+	if _, err = f.database.DB().Exec(`UPDATE component_releases SET candidate=1,environment_constraints_json='{"architecture":["amd64"]}' WHERE id='release-test-runtime-1.1.0'`); err != nil {
 		t.Fatal(err)
 	}
 	owner := f.session(seed.ScenarioOwnerID)
@@ -99,9 +99,9 @@ func TestScenarioLabelsCannotBypassGraphWriteValidation(t *testing.T) {
 		flow.Data.DependencySources = n.DependencySources
 		graph.Nodes = append(graph.Nodes, flow)
 	}
-	body := map[string]any{"graph": graph, "environmentConstraints": map[string]any{"architecture": []string{"arm64"}}}
+	body := map[string]any{"expectedDigest": domain.ScenarioRevisionSpecDigest(revision), "graph": graph, "environmentConstraints": map[string]any{"architecture": []string{"arm64"}}}
 	response := f.request(http.MethodPut, "/api/v1/scenario-revisions/"+revision.ID+"/graph", body, owner)
-	if response.Code != 400 {
+	if response.Code != 409 {
 		t.Fatal(response.Code, response.Body.String())
 	}
 	unchanged, err := f.database.GetScenarioRevision(ctx, revision.ID)

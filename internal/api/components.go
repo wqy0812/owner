@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,7 +28,7 @@ func (c componentDTO) MarshalJSON() ([]byte, error) {
 		for _, release := range line.Releases {
 			ids = append(ids, release.ID)
 		}
-		lines = append(lines, map[string]any{"id": line.ID, "componentId": line.ComponentID, "name": line.Name, "latestReleasedId": line.LatestReleasedID, "currentDraftId": line.CurrentDraftID, "evolutionEligible": line.EvolutionEligible, "evolutionParentId": line.EvolutionParentID, "evolutionBlockedReason": line.EvolutionBlockedReason, "releaseIds": ids, "createdAt": line.CreatedAt})
+		lines = append(lines, map[string]any{"id": line.ID, "componentId": line.ComponentID, "name": line.Name, "latestReleasedId": line.LatestReleasedID, "currentDraftId": line.CurrentDraftID, "evolutionEligible": line.EvolutionEligible, "evolutionParentId": line.EvolutionParentID, "evolutionBlockedReason": line.EvolutionBlockedReason, "environmentConstraints": line.EnvironmentConstraints, "releaseIds": ids, "createdAt": line.CreatedAt})
 	}
 	return json.Marshal(struct {
 		plain
@@ -36,15 +37,16 @@ func (c componentDTO) MarshalJSON() ([]byte, error) {
 }
 
 type releaseInput struct {
-	Version                string                       `json:"version"`
-	Status                 domain.ReleaseStatus         `json:"status"`
-	ReleaseNotes           string                       `json:"releaseNotes"`
-	Compatibility          domain.ReleaseCompatibility  `json:"compatibility"`
-	RiskLevel              domain.RiskLevel             `json:"riskLevel"`
-	EnvironmentConstraints map[string]any               `json:"environmentConstraints"`
-	Parameters             []domain.ParameterDefinition `json:"parameters"`
-	Dependencies           []componentDependencyInput   `json:"dependencies"`
-	Actions                []componentActionInput       `json:"actions"`
+	ExpectedDefinitionGeneration *int64                       `json:"expectedDefinitionGeneration,omitempty"`
+	Version                      string                       `json:"version"`
+	Status                       domain.ReleaseStatus         `json:"status"`
+	ReleaseNotes                 string                       `json:"releaseNotes"`
+	Compatibility                domain.ReleaseCompatibility  `json:"compatibility"`
+	RiskLevel                    domain.RiskLevel             `json:"riskLevel"`
+	EnvironmentConstraints       map[string]any               `json:"environmentConstraints"`
+	Parameters                   []domain.ParameterDefinition `json:"parameters"`
+	Dependencies                 []componentDependencyInput   `json:"dependencies"`
+	Actions                      []componentActionInput       `json:"actions"`
 }
 
 type componentDependencyInput struct {
@@ -56,23 +58,28 @@ type componentDependencyInput struct {
 }
 
 type componentActionInput struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Kind                domain.ActionKind `json:"kind"`
-	Tags                []string          `json:"tags"`
-	HostGroup           string            `json:"hostGroup"`
-	RequiredCredentials *[]string         `json:"requiredCredentials"`
-	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
-	Destructive         bool              `json:"destructive"`
-	Idempotent          bool              `json:"idempotent"`
-	FromReleaseID       string            `json:"fromReleaseId"`
-	ToReleaseID         string            `json:"toReleaseId"`
+	ResourceContract    *domain.ResourceContract `json:"resourceContract,omitempty"`
+	PreCheckActionID    string                   `json:"preCheckActionId"`
+	PostCheckActionID   string                   `json:"postCheckActionId"`
+	Become              bool                     `json:"become"`
+	ID                  string                   `json:"id"`
+	Name                string                   `json:"name"`
+	Kind                domain.ActionKind        `json:"kind"`
+	Tags                []string                 `json:"tags"`
+	HostGroup           string                   `json:"hostGroup"`
+	RequiredCredentials *[]string                `json:"requiredCredentials"`
+	TimeoutSeconds      int                      `json:"timeoutSeconds"`
+	RiskLevel           domain.RiskLevel         `json:"riskLevel"`
+	Destructive         bool                     `json:"destructive"`
+	Idempotent          bool                     `json:"idempotent"`
+	FromReleaseID       string                   `json:"fromReleaseId"`
+	ToReleaseID         string                   `json:"toReleaseId"`
 }
 
 type releaseContractInput struct {
-	Parameters   []domain.ParameterDefinition `json:"parameters"`
-	Dependencies []componentDependencyInput   `json:"dependencies"`
+	Parameters         []domain.ParameterDefinition `json:"parameters"`
+	Dependencies       []componentDependencyInput   `json:"dependencies"`
+	ExpectedGeneration *int64                       `json:"expectedDefinitionGeneration"`
 }
 
 func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDependency {
@@ -90,11 +97,23 @@ func dependencyInputs(inputs []componentDependencyInput) []domain.ComponentDepen
 
 func (input releaseInput) domain(existing *domain.ComponentRelease) domain.ComponentRelease {
 	release := domain.ComponentRelease{
-		Version: input.Version, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
+		ExpectedPublicationGeneration: input.ExpectedDefinitionGeneration, Version: input.Version, Status: input.Status, ReleaseNotes: input.ReleaseNotes,
 		Compatibility: input.Compatibility, RiskLevel: input.RiskLevel,
 		EnvironmentConstraints: input.EnvironmentConstraints, Parameters: input.Parameters,
 	}
 	release.Dependencies = dependencyInputs(input.Dependencies)
+	if existing != nil {
+		if input.Parameters == nil {
+			release.Parameters = existing.Parameters
+		}
+		if input.Dependencies == nil {
+			release.Dependencies = existing.Dependencies
+		}
+		if input.EnvironmentConstraints == nil {
+			release.EnvironmentConstraints = existing.EnvironmentConstraints
+		}
+	}
+
 	for index, inputAction := range input.Actions {
 		risk := inputAction.RiskLevel
 		if risk == "" {
@@ -115,8 +134,8 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 			empty := []string{}
 			requiredCredentials = &empty
 		}
-		release.Actions = append(release.Actions, domain.ActionDefinition{
-			ID: inputAction.ID, Name: inputAction.Name, Kind: inputAction.Kind, Tags: inputAction.Tags,
+		release.Actions = append(release.Actions, domain.ActionDefinition{ResourceContract: inputAction.ResourceContract,
+			PreCheckActionID: inputAction.PreCheckActionID, PostCheckActionID: inputAction.PostCheckActionID, Become: inputAction.Become, ID: inputAction.ID, Name: inputAction.Name, Kind: inputAction.Kind, Tags: inputAction.Tags,
 			HostGroup:           inputAction.HostGroup,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
@@ -213,6 +232,10 @@ func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if input.ExpectedDefinitionGeneration == nil {
+		writeError(w, fmt.Errorf("%w: 请载入最新版本后保存合同", domain.ErrConflict))
+		return
+	}
 	release, err := h.platform.Catalog().UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), input.domain(&existing))
 	if err != nil {
 		writeError(w, err)
@@ -227,9 +250,16 @@ func (h *Handler) updateReleaseContract(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	release, err := h.platform.Catalog().UpdateReleaseContract(
-		r.Context(), currentUser(r), r.PathValue("id"), input.Parameters, dependencyInputs(input.Dependencies),
-	)
+	if input.ExpectedGeneration == nil {
+		writeError(w, fmt.Errorf("%w: 请载入最新版本后保存合同", domain.ErrConflict))
+		return
+	}
+	release, err := h.platform.Catalog().GetComponentRelease(r.Context(), r.PathValue("id"))
+	if err == nil {
+		release.Parameters, release.Dependencies = input.Parameters, dependencyInputs(input.Dependencies)
+		release.ExpectedPublicationGeneration = input.ExpectedGeneration
+		release, err = h.platform.Catalog().UpdateRelease(r.Context(), currentUser(r), r.PathValue("id"), release)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -425,7 +455,7 @@ func (h *Handler) componentDTO(r *http.Request, component domain.Component) comp
 		if !ok {
 			index = len(output.ReleaseLines)
 			lineIndex[release.LineID] = index
-			output.ReleaseLines = append(output.ReleaseLines, domain.ComponentReleaseLine{ID: release.LineID, ComponentID: component.ID, Name: release.LineName, Releases: []domain.ComponentRelease{}, CreatedAt: release.CreatedAt})
+			output.ReleaseLines = append(output.ReleaseLines, domain.ComponentReleaseLine{ID: release.LineID, ComponentID: component.ID, Name: release.LineName, EnvironmentConstraints: release.EnvironmentConstraints, Releases: []domain.ComponentRelease{}, CreatedAt: release.CreatedAt})
 		}
 		line := &output.ReleaseLines[index]
 		line.Releases = append(line.Releases, release)
@@ -507,4 +537,40 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 		"componentOwners": componentOwners, "scenarioOwners": scenarioOwners, "scenarios": scenarioList,
 		"paths": paths, "scenarioRunCount": report.ScenarioRunCount,
 	}
+}
+
+func (a *componentActionInput) UnmarshalJSON(data []byte) error {
+	if err := rejectLegacyAuthoringJSON(data); err != nil {
+		return err
+	}
+	type plain componentActionInput
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode((*plain)(a))
+}
+
+func (h *Handler) patchReleaseContract(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Section            string                        `json:"section"`
+		ExpectedGeneration *int64                        `json:"expectedDefinitionGeneration"`
+		Parameters         *[]domain.ParameterDefinition `json:"parameters,omitempty"`
+		Dependencies       *[]componentDependencyInput   `json:"dependencies,omitempty"`
+		NewParameters      []domain.ParameterDefinition  `json:"newParameters,omitempty"`
+		RemoveParameters   []string                      `json:"removeParameters,omitempty"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	patch := service.ReleaseContractPatch{Section: input.Section, ExpectedGeneration: input.ExpectedGeneration, Parameters: input.Parameters, NewParameters: input.NewParameters, RemoveParameters: input.RemoveParameters}
+	if input.Dependencies != nil {
+		deps := dependencyInputs(*input.Dependencies)
+		patch.Dependencies = &deps
+	}
+	release, err := h.platform.Catalog().PatchReleaseContract(r.Context(), currentUser(r), r.PathValue("id"), patch)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, release)
 }

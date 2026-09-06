@@ -10,13 +10,13 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-type releaseCoordinatorStoreStub struct {
-	releaseCoordinatorStore
+type releasesStoreStub struct {
+	releasesStore
 	releases map[string]domain.ComponentRelease
 	errors   map[string]error
 }
 
-func (s *releaseCoordinatorStoreStub) GetComponentRelease(_ context.Context, id string) (domain.ComponentRelease, error) {
+func (s *releasesStoreStub) GetComponentRelease(_ context.Context, id string) (domain.ComponentRelease, error) {
 	if err := s.errors[id]; err != nil {
 		return domain.ComponentRelease{}, err
 	}
@@ -37,7 +37,7 @@ func TestCaptureReleasePublicationStateLocksDependencyAndTransitionClosure(t *te
 		"dependency": {ID: "dependency", ComponentID: "dependency-component", Version: "1.0.0", Status: domain.ReleaseReleased, PublicationGeneration: 2},
 		"previous":   {ID: "previous", ComponentID: "component", Version: "1.0.0", Status: domain.ReleaseReleased, PublicationGeneration: 4},
 	}
-	coordinator := &ReleaseCoordinator{store: &releaseCoordinatorStoreStub{releases: releases}}
+	coordinator := &ReleaseCoordinator{store: &releasesStoreStub{releases: releases}}
 	captured, guards, err := coordinator.captureReleasePublicationState(context.Background(), []string{"current", "current"})
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestCaptureReleasePublicationStateLocksDependencyAndTransitionClosure(t *te
 }
 
 func TestCaptureReleasePublicationStateFailsForMissingRootOrEmptyReference(t *testing.T) {
-	coordinator := &ReleaseCoordinator{store: &releaseCoordinatorStoreStub{releases: map[string]domain.ComponentRelease{}}}
+	coordinator := &ReleaseCoordinator{store: &releasesStoreStub{releases: map[string]domain.ComponentRelease{}}}
 	if _, _, err := coordinator.captureReleasePublicationState(context.Background(), []string{"missing"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing root error=%v", err)
 	}
@@ -91,7 +91,7 @@ func TestScenarioTestEvidenceRequiresCurrentRevisionAndReleaseDefinitions(t *tes
 		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node-1", ReleaseID: release.ID}}},
 	}
 	run := currentScenarioEvidence(revision, release)
-	stub := &releaseCoordinatorStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}
+	stub := &releasesStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}
 	coordinator := &ReleaseCoordinator{store: stub}
 	if current, err := coordinator.scenarioTestEvidenceCurrent(context.Background(), run, revision); err != nil || !current {
 		t.Fatalf("current evidence=%v err=%v", current, err)
@@ -133,7 +133,7 @@ func TestReleasedScenarioMayRetainDeprecatedReleaseEvidence(t *testing.T) {
 	}
 	run := currentScenarioEvidence(revision, release)
 	release.Status = domain.ReleaseDeprecated
-	coordinator := &ReleaseCoordinator{store: &releaseCoordinatorStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}}
+	coordinator := &ReleaseCoordinator{store: &releasesStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}}
 	if current, err := coordinator.scenarioRunDefinitionCurrent(context.Background(), run, revision); err != nil || !current {
 		t.Fatalf("released historical evidence=%v err=%v", current, err)
 	}
@@ -153,7 +153,7 @@ func TestScenarioEvidenceRejectsConflictingDuplicateReleaseLocks(t *testing.T) {
 	}})
 	snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
 	run := domain.Run{ScenarioRevisionID: revision.ID, InputSnapshot: snapshot}
-	coordinator := &ReleaseCoordinator{store: &releaseCoordinatorStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}}
+	coordinator := &ReleaseCoordinator{store: &releasesStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}}
 	if current, err := coordinator.scenarioRunDefinitionCurrent(context.Background(), run, revision); err != nil || current {
 		t.Fatalf("conflicting locks current=%v err=%v", current, err)
 	}
@@ -179,7 +179,7 @@ func TestMutualConfigurationCandidatesLockEverySourceAndRejectChangedEvidence(t 
 		releases[key] = r
 		byID[r.ID] = r
 	}
-	stub := &releaseCoordinatorStoreStub{releases: byID}
+	stub := &releasesStoreStub{releases: byID}
 	coordinator := &ReleaseCoordinator{store: stub}
 	captured, guards, err := coordinator.captureReleasePublicationState(context.Background(), []string{"api-r1"})
 	if err != nil || len(captured) != 2 || len(guards) != 2 {

@@ -8,10 +8,11 @@ import (
 	"path"
 	"strings"
 
+	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *Platform) bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+func (p *DeliveryService) bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
 	targetStation := strings.TrimSpace(revision.Variables[fileStationVariable])
 	if targetStation != "" {
 		var err error
@@ -22,6 +23,9 @@ func (p *Platform) bindComponentArtifacts(ctx context.Context, revision domain.E
 	}
 	for index := range plan.Steps {
 		step := &plan.Steps[index]
+		if step.SourceType == "scenario_acceptance" || step.SourceParametersFrozen {
+			continue
+		}
 		release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
 		if err != nil {
 			return err
@@ -62,6 +66,9 @@ func (p *Platform) bindComponentArtifacts(ctx context.Context, revision domain.E
 				ReleaseID: release.ID, ComponentID: component.ID, ComponentName: component.Name, ComponentOwnerID: component.OwnerID,
 				StepIDs: []string{step.ID}, SizeBytes: artifact.SizeBytes, TargetStation: targetStation, RelativePath: relativePath,
 			})
+			if targetStation != "" {
+				observePlannedMediaTransfer(ctx, targetURL)
+			}
 		}
 	}
 	return nil
@@ -71,7 +78,7 @@ func artifactURL(station, relativePath string) string {
 	return (&url.URL{Scheme: "http", Host: station, Path: "/" + strings.TrimPrefix(relativePath, "/")}).String()
 }
 
-func (p *Platform) bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+func (p *DeliveryService) bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
 	targetRegistry := strings.TrimSpace(revision.Variables[imageRegistryVariable])
 	if targetRegistry != "" {
 		var err error
@@ -82,6 +89,9 @@ func (p *Platform) bindComponentImages(ctx context.Context, revision domain.Envi
 	}
 	for index := range plan.Steps {
 		step := &plan.Steps[index]
+		if step.SourceType == "scenario_acceptance" || step.SourceParametersFrozen {
+			continue
+		}
 		release, err := p.store.GetComponentRelease(ctx, step.ReleaseID)
 		if err != nil {
 			return err
@@ -127,6 +137,9 @@ func (p *Platform) bindComponentImages(ctx context.Context, revision domain.Envi
 				ReleaseID: release.ID, ComponentID: component.ID, ComponentName: component.Name, ComponentOwnerID: component.OwnerID,
 				StepIDs: []string{step.ID}, SourceRegistry: sourceRegistry, TargetRegistry: targetRegistry, TargetRef: targetRef,
 			})
+			if targetRegistry != "" {
+				observePlannedMediaTransfer(ctx, targetDigest)
+			}
 		}
 	}
 	return nil
@@ -140,6 +153,7 @@ func bindArtifactVariables(step *lockedStep, artifact domain.ComponentArtifact, 
 		}
 		step.Variables[name] = value
 	}
+	step.Media = append(step.Media, ansible.JobMedia{Kind: "artifact", Location: location, Identity: artifact.SHA256, SizeBytes: artifact.SizeBytes})
 	return nil
 }
 
@@ -154,6 +168,7 @@ func bindImageVariables(step *lockedStep, logicalName, location, digest string) 
 		}
 		step.Variables[name] = value
 	}
+	step.Media = append(step.Media, ansible.JobMedia{Kind: "image", Location: location, Identity: digest})
 	return nil
 }
 

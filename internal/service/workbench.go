@@ -17,23 +17,28 @@ var activeWorkRunStatuses = map[domain.RunStatus]bool{
 	domain.RunRunning:          true,
 }
 
-func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+func (p *ReadModelService) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+	request := *p
+	request.store = newWorkbenchReadStore(p.store)
+	return request.workbench(ctx, user)
+}
+
+func (p *ReadModelService) workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
 	if user.Role == domain.RolePlatformAdmin {
 		return p.platformAdminWorkbench(ctx, user)
 	}
-	components, err := p.ListComponents(ctx, user)
+	subjects, err := p.store.WorkbenchSubjects(ctx, user)
 	if err != nil {
 		return domain.Workbench{}, err
 	}
-	scenarios, err := p.ListScenarios(ctx, user)
-	if err != nil {
-		return domain.Workbench{}, err
+	components, scenarios, environments := subjects.Components, subjects.Scenarios, subjects.Environments
+	if user.Role == domain.RoleComponentOwner {
+		components, err = p.catalog.WorkbenchReadiness(ctx, components)
+		if err != nil {
+			return domain.Workbench{}, err
+		}
 	}
-	environments, err := p.ListEnvironments(ctx, user)
-	if err != nil {
-		return domain.Workbench{}, err
-	}
-	runs, err := p.store.ListRuns(ctx, user)
+	runs, err := p.workbenchRuns(ctx, user, components, scenarios)
 	if err != nil {
 		return domain.Workbench{}, err
 	}
@@ -70,6 +75,30 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 		environmentByID[environment.ID] = environment
 		if environment.OwnerID == user.ID {
 			workbench.Assets.Environments++
+		}
+	}
+	metadata, err := p.store.WorkbenchMetadata(ctx, user, runs)
+	if err != nil {
+		return domain.Workbench{}, err
+	}
+	for id, c := range metadata.Components {
+		if _, exists := componentByID[id]; !exists {
+			componentByID[id] = c
+		}
+	}
+	for id, r := range metadata.Releases {
+		if _, exists := releaseByID[id]; !exists {
+			releaseByID[id] = r
+		}
+	}
+	for id, s := range metadata.Scenarios {
+		if _, exists := scenarioByID[id]; !exists {
+			scenarioByID[id] = s
+		}
+	}
+	for id, r := range metadata.Revisions {
+		if _, exists := revisionByID[id]; !exists {
+			revisionByID[id] = r
 		}
 	}
 
@@ -121,13 +150,13 @@ func (p *Platform) Workbench(ctx context.Context, user domain.User) (domain.Work
 	return workbench, nil
 }
 
-func (p *Platform) platformAdminWorkbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
-	components, err := p.store.ListComponents(ctx, user)
+func (p *ReadModelService) platformAdminWorkbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
+	subjects, err := p.store.WorkbenchSubjects(ctx, user)
 	if err != nil {
 		return domain.Workbench{}, err
 	}
 	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
-	workbench.Items = platformAdminComponentWork(components)
+	workbench.Items = platformAdminComponentWork(subjects.Components)
 	workbench.Summary.ActionRequired = len(workbench.Items)
 	return workbench, nil
 }
@@ -272,7 +301,7 @@ func componentOwnerWork(user domain.User, components []domain.Component, runs []
 	return items, embedded, nil
 }
 
-func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scenarios []domain.Scenario, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.User, scenarios []domain.Scenario, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
 	items := []domain.WorkItem{}
 	embedded := map[string]bool{}
 	for _, scenario := range scenarios {
@@ -291,7 +320,7 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 			if run.Kind != domain.RunScenarioTest || run.ScenarioRevisionID != revision.ID {
 				continue
 			}
-			matches, matchErr := p.releaseCoordinator.scenarioRunDefinitionCurrent(ctx, run, revision)
+			matches, matchErr := scenarioRunDefinitionCurrent(ctx, run, revision, p.store.GetComponentRelease)
 			if matchErr != nil {
 				return nil, nil, matchErr
 			}
@@ -307,7 +336,7 @@ func (p *Platform) scenarioOwnerWork(ctx context.Context, user domain.User, scen
 			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && run.Status == domain.RunSucceeded
 		})
 		reasons := []domain.WorkReason{}
-		issues, validationErr := p.ValidateScenario(ctx, user, revision.ID)
+		issues, validationErr := p.scenarios.Validate(ctx, user, revision.ID)
 		if validationErr != nil {
 			return nil, nil, validationErr
 		}
@@ -490,7 +519,7 @@ func impactWork(user domain.User, notifications []domain.Notification, scenarios
 	return items
 }
 
-func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.Run, embedded map[string]bool, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) ([]domain.WorkItem, error) {
+func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs []domain.Run, embedded map[string]bool, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) ([]domain.WorkItem, error) {
 	latestByKey := map[string]domain.Run{}
 	for _, run := range runs {
 		key := runWorkloadKey(run)
@@ -549,7 +578,7 @@ func (p *Platform) runWork(ctx context.Context, user domain.User, runs []domain.
 	return items, nil
 }
 
-func (p *Platform) runMatchesCurrentDefinition(ctx context.Context, run domain.Run) (bool, error) {
+func (p *ReadModelService) runMatchesCurrentDefinition(ctx context.Context, run domain.Run) (bool, error) {
 	if run.ComponentReleaseID != "" {
 		release, err := p.store.GetComponentRelease(ctx, run.ComponentReleaseID)
 		if err != nil {
@@ -562,12 +591,12 @@ func (p *Platform) runMatchesCurrentDefinition(ctx context.Context, run domain.R
 		if err != nil {
 			return false, nil
 		}
-		return p.releaseCoordinator.scenarioRunDefinitionCurrent(ctx, run, revision)
+		return scenarioRunDefinitionCurrent(ctx, run, revision, p.store.GetComponentRelease)
 	}
 	return true, nil
 }
 
-func (p *Platform) failedStepOwnedBy(ctx context.Context, run domain.Run, ownerID string, components map[string]domain.Component) (bool, error) {
+func (p *ReadModelService) failedStepOwnedBy(ctx context.Context, run domain.Run, ownerID string, components map[string]domain.Component) (bool, error) {
 	steps, err := p.store.ListRunSteps(ctx, run.ID)
 	if err != nil {
 		return false, err
@@ -717,7 +746,7 @@ func runCause(run domain.Run) *domain.WorkCause {
 	return &domain.WorkCause{Kind: "run", Summary: runStatusMessage(run.Status), At: &at}
 }
 
-func (p *Platform) evidenceInvalidationCause(ctx context.Context, resourceType, resourceID string, evidence *domain.Run) *domain.WorkCause {
+func (p *ReadModelService) evidenceInvalidationCause(ctx context.Context, resourceType, resourceID string, evidence *domain.Run) *domain.WorkCause {
 	after := evidence.CreatedAt
 	if evidence.FinishedAt != nil {
 		after = *evidence.FinishedAt
@@ -767,4 +796,16 @@ func sortWorkItems(items []domain.WorkItem) {
 		}
 		return items[i].ID < items[j].ID
 	})
+}
+
+func (s *ReadModelService) ListNotifications(ctx context.Context, userID string, unreadOnly bool) ([]domain.Notification, error) {
+	return s.store.ListNotifications(ctx, userID, unreadOnly)
+}
+
+func (s *ReadModelService) MarkNotificationRead(ctx context.Context, id, userID string) error {
+	return s.store.MarkNotificationRead(ctx, id, userID)
+}
+
+func (s *ReadModelService) GetNotification(ctx context.Context, id string) (domain.Notification, error) {
+	return s.store.GetNotification(ctx, id)
 }

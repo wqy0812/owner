@@ -48,6 +48,7 @@ func TestCatalogKeepsCurrentTableShapeWithoutExportingUnreferencedDefaults(t *te
 	if err := source.CreateComponentRelease(ctx, r); err != nil {
 		t.Fatal(err)
 	}
+	materializeBackupRoleFixture(t, source, root)
 	exported := filepath.Join(root, "export")
 	if err := os.MkdirAll(exported, 0700); err != nil {
 		t.Fatal(err)
@@ -122,6 +123,7 @@ func TestCatalogRestoreBootstrapsEnvironmentVariablesOnStartup(t *testing.T) {
 	if err := source.CreateComponentRelease(ctx, r); err != nil {
 		t.Fatal(err)
 	}
+	materializeBackupRoleFixture(t, source, root)
 	exported := filepath.Join(root, "export")
 	if err := os.MkdirAll(exported, 0700); err != nil {
 		t.Fatal(err)
@@ -159,7 +161,11 @@ func TestCatalogRestoreBootstrapsEnvironmentVariablesOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(categories) != 1 || categories[0].Key != "architecture" {
+	keys := map[string]bool{}
+	for _, category := range categories {
+		keys[category.Key] = true
+	}
+	if len(categories) != 2 || !keys["architecture"] || !keys["hostGroup"] {
 		t.Fatalf("restored option directory was overwritten: %v", categories)
 	}
 	if err := (seed.Seeder{Store: target}).SeedUsers(ctx); err != nil {

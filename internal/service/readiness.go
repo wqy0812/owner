@@ -9,12 +9,12 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *Platform) releaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ReleaseReadiness, error) {
+func (p *ReleaseRules) releaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ReleaseReadiness, error) {
 	return newReadinessEvaluation(p).readiness(ctx, release)
 }
 
 func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, release domain.ComponentRelease, visiting map[string]bool, memo map[string]domain.ReleaseReadiness) (domain.ReleaseReadiness, error) {
-	p := e.platform
+	p := e.rules
 	if cached, ok := memo[release.ID]; ok {
 		return cached, nil
 	}
@@ -24,6 +24,9 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 		result.Blockers = append(result.Blockers, domain.ReadinessBlocker{Code: code, Message: message, ActionURL: componentURL + "&action=" + action})
 	}
 
+	if err := domain.ValidateActionBindings(release, true); err != nil {
+		add("action_checks_invalid", err.Error(), "lifecycle")
+	}
 	configured := map[domain.ActionKind]bool{}
 	for _, action := range release.Actions {
 		configured[action.Kind] = true
@@ -31,12 +34,12 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 	requiredActions := []struct {
 		kind  domain.ActionKind
 		label string
-	}{{domain.ActionInstall, "Install"}, {domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}}
+	}{{domain.ActionInstall, "Install"}, {domain.ActionRollback, "Rollback"}}
 	if release.ParentReleaseID != "" {
 		requiredActions = []struct {
 			kind  domain.ActionKind
 			label string
-		}{{domain.ActionVerify, "Verify"}, {domain.ActionRollback, "Rollback"}}
+		}{{domain.ActionInstall, "Install"}, {domain.ActionRollback, "Rollback"}}
 		if _, err := actionFor(release, domain.ActionUpgrade); err != nil {
 			add("lifecycle_action_missing", "缺少 Upgrade 生命周期能力（显式 Upgrade 或幂等 Install）", "lifecycle")
 		}
@@ -50,7 +53,9 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 		add("playbook_workspace_invalid", err.Error(), "lifecycle")
 	}
 
-	if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
+	if err := domain.ValidateReleaseYAMLAuthoring(release); err != nil {
+		add("yaml_migration_required", err.Error(), "lifecycle")
+	} else if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
 	} else if err := p.validateReleaseTransitionContractsWithPlaybooks(ctx, release, e.validatePlaybook); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
@@ -74,7 +79,7 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 		result.InstallEvidenceRunID = installID
 		result.RollbackEvidenceRunID = rollbackID
 		if installID == "" {
-			add("install_evidence_missing", "当前合同缺少安装及 Verify 成功证据", "validate")
+			add("install_evidence_missing", "当前合同缺少安装及前后检查成功证据", "validate")
 		}
 		if rollbackID == "" {
 			add("rollback_evidence_missing", "当前合同缺少回滚及回滚后验证证据", "validate")
@@ -122,11 +127,11 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 	return result, nil
 }
 
-func (p *Platform) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateReleaseTransitionContracts(ctx context.Context, release domain.ComponentRelease) error {
 	return p.validateReleaseTransitionContractsWithPlaybooks(ctx, release, p.validatePlaybook)
 }
 
-func (p *Platform) validateReleaseTransitionContractsWithPlaybooks(ctx context.Context, release domain.ComponentRelease, validatePlaybook func(string) error) error {
+func (p *ReleaseRules) validateReleaseTransitionContractsWithPlaybooks(ctx context.Context, release domain.ComponentRelease, validatePlaybook func(string) error) error {
 	var parent domain.ComponentRelease
 	if release.ParentReleaseID == "" {
 		for _, action := range release.Actions {
@@ -188,15 +193,12 @@ func (p *Platform) validateReleaseTransitionContractsWithPlaybooks(ctx context.C
 	return nil
 }
 
-func (p *Platform) validatePlaybook(path string) error {
-	if digester, ok := p.runner.(digestRunner); ok {
-		_, _, err := digester.Digest(path)
-		return err
-	}
-	return nil
+func (p *ReleaseRules) validatePlaybook(path string) error {
+	_, _, err := p.inspector.Digest(path)
+	return err
 }
 
-func (p *Platform) validateWorkspaceManifest(ctx context.Context, release domain.ComponentRelease) error {
+func (p *ReleaseRules) validateWorkspaceManifest(ctx context.Context, release domain.ComponentRelease) error {
 	if len(release.Actions) == 0 && len(release.PlaybookFiles) == 0 {
 		return nil // An empty Draft has no workspace to validate yet.
 	}
@@ -207,7 +209,7 @@ func (p *Platform) validateWorkspaceManifest(ctx context.Context, release domain
 	if err != nil {
 		return err
 	}
-	directory, err := p.workspaceDirectory(component, release, false)
+	directory, err := p.workspace.workspaceDirectory(component, release, false)
 	if err != nil {
 		return err
 	}
@@ -226,7 +228,7 @@ func (p *Platform) validateWorkspaceManifest(ctx context.Context, release domain
 		}
 	}
 	for _, action := range release.Actions {
-		expectedPath, err := actionPlaybookPath(component, release, action.Kind)
+		expectedPath, err := actionSourcePath(component, release, action)
 		if err != nil || action.Playbook != expectedPath {
 			return fmt.Errorf("%w: action %s must use the platform-managed entrypoint", domain.ErrInvalid, action.Kind)
 		}
@@ -245,7 +247,7 @@ func readinessError(readiness domain.ReleaseReadiness) error {
 	return fmt.Errorf("%w: release readiness blocked: %s", domain.ErrConflict, strings.Join(messages, "; "))
 }
 
-func (p *Platform) decorateReleaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ComponentRelease, error) {
+func (p *ReleaseRules) decorateReleaseReadiness(ctx context.Context, release domain.ComponentRelease) (domain.ComponentRelease, error) {
 	readiness, err := p.releaseReadiness(ctx, release)
 	if err != nil {
 		return release, err
@@ -254,6 +256,6 @@ func (p *Platform) decorateReleaseReadiness(ctx context.Context, release domain.
 	return release, nil
 }
 
-func (p *Platform) decorateComponentReadiness(ctx context.Context, component domain.Component) (domain.Component, error) {
+func (p *ReleaseRules) decorateComponentReadiness(ctx context.Context, component domain.Component) (domain.Component, error) {
 	return newReadinessEvaluation(p).decorateComponent(ctx, component)
 }

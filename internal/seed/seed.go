@@ -22,56 +22,24 @@ const (
 	platformCatalogAuditID  = "audit-platform-catalog-bootstrapped"
 )
 
+// Historical catalog audit identities remain stable for reference imports and
+// preservation checks. Fresh initialization does not emit these markers.
+const (
+	seedAuditAction               = "demo.seeded"
+	seedAuditResourceID           = "newplatform-demo"
+	kubernetes1175SeedAuditID     = "audit-k8s-1.17.5-demo-seeded"
+	kubernetes1175SeedAuditAction = "demo.kubernetes_1_17_5.seeded"
+)
+
 type Seeder struct {
 	Store *store.Store
 	Now   func() time.Time
 }
 
-func (s Seeder) Run(ctx context.Context) error {
-	if s.Store == nil {
-		return errors.New("seed store is required")
-	}
-	now := time.Now().UTC()
-	if s.Now != nil {
-		now = s.Now().UTC()
-	}
-	if err := s.seedUsers(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedPlatformCatalog(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedComponents(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedScenarios(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedEnvironments(ctx, now); err != nil {
-		return err
-	}
-	if err := s.appendAuditIfMissing(ctx, domain.AuditEvent{
-		ID: seedAuditID, ActorID: "system", Action: "demo.seeded",
-		ResourceType: "platform", ResourceID: "newplatform-demo",
-		Metadata: map[string]any{"openFuyaoSnapshot": "examples/ansible/openfuyao"}, CreatedAt: now,
-	}); err != nil {
-		return err
-	}
-	if err := s.seedKubernetes1175Catalog(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedKubernetes1175Scenarios(ctx, now); err != nil {
-		return err
-	}
-	if err := s.seedKubernetes1175Environment(ctx, now); err != nil {
-		return err
-	}
-	return s.appendAuditIfMissing(ctx, domain.AuditEvent{
-		ID: "audit-k8s-1.17.5-demo-seeded", ActorID: "system", Action: "demo.kubernetes_1_17_5.seeded",
-		ResourceType: "scenario", ResourceID: "scenario-k8s-1.17.5",
-		Metadata: map[string]any{"snapshot": "examples/ansible/k8s-1.17.5-cluster", "model": "minimal-components", "evidence": "not_seeded"}, CreatedAt: now,
-	})
-}
+// Run initializes the new contract with governed identities and directories.
+// Component content is authored or imported as native Roles; old deployment
+// snapshots are reference material and are never seeded as executable Releases.
+func (s Seeder) Run(ctx context.Context) error { return s.SeedUsers(ctx) }
 
 // SeedUsers creates the fixed identities used by the role switcher and installs
 // the platform-owned directories once on a new database. It intentionally
@@ -155,7 +123,7 @@ func initialPlatformCategories() []seededPlatformCategory {
 	return []seededPlatformCategory{
 		{id: "platform-category-architecture", key: "architecture", label: "架构", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"amd64", "x86/amd64"}, {"arm64", "ARM/arm64"}}},
 		{id: "platform-category-operating-system", key: "operatingSystem", label: "操作系统", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"Ubuntu", "Ubuntu"}, {"SUSE", "SUSE"}, {"Kylin", "Kylin"}}},
-		{id: "platform-category-operating-system-version", key: "operatingSystemVersion", label: "操作系统版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"18.04", "18.04"}, {"20.04", "20.04"}, {"22.04", "22.04"}, {"24.04", "24.04"}, {"18.04 / 24.04", "18.04 / 24.04（混合）"}}},
+		{id: "platform-category-operating-system-version", key: "operatingSystemVersion", label: "操作系统版本", kind: domain.PlatformOptionEnvironmentDimension, required: true, parentKey: "operatingSystem", optionParents: map[string]string{"18.04": "Ubuntu", "20.04": "Ubuntu", "22.04": "Ubuntu", "24.04": "Ubuntu", "18.04 / 24.04": "Ubuntu"}, options: []seededPlatformOption{{"18.04", "18.04"}, {"20.04", "20.04"}, {"22.04", "22.04"}, {"24.04", "24.04"}, {"18.04 / 24.04", "18.04 / 24.04（混合）"}}},
 		{id: "platform-category-ip-family", key: "ipFamily", label: "IP 协议族", kind: domain.PlatformOptionEnvironmentDimension, required: true, options: []seededPlatformOption{{"IPv4", "IPv4"}, {"IPv6", "IPv6"}}},
 		{id: "platform-category-hardware-profile", key: "hardwareProfile", label: "硬件类型", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"general", "通用主机"}, {"gpu", "GPU"}, {"dpu", "DPU"}, {"bms", "BMS"}}},
 		{id: "platform-category-deployment-mode", key: "deploymentMode", label: "部署形态", kind: domain.PlatformOptionEnvironmentDimension, options: []seededPlatformOption{{"standard", "standard"}, {"serverless", "serverless"}, {"ingress", "ingress"}}},
@@ -314,10 +282,6 @@ func componentMetadata(id string) (domain.ComponentLayer, []string) {
 
 func (s Seeder) seedScenarios(ctx context.Context, now time.Time) error {
 	return s.seedOpenFuyaoScenarios(ctx, now)
-}
-
-func scenarioNode(id, name, releaseID, group string, x, y float64) domain.ScenarioNode {
-	return domain.ScenarioNode{ID: id, Name: name, ReleaseID: releaseID, Action: domain.ActionInstall, HostGroup: group, ParameterValues: map[string]any{}, Position: domain.GraphPosition{X: x, Y: y}}
 }
 
 func (s Seeder) seedEnvironments(ctx context.Context, now time.Time) error {

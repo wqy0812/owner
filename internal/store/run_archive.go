@@ -173,7 +173,7 @@ func archiveRecords(ctx context.Context, q queryer, id string, write func(string
 		return boundary, err
 	}
 	// Typed row maps preserve every column, including future optional approval fields.
-	for _, table := range []string{"run_steps", "approvals"} {
+	for _, table := range []string{"run_steps", "approvals", "action_execution_receipts", "run_jobs"} {
 		rows, e := q.QueryContext(ctx, "SELECT * FROM "+table+" WHERE run_id=? ORDER BY rowid", id)
 		if e != nil {
 			return boundary, e
@@ -197,7 +197,11 @@ func archiveRecords(ctx context.Context, q queryer, id string, write func(string
 			m := map[string]any{}
 			for i, c := range cols {
 				if b, ok := vals[i].([]byte); ok {
-					m[c] = string(b)
+					if table == "run_jobs" && c == "bundle" {
+						m[c] = b
+					} else {
+						m[c] = string(b)
+					}
 				} else {
 					m[c] = vals[i]
 				}
@@ -362,7 +366,6 @@ func (s *Store) RecordRetentionScan(ctx context.Context, now time.Time, result s
 	_, err := s.db.ExecContext(ctx, `UPDATE run_retention_policy SET last_scan_at=?,last_scan_result=? WHERE id=1`, timeText(now), result)
 	return err
 }
-func isMissingArchive(err error) bool { return errors.Is(err, domain.ErrNotFound) }
 func (s *Store) RetentionCursor(ctx context.Context, status string) (string, string, error) {
 	var at, id string
 	err := s.db.QueryRowContext(ctx, `SELECT finished_at,run_id FROM run_retention_cursors WHERE status=?`, status).Scan(&at, &id)

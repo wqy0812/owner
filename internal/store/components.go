@@ -102,13 +102,16 @@ func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 			r.Compatibility = domain.CompatibilityNotApplicable
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, r.LineID, r.ComponentID, r.LineName, timeText(r.CreatedAt)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO component_release_lines(id,component_id,name,created_at,environment_constraints_json) VALUES(?,?,?,?,?)`, r.LineID, r.ComponentID, r.LineName, timeText(r.CreatedAt), jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints))); err != nil {
 		return mapSQLError(err)
+	}
+	if err := validateBranchScopeTx(ctx, tx, "component_release_lines", r.LineID, r.EnvironmentConstraints); err != nil {
+		return err
 	}
 	if r.Review.Status == "" {
 		r.Review.Status = domain.ReleaseReviewNotSubmitted
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.PlaybookTreeSHA256, r.PlaybookWorkspaceRoot, timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookTreeSHA256, r.PlaybookWorkspaceRoot, timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -134,15 +137,8 @@ func (s *Store) CreateClonedComponentRelease(ctx context.Context, r domain.Compo
 	if err := insertComponentRelease(ctx, tx, r); err != nil {
 		return err
 	}
-	for _, artifact := range r.Artifacts {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, artifact.ID, r.ID, artifact.Alias, artifact.Filename, artifact.SHA256, artifact.SizeBytes, artifact.SourceURL, artifact.SourceUpdatedBy, timeText(artifact.SourceUpdatedAt), artifact.CreatedBy, timeText(artifact.CreatedAt)); err != nil {
-			return mapSQLError(err)
-		}
-	}
-	for _, image := range r.Images {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_images(id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, image.ID, r.ID, image.LogicalName, image.Digest, image.SourceRef, image.SourceUpdatedBy, timeText(image.SourceUpdatedAt), image.CreatedBy, timeText(image.CreatedAt)); err != nil {
-			return mapSQLError(err)
-		}
+	if err := insertReleaseMediaTx(ctx, tx, r); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, audit.ID, audit.ActorID, audit.Action, audit.ResourceType, audit.ResourceID, jsonText(audit.Metadata), timeText(audit.CreatedAt)); err != nil {
 		return mapSQLError(err)
@@ -160,10 +156,16 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 	if err != nil {
 		return err
 	}
+	if r.ExpectedPublicationGeneration != nil && previous.PublicationGeneration != *r.ExpectedPublicationGeneration {
+		return fmt.Errorf("%w: 合同已更新，请重新载入后保存", domain.ErrConflict)
+	}
+	if err := validateBranchScopeTx(ctx, tx, "component_release_lines", previous.LineID, r.EnvironmentConstraints); err != nil {
+		return err
+	}
 	if err := validateReleaseCatalogTx(ctx, tx, r, &previous); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,playbook_workspace_root=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(r.EnvironmentConstraints), jsonText(r.Parameters), r.PlaybookWorkspaceRoot, r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,playbook_workspace_root=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookWorkspaceRoot, r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -195,7 +197,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.HostGroup, jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.HostGroup, jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID), a.PreCheckActionID, a.PostCheckActionID, a.Become, a.GatherFacts, resourceContractJSON(a.ResourceContract))
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -248,6 +250,10 @@ func getComponentRelease(ctx context.Context, q queryer, id string) (domain.Comp
 }
 
 type ReleaseDisplayMetadata struct {
+	OwnerID       string
+	OwnerName     string
+	Status        domain.ReleaseStatus
+	Candidate     bool
 	ComponentID   string
 	ComponentName string
 	Version       string
@@ -257,8 +263,8 @@ type ReleaseDisplayMetadata struct {
 // scenario graph DTOs in one query, without loading release child records.
 func (s *Store) ListReleaseDisplayMetadata(ctx context.Context) (map[string]ReleaseDisplayMetadata, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT r.id,r.component_id,c.name,r.version
-FROM component_releases r JOIN components c ON c.id=r.component_id`)
+SELECT r.id,r.component_id,c.name,r.version,c.owner_id,u.name,r.status,r.candidate
+FROM component_releases r JOIN components c ON c.id=r.component_id JOIN users u ON u.id=c.owner_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +273,7 @@ FROM component_releases r JOIN components c ON c.id=r.component_id`)
 	for rows.Next() {
 		var id string
 		var metadata ReleaseDisplayMetadata
-		if err := rows.Scan(&id, &metadata.ComponentID, &metadata.ComponentName, &metadata.Version); err != nil {
+		if err := rows.Scan(&id, &metadata.ComponentID, &metadata.ComponentName, &metadata.Version, &metadata.OwnerID, &metadata.OwnerName, &metadata.Status, &metadata.Candidate); err != nil {
 			return nil, err
 		}
 		output[id] = metadata
@@ -319,7 +325,7 @@ func listDependencies(ctx context.Context, q queryer, releaseIDs ...string) ([]d
 
 func listActions(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ActionDefinition, error) {
 	placeholders, args := releaseIDPlaceholders(releaseIDs)
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id FROM action_definitions WHERE release_id IN (`+placeholders+`) ORDER BY kind,name`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json FROM action_definitions WHERE release_id IN (`+placeholders+`) ORDER BY kind,name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -328,10 +334,14 @@ func listActions(ctx context.Context, q queryer, releaseIDs ...string) ([]domain
 	for rows.Next() {
 		var a domain.ActionDefinition
 		var tags, requiredCredentials string
+		var resourceJSON sql.NullString
 		var destructive, idempotent int
 		var from, to sql.NullString
-		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.HostGroup, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to); err != nil {
+		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.HostGroup, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to, &a.PreCheckActionID, &a.PostCheckActionID, &a.Become, &a.GatherFacts, &resourceJSON); err != nil {
 			return nil, err
+		}
+		if resourceJSON.Valid {
+			a.ResourceContract = decodeJSON(resourceJSON.String, (*domain.ResourceContract)(nil))
 		}
 		a.Tags = nonNilStrings(decodeJSON(tags, []string{}))
 		a.RequiredCredentials = nonNilStrings(decodeJSON(requiredCredentials, []string{}))
@@ -714,11 +724,12 @@ func (s *Store) HasActiveDraftInLine(ctx context.Context, lineID string) (bool, 
 
 func (s *Store) GetReleaseLine(ctx context.Context, lineID string) (domain.ComponentReleaseLine, error) {
 	var line domain.ComponentReleaseLine
-	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id,component_id,name,created_at FROM component_release_lines WHERE id=?`, lineID).Scan(&line.ID, &line.ComponentID, &line.Name, &created)
+	var created, constraints string
+	err := s.db.QueryRowContext(ctx, `SELECT id,component_id,name,created_at,environment_constraints_json FROM component_release_lines WHERE id=?`, lineID).Scan(&line.ID, &line.ComponentID, &line.Name, &created, &constraints)
 	if err != nil {
 		return line, mapSQLError(err)
 	}
+	line.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	line.CreatedAt = parseTime(created)
 	return line, nil
 }
@@ -762,4 +773,18 @@ func (s *Store) RenameReleaseLineAndDraftActions(ctx context.Context, lineID, co
 		}
 	}
 	return tx.Commit()
+}
+
+func insertReleaseMediaTx(ctx context.Context, tx *sql.Tx, r domain.ComponentRelease) error {
+	for _, artifact := range r.Artifacts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_artifacts(id,release_id,alias,filename,sha256,size_bytes,source_url,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, artifact.ID, r.ID, artifact.Alias, artifact.Filename, artifact.SHA256, artifact.SizeBytes, artifact.SourceURL, artifact.SourceUpdatedBy, timeText(artifact.SourceUpdatedAt), artifact.CreatedBy, timeText(artifact.CreatedAt)); err != nil {
+			return mapSQLError(err)
+		}
+	}
+	for _, image := range r.Images {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO component_release_images(id,release_id,logical_name,digest,source_ref,source_updated_by,source_updated_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, image.ID, r.ID, image.LogicalName, image.Digest, image.SourceRef, image.SourceUpdatedBy, timeText(image.SourceUpdatedAt), image.CreatedBy, timeText(image.CreatedAt)); err != nil {
+			return mapSQLError(err)
+		}
+	}
+	return nil
 }

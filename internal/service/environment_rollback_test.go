@@ -17,7 +17,7 @@ func (r rollbackDigestRunner) Digest(playbook string) (string, string, error) {
 	return digest, "tree", nil
 }
 
-func TestCurrentReleaseContainsCapturedInstallPlaybookAllowsRotatedActionID(t *testing.T) {
+func TestCurrentReleaseContainsCapturedInstallPlaybookRejectsRotatedActionID(t *testing.T) {
 	release := domain.ComponentRelease{ID: "release-1", Actions: []domain.ActionDefinition{
 		{ID: "new-install-action", Kind: domain.ActionInstall, Playbook: "install.yml"},
 		{ID: "new-verify-action", Kind: domain.ActionVerify, Playbook: "verify.yml"},
@@ -27,14 +27,11 @@ func TestCurrentReleaseContainsCapturedInstallPlaybookAllowsRotatedActionID(t *t
 		"install.yml": "install-digest",
 		"verify.yml":  "verify-digest",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !matched {
-		t.Fatal("expected the identical install Playbook digest to survive Action ID rotation")
+	if !errors.Is(err, domain.ErrConflict) || matched {
+		t.Fatalf("rotated action accepted: matched=%v err=%v", matched, err)
 	}
 
-	matched, err = currentReleaseContainsCapturedInstallPlaybook(release, "captured-install-action", "different-digest", rollbackDigestRunner{
+	matched, err = currentReleaseContainsCapturedInstallPlaybook(release, "new-install-action", "different-digest", rollbackDigestRunner{
 		"install.yml": "install-digest",
 		"verify.yml":  "verify-digest",
 	})

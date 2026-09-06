@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -16,6 +17,13 @@ func (s *Store) CreateComponentImport(ctx context.Context, components []domain.C
 		return err
 	}
 	defer tx.Rollback()
+	if err := insertComponentImportTx(ctx, tx, components, releases, audits); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertComponentImportTx(ctx context.Context, tx *sql.Tx, components []domain.Component, releases []domain.ComponentRelease, audits []domain.AuditEvent) error {
 	// Configuration references may point to another member created later in this
 	// atomic import. Foreign keys are still enforced at commit.
 	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON`); err != nil {
@@ -30,11 +38,14 @@ func (s *Store) CreateComponentImport(ctx context.Context, components []domain.C
 		if err := insertComponentRelease(ctx, tx, release); err != nil {
 			return err
 		}
+		if err := insertReleaseMediaTx(ctx, tx, release); err != nil {
+			return err
+		}
 	}
 	for _, event := range audits {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`, event.ID, event.ActorID, event.Action, event.ResourceType, event.ResourceID, jsonText(event.Metadata), timeText(event.CreatedAt)); err != nil {
 			return mapSQLError(err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }

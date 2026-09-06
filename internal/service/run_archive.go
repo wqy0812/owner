@@ -2,8 +2,6 @@ package service
 
 import (
 	"bytes"
-	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/runarchive"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,9 +14,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/runarchive"
 )
 
-func (p *Platform) ConfigureRunArchives(root string) error {
+func (p *RunArchives) Configure(root string) error {
 	if root == "" {
 		return nil
 	}
@@ -44,7 +45,7 @@ func (p *Platform) ConfigureRunArchives(root string) error {
 
 // StartRunArchiveWorker is separate from execution scheduling. Defaults are off,
 // and a missing archive directory never prevents normal Run execution.
-func (p *Platform) StartRunArchiveWorker() {
+func (p *RunArchives) Start() {
 	go func() {
 		timer := time.NewTicker(3 * time.Second)
 		defer timer.Stop()
@@ -71,7 +72,7 @@ func (p *Platform) StartRunArchiveWorker() {
 		}
 	}()
 }
-func (p *Platform) processRunArchive(ctx context.Context, a domain.RunArchive) error {
+func (p *RunArchives) processRunArchive(ctx context.Context, a domain.RunArchive) error {
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan struct{})
@@ -122,7 +123,7 @@ func checkArchiveStorage(root string, needed int64) error {
 	}
 	return err
 }
-func (p *Platform) archiveOne(ctx context.Context, a domain.RunArchive) error {
+func (p *RunArchives) archiveOne(ctx context.Context, a domain.RunArchive) error {
 	needed, err := p.store.RunArchiveBytes(ctx, a.RunID)
 	if err != nil {
 		return err
@@ -203,29 +204,29 @@ func (s *ExecutionService) ArchiveRuns(ctx context.Context, user domain.User, id
 	if user.Role != domain.RolePlatformAdmin {
 		return nil, domain.ErrForbidden
 	}
-	if s.platform.archiveRoot == "" {
+	if s.archives.archiveRoot == "" {
 		return nil, fmt.Errorf("%w: 尚未配置持久化归档目录", domain.ErrConflict)
 	}
-	if err := checkArchiveStorage(s.platform.archiveRoot, 0); err != nil {
+	if err := checkArchiveStorage(s.archives.archiveRoot, 0); err != nil {
 		return nil, fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
-	return s.platform.store.EnqueueRunArchives(ctx, ids, "manual", user.ID, time.Now().UTC())
+	return s.store.EnqueueRunArchives(ctx, ids, "manual", user.ID, time.Now().UTC())
 }
 func (s *ExecutionService) CleanupPreview(ctx context.Context, user domain.User, ids []string) ([]domain.RunCleanupPreview, error) {
 	if user.Role != domain.RolePlatformAdmin {
 		return nil, domain.ErrForbidden
 	}
-	return s.platform.store.PreviewRunCleanup(ctx, ids, time.Now().UTC())
+	return s.store.PreviewRunCleanup(ctx, ids, time.Now().UTC())
 }
 func (s *ExecutionService) CleanupRuns(ctx context.Context, user domain.User, ids []string) error {
 	if user.Role != domain.RolePlatformAdmin {
 		return domain.ErrForbidden
 	}
-	if err := s.platform.store.CleanupRuns(ctx, ids, user.ID, "manual", time.Now().UTC()); err != nil {
+	if err := s.store.CleanupRuns(ctx, ids, user.ID, "manual", time.Now().UTC()); err != nil {
 		return err
 	}
 	for _, id := range ids {
-		s.platform.hub.Publish("run.updated", map[string]any{"runId": id})
+		s.hub.Publish("run.updated", map[string]any{"runId": id})
 	}
 	return nil
 }
@@ -233,10 +234,10 @@ func (s *ExecutionService) ArchiveHealth(ctx context.Context, user domain.User) 
 	if user.Role != domain.RolePlatformAdmin {
 		return domain.RunArchiveHealth{}, domain.ErrForbidden
 	}
-	h, err := s.platform.store.RunArchiveHealth(ctx)
-	h.Configured = s.platform.archiveRoot != ""
+	h, err := s.store.RunArchiveHealth(ctx)
+	h.Configured = s.archives.archiveRoot != ""
 	if h.Configured {
-		if storageErr := checkArchiveStorage(s.platform.archiveRoot, 0); storageErr != nil {
+		if storageErr := checkArchiveStorage(s.archives.archiveRoot, 0); storageErr != nil {
 			h.StorageError = Redact(storageErr.Error()).(string)
 		}
 	}
@@ -246,10 +247,10 @@ func (s *ExecutionService) SaveRetention(ctx context.Context, user domain.User, 
 	if user.Role != domain.RolePlatformAdmin {
 		return domain.ErrForbidden
 	}
-	if policy.AutoArchive && s.platform.archiveRoot == "" {
+	if policy.AutoArchive && s.archives.archiveRoot == "" {
 		return fmt.Errorf("%w: 请先配置持久化归档目录", domain.ErrConflict)
 	}
-	return s.platform.store.SaveRunRetentionPolicy(ctx, policy, user.ID, time.Now().UTC())
+	return s.store.SaveRunRetentionPolicy(ctx, policy, user.ID, time.Now().UTC())
 }
 func (s *ExecutionService) ArchiveDownload(ctx context.Context, user domain.User, id string) (*os.File, domain.RunArchive, error) {
 	var zero domain.RunArchive
@@ -260,14 +261,14 @@ func (s *ExecutionService) ArchiveDownload(ctx context.Context, user domain.User
 	if !visible {
 		return nil, zero, domain.ErrForbidden
 	}
-	a, err := s.platform.store.GetRunArchive(ctx, id)
+	a, err := s.store.GetRunArchive(ctx, id)
 	if err != nil {
 		return nil, a, err
 	}
 	if a.Status != "archived" {
 		return nil, a, domain.ErrConflict
 	}
-	path, err := runarchive.Path(s.platform.archiveRoot, a.RelativePath)
+	path, err := runarchive.Path(s.archives.archiveRoot, a.RelativePath)
 	if err != nil {
 		return nil, a, fmt.Errorf("%w: 归档文件丢失或不可读", domain.ErrConflict)
 	}
@@ -276,7 +277,7 @@ func (s *ExecutionService) ArchiveDownload(ctx context.Context, user domain.User
 		return nil, a, fmt.Errorf("%w: 归档文件不可读", domain.ErrConflict)
 	}
 	h := sha256.New()
-	size, err := io.Copy(h, f)
+	size, err := io.Copy(h, runLogContextReader{ctx, f})
 	if err != nil || hex.EncodeToString(h.Sum(nil)) != a.SHA256 || size != a.SizeBytes {
 		f.Close()
 		return nil, a, fmt.Errorf("%w: 归档文件损坏，下载不可用", domain.ErrConflict)
@@ -288,16 +289,16 @@ func (s *ExecutionService) ArchiveDownload(ctx context.Context, user domain.User
 	return f, a, nil
 }
 func (s *ExecutionService) RunArchive(ctx context.Context, id string) (*domain.RunArchive, error) {
-	a, err := s.platform.store.GetRunArchive(ctx, id)
+	a, err := s.store.GetRunArchive(ctx, id)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, nil
 	}
 	return &a, err
 }
 func (s *ExecutionService) WasCleaned(ctx context.Context, id string) (bool, error) {
-	return s.platform.store.RunWasCleaned(ctx, id)
+	return s.store.RunWasCleaned(ctx, id)
 }
-func (p *Platform) scanRunRetention(ctx context.Context) {
+func (p *RunArchives) scanRunRetention(ctx context.Context) {
 	_ = p.reconcileArchiveOrphans(ctx)
 	policy, err := p.store.RunRetentionPolicy(ctx)
 	if err != nil || (!policy.AutoArchive && !policy.AutoCleanup) {
@@ -370,7 +371,7 @@ func (p *Platform) scanRunRetention(ctx context.Context) {
 	_ = p.store.RecordRetentionScan(ctx, now, fmt.Sprintf("归档受理 %d，清理 %d，受保护跳过 %d，失败 %d", archived, cleaned, skipped, failed))
 }
 
-func (p *Platform) reconcileArchiveOrphans(ctx context.Context) error {
+func (p *RunArchives) reconcileArchiveOrphans(ctx context.Context) error {
 	if p.archiveRoot == "" {
 		return nil
 	}

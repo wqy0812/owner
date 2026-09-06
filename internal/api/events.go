@@ -50,6 +50,15 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) eventVisible(r *http.Request, user domain.User, event service.Event) bool {
+	if event.Type == "preparation.updated" {
+		payload, ok := event.Data.(map[string]any)
+		if !ok {
+			return false
+		}
+		id, _ := payload["preparationId"].(string)
+		_, err := h.platform.Preparations().Get(r.Context(), user, id)
+		return err == nil
+	}
 	if !strings.HasPrefix(event.Type, "run.") && !strings.HasPrefix(event.Type, "approval.") {
 		return true
 	}

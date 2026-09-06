@@ -11,7 +11,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *Platform) finalizeDeliveryPlan(ctx context.Context, plan lockedPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (lockedPlan, error) {
+func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (lockedPlan, error) {
 	if len(plan.DeliveryRequirements) == 0 {
 		if len(inputs) != 0 {
 			return plan, fmt.Errorf("%w: run has no delivery requirements", domain.ErrInvalid)
@@ -83,10 +83,11 @@ func (p *Platform) finalizeDeliveryPlan(ctx context.Context, plan lockedPlan, in
 		}
 		plan.DeliveryResults = append(plan.DeliveryResults, result)
 	}
+	refreshParentSteps(&plan)
 	return plan, nil
 }
 
-func (p *Platform) deliveryTargetPresent(ctx context.Context, requirement DeliveryRequirement) (bool, error) {
+func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement DeliveryRequirement) (bool, error) {
 	switch requirement.Kind {
 	case "artifact":
 		err := p.artifactDelivery.Probe(ctx, ArtifactLocation{FileStation: requirement.TargetStation, RelativePath: requirement.RelativePath}, ArtifactIdentity{SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes})
@@ -124,7 +125,7 @@ func bindDeliveryRequirementVariables(plan *lockedPlan, requirement DeliveryRequ
 					relativePath = strings.TrimPrefix(parsed.Path, "/")
 				}
 			}
-			artifact := domain.ComponentArtifact{Alias: requirement.Name, SHA256: strings.TrimPrefix(requirement.Identity, "sha256:")}
+			artifact := domain.ComponentArtifact{Alias: requirement.Name, SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes}
 			if err := bindArtifactVariables(step, artifact, relativePath, location); err != nil {
 				return err
 			}

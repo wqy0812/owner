@@ -79,13 +79,13 @@ func maintenanceTestPlatform(t *testing.T) (*Platform, domain.User, domain.Envir
 	if err := database.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
 	}
-	return NewPlatform(database, nil, nil), owner, environment
+	return newTestPlatform(t, database, nil, nil), owner, environment
 }
 
 func configureTestSSHPassword(t *testing.T, platform *Platform, owner domain.User, environmentID string) domain.Environment {
 	t.Helper()
 	t.Setenv("CLUSTERFORGE_TEST_SSH_PASSWORD", "secret")
-	updated, err := platform.UpdateCredentialRefs(context.Background(), owner, environmentID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_SSH_PASSWORD"}}, "配置 SSH 检查凭据")
+	updated, err := platform.environments.UpdateCredentialRefs(context.Background(), owner, environmentID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_SSH_PASSWORD"}}, "配置 SSH 检查凭据")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestEnvironmentHealthCheckPersistsReachability(t *testing.T) {
 		}
 		return nil, errors.New("unreachable")
 	})
-	check, err := platform.CheckEnvironmentHealth(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckHealth(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestEnvironmentHealthCheckPersistsReachability(t *testing.T) {
 
 func TestEnvironmentConnectivityCombinesTCPAndSSHChecks(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	updated, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Port: 2222, Groups: []string{"all"}}}, "使用远端节点")
+	updated, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Port: 2222, Groups: []string{"all"}}}, "使用远端节点")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestEnvironmentConnectivityCombinesTCPAndSSHChecks(t *testing.T) {
 	checker := &fixedSSHChecker{}
 	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 
-	check, err := platform.CheckEnvironmentConnectivity(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckConnectivity(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestEnvironmentConnectivityCombinesTCPAndSSHChecks(t *testing.T) {
 
 func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	checkedRevision, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Port: 2222, Groups: []string{"all"}}}, "使用远端节点")
+	checkedRevision, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Port: 2222, Groups: []string{"all"}}}, "使用远端节点")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 	var updateErr error
 	platform.ConfigureEnvironmentHealthDialer(func(_ context.Context, _, _ string) (net.Conn, error) {
 		updateOnce.Do(func() {
-			_, updateErr = platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.11", User: "root", Port: 22, Groups: []string{"all"}}}, "检查期间更新 Revision")
+			_, updateErr = platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.11", User: "root", Port: 22, Groups: []string{"all"}}}, "检查期间更新 Revision")
 		})
 		left, right := net.Pipe()
 		_ = right.Close()
@@ -169,14 +169,14 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 	checker := &fixedSSHChecker{}
 	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 
-	check, err := platform.CheckEnvironmentConnectivity(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckConnectivity(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updateErr != nil {
 		t.Fatal(updateErr)
 	}
-	current, err := platform.store.GetEnvironment(context.Background(), environment.ID, false)
+	current, err := testDatabase(platform).GetEnvironment(context.Background(), environment.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,13 +193,13 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 
 func TestEnvironmentSSHCheckClassifiesAuthenticationFailure(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+	if _, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
 	configureTestSSHPassword(t, platform, owner, environment.ID)
 	platform.ConfigureEnvironmentSSHChecker(&fixedSSHChecker{err: &sshcheck.CheckError{Kind: sshcheck.ErrorAuthentication, Err: errors.New("rejected")}}, "/tmp/test-known-hosts")
 
-	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,12 +210,12 @@ func TestEnvironmentSSHCheckClassifiesAuthenticationFailure(t *testing.T) {
 
 func TestEnvironmentSSHCheckClassifiesInvalidPrivateKey(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+	if _, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
 	configureTestSSHPassword(t, platform, owner, environment.ID)
 	platform.ConfigureEnvironmentSSHChecker(&fixedSSHChecker{err: &sshcheck.CheckError{Kind: sshcheck.ErrorPrivateKey, Err: errors.New("invalid key")}}, "/tmp/test-known-hosts")
-	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,23 +252,23 @@ func TestClassifyGoSSHFailureCoversStablePublicErrorCodes(t *testing.T) {
 
 func TestEnvironmentSSHCheckReportsMissingCredentialWithoutResolvingUnrelatedRefs(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+	if _, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", User: "root", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
 	checker := &fixedSSHChecker{}
 	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
-	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_UNRELATED"}}, "配置无关凭据"); err != nil {
+	if _, err := platform.environments.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "K8S_ENCRYPTION_KEY", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_UNRELATED"}}, "配置无关凭据"); err != nil {
 		t.Fatal(err)
 	}
-	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil || check.Status != "degraded" || check.Results[0].ErrorCode != "ssh_credential_missing" || len(checker.requests) != 0 {
 		t.Fatalf("unrelated credential check=%+v requests=%d err=%v", check, len(checker.requests), err)
 	}
 
-	if _, err := platform.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_SSH"}}, "配置 SSH 凭据"); err != nil {
+	if _, err := platform.environments.UpdateCredentialRefs(context.Background(), owner, environment.ID, []domain.CredentialRef{{Name: "ssh_password", Kind: "envVarRef", Reference: "CLUSTERFORGE_TEST_MISSING_SSH"}}, "配置 SSH 凭据"); err != nil {
 		t.Fatal(err)
 	}
-	check, err = platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	check, err = platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,13 +308,13 @@ func TestEnvironmentSSHCredentialsRejectRemovedAliases(t *testing.T) {
 
 func TestEnvironmentSSHCheckRequiresInventoryUser(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
+	if _, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-1", Address: "192.0.2.10", Groups: []string{"all"}}}, "使用远端节点"); err != nil {
 		t.Fatal(err)
 	}
 	configureTestSSHPassword(t, platform, owner, environment.ID)
 	checker := &fixedSSHChecker{}
 	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
-	check, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+	check, err := platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 	if err != nil || check.Status != "degraded" || check.Results[0].ErrorCode != "ssh_user_missing" || len(checker.requests) != 0 {
 		t.Fatalf("SSH user check=%+v requests=%+v err=%v", check, checker.requests, err)
 	}
@@ -326,7 +326,7 @@ func TestEnvironmentSSHCheckLimitsConcurrencyToEightHosts(t *testing.T) {
 	for index := range hosts {
 		hosts[index] = InventoryHost{Name: fmt.Sprintf("node-%d", index+1), Address: fmt.Sprintf("192.0.2.%d", index+1), User: "root", Groups: []string{"all"}}
 	}
-	if _, err := platform.UpdateInventory(context.Background(), owner, environment.ID, hosts, "配置并发检查节点"); err != nil {
+	if _, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, hosts, "配置并发检查节点"); err != nil {
 		t.Fatal(err)
 	}
 	configureTestSSHPassword(t, platform, owner, environment.ID)
@@ -334,7 +334,7 @@ func TestEnvironmentSSHCheckLimitsConcurrencyToEightHosts(t *testing.T) {
 	platform.ConfigureEnvironmentSSHChecker(checker, "/tmp/test-known-hosts")
 	result := make(chan error, 1)
 	go func() {
-		_, err := platform.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
+		_, err := platform.environments.CheckEnvironmentSSH(context.Background(), owner, environment.ID)
 		result <- err
 	}()
 	select {
@@ -386,7 +386,7 @@ func TestEnvironmentOwnerWorkbenchShowsCatalogBackupWarnings(t *testing.T) {
 	platform, owner, _ := maintenanceTestPlatform(t)
 	provider := &fixedCatalogBackupHealth{}
 	platform.ConfigurePublicationBackupHealth(provider)
-	workbench, err := platform.Workbench(context.Background(), owner)
+	workbench, err := platform.readModel.Workbench(context.Background(), owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestEnvironmentOwnerWorkbenchShowsCatalogBackupWarnings(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	provider.health = domain.CatalogBackupHealth{Configured: true, Behind: true, CurrentGeneration: 8, BackedUpGeneration: 6, LastError: "git push failed", LastErrorAt: &now}
-	workbench, err = platform.Workbench(context.Background(), owner)
+	workbench, err = platform.readModel.Workbench(context.Background(), owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,14 +417,14 @@ func workItemByID(items []domain.WorkItem, id string) *domain.WorkItem {
 
 func TestRestoreEnvironmentRevisionCreatesNewRevisionWithReason(t *testing.T) {
 	platform, owner, environment := maintenanceTestPlatform(t)
-	updated, err := platform.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.2", Port: 22, Groups: []string{"all"}}}, "替换测试节点")
+	updated, err := platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.2", Port: 22, Groups: []string{"all"}}}, "替换测试节点")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Revision == nil || updated.Revision.Revision != 2 || updated.Revision.ChangeReason != "替换测试节点" {
 		t.Fatalf("updated revision=%+v", updated.Revision)
 	}
-	restored, err := platform.RestoreEnvironmentRevision(context.Background(), owner, environment.ID, environment.CurrentRevisionID, "回退错误节点配置")
+	restored, err := platform.environments.RestoreRevision(context.Background(), owner, environment.ID, environment.CurrentRevisionID, "回退错误节点配置")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,4 +435,11 @@ func TestRestoreEnvironmentRevisionCreatesNewRevisionWithReason(t *testing.T) {
 	if err := json.Unmarshal(restored.Revision.Inventory, &inventory); err != nil || len(inventory.Hosts) != 1 || inventory.Hosts[0].Name != "node-1" {
 		t.Fatalf("restored inventory=%+v err=%v", inventory, err)
 	}
+}
+
+func (c *blockingSSHChecker) Probe(context.Context, sshcheck.Request, sshcheck.Probe) (sshcheck.ProbeResult, error) {
+	return sshcheck.ProbeResult{Status: "passed"}, nil
+}
+func (c *fixedSSHChecker) Probe(context.Context, sshcheck.Request, sshcheck.Probe) (sshcheck.ProbeResult, error) {
+	return sshcheck.ProbeResult{Status: "passed"}, c.err
 }

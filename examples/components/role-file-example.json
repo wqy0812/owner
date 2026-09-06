@@ -1,0 +1,142 @@
+{
+  "entries": [
+    {
+      "component": {
+        "name": "Role 文件恢复示例",
+        "slug": "role-file-example",
+        "description": "仅创建隔离示例文件并恢复原始内容，用于演示显式检查及备份。",
+        "layer": "runtime_state",
+        "tags": [
+          "runtime"
+        ]
+      },
+      "release": {
+        "version": "1.0.0",
+        "releaseNotes": "新 Role 合同示例；导入后为 Draft，需完成环境验证。",
+        "lineName": "Example",
+        "riskLevel": "destructive",
+        "environmentConstraints": {},
+        "parameters": [
+          {
+            "name": "target_path",
+            "description": "隔离示例文件路径",
+            "type": "string",
+            "required": true,
+            "visibility": "internal",
+            "modifiable": false,
+            "valueProvider": "component_owner",
+            "fixedValue": "/tmp/clusterforge-example-demo"
+          },
+          {
+            "name": "content",
+            "description": "示例文件内容",
+            "type": "string",
+            "required": true,
+            "visibility": "public",
+            "modifiable": true,
+            "valueProvider": "scenario_owner",
+            "testValue": "ClusterForge role job example",
+            "suggestedValue": "ClusterForge role job example"
+          }
+        ],
+        "dependencies": [],
+        "actions": [
+          {
+            "id": "install",
+            "name": "安装示例文件",
+            "type": "install",
+            "playbook": "tasks/install.yml",
+            "preCheckActionId": "install-pre",
+            "postCheckActionId": "install-post",
+            "hostGroup": "all",
+            "timeoutSeconds": 120,
+            "riskLevel": "destructive",
+            "destructive": true,
+            "idempotent": true,
+            "become": true
+          },
+          {
+            "id": "install-pre",
+            "name": "install-pre",
+            "type": "check",
+            "playbook": "tasks/checks/install-pre.yml",
+            "hostGroup": "all",
+            "timeoutSeconds": 60,
+            "riskLevel": "low",
+            "become": true
+          },
+          {
+            "id": "install-post",
+            "name": "install-post",
+            "type": "check",
+            "playbook": "tasks/checks/install-post.yml",
+            "hostGroup": "all",
+            "timeoutSeconds": 60,
+            "riskLevel": "low",
+            "become": true
+          },
+          {
+            "id": "rollback",
+            "name": "恢复原始文件",
+            "type": "rollback",
+            "playbook": "tasks/rollback.yml",
+            "preCheckActionId": "rollback-pre",
+            "postCheckActionId": "rollback-post",
+            "hostGroup": "all",
+            "timeoutSeconds": 120,
+            "riskLevel": "destructive",
+            "destructive": true,
+            "idempotent": true,
+            "become": true
+          },
+          {
+            "id": "rollback-pre",
+            "name": "rollback-pre",
+            "type": "check",
+            "playbook": "tasks/checks/rollback-pre.yml",
+            "hostGroup": "all",
+            "timeoutSeconds": 60,
+            "riskLevel": "low",
+            "become": true
+          },
+          {
+            "id": "rollback-post",
+            "name": "rollback-post",
+            "type": "check",
+            "playbook": "tasks/checks/rollback-post.yml",
+            "hostGroup": "all",
+            "timeoutSeconds": 60,
+            "riskLevel": "low",
+            "become": true
+          }
+        ]
+      },
+      "playbooks": [
+        {
+          "filename": "tasks/install.yml",
+          "content": "- name: Inspect current file independently\n  ansible.builtin.stat:\n    path: \"{{ cf.inputs.target_path }}\"\n  register: cf_local_current\n- name: Create recovery directory\n  ansible.builtin.file:\n    path: \"{{ cf.inputs.clusterforge_backup_ref }}\"\n    state: directory\n    mode: '0700'\n- name: Detect existing baseline\n  ansible.builtin.stat:\n    path: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_baseline\n- name: Read retained recovery identity\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_identity\n  when: cf_local_baseline.stat.exists\n- name: Reject a replaced recovery baseline\n  ansible.builtin.assert:\n    that: (cf_local_identity.content | b64decode | from_json).metadata == cf.inputs.clusterforge_backup_metadata\n  when: cf_local_baseline.stat.exists\n- name: Capture original file only once\n  ansible.builtin.copy:\n    src: \"{{ cf.inputs.target_path }}\"\n    dest: \"{{ cf.inputs.clusterforge_backup_ref }}/original\"\n    remote_src: true\n    mode: preserve\n  when: not cf_local_baseline.stat.exists and cf_local_current.stat.exists\n- name: Persist original existence only once\n  ansible.builtin.copy:\n    content: \"{{ {'existed': cf_local_current.stat.exists, 'metadata': cf.inputs.clusterforge_backup_metadata} | to_json }}\"\n    dest: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n    mode: '0600'\n    force: false\n- name: Install example file\n  ansible.builtin.copy:\n    content: \"{{ cf.inputs.content }}\"\n    dest: \"{{ cf.inputs.target_path }}\"\n    mode: '0600'\n"
+        },
+        {
+          "filename": "tasks/rollback.yml",
+          "content": "- name: Read original baseline\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_baseline\n- name: Restore original file\n  ansible.builtin.copy:\n    src: \"{{ cf.inputs.clusterforge_backup_ref }}/original\"\n    dest: \"{{ cf.inputs.target_path }}\"\n    remote_src: true\n    mode: preserve\n  when: (cf_local_baseline.content | b64decode | from_json).existed\n- name: Restore original absence\n  ansible.builtin.file:\n    path: \"{{ cf.inputs.target_path }}\"\n    state: absent\n  when: not (cf_local_baseline.content | b64decode | from_json).existed\n"
+        },
+        {
+          "filename": "tasks/checks/install-pre.yml",
+          "content": "- name: Validate example target\n  ansible.builtin.assert:\n    that:\n      - cf.inputs.target_path is match('^/tmp/clusterforge-example-[A-Za-z0-9_-]+$')\n      - cf.inputs.content is string\n"
+        },
+        {
+          "filename": "tasks/checks/install-post.yml",
+          "content": "- name: Read installed example\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.target_path }}\"\n  register: cf_local_installed\n- name: Confirm installed content\n  ansible.builtin.assert:\n    that: (cf_local_installed.content | b64decode) == cf.inputs.content\n"
+        },
+        {
+          "filename": "tasks/checks/rollback-pre.yml",
+          "content": "- name: Read recovery baseline independently\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_baseline\n- name: Confirm baseline is usable\n  ansible.builtin.assert:\n    that:\n      - (cf_local_baseline.content | b64decode | from_json).existed is boolean\n      - (cf_local_baseline.content | b64decode | from_json).metadata == cf.inputs.clusterforge_backup_metadata\n"
+        },
+        {
+          "filename": "tasks/checks/rollback-post.yml",
+          "content": "- name: Read original existence\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_baseline\n- name: Inspect restored target\n  ansible.builtin.stat:\n    path: \"{{ cf.inputs.target_path }}\"\n    checksum_algorithm: sha256\n  register: cf_local_restored\n- name: Inspect preserved original\n  ansible.builtin.stat:\n    path: \"{{ cf.inputs.clusterforge_backup_ref }}/original\"\n    checksum_algorithm: sha256\n  register: cf_local_original\n- name: Confirm original state is restored\n  ansible.builtin.assert:\n    that:\n      - cf_local_restored.stat.exists == (cf_local_baseline.content | b64decode | from_json).existed\n      - not cf_local_restored.stat.exists or cf_local_restored.stat.checksum == cf_local_original.stat.checksum\n"
+        }
+      ]
+    }
+  ]
+}

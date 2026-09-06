@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -24,23 +26,58 @@ type ComponentImportDependency struct {
 }
 
 type ComponentImportAction struct {
-	Name                string            `json:"name"`
-	Type                domain.ActionKind `json:"type"`
-	Playbook            string            `json:"playbook"`
-	Tags                []string          `json:"tags"`
-	HostGroup           string            `json:"hostGroup"`
-	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	RequiredCredentials []string          `json:"requiredCredentials"`
-	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
-	Destructive         bool              `json:"destructive"`
-	Idempotent          bool              `json:"idempotent"`
+	ResourceContract    *domain.ResourceContract `json:"resourceContract,omitempty"`
+	ID                  string                   `json:"id"`
+	PreCheckActionID    string                   `json:"preCheckActionId"`
+	PostCheckActionID   string                   `json:"postCheckActionId"`
+	Become              bool                     `json:"become"`
+	Name                string                   `json:"name"`
+	Type                domain.ActionKind        `json:"type"`
+	Playbook            string                   `json:"playbook"`
+	Tags                []string                 `json:"tags"`
+	HostGroup           string                   `json:"hostGroup"`
+	TimeoutSeconds      int                      `json:"timeoutSeconds"`
+	RequiredCredentials []string                 `json:"requiredCredentials"`
+	RiskLevel           domain.RiskLevel         `json:"riskLevel"`
+	Destructive         bool                     `json:"destructive"`
+	Idempotent          bool                     `json:"idempotent"`
+}
+
+func (a *ComponentImportAction) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key, value := range raw {
+		if strings.EqualFold(key, "gatherFacts") || strings.EqualFold(key, "runtimeChecks") {
+			return fmt.Errorf("%w: %s 已移除，请在 YAML 中编写采集与检查", domain.ErrInvalid, key)
+		}
+		if !strings.EqualFold(key, "resourceContract") {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(value, &fields); err != nil {
+			return err
+		}
+		for field := range fields {
+			if strings.EqualFold(field, "checks") {
+				return fmt.Errorf("%w: resourceContract.checks 已移除，请使用前置检查 YAML", domain.ErrInvalid)
+			}
+		}
+	}
+	type plain ComponentImportAction
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode((*plain)(a))
 }
 
 type ComponentImportEntry struct {
 	Component struct {
-		Name, Slug, Description string
-		Layer                   domain.ComponentLayer
-		Tags                    []string `json:"tags"`
+		Name        string                `json:"name"`
+		Slug        string                `json:"slug"`
+		Description string                `json:"description"`
+		Layer       domain.ComponentLayer `json:"layer"`
+		Tags        []string              `json:"tags"`
 	} `json:"component"`
 	Release struct {
 		Version                string                       `json:"version"`
@@ -52,7 +89,12 @@ type ComponentImportEntry struct {
 		Dependencies           []ComponentImportDependency  `json:"dependencies"`
 		Actions                []ComponentImportAction      `json:"actions"`
 	} `json:"release"`
-	Playbooks []struct{ Filename, Content string } `json:"playbooks"`
+	Playbooks []ComponentImportFileSource `json:"playbooks"`
+}
+
+type ComponentImportFileSource struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
 }
 
 type ComponentImportRequest struct {
@@ -73,11 +115,19 @@ type ComponentImportPlan struct {
 	Items      []ComponentImportPlanItem `json:"items"`
 	Order      []string                  `json:"order"`
 }
+type ImportFileMapping struct {
+	OriginalPath string `json:"originalPath"`
+	CurrentPath  string `json:"currentPath"`
+	ActionID     string `json:"actionId,omitempty"`
+	ReleaseID    string `json:"releaseId,omitempty"`
+}
+
 type ComponentImportResult struct {
-	CompletedComponents []string          `json:"completedComponents"`
-	CompletedReleases   []string          `json:"completedReleases"`
-	SavedPlaybooks      []string          `json:"savedPlaybooks"`
-	CreatedDrafts       map[string]string `json:"createdDrafts"`
+	FileMappings        []ImportFileMapping `json:"fileMappings"`
+	CompletedComponents []string            `json:"completedComponents"`
+	CompletedReleases   []string            `json:"completedReleases"`
+	SavedPlaybooks      []string            `json:"savedPlaybooks"`
+	CreatedDrafts       map[string]string   `json:"createdDrafts"`
 }
 
 func normalizeStrings(values []string) []string {
@@ -126,7 +176,7 @@ func normalizeComponentImportRequest(input ComponentImportRequest) ComponentImpo
 			action.Tags = normalizeStrings(action.Tags)
 			action.RequiredCredentials = normalizeStrings(action.RequiredCredentials)
 		}
-		entry.Playbooks = append([]struct{ Filename, Content string }(nil), entry.Playbooks...)
+		entry.Playbooks = append([]ComponentImportFileSource(nil), entry.Playbooks...)
 		for index := range entry.Playbooks {
 			entry.Playbooks[index].Filename = strings.TrimSpace(entry.Playbooks[index].Filename)
 		}
@@ -134,7 +184,7 @@ func normalizeComponentImportRequest(input ComponentImportRequest) ComponentImpo
 	return output
 }
 
-func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User, input ComponentImportRequest) (ComponentImportPlan, error) {
+func (p *CatalogService) PreviewImport(ctx context.Context, user domain.User, input ComponentImportRequest) (ComponentImportPlan, error) {
 	input = normalizeComponentImportRequest(input)
 	if err := domain.ValidateRole(user, domain.RoleComponentOwner); err != nil {
 		return ComponentImportPlan{}, err
@@ -180,7 +230,7 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		}
 		playbooks := map[string]bool{}
 		for _, playbook := range entry.Playbooks {
-			if !managedPlaybookFilename.MatchString(playbook.Filename) || strings.TrimSpace(playbook.Content) == "" || len([]byte(playbook.Content)) > MaxPlaybookBytes {
+			if !validImportSourcePath(playbook.Filename) || strings.TrimSpace(playbook.Content) == "" || len([]byte(playbook.Content)) > MaxPlaybookBytes {
 				return ComponentImportPlan{}, fmt.Errorf("%w: %s Playbook %q is invalid", domain.ErrInvalid, slug, playbook.Filename)
 			}
 			if playbooks[playbook.Filename] {
@@ -191,17 +241,20 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		actions := make([]domain.ActionDefinition, 0, len(entry.Release.Actions))
 		usedPlaybooks, actionKinds := map[string]bool{}, map[domain.ActionKind]bool{}
 		for _, action := range entry.Release.Actions {
+			if action.ResourceContract != nil && len(action.ResourceContract.Checks) > 0 {
+				return ComponentImportPlan{}, domain.YAMLMigrationRequired(action.Name)
+			}
 			if action.Type == domain.ActionUpgrade {
 				return ComponentImportPlan{}, fmt.Errorf("%w: imported upgrade actions require existing release IDs", domain.ErrInvalid)
 			}
 			if !playbooks[action.Playbook] {
 				return ComponentImportPlan{}, fmt.Errorf("%w: action %s references missing Playbook %q", domain.ErrInvalid, action.Type, action.Playbook)
 			}
-			if actionKinds[action.Type] {
+			if actionKinds[action.Type] && action.Type != domain.ActionCheck {
 				return ComponentImportPlan{}, fmt.Errorf("%w: %s contains duplicate action %s", domain.ErrInvalid, slug, action.Type)
 			}
 			actionKinds[action.Type], usedPlaybooks[action.Playbook] = true, true
-			if action.Idempotent && action.Type != domain.ActionInstall {
+			if action.Idempotent && action.Type == domain.ActionCheck {
 				return ComponentImportPlan{}, fmt.Errorf("%w: only install may be idempotent", domain.ErrInvalid)
 			}
 			timeout := action.TimeoutSeconds
@@ -212,14 +265,28 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 			if risk == "" {
 				risk = domain.RiskLow
 			}
-			actions = append(actions, domain.ActionDefinition{Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
+			actions = append(actions, domain.ActionDefinition{ResourceContract: action.ResourceContract, ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
 		}
-		for filename := range playbooks {
-			if !usedPlaybooks[filename] {
-				return ComponentImportPlan{}, fmt.Errorf("%w: Playbook %q is not referenced by an action", domain.ErrInvalid, filename)
+		for _, action := range actions {
+			expected, err := domain.ActionTaskPath(action)
+			if err != nil {
+				return ComponentImportPlan{}, err
+			}
+			if action.Playbook != expected {
+				return ComponentImportPlan{}, fmt.Errorf("%w: action entry must be %s", domain.ErrInvalid, expected)
+			}
+			for _, source := range entry.Playbooks {
+				if source.Filename == expected {
+					if err := ansible.ValidateRoleTasks([]byte(source.Content), action.Kind == domain.ActionCheck); err != nil {
+						return ComponentImportPlan{}, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+					}
+				}
 			}
 		}
 		validationRelease := domain.ComponentRelease{ID: "import-release-" + slug, ComponentID: "import-component-" + slug, Version: entry.Release.Version, RiskLevel: entry.Release.RiskLevel, EnvironmentConstraints: entry.Release.EnvironmentConstraints, Parameters: entry.Release.Parameters, Actions: actions}
+		if err := domain.ValidateActionBindings(validationRelease, false); err != nil {
+			return ComponentImportPlan{}, err
+		}
 		if validationRelease.RiskLevel == "" {
 			validationRelease.RiskLevel = domain.RiskLow
 		}
@@ -232,10 +299,10 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 		if err := validateRelease(validationRelease); err != nil {
 			return ComponentImportPlan{}, err
 		}
-		if err := p.validateReleaseCatalogValues(ctx, validationRelease); err != nil {
+		if err := p.releaseRules.validateReleaseCatalogValues(ctx, validationRelease); err != nil {
 			return ComponentImportPlan{}, err
 		}
-		if err := p.validateEnvironmentConstraintRetiredReferences(ctx, validationRelease.EnvironmentConstraints, nil); err != nil {
+		if err := p.catalogRules.validateEnvironmentConstraintRetiredReferences(ctx, validationRelease.EnvironmentConstraints, nil); err != nil {
 			return ComponentImportPlan{}, err
 		}
 	}
@@ -311,9 +378,9 @@ func (p *Platform) PreviewComponentImport(ctx context.Context, user domain.User,
 	return plan, nil
 }
 
-func (p *Platform) ImportComponents(ctx context.Context, user domain.User, input ComponentImportRequest) (ComponentImportResult, error) {
+func (p *CatalogService) Import(ctx context.Context, user domain.User, input ComponentImportRequest) (ComponentImportResult, error) {
 	input = normalizeComponentImportRequest(input)
-	plan, err := p.PreviewComponentImport(ctx, user, input)
+	plan, err := p.PreviewImport(ctx, user, input)
 	if err != nil {
 		return ComponentImportResult{}, err
 	}
@@ -377,7 +444,7 @@ type componentImportManifest struct {
 	BatchDir   string                        `json:"-"`
 }
 
-func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User, input ComponentImportRequest, plan ComponentImportPlan) (preparedComponentImport, error) {
+func (p *CatalogService) prepareComponentImport(ctx context.Context, user domain.User, input ComponentImportRequest, plan ComponentImportPlan) (preparedComponentImport, error) {
 	bySlug := make(map[string]ComponentImportEntry, len(input.Entries))
 	for _, entry := range input.Entries {
 		bySlug[entry.Component.Slug] = entry
@@ -425,39 +492,61 @@ func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User,
 		for _, playbook := range entry.Playbooks {
 			playbookContents[playbook.Filename] = playbook.Content
 		}
+		ids := map[string]string{}
 		for _, action := range entry.Release.Actions {
-			timeout := action.TimeoutSeconds
+			ids[action.ID] = newID("action")
+		}
+		rename := map[string]string{}
+		for _, action := range entry.Release.Actions {
+			timeout, risk := action.TimeoutSeconds, action.RiskLevel
 			if timeout == 0 {
 				timeout = 1800
 			}
-			risk := action.RiskLevel
 			if risk == "" {
 				risk = domain.RiskLow
 			}
-			contents := playbookContents[action.Playbook]
-			digest := sha256.Sum256([]byte(contents))
-			sha := hex.EncodeToString(digest[:])
-			relative, pathErr := actionPlaybookPath(components[slug], release, action.Type)
-			if pathErr != nil {
-				return preparedComponentImport{}, pathErr
+			definition := domain.ActionDefinition{ResourceContract: action.ResourceContract, ID: ids[action.ID], ReleaseID: release.ID, Name: action.Name, Kind: action.Type,
+				PreCheckActionID: ids[action.PreCheckActionID], PostCheckActionID: ids[action.PostCheckActionID], Become: action.Become,
+				Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent}
+			path, err := domain.ActionTaskPath(definition)
+			if err != nil {
+				return preparedComponentImport{}, err
 			}
-			workspacePath := string(action.Type) + ".yml"
-			prepared.Files = append(prepared.Files, componentImportFile{Component: components[slug], Release: release, RelativePath: relative, Content: contents})
-			prepared.Result.SavedPlaybooks = append(prepared.Result.SavedPlaybooks, slug+"/"+workspacePath)
-			release.PlaybookFiles = append(release.PlaybookFiles, domain.ComponentPlaybookFile{ReleaseID: release.ID, Path: workspacePath, SHA256: sha, SizeBytes: int64(len([]byte(contents))), MediaType: "application/yaml", UpdatedAt: now})
-			release.Actions = append(release.Actions, domain.ActionDefinition{
-				Name: action.Name, Kind: action.Type, Playbook: relative, PlaybookSHA256: sha, Tags: action.Tags,
-				HostGroup: action.HostGroup, TimeoutSeconds: timeout,
-				RequiredCredentials: action.RequiredCredentials,
-				RiskLevel:           risk, Destructive: action.Destructive, Idempotent: action.Idempotent,
-			})
+			rename[action.Playbook] = path
+			prepared.Result.FileMappings = append(prepared.Result.FileMappings, ImportFileMapping{OriginalPath: action.Playbook, CurrentPath: managedReleasePrefix(components[slug], release) + path, ActionID: definition.ID, ReleaseID: release.ID})
+			definition.Playbook = managedReleasePrefix(components[slug], release) + path
+			digest := sha256.Sum256([]byte(playbookContents[action.Playbook]))
+			definition.PlaybookSHA256 = hex.EncodeToString(digest[:])
+			release.Actions = append(release.Actions, definition)
+		}
+		for _, source := range entry.Playbooks {
+			path := source.Filename
+			contents, err := rebaseRoleIncludes(path, []byte(source.Content), rename, func(name string) bool { _, ok := playbookContents[name]; return ok })
+			if err != nil {
+				return preparedComponentImport{}, err
+			}
+			source.Content = string(contents)
+			if next := rename[path]; next != "" {
+				path = next
+			}
+			digest := sha256.Sum256([]byte(source.Content))
+			sha := hex.EncodeToString(digest[:])
+			relative := managedReleasePrefix(components[slug], release) + path
+			prepared.Files = append(prepared.Files, componentImportFile{Component: components[slug], Release: release, RelativePath: relative, Content: source.Content})
+			prepared.Result.SavedPlaybooks = append(prepared.Result.SavedPlaybooks, slug+"/"+path)
+			release.PlaybookFiles = append(release.PlaybookFiles, domain.ComponentPlaybookFile{ReleaseID: release.ID, Path: path, SHA256: sha, SizeBytes: int64(len([]byte(source.Content))), MediaType: "application/octet-stream", UpdatedAt: now})
+			for i := range release.Actions {
+				if release.Actions[i].Playbook == relative {
+					release.Actions[i].PlaybookSHA256 = sha
+				}
+			}
 		}
 		release.PlaybookTreeSHA256 = workspaceTreeSHA(release.PlaybookFiles)
 		rewriteReleaseChildren(&release)
 		if err := validateRelease(release); err != nil {
 			return preparedComponentImport{}, err
 		}
-		if err := p.validateReleaseCatalogValues(ctx, release); err != nil {
+		if err := p.releaseRules.validateReleaseCatalogValues(ctx, release); err != nil {
 			return preparedComponentImport{}, err
 		}
 		releases[slug] = release
@@ -482,11 +571,11 @@ func (p *Platform) prepareComponentImport(ctx context.Context, user domain.User,
 	return prepared, nil
 }
 
-func (p *Platform) componentImportStagingRoot() (string, error) {
-	if strings.TrimSpace(p.playbookRoot) == "" {
+func (p *CatalogService) componentImportStagingRoot() (string, error) {
+	if strings.TrimSpace(p.workspace.root) == "" {
 		return "", fmt.Errorf("playbook management is not configured")
 	}
-	root, err := filepath.Abs(p.playbookRoot)
+	root, err := filepath.Abs(p.workspace.root)
 	if err != nil {
 		return "", fmt.Errorf("resolve playbook root: %w", err)
 	}
@@ -525,7 +614,7 @@ func writeSyncedFile(path string, contents []byte, mode os.FileMode) error {
 	return err
 }
 
-func (p *Platform) stageComponentImportFiles(files []componentImportFile) (componentImportManifest, error) {
+func (p *CatalogService) stageComponentImportFiles(files []componentImportFile) (componentImportManifest, error) {
 	if len(files) == 0 {
 		return componentImportManifest{}, nil
 	}
@@ -571,7 +660,7 @@ func (p *Platform) stageComponentImportFiles(files []componentImportFile) (compo
 	return manifest, nil
 }
 
-func (p *Platform) promoteComponentImportFiles(manifest componentImportManifest) error {
+func (p *CatalogService) promoteComponentImportFiles(manifest componentImportManifest) error {
 	if manifest.BatchDir == "" {
 		return nil
 	}
@@ -597,7 +686,7 @@ func (p *Platform) promoteComponentImportFiles(manifest componentImportManifest)
 	return nil
 }
 
-func (p *Platform) cleanupComponentImportManifest(manifest componentImportManifest, deleteFinal bool) error {
+func (p *CatalogService) cleanupComponentImportManifest(manifest componentImportManifest, deleteFinal bool) error {
 	var firstErr error
 	if deleteFinal {
 		for _, item := range manifest.Files {
@@ -636,8 +725,8 @@ func (p *Platform) cleanupComponentImportManifest(manifest componentImportManife
 	return nil
 }
 
-func (p *Platform) RecoverComponentImportFiles(ctx context.Context) error {
-	if strings.TrimSpace(p.playbookRoot) == "" {
+func (p *CatalogService) RecoverComponentImportFiles(ctx context.Context) error {
+	if strings.TrimSpace(p.workspace.root) == "" {
 		return nil
 	}
 	stagingRoot, err := p.componentImportStagingRoot()
@@ -686,4 +775,9 @@ func (p *Platform) RecoverComponentImportFiles(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func validImportSourcePath(path string) bool {
+	clean, err := cleanWorkspaceRelative(path)
+	return err == nil && clean == path
 }

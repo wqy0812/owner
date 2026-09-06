@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -17,6 +19,7 @@ type RunRetryPlan struct {
 	RemainingSteps        []ComponentTestPlanStep `json:"remainingSteps"`
 	RequiresApproval      bool                    `json:"requiresApproval"`
 	PlanDigest            string                  `json:"planDigest"`
+	RecoveryStateDigest   string                  `json:"recoveryStateDigest"`
 }
 
 type RunRetryRequest struct {
@@ -38,7 +41,7 @@ func retryStartIndex(run domain.Run, plan lockedPlan) int {
 	return len(plan.Steps)
 }
 
-func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, sourceRunID string) (RunRetryPlan, error) {
+func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, sourceRunID string) (RunRetryPlan, error) {
 	source, err := p.store.GetRun(ctx, sourceRunID)
 	if err != nil {
 		return RunRetryPlan{}, err
@@ -49,7 +52,7 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 	if source.Status != domain.RunFailed && source.Status != domain.RunInterrupted {
 		return RunRetryPlan{}, fmt.Errorf("%w: only failed or interrupted runs can be retried", domain.ErrConflict)
 	}
-	if source.Kind != domain.RunComponentTest && source.Kind != domain.RunScenarioTest && source.Kind != domain.RunScenario {
+	if source.Kind != domain.RunComponentTest && source.Kind != domain.RunScenarioTest && source.Kind != domain.RunScenario && source.Kind != domain.RunEnvironmentRollback {
 		return RunRetryPlan{}, fmt.Errorf("%w: this run kind does not support safe retry", domain.ErrInvalid)
 	}
 	root := source.RetryRootRunID
@@ -63,6 +66,14 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 	if active {
 		return RunRetryPlan{}, fmt.Errorf("%w: source run already has an active retry", domain.ErrConflict)
 	}
+	nextAttempt, err := p.store.NextRetryAttempt(ctx, root)
+	if err != nil {
+		return RunRetryPlan{}, err
+	}
+	if source.RetryAttempt != nextAttempt-1 {
+		return RunRetryPlan{}, fmt.Errorf("%w: a newer attempt exists; continue from that Run", domain.ErrConflict)
+	}
+
 	environment, err := p.store.GetEnvironment(ctx, source.EnvironmentID, false)
 	if err != nil {
 		return RunRetryPlan{}, err
@@ -77,6 +88,9 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 	if err != nil {
 		return RunRetryPlan{}, fmt.Errorf("%w: historical run has no retryable locked plan", domain.ErrConflict)
 	}
+	if err := p.validateRetryRecoveryIdentity(ctx, source, locked, root); err != nil {
+		return RunRetryPlan{}, err
+	}
 	start := retryStartIndex(source, locked)
 	if start >= len(locked.Steps) {
 		return RunRetryPlan{}, fmt.Errorf("%w: no incomplete step remains", domain.ErrConflict)
@@ -84,7 +98,13 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 	if !locked.Steps[start].RetrySafe {
 		return RunRetryPlan{}, fmt.Errorf("%w: first incomplete action is not declared retry-safe", domain.ErrConflict)
 	}
-	for _, step := range locked.Steps[start:] {
+	for _, step := range locked.Steps {
+		if step.SourceType == "scenario_acceptance" {
+			if err := p.workspaceVerifier.verifyScenarioAcceptanceStep(ctx, &step); err != nil {
+				return RunRetryPlan{}, err
+			}
+			continue
+		}
 		release, getErr := p.store.GetComponentRelease(ctx, step.ReleaseID)
 		if getErr != nil {
 			return RunRetryPlan{}, getErr
@@ -103,41 +123,49 @@ func (p *Platform) PreviewRunRetry(ctx context.Context, user domain.User, source
 			return RunRetryPlan{}, fmt.Errorf("%w: scenario revision definition changed", domain.ErrConflict)
 		}
 	}
-	if digester, ok := p.runner.(digestRunner); ok {
-		for _, step := range locked.Steps[start:] {
-			playbookDigest, treeDigest, digestErr := digester.Digest(step.Playbook)
-			if digestErr != nil {
-				return RunRetryPlan{}, digestErr
-			}
-			if playbookDigest != step.PlaybookDigest || treeDigest != step.WorkspaceDigest {
-				return RunRetryPlan{}, fmt.Errorf("%w: executable content changed", domain.ErrConflict)
-			}
+	for _, step := range locked.Steps {
+		playbookDigest, treeDigest, digestErr := p.inspector.Digest(step.Playbook)
+		if digestErr != nil {
+			return RunRetryPlan{}, digestErr
 		}
-	} else {
-		return RunRetryPlan{}, fmt.Errorf("%w: runner cannot verify executable fingerprints", domain.ErrConflict)
+		if playbookDigest != step.PlaybookDigest || treeDigest != step.WorkspaceDigest {
+			return RunRetryPlan{}, fmt.Errorf("%w: executable content changed", domain.ErrConflict)
+		}
+	}
+
+	if locked.Steps[start].Phase == "execute" && start > 0 && locked.Steps[start-1].Phase == "pre" {
+		start--
 	}
 	result := RunRetryPlan{SourceRunID: source.ID, RetryRootRunID: root, EnvironmentRevisionID: source.EnvironmentRevisionID, StartStep: start, SkippedSteps: start}
-	for index, step := range locked.Steps[start:] {
-		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval})
+	result.RecoveryStateDigest, err = p.retryRecoveryStateDigest(ctx, source.EnvironmentID)
+	if err != nil {
+		return RunRetryPlan{}, err
+	}
+	remaining, err := retryLockedSteps(locked, start)
+	if err != nil {
+		return RunRetryPlan{}, err
+	}
+	for index, step := range remaining {
+		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval})
 		result.RequiresApproval = result.RequiresApproval || step.NeedsApproval
 	}
 	if len(locked.ArtifactTransfers) > 0 || len(locked.ImageTransfers) > 0 {
 		result.RequiresApproval = true
 	}
 	result.PlanDigest = digestValue(struct {
-		SourceID, Status, EnvironmentRevisionID, ArtifactDigest string
-		Start                                                   int
-		Steps                                                   []lockedStep
-		DeliveryRequirements                                    []DeliveryRequirement
-		DeliveryDecisions                                       []DeliveryDecision
-		ArtifactTransfers                                       []lockedArtifactTransfer
-		ImageTransfers                                          []lockedImageTransfer
-	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, start, locked.Steps[start:], locked.DeliveryRequirements, locked.DeliveryDecisions, locked.ArtifactTransfers, locked.ImageTransfers})
+		SourceID, Status, EnvironmentRevisionID, ArtifactDigest, RecoveryStateDigest string
+		Start                                                                        int
+		Steps                                                                        []lockedStep
+		DeliveryRequirements                                                         []DeliveryRequirement
+		DeliveryDecisions                                                            []DeliveryDecision
+		ArtifactTransfers                                                            []lockedArtifactTransfer
+		ImageTransfers                                                               []lockedImageTransfer
+	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, result.RecoveryStateDigest, start, remaining, locked.DeliveryRequirements, locked.DeliveryDecisions, locked.ArtifactTransfers, locked.ImageTransfers})
 	return result, nil
 }
 
-func (p *Platform) RetryRun(ctx context.Context, user domain.User, sourceRunID string, input RunRetryRequest) (domain.Run, error) {
-	preview, err := p.PreviewRunRetry(ctx, user, sourceRunID)
+func (p *ExecutionService) Retry(ctx context.Context, user domain.User, sourceRunID string, input RunRetryRequest) (domain.Run, error) {
+	preview, err := p.PreviewRetry(ctx, user, sourceRunID)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -152,44 +180,92 @@ func (p *Platform) RetryRun(ctx context.Context, user domain.User, sourceRunID s
 	if err != nil {
 		return domain.Run{}, err
 	}
-	locked.Steps = append([]lockedStep(nil), locked.Steps[preview.StartStep:]...)
-	now := time.Now().UTC()
-	runID := newID("run")
-	if err := p.rebindRetryBackupPlan(ctx, source.EnvironmentID, runID, source.Kind, now, &locked); err != nil {
-		return domain.Run{}, err
-	}
-	retryAttempt, err := p.store.NextRetryAttempt(ctx, preview.RetryRootRunID)
+	locked.Steps, err = retryLockedSteps(locked, preview.StartStep)
 	if err != nil {
 		return domain.Run{}, err
 	}
-	snapshot := structToMap(locked)
-	for key, value := range source.InputSnapshot {
-		if key != "steps" && key != "artifactTransfers" && key != "imageTransfers" && key != "treeDigest" && key != "installationBaseline" && key != "installationBaselineDigest" {
-			snapshot[key] = value
+	if source.Kind == domain.RunEnvironmentRollback {
+		locked.InstallationBaseline = installationBaselineFromSteps(locked.Steps)
+		locked.InstallationBaselineDigest = installationBaselineDigest(locked.InstallationBaseline)
+	}
+	now := time.Now().UTC()
+	runID := newID("run")
+	if err := p.workspaceVerifier.verifyLockedWorkspaceDigests(ctx, locked.Steps); err != nil {
+		return domain.Run{}, err
+	}
+	return p.creator.createRetryRun(ctx, user, source, locked, preview, runID, now)
+}
+
+func retryLockedSteps(plan lockedPlan, start int) ([]lockedStep, error) {
+	selected, err := ansible.ContinuationSteps(jobPlanFromLocked("", plan, nil), start)
+	if err != nil {
+		return nil, err
+	}
+	steps := make([]lockedStep, 0, len(selected))
+	for _, item := range selected {
+		source := lockedStepByID(plan.Steps, item.ID)
+		if source == nil {
+			source = lockedStepByID(plan.Steps, strings.TrimPrefix(item.ID, "refresh-"))
 		}
-	}
-	run := domain.Run{ID: runID, Kind: source.Kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: source.EnvironmentID, EnvironmentRevisionID: source.EnvironmentRevisionID, ComponentReleaseID: source.ComponentReleaseID, ScenarioRevisionID: source.ScenarioRevisionID, Action: source.Action, Destructive: preview.RequiresApproval, InputSnapshot: snapshot, ArtifactDigest: source.ArtifactDigest, RetryOfRunID: source.ID, RetryRootRunID: preview.RetryRootRunID, RetryAttempt: retryAttempt, RetryStartStep: source.RetryStartStep + preview.StartStep, CreatedAt: now}
-	var approval *domain.Approval
-	if preview.RequiresApproval {
-		run.Status = domain.RunAwaitingApproval
-		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: now}
-		run.Approval = approval
-	}
-	if source.Kind == domain.RunScenarioTest {
-		if err := p.store.SetScenarioRevisionStatus(ctx, source.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionDraft}, domain.RevisionTesting, now); err != nil {
-			return run, err
+		if source == nil {
+			continue
 		}
-	}
-	if err := p.store.CreateRun(ctx, run, approval); err != nil {
-		if source.Kind == domain.RunScenarioTest {
-			_ = p.store.SetScenarioRevisionStatus(ctx, source.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, now)
+		step := *source
+		if step.ID != item.ID {
+			step.NodeID = "refresh-" + step.NodeID
 		}
-		return run, err
+		step.ID, step.Phase = item.ID, item.Phase
+		steps = append(steps, step)
 	}
-	p.audit(ctx, user, "run.retry_created", "run", run.ID, map[string]any{"sourceRunId": source.ID, "retryRootRunId": run.RetryRootRunID, "retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep, "planDigest": preview.PlanDigest})
-	p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
-	if run.Status == domain.RunQueued {
-		p.schedule(run.EnvironmentID)
+	return steps, nil
+}
+
+func (p *ExecutionService) validateRetryRecoveryIdentity(ctx context.Context, source domain.Run, plan lockedPlan, root string) error {
+	rootRun, err := p.store.GetRun(ctx, root)
+	if err != nil {
+		return err
 	}
-	return run, nil
+	receipts, err := p.store.LatestEnvironmentActionReceipts(ctx, source.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	for _, receipt := range receipts {
+		relevant := false
+		identityMatches := false
+		priorMatches := false
+		for _, step := range plan.ParentSteps {
+			if step.ComponentID != receipt.ComponentID || step.SourceNodeID != receipt.SourceNodeID {
+				continue
+			}
+			relevant = true
+			if step.Backup != nil && receipt.BackupRef == step.BackupRef && digestValue(receipt.Backup) == digestValue(*step.Backup) {
+				identityMatches = true
+			}
+			if step.Backup != nil && step.Backup.Previous != nil {
+				prior := step.Backup.Previous
+				priorMatches = priorMatches || (prior.BackupRef == receipt.BackupRef && digestValue(prior.Backup) == digestValue(receipt.Backup))
+			}
+		}
+		if !relevant {
+			continue
+		}
+		receiptRun, err := p.store.GetRun(ctx, receipt.RunID)
+		if err != nil {
+			return err
+		}
+		if (receiptRun.ID == root || receiptRun.RetryRootRunID == root) && identityMatches {
+			continue
+		}
+		// A failed precheck has not touched its baseline. An older verified
+		// installation is valid only if it is the exact locked restore source.
+		if receipt.Status == "verified" && receipt.UpdatedAt.Before(rootRun.CreatedAt) && (priorMatches || identityMatches) {
+			continue
+		}
+		return fmt.Errorf("%w: recovery baseline or component state changed outside this retry chain", domain.ErrConflict)
+	}
+	return nil
+}
+
+func (p *ExecutionService) retryRecoveryStateDigest(ctx context.Context, environmentID string) (string, error) {
+	return p.store.RetryRecoveryStateDigest(ctx, environmentID)
 }

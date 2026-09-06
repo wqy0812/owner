@@ -29,7 +29,6 @@ func (r *countingPlaybookRunner) Digest(path string) (string, string, error) {
 }
 
 type sequentialPlaybookRunner struct {
-	ActionRunner
 	digestRunner
 }
 
@@ -46,8 +45,11 @@ func TestReadinessBatchesFilesWithoutSharingMutationValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(root, "fixture"), []byte("- debug: msg=fixture\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	runner := &countingPlaybookRunner{Runner: &ansible.Runner{AllowedRoot: root}}
-	p.runner = runner
+	setTestRunner(t, p, runner)
 	component, err := database.GetComponent(ctx, "component-1", false)
 	if err != nil {
 		t.Fatal(err)
@@ -67,11 +69,11 @@ func TestReadinessBatchesFilesWithoutSharingMutationValidation(t *testing.T) {
 		}
 	}
 	owner := domain.User{ID: "component-owner", Role: domain.RoleComponentOwner}
-	batched, err := p.ListComponents(ctx, owner)
+	batched, err := p.catalog.ListComponents(ctx, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.batches != 1 || len(runner.paths) != 4 || runner.singles != 0 {
+	if runner.batches != 1 || len(runner.paths) != 5 || runner.singles != 0 {
 		t.Fatalf("batches=%d paths=%v single=%d", runner.batches, runner.paths, runner.singles)
 	}
 	for _, c := range batched {
@@ -79,7 +81,7 @@ func TestReadinessBatchesFilesWithoutSharingMutationValidation(t *testing.T) {
 			t.Fatalf("file failure attributed to wrong release: %+v", c.Releases[0].Readiness)
 		}
 	}
-	work, err := p.Workbench(ctx, owner)
+	work, err := p.readModel.Workbench(ctx, owner)
 	if err != nil || len(work.Items) != 2 || runner.batches != 2 || runner.singles != 0 {
 		t.Fatalf("workbench repeated validation: items=%d batches=%d single=%d err=%v", len(work.Items), runner.batches, runner.singles, err)
 	}
@@ -92,13 +94,13 @@ func TestReadinessBatchesFilesWithoutSharingMutationValidation(t *testing.T) {
 		t.Fatal("unevaluated Readiness was treated as publishable")
 	}
 	// Compare the entire response against the original per-action validation.
-	p.runner = sequentialPlaybookRunner{ActionRunner: runner, digestRunner: runner}
-	sequential, err := p.ListComponents(ctx, owner)
+	setTestRunner(t, p, sequentialPlaybookRunner{digestRunner: runner})
+	sequential, err := p.catalog.ListComponents(ctx, owner)
 	if err != nil || !reflect.DeepEqual(batched, sequential) {
 		t.Fatalf("batch changed the response: %v", err)
 	}
-	p.runner = runner
-	evaluation := newReadinessEvaluation(p)
+	setTestRunner(t, p, runner)
+	evaluation := newReadinessEvaluation(p.releaseRules)
 	evaluation.preparePlaybooks([]domain.Component{{Releases: []domain.ComponentRelease{valid}}})
 	before := runner.singles
 	if err := evaluation.validatePlaybook("unlisted.yml"); err == nil || runner.singles != before+1 {
@@ -108,10 +110,10 @@ func TestReadinessBatchesFilesWithoutSharingMutationValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A publication check must not inherit the earlier successful read check.
-	if err := p.validateReleaseTransitionContracts(ctx, valid); err == nil {
+	if err := p.releaseRules.validateReleaseTransitionContracts(ctx, valid); err == nil {
 		t.Fatal("mutation validation reused a successful file check")
 	}
-	next, err := p.GetComponent(ctx, owner, valid.ComponentID)
+	next, err := p.catalog.Get(ctx, owner, valid.ComponentID)
 	if err != nil || !readinessBlockerCodes(next.Releases[0].Readiness)["release_contract_invalid"] {
 		t.Fatalf("next detail read reused a deleted file: %v", err)
 	}
