@@ -84,16 +84,16 @@ func TestRoleJobCompileAndSeal(t *testing.T) {
 	if err := json.Unmarshal(data, &plays); err != nil {
 		t.Fatal(err)
 	}
-	if len(plays) != 6 {
+	if len(plays) != 11 {
 		t.Fatalf("plays=%d", len(plays))
 	}
-	for _, i := range []int{1, 4} {
+	for _, i := range []int{2, 5} {
 		if plays[i]["strategy"] != "linear" || plays[i]["any_errors_fatal"] != true {
 			t.Fatal("failure policy missing")
 		}
 		cf := plays[i]["vars"].(map[string]any)["cf"].(map[string]any)
-		if cf["inputs"].(map[string]any)["version"] != []string{"a", "b"}[(i-1)/3] {
-			t.Fatal("parameters crossed nodes")
+		if !strings.Contains(cf["inputs"].(string), "cf_gate_result.inputs") {
+			t.Fatal("role inputs bypass durable stage selection")
 		}
 	}
 	if len(bundle.Manifest.Plan.Recovery) != 1 || bundle.Manifest.Plan.Recovery[0].TasksFrom != "rollback.yml" {

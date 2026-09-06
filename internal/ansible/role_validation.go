@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,11 @@ func validateTasks(content []byte, check bool, include func(string) error) error
 	aliases = func(n *yaml.Node) error {
 		if n.Kind == yaml.AliasNode {
 			return fmt.Errorf("YAML aliases are not allowed in executable source")
+		}
+		if n.Kind == yaml.ScalarNode {
+			if err := validateLocalLookups(n.Value); err != nil {
+				return err
+			}
 		}
 		for _, child := range n.Content {
 			if err := aliases(child); err != nil {
@@ -53,6 +59,16 @@ func validateTasks(content []byte, check bool, include func(string) error) error
 			}
 			for key, value := range values {
 				module := strings.TrimPrefix(key, "ansible.builtin.")
+				if module == "copy" || module == "template" || module == "unarchive" || module == "script" {
+					if err := validateLocalSource(module, value); err != nil {
+						return err
+					}
+					if args := values["args"]; args != nil {
+						if err := validateLocalSource(module, args); err != nil {
+							return err
+						}
+					}
+				}
 				switch module {
 				case "hosts", "roles", "import_playbook", "strategy", "force_handlers", "rescue", "local_action", "action", "any_errors_fatal", "async", "include_role", "import_role", "add_host", "group_by", "set_stats", "include_vars":
 					return fmt.Errorf("%s is not permitted in managed role tasks", key)
@@ -114,6 +130,54 @@ func validateTasks(content []byte, check bool, include func(string) error) error
 	}
 	return tasks(document.Content[0])
 }
+
+var rolePathPrefix = regexp.MustCompile(`^\{\{\s*role_path\s*\}\}/`)
+var localLookupCall = regexp.MustCompile(`\b(?:lookup|query|q)\s*\(\s*['"](?:ansible\.builtin\.)?(?:file|fileglob|template|first_found)['"]\s*,([^)]*)\)`)
+var fixedLookupArgument = regexp.MustCompile(`^\s*['"]([^'"]+)['"]\s*(?:,\s*[a-zA-Z_]\w*\s*=.*)?$`)
+
+func validateLocalLookups(value string) error {
+	for _, call := range localLookupCall.FindAllStringSubmatch(value, -1) {
+		argument := fixedLookupArgument.FindStringSubmatch(call[1])
+		if len(argument) != 2 || !safeLocalRolePath(argument[1]) {
+			return fmt.Errorf("local file lookups must use one fixed relative path inside this role")
+		}
+	}
+	return nil
+}
+
+func safeLocalRolePath(path string) bool {
+	return path != "" && !filepath.IsAbs(path) && !strings.Contains(path, "{{") && !strings.Contains(path, "..") && !strings.ContainsAny(path, "\\\x00~") && !strings.HasPrefix(filepath.Clean(path), "roles/")
+}
+
+func validateLocalSource(module string, node *yaml.Node) error {
+	source, remote := "", false
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			key, value := node.Content[i].Value, node.Content[i+1]
+			if key == "src" || (module == "script" && key == "cmd") {
+				source = value.Value
+			}
+			if key == "remote_src" {
+				remote = value.Tag == "!!bool" && value.Value == "true"
+			}
+		}
+	} else if module == "script" {
+		source = node.Value
+	} else {
+		return fmt.Errorf("%s must use YAML mapping arguments so its local source can be validated", module)
+	}
+	if remote || source == "" {
+		return nil
+	}
+	source = rolePathPrefix.ReplaceAllString(source, "")
+	if module == "script" {
+		source = strings.SplitN(source, " ", 2)[0]
+	}
+	if !safeLocalRolePath(source) {
+		return fmt.Errorf("%s source must use a fixed relative path inside this role; target-host sources must declare remote_src: true", module)
+	}
+	return nil
+}
 func reservedRoleVariable(name string) bool {
 	return name == "cf" || (strings.HasPrefix(name, "cf_") && name != "cf_local" && !strings.HasPrefix(name, "cf_local_")) || strings.HasPrefix(name, "ansible_")
 }
@@ -142,6 +206,9 @@ func validateRoleEntry(root, relative string, check bool, visiting map[string]bo
 }
 
 func validateRoleVariables(data []byte) error {
+	if err := validateLocalLookups(string(data)); err != nil {
+		return err
+	}
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
 		return err

@@ -1,6 +1,7 @@
 package ansible
 
 import (
+	"codex/platform-demo/internal/domain"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,7 +18,14 @@ import (
 	"time"
 )
 
-const JobContract = "clusterforge-role-job-v1"
+const JobContract = "clusterforge-native-job-v3"
+const PreviousNativeJobContract = "clusterforge-native-job-v2"
+
+func IsNativeJobContract(contract string) bool {
+	return contract == JobContract || contract == PreviousNativeJobContract
+}
+
+const LegacyJobContract = "clusterforge-role-job-v1"
 
 //go:embed job_plugins
 var jobPlugins embed.FS
@@ -28,30 +36,42 @@ type JobRuntime struct {
 }
 
 type JobStep struct {
-	Stage              string         `json:"stage,omitempty"`
-	SourceType         string         `json:"sourceType,omitempty"`
-	ScenarioRevisionID string         `json:"scenarioRevisionId,omitempty"`
-	RecoveryOfStepID   string         `json:"recoveryOfStepId,omitempty"`
-	ID                 string         `json:"id"`
-	NodeID             string         `json:"nodeId"`
-	Name               string         `json:"name"`
-	ReleaseID          string         `json:"releaseId"`
-	ComponentID        string         `json:"componentId"`
-	ParentActionID     string         `json:"parentActionId"`
-	ActionID           string         `json:"actionId"`
-	Action             string         `json:"action"`
-	Phase              string         `json:"phase"`
-	Playbook           string         `json:"source"`
-	PlaybookDigest     string         `json:"sourceDigest"`
-	WorkspaceDigest    string         `json:"workspaceDigest"`
-	Role               string         `json:"role"`
-	TasksFrom          string         `json:"tasksFrom"`
-	Limit              string         `json:"limit"`
-	Variables          map[string]any `json:"variables"`
-	TimeoutSeconds     int            `json:"timeoutSeconds"`
-	Become             bool           `json:"become"`
-	GatherFacts        bool           `json:"gatherFacts"`
-	RetrySafe          bool           `json:"retrySafe"`
+	PreCheckRequired   bool                      `json:"preCheckRequired,omitempty"`
+	RuntimeChecks      []domain.RuntimeCheck     `json:"runtimeChecks,omitempty"`
+	ResourceContract   *domain.ResourceContract  `json:"resourceContract,omitempty"`
+	Resources          []domain.ResourceInstance `json:"resources,omitempty"`
+	Media              []JobMedia                `json:"media,omitempty"`
+	Stage              string                    `json:"stage,omitempty"`
+	SourceType         string                    `json:"sourceType,omitempty"`
+	ScenarioRevisionID string                    `json:"scenarioRevisionId,omitempty"`
+	RecoveryOfStepID   string                    `json:"recoveryOfStepId,omitempty"`
+	ID                 string                    `json:"id"`
+	NodeID             string                    `json:"nodeId"`
+	Name               string                    `json:"name"`
+	ReleaseID          string                    `json:"releaseId"`
+	ComponentID        string                    `json:"componentId"`
+	ParentActionID     string                    `json:"parentActionId"`
+	ActionID           string                    `json:"actionId"`
+	Action             string                    `json:"action"`
+	Phase              string                    `json:"phase"`
+	Playbook           string                    `json:"source"`
+	PlaybookDigest     string                    `json:"sourceDigest"`
+	WorkspaceDigest    string                    `json:"workspaceDigest"`
+	Role               string                    `json:"role"`
+	TasksFrom          string                    `json:"tasksFrom"`
+	Limit              string                    `json:"limit"`
+	Variables          map[string]any            `json:"variables"`
+	TimeoutSeconds     int                       `json:"timeoutSeconds"`
+	Become             bool                      `json:"become"`
+	GatherFacts        bool                      `json:"gatherFacts"`
+	RetrySafe          bool                      `json:"retrySafe"`
+}
+
+type JobMedia struct {
+	Kind      string `json:"kind"`
+	Location  string `json:"location"`
+	Identity  string `json:"identity"`
+	SizeBytes int64  `json:"sizeBytes,omitempty"`
 }
 
 type JobPlan struct {
@@ -66,10 +86,22 @@ type JobPlan struct {
 }
 
 type JobManifest struct {
-	Contract string            `json:"contract"`
-	Plan     JobPlan           `json:"plan"`
-	Files    map[string]string `json:"files"`
-	Digest   string            `json:"digest"`
+	Verification     *JobVerification  `json:"verification,omitempty"`
+	EntryPoint       string            `json:"entryPoint,omitempty"`
+	FullPlanDigest   string            `json:"fullPlanDigest,omitempty"`
+	GeneratedEntries map[string]string `json:"generatedEntries,omitempty"`
+	Contract         string            `json:"contract"`
+	Plan             JobPlan           `json:"plan"`
+	Files            map[string]string `json:"files"`
+	Digest           string            `json:"digest"`
+}
+
+type JobVerification struct {
+	ScenarioRevisionID string   `json:"scenarioRevisionId"`
+	RunIDs             []string `json:"runIds"`
+	RootBundleDigest   string   `json:"rootBundleDigest"`
+	FullPlanDigest     string   `json:"fullPlanDigest"`
+	CompletedAt        string   `json:"completedAt"`
 }
 
 type JobBundle struct {
@@ -103,12 +135,16 @@ func (r *Runner) RuntimeIdentity(ctx context.Context) (JobRuntime, error) {
 	if err != nil {
 		return JobRuntime{}, fmt.Errorf("Ansible runtime unavailable: %w", err)
 	}
-	core := regexp.MustCompile(`\[core ([0-9.]+)\]`).FindStringSubmatch(string(out))
-	python := regexp.MustCompile(`python version = ([0-9.]+)`).FindStringSubmatch(string(out))
-	if len(core) != 2 || len(python) != 2 {
-		return JobRuntime{}, fmt.Errorf("Ansible runtime must report ansible-core and Python versions")
+	return parseJobRuntime(string(out))
+}
+
+func parseJobRuntime(output string) (JobRuntime, error) {
+	version := regexp.MustCompile(`(?m)^ansible-playbook (?:\[core )?([0-9]+\.[0-9]+\.[0-9]+)(?:\]|\s|$)`).FindStringSubmatch(output)
+	python := regexp.MustCompile(`(?m)^\s*python version = ([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)`).FindStringSubmatch(output)
+	if len(version) != 2 || len(python) != 2 {
+		return JobRuntime{}, fmt.Errorf("cannot identify Ansible and Python versions from ansible-playbook --version (supports Ansible 2.8.8 and ansible-core output)")
 	}
-	return JobRuntime{AnsibleCore: core[1], Python: python[1]}, nil
+	return JobRuntime{AnsibleCore: version[1], Python: python[1]}, nil
 }
 
 // BuildJob copies exact release trees and compiles one deterministic playbook.
@@ -131,6 +167,8 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 	bundle := &JobBundle{Path: directory}
 	fail := func(err error) (*JobBundle, error) { _ = bundle.Close(); return nil, err }
 	seen := map[string]string{}
+	sourceRoots := map[string]string{}
+	identityRoots := map[string]string{}
 	ids := map[string]bool{}
 	allSteps := make([]*JobStep, 0, len(plan.Steps)+len(plan.Recovery))
 	for i := range plan.Steps {
@@ -147,6 +185,9 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 			return fail(fmt.Errorf("job step IDs must be nonempty and unique"))
 		}
 		ids[step.ID] = true
+		if step.GatherFacts || len(step.RuntimeChecks) > 0 || (step.ResourceContract != nil && len(step.ResourceContract.Checks) > 0) {
+			return fail(domain.YAMLMigrationRequired(step.Name))
+		}
 		root, source, clean, err := r.resolvePlaybook(step.Playbook)
 		if err != nil {
 			return fail(err)
@@ -174,6 +215,22 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 			identity = "scenario:" + step.ScenarioRevisionID
 		}
 		step.Role = RoleName(identity)
+		if identity == "" {
+			return fail(fmt.Errorf("component role requires an immutable release identity"))
+		}
+		rootIdentity := identity + "\x00" + step.ComponentID
+		for existing, owner := range sourceRoots {
+			if owner == rootIdentity {
+				continue
+			}
+			if existing == roleRoot || strings.HasPrefix(existing, roleRoot+string(filepath.Separator)) || strings.HasPrefix(roleRoot, existing+string(filepath.Separator)) {
+				return fail(fmt.Errorf("component workspaces cannot coincide or contain one another"))
+			}
+		}
+		if previous, ok := identityRoots[identity]; ok && previous != roleRoot {
+			return fail(fmt.Errorf("one release cannot refer to multiple workspaces"))
+		}
+		sourceRoots[roleRoot], identityRoots[identity] = rootIdentity, roleRoot
 		step.TasksFrom = strings.TrimPrefix(filepath.ToSlash(rel), "tasks/")
 		target := filepath.Join(directory, "roles", step.Role)
 		if old, ok := seen[step.Role]; ok {
@@ -210,10 +267,14 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 	if strings.Contains(plan.Inventory, "__clusterforge_controller") {
 		return fail(fmt.Errorf("inventory uses a reserved controller name"))
 	}
+	entries, err := writeRoleEntrypoints(directory, plan)
+	if err != nil {
+		return fail(err)
+	}
 	if err := writeJobFiles(directory, plan); err != nil {
 		return fail(err)
 	}
-	manifest := JobManifest{Contract: JobContract, Plan: plan, Files: map[string]string{}}
+	manifest := JobManifest{Contract: JobContract, Plan: plan, Files: map[string]string{}, GeneratedEntries: entries, EntryPoint: "site.yml", FullPlanDigest: jsonDigest(plan)}
 	if err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return e
@@ -257,6 +318,13 @@ func validateRoleTree(root string) error {
 			}
 			return validateRoleVariables(data)
 		}
+		if strings.HasPrefix(rel, "templates/") {
+			data, e := os.ReadFile(path)
+			if e != nil {
+				return e
+			}
+			return validateLocalLookups(string(data))
+		}
 		if (strings.HasPrefix(rel, "tasks/") || strings.HasPrefix(rel, "handlers/")) && (strings.HasSuffix(rel, ".yml") || strings.HasSuffix(rel, ".yaml")) {
 			data, e := os.ReadFile(path)
 			if e != nil {
@@ -270,31 +338,41 @@ func validateRoleTree(root string) error {
 
 func writeJobFiles(directory string, plan JobPlan) error {
 	plays := []map[string]any{}
+	plays = append(plays, map[string]any{"name": "Initialize immutable job", "hosts": "__clusterforge_controller", "gather_facts": false, "any_errors_fatal": true, "tasks": []any{map[string]any{"name": "Initialize durable job state", "no_log": true, "cf_gate": map[string]any{"kind": "initialize", "options": "{{ cf_job | default({}) }}", "credentials": "{{ cf_credentials | default({}) }}"}, "register": "cf_initialize"}, map[string]any{"name": "Recovery preview", "debug": map[string]any{"var": "cf_initialize.preview"}, "when": "cf_initialize.preview is defined"}}})
 	localVars, err := roleLocalVariables(directory)
 	if err != nil {
 		return err
 	}
 	gate := func(step JobStep, kind string) map[string]any {
-		return map[string]any{"name": "Controller " + kind + " " + step.ID, "hosts": "__clusterforge_controller", "gather_facts": false, "any_errors_fatal": true, "strategy": "linear", "tasks": []any{map[string]any{"name": "Commit stage boundary", "cf_gate": map[string]any{"kind": kind, "step_id": step.ID, "watchdog": kind == "begin" && step.ID == plan.Steps[0].ID}}}}
+		task := map[string]any{"name": "Commit stage boundary", "no_log": true, "cf_gate": map[string]any{"kind": kind, "step_id": step.ID}}
+		if kind == "begin" {
+			task["register"] = "cf_gate_result"
+		}
+		return map[string]any{"name": "Controller " + kind + " " + step.ID, "hosts": "__clusterforge_controller", "gather_facts": false, "any_errors_fatal": true, "strategy": "linear", "tasks": []any{task}}
 	}
-	for _, step := range plan.Steps {
+	for _, step := range append(append([]JobStep(nil), plan.Steps...), plan.Recovery...) {
 		plays = append(plays, gate(step, "begin"))
-		contextVars := map[string]any{"environmentId": plan.EnvironmentID, "releaseId": step.ReleaseID, "componentId": step.ComponentID, "backupRef": step.Variables["clusterforge_backup_ref"], "stepId": step.ID, "nodeId": step.NodeID, "actionId": step.ActionID, "parentActionId": step.ParentActionID, "phase": step.Phase}
-		vars := map[string]any{"cf_step_id": step.ID, "cf": map[string]any{"inputs": step.Variables, "context": contextVars, "credentials": "{{ cf_credentials }}"}}
-		scopeTasks := []any{map[string]any{"name": "Clear phase facts", "ansible.builtin.meta": "clear_facts"}}
+		vars := map[string]any{"cf_step_id": step.ID, "cf": map[string]any{"inputs": "{{ hostvars['__clusterforge_controller'].cf_gate_result.inputs | default({}) }}", "context": "{{ hostvars['__clusterforge_controller'].cf_gate_result.context | default({}) }}", "credentials": "{{ cf_credentials | default({}) }}"}}
+		scopeTasks := []any{map[string]any{"name": "Clear phase facts", "meta": "clear_facts"}}
 		if len(localVars) > 0 {
-			scopeTasks = append(scopeTasks, map[string]any{"name": "Reset phase local variables", "ansible.builtin.set_fact": localVars})
+			scopeTasks = append(scopeTasks, map[string]any{"name": "Reset phase local variables", "set_fact": localVars})
 		}
-		// Automatic gathering runs before pre_tasks and would be erased by
-		// clear_facts. Gather explicitly after removing the prior phase's state.
-		if step.GatherFacts {
-			scopeTasks = append(scopeTasks, map[string]any{"name": "Gather phase facts", "ansible.builtin.setup": map[string]any{}})
+		condition := "hostvars['__clusterforge_controller'].cf_gate_result.run | default(false)"
+		for _, task := range scopeTasks {
+			if _, meta := task.(map[string]any)["meta"]; !meta {
+				task.(map[string]any)["when"] = condition
+			}
 		}
-		plays = append(plays, map[string]any{"name": step.Name, "hosts": step.Limit + ":!__clusterforge_controller", "gather_facts": false, "become": step.Become, "any_errors_fatal": true, "strategy": "linear", "vars": vars, "pre_tasks": scopeTasks, "tasks": []any{map[string]any{"name": "Execute " + step.Name, "ansible.builtin.import_role": map[string]any{"name": step.Role, "tasks_from": step.TasksFrom, "public": false, "allow_duplicates": true}}}})
+		plays = append(plays, map[string]any{"name": step.Name, "hosts": step.Limit + ":!__clusterforge_controller", "gather_facts": false, "become": step.Become, "any_errors_fatal": true, "strategy": "linear", "vars": vars, "pre_tasks": scopeTasks, "tasks": []any{map[string]any{"name": "Execute " + step.Name, "when": condition, "include_role": map[string]any{"name": step.Role, "tasks_from": roleEntrypoint(step.TasksFrom), "public": false, "allow_duplicates": true}}}})
 		plays = append(plays, gate(step, "end"))
 	}
+	plays = append(plays, map[string]any{"name": "Finish durable job", "hosts": "__clusterforge_controller", "gather_facts": false, "any_errors_fatal": true, "tasks": []any{map[string]any{"cf_gate": map[string]any{"kind": "finish"}}}})
 	playbook, _ := json.MarshalIndent(plays, "", "  ")
-	files := map[string][]byte{"site.yml": playbook, "inventory.ini": []byte(plan.Inventory + "\n[clusterforge_controller]\n__clusterforge_controller ansible_connection=local\n"), "ansible.cfg": []byte("[defaults]\nretry_files_enabled = False\nstdout_callback = default\ncallbacks_enabled = cf_events\ncallback_plugins = ./callback_plugins\naction_plugins = ./action_plugins\nroles_path = ./roles\nhost_key_checking = True\n[ssh_connection]\npipelining = True\n")}
+	syntax, err := jobSyntaxPlaybook(directory, plan)
+	if err != nil {
+		return err
+	}
+	files := map[string][]byte{"site.yml": playbook, "syntax.yml": syntax, "inventory.ini": []byte(plan.Inventory + "\n[clusterforge_controller]\n__clusterforge_controller ansible_connection=local\n"), "ansible.cfg": []byte("[defaults]\nretry_files_enabled = False\nstdout_callback = default\ncallbacks_enabled = cf_events\ncallback_whitelist = cf_events\ncallback_plugins = ./callback_plugins\naction_plugins = ./action_plugins\nroles_path = ./roles\nhost_key_checking = True\n[ssh_connection]\npipelining = True\n")}
 	for path, data := range files {
 		if err := writePrivateFile(filepath.Join(directory, path), data); err != nil {
 			return err
@@ -339,8 +417,11 @@ func (b *JobBundle) Validate() error {
 	m := b.Manifest
 	expected := m.Digest
 	m.Digest = ""
-	if m.Contract != JobContract || expected == "" || jsonDigest(m) != expected {
+	if (!IsNativeJobContract(m.Contract) && m.Contract != LegacyJobContract) || expected == "" || jsonDigest(m) != expected {
 		return fmt.Errorf("job manifest digest mismatch")
+	}
+	if IsNativeJobContract(m.Contract) && (m.EntryPoint != "site.yml" || m.FullPlanDigest != jsonDigest(m.Plan)) {
+		return fmt.Errorf("native job full plan identity mismatch")
 	}
 	for relative, expected := range m.Files {
 		clean := filepath.Clean(relative)

@@ -25,6 +25,8 @@ func roleJobFixture(t *testing.T, binary string, mutation string) (*Runner, JobP
 		}
 		if component == "alpha" {
 			switch mutation {
+			case "unreachable":
+				sources["tasks/checks/pre.yml"] = "- setup:\n" + sources["tasks/checks/pre.yml"]
 			case "pre":
 				sources["tasks/checks/pre.yml"] = "- fail:\n    msg: pre failed\n"
 			case "execute":
@@ -90,7 +92,6 @@ func TestRoleJobAcceptance(t *testing.T) {
 			runner, plan, target := roleJobFixture(t, binary, failure)
 			if failure == "unreachable" {
 				plan.Inventory = "[first]\na ansible_host=127.0.0.1 ansible_port=1 ansible_connection=ssh ansible_ssh_timeout=1\n[second]\nc ansible_connection=local\n"
-				plan.Steps[0].GatherFacts = true
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

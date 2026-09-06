@@ -30,9 +30,21 @@ class ActionModule(ActionBase):
         result = super().run(tmp, task_vars)
         try:
             if not os.environ.get('CLUSTERFORGE_JOB_SOCKET') or not os.environ.get('CLUSTERFORGE_JOB_TOKEN'):
-                raise RuntimeError('Run this bundle through clusterforge-job')
-            response = exchange({'kind': self._task.args['kind'], 'stepId': self._task.args['step_id']})
-            if self._task.args.get('watchdog'):
+                self._display.error('Job controller unavailable; load the bundled ansible.cfg and cf_events callback')
+                raise RuntimeError('Job controller unavailable; load the bundled ansible.cfg and cf_events callback')
+            payload = {'kind': self._task.args['kind'], 'stepId': self._task.args.get('step_id', '')}
+            if payload['kind'] == 'initialize':
+                root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                sys.path.insert(0, root)
+                from cf_compatibility import validate
+                try:
+                    validate(root)
+                except Exception as error:
+                    exchange({'kind': 'abort', 'message': str(error)})
+                    raise
+                payload.update(options=self._task.args.get('options', {}), credentials=self._task.args.get('credentials', {}))
+            response = exchange(payload)
+            if response.get('watchdog') or self._task.args.get('watchdog'):
                 # A separate, credential-free supervisor survives a hard
                 # controller crash and stops the whole Ansible process group.
                 # Workers call setsid(), so their own group is not the main
@@ -52,6 +64,9 @@ class ActionModule(ActionBase):
                     raise RuntimeError('Job supervisor did not start')
                 supervisor.stdout.close()
             result.update(changed=False)
+            for key in ('run', 'inputs', 'context', 'preview'):
+                if key in response:
+                    result[key] = response[key]
         except Exception as error:
             result.update(failed=True, changed=False, msg='Job boundary rejected: ' + str(error))
         return result

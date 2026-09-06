@@ -18,6 +18,7 @@ import (
 )
 
 type JobEvent struct {
+	Message   string         `json:"message,omitempty"`
 	OwnerTask bool           `json:"ownerTask,omitempty"`
 	Kind      string         `json:"kind"`
 	StepID    string         `json:"stepId"`
@@ -68,6 +69,7 @@ func (r *Runner) RunJob(ctx context.Context, request JobRequest) (JobResult, err
 }
 
 type jobController struct {
+	initialized   bool
 	mu            sync.Mutex
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -108,7 +110,35 @@ func (c *jobController) handle(event JobEvent) error {
 	if c.failure != nil {
 		return c.failure
 	}
+	if event.Kind == "abort" {
+		return c.fail(fmt.Errorf("job preflight: %s", event.Message))
+	}
+	if event.Kind == "initialize" {
+		if c.initialized || c.next != 0 || c.active >= 0 {
+			return c.fail(fmt.Errorf("job already initialized"))
+		}
+		c.initialized = true
+		return nil
+	}
+	if event.Kind == "finish" {
+		if !c.finished.Load() {
+			return c.fail(fmt.Errorf("job ended before all selected stages completed"))
+		}
+		return nil
+	}
+	if event.Kind == "current" {
+		return nil
+	}
 	steps := c.bundle.Manifest.Plan.Steps
+	if event.Kind == "begin" || event.Kind == "end" {
+		if c.active < 0 && (c.next >= len(steps) || event.StepID != steps[c.next].ID) {
+			for _, recovery := range c.bundle.Manifest.Plan.Recovery {
+				if event.StepID == recovery.ID {
+					return nil
+				}
+			}
+		}
+	}
 	if c.next >= len(steps) {
 		return c.fail(fmt.Errorf("unexpected event after final stage"))
 	}
@@ -215,6 +245,11 @@ func (c *jobController) handle(event JobEvent) error {
 			}
 			result.Hosts[event.Host] = recap
 		}
+		if event.Kind == "waiting" {
+			if waiting, ok := event.Result["waiting"].(map[string]any); ok {
+				waiting["deadline"] = time.Unix(0, c.deadline.Load()).UTC().Format(time.RFC3339Nano)
+			}
+		}
 		if c.request.OnEvent != nil {
 			event.Token = ""
 			if c.redactor != nil {
@@ -320,6 +355,23 @@ func (r *Runner) RunBundle(parent context.Context, bundle *JobBundle, request Jo
 					err = controller.handle(event)
 				}
 				reply := map[string]any{"ok": err == nil, "done": controller.finished.Load(), "ansibleGroup": controller.processGroup.Load()}
+				if err == nil {
+					controller.mu.Lock()
+					if event.Kind == "initialize" {
+						reply["watchdog"] = true
+					}
+					if event.Kind == "begin" || event.Kind == "current" {
+						reply["run"] = false
+						if controller.active >= 0 && controller.next < len(execution.Manifest.Plan.Steps) {
+							step := execution.Manifest.Plan.Steps[controller.next]
+							if step.ID == event.StepID {
+								reply["run"], reply["stepId"], reply["inputs"] = true, step.ID, step.Variables
+								reply["context"] = map[string]any{"environmentId": execution.Manifest.Plan.EnvironmentID, "releaseId": step.ReleaseID, "componentId": step.ComponentID, "backupRef": step.Variables["clusterforge_backup_ref"], "stepId": step.ID, "nodeId": step.NodeID, "actionId": step.ActionID, "parentActionId": step.ParentActionID, "phase": step.Phase}
+							}
+						}
+					}
+					controller.mu.Unlock()
+				}
 				if err != nil {
 					reply["error"] = err.Error()
 				}
@@ -359,6 +411,8 @@ func (r *Runner) RunBundle(parent context.Context, bundle *JobBundle, request Jo
 	for k, v := range r.Env {
 		runner.Env[k] = v
 	}
+	runner.Env["ANSIBLE_CALLBACK_WHITELIST"] = "cf_events"
+	runner.Env["CLUSTERFORGE_JOB_TRANSPORT"] = "platform"
 	for k, v := range map[string]string{"ANSIBLE_CONFIG": filepath.Join(executionRoot, "ansible.cfg"), "ANSIBLE_ACTION_PLUGINS": filepath.Join(executionRoot, "action_plugins"), "ANSIBLE_CALLBACK_PLUGINS": filepath.Join(executionRoot, "callback_plugins"), "ANSIBLE_CALLBACKS_ENABLED": "cf_events", "ANSIBLE_ROLES_PATH": filepath.Join(executionRoot, "roles"), "ANSIBLE_STRATEGY": "linear", "ANSIBLE_FORCE_HANDLERS": "False", "ANSIBLE_CACHE_PLUGIN": "memory", "PYTHONDONTWRITEBYTECODE": "1", "CLUSTERFORGE_JOB_SOCKET": filepath.Join(socketDir, "control.sock"), "CLUSTERFORGE_JOB_TOKEN": controller.token} {
 		runner.Env[k] = v
 	}
@@ -410,7 +464,13 @@ func (r *Runner) RunBundle(parent context.Context, bundle *JobBundle, request Jo
 		if phase.flag != "" {
 			args = append(args, phase.flag)
 		}
-		args = append(args, filepath.Join(executionRoot, "site.yml"))
+		entry := "site.yml"
+		if phase.kind == PhaseSyntaxCheck {
+			if _, ok := bundle.Manifest.Files["syntax.yml"]; ok {
+				entry = "syntax.yml"
+			}
+		}
+		args = append(args, filepath.Join(executionRoot, entry))
 		phaseResult, err := runner.runPhase(ctx, phase.kind, args, executionRoot, localTemp, logs)
 		result.Phases = append(result.Phases, phaseResult)
 		if phase.kind == PhaseExecute {
@@ -422,7 +482,27 @@ func (r *Runner) RunBundle(parent context.Context, bundle *JobBundle, request Jo
 		}
 		if phase.kind == PhaseListHosts {
 			events, _ := logs.Snapshot()
-			if err := validateJobHostPreview(events, len(bundle.Manifest.Plan.Steps)); err != nil {
+			stages := len(bundle.Manifest.Plan.Steps)
+			if IsNativeJobContract(bundle.Manifest.Contract) {
+				stages += len(bundle.Manifest.Plan.Recovery)
+			}
+			if IsNativeJobContract(bundle.Manifest.Contract) {
+				// Initialization and completion are additional controller plays.
+				trimmed := make([]LogEvent, 0, len(events))
+				hostLine := regexp.MustCompile(`^\s*hosts \(([0-9]+)\):`)
+				seen := 0
+				for _, event := range events {
+					if event.Phase == PhaseListHosts && hostLine.MatchString(event.Line) {
+						seen++
+						if seen == 1 || seen == stages*3+2 {
+							continue
+						}
+					}
+					trimmed = append(trimmed, event)
+				}
+				events = trimmed
+			}
+			if err := validateJobHostPreview(events, stages); err != nil {
 				return result, err
 			}
 		}

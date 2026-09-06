@@ -3,7 +3,6 @@ package ansible
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -134,8 +133,4 @@ func TreeDigest(root string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func isOutsideRoot(err error) bool {
-	return errors.Is(err, ErrOutsideRoot)
 }

@@ -102,7 +102,7 @@ func TestRoleJobRealAnsible(t *testing.T) {
 	}
 }
 
-func TestRoleJobRealAnsibleFactsAreGatheredAfterPhaseReset(t *testing.T) {
+func TestRoleJobRealAnsibleFactsAreOwnedByYAML(t *testing.T) {
 	binary := os.Getenv("CLUSTERFORGE_JOB_TEST_ANSIBLE")
 	if binary == "" {
 		t.Skip("set CLUSTERFORGE_JOB_TEST_ANSIBLE for real isolated Ansible acceptance")
@@ -115,7 +115,11 @@ func TestRoleJobRealAnsibleFactsAreGatheredAfterPhaseReset(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("- assert:\n    that: \""+condition+"\"\n"), 0600); err != nil {
+		prefix := ""
+		if i == 0 {
+			prefix = "- setup:\n"
+		}
+		if err := os.WriteFile(path, []byte(prefix+"- assert:\n    that: \""+condition+"\"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -124,12 +128,12 @@ func TestRoleJobRealAnsibleFactsAreGatheredAfterPhaseReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := JobPlan{Inventory: "[targets]\ntarget ansible_connection=local\n"}
-	for i, entry := range entries {
+	for _, entry := range entries {
 		digest, err := FileDigest(filepath.Join(role, "tasks", entry))
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan.Steps = append(plan.Steps, JobStep{ID: entry, ReleaseID: "release", Name: entry, Action: "check", Phase: "check", Playbook: "managed/component/line/release/tasks/" + entry, PlaybookDigest: digest, WorkspaceDigest: tree, Limit: "targets", TimeoutSeconds: 20, GatherFacts: i == 0})
+		plan.Steps = append(plan.Steps, JobStep{ID: entry, ReleaseID: "release", Name: entry, Action: "check", Phase: "check", Playbook: "managed/component/line/release/tasks/" + entry, PlaybookDigest: digest, WorkspaceDigest: tree, Limit: "targets", TimeoutSeconds: 20})
 	}
 	runner := &Runner{AllowedRoot: root, Binary: binary}
 	result, err := runner.RunJob(context.Background(), JobRequest{Plan: plan})
