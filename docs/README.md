@@ -1,6 +1,8 @@
 # ClusterForge 文档中心
 
-> 代码文档基线：2026-09-05 当前工作区；不代表测试环境已部署。资产目录与节点文件保留各自日期的历史快照
+当前执行契约：场景编译为单个 Ansible 作业，组件使用独立 Role。参见[组件编写规范](component-role-authoring.md)、[场景执行](scenario-role-job.md)及[独立作业包](standalone-role-job.md)。新库只初始化身份和平台目录；旧作业快照不自动装入。
+
+> 代码文档基线：2026-09-07 当前工作区；不代表测试环境已部署。资产目录与节点文件保留各自日期的历史快照
 > 版本与环境：当前仅有首个版本（V1），所有部署与验收对象均为测试环境。统一口径见[首版与环境策略](version-policy.md)。
 
 本目录集中保存当前功能与开发说明，并通过索引区分带日期的快照、专项验收和历史方案。代码、数据库合同或前台入口变化时，应直接更新对应正式文档；`history/` 单独归档已经完成或不具约束力的历史方案与讨论，不作为当前合同。
@@ -13,6 +15,10 @@
 | 理解平台功能 | [平台功能与核心概念](platform-capabilities.md) | 功能、对象关系和职责；与前端功能章节共用内容源 |
 | 第一次接触仓库 | [项目结构说明](project-structure.md) | 目录、运行架构、开发入口与常用命令 |
 | 后端开发、测试与设计 | [平台设计文档](backend-design.md) | 领域模型、权限、状态机、数据结构、API 与安全边界 |
+| Run 刷新与工作台性能 | [活动读取与工作台合同](run-activity-and-workbench.md) | 场景保存基线、等待状态表、增量日志与按角色查询；[验收记录](records/2026-09-07-performance-validation.md) |
+| 场景分支、版本升级和业务验收 | [场景生命周期](scenario-lifecycle.md) | 新建分支、双测试发布、环境基线、失败恢复和保留历史转换 |
+| 回看配置来源与分支界面改造 | [2026-09-06 配置来源、分支适配标签与管理界面方案](configuration-provenance-branch-ui-plan-2026-09-06.md) | 本地实施完成：[验证记录](records/2026-09-06-configuration-provenance-branch-ui-validation.md)；来源展示、固定分支范围、类别层级与目录样板 |
+| 规划组件前端与构建交付职责拆分 | [2026-09-06 组件前端与构建交付落地方案](component-ui-and-delivery-modularization-plan-2026-09-06.md) | 规划稿：组件功能模块、前端类型归位、Docker 构建适配器、共享介质与独立 CLI；尚未实施 |
 | 平台操作者 | [平台说明书](platform-manual.md) | 功能入口、工作流、角色操作条件、结果与风险 |
 | 适配范围、直接引用与历史管理 | [运行历史与适配说明](run-history-and-adaptation.md) | 当前匹配规则、成功归档、失败清理、完整历史备份 |
 | 灾备配置、备份与恢复 | [Catalog 与数据库备份恢复](catalog-backup-and-restore.md) | 私有 Git Catalog、SQLite 快照、恢复点、空库恢复和失败边界 |
@@ -24,7 +30,10 @@
 | 判断版本和兼容策略 | [首版与环境策略](version-policy.md) | V1 数据库、API 和测试环境解释规则 |
 | 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、审批、清理顺序、恢复与验收边界 |
 | 查阅列表优化测量 | [2026-09-03 性能记录](records/2026-09-03-read-performance.md) | 旧实现及测量，不代表当前读取合同 |
-| 查阅本轮分批审核 | [2026-09-05 代码审核](records/2026-09-05-code-review.md) | 提交批次、已修复问题、用户决定与本地验证边界 |
+| 查阅本轮分批审核 | [2026-09-07 分批审核](records/2026-09-07-batched-code-review.md) | 提交边界、复现修复、验证结果和未执行事项 |
+| 查阅前次分批审核 | [2026-09-05 代码审核](records/2026-09-05-code-review.md) | 提交批次、已修复问题、用户决定与本地验证边界 |
+| 查阅场景生命周期验证 | [2026-09-05 场景生命周期本地验证](records/2026-09-05-scenario-lifecycle-validation.md) | 分支、升级、业务验收、保留历史转换与桌面浏览器检查；未部署 |
+| 查阅后端模块化验证 | [2026-09-05 后端模块化本地验证](records/2026-09-05-backend-modularization-validation.md) | 优化 1–4、模块边界、Go/竞态/前端及真实本地 Ansible 门禁；未部署 |
 | 查阅三方案验收 | [2026-09-05 三方案验收](verification-three-plans-2026-09-05.md) | 适配、直接引用、归档的本地验收与边界 |
 | 查阅历史验收证据 | [2026-08-24 Kubernetes 细粒度验收](records/2026-08-24-k8s-1.17.5-ubuntu-fine-grained-acceptance.md) | `docs/records/` 下按日期保存的静态验收记录，不代表实时状态 |
 | 查阅双版本组件录入证据 | [2026-08-28 双版本组件前台录入](records/2026-08-28-kubernetes-dual-version-component-entry.md) | 前台路径、计划指纹、生成 ID、审计时间和最终计数 |

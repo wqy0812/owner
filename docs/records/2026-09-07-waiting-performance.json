@@ -1,0 +1,44 @@
+[
+  {
+    "name": "1000/legacy",
+    "samples": 31,
+    "medianMicros": 4869.958,
+    "p95Micros": 9173.166,
+    "bytesPerRequest": 745
+  },
+  {
+    "name": "1000/projection",
+    "samples": 31,
+    "medianMicros": 14.083,
+    "p95Micros": 21.084,
+    "bytesPerRequest": 784
+  },
+  {
+    "name": "10000/legacy",
+    "samples": 31,
+    "medianMicros": 56357,
+    "p95Micros": 94811.75,
+    "bytesPerRequest": 744
+  },
+  {
+    "name": "10000/projection",
+    "samples": 31,
+    "medianMicros": 7.625,
+    "p95Micros": 78.625,
+    "bytesPerRequest": 784
+  },
+  {
+    "name": "50000/legacy",
+    "samples": 31,
+    "medianMicros": 252195.583,
+    "p95Micros": 300760.125,
+    "bytesPerRequest": 1480
+  },
+  {
+    "name": "50000/projection",
+    "samples": 31,
+    "medianMicros": 15.25,
+    "p95Micros": 48.333,
+    "bytesPerRequest": 784
+  }
+]

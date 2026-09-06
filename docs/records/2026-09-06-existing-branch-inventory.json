@@ -1,0 +1,1079 @@
+{
+  "database": "/Users/wqy/Desktop/owner/data/newplatform.db",
+  "inspectedAt": "2026-09-06T14:47:07.967995+00:00",
+  "readOnly": true,
+  "offlineSnapshot": false,
+  "schema": [],
+  "branchConflicts": [],
+  "legacyComponentScopeDifferences": [
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-etcd",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-etcd-3.6.7",
+          "version": "v3.6.7-of.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-etcd-3.3.10",
+          "version": "3.3.10",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-coredns",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-coredns-1.12.2",
+          "version": "v1.12.2-of.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-coredns-1.3.1",
+          "version": "1.3.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kube-proxy",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kube-proxy-1.34.3",
+          "version": "v1.34.3-of.1.icbc.harbor",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-kube-proxy-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "legacyComponentGroups": [
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-containerd",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-containerd-2.1.1",
+          "version": "v2.1.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-etcd",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-etcd-3.6.7",
+          "version": "v3.6.7-of.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-etcd-3.3.10",
+          "version": "3.3.10",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kubernetes",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kubernetes-1.34.3",
+          "version": "v1.34.3-of.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-calico",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-calico-3.27.3",
+          "version": "v3.27.3-icbc",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-coredns",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-coredns-1.12.2",
+          "version": "v1.12.2-of.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-coredns-1.3.1",
+          "version": "1.3.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kube-proxy",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kube-proxy-1.34.3",
+          "version": "v1.34.3-of.1.icbc.harbor",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        },
+        {
+          "id": "release-kube-proxy-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-cert",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-cert-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-bootstrap",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-bootstrap-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-common",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-common-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-addon",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-addon-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-master",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-master-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-bke-nodes",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-bke-nodes-25.12",
+          "version": "v25.12",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "ipv4"
+            ],
+            "operatingSystem": [
+              "Kylin V10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-host-preflight",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-host-preflight-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-host-bootstrap",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-host-bootstrap-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-cluster-pki",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-cluster-pki-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-docker",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-docker-18.09.7",
+          "version": "18.09.7",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kubernetes-distribution",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kubernetes-distribution-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kubernetes-encryption-config",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kubernetes-encryption-config-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kube-apiserver",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kube-apiserver-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kube-controller-manager",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kube-controller-manager-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kube-scheduler",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kube-scheduler-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kubernetes-bootstrap-rbac",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kubernetes-bootstrap-rbac-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-flannel",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-flannel-0.11.0",
+          "version": "0.11.0",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-kubelet",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-kubelet-1.17.5",
+          "version": "1.17.5",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-node-logging",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-node-logging-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-haproxy",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-haproxy-source-6909da3",
+          "version": "source-6909da3",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-blackbox-exporter",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-blackbox-exporter-source-6909da3",
+          "version": "source-6909da3",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-node-exporter",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-node-exporter-0.18.0",
+          "version": "0.18.0",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-metrics-server",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-metrics-server-0.3.1",
+          "version": "0.3.1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-amc",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-amc-source-6909da3",
+          "version": "source-6909da3",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-glusterfs-client",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-glusterfs-client-3.12.6",
+          "version": "3.12.6",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-go-pprof-toolkit",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-go-pprof-toolkit-source-6909da3",
+          "version": "source-6909da3",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-prometheus-access-bootstrap",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-prometheus-access-bootstrap-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "legacy_component_group",
+      "branchIdentityKnown": false,
+      "componentId": "component-autoscaling-rbac",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "release-autoscaling-rbac-k8s-1.17.5",
+          "version": "v1.17.5-r1",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ],
+            "ipFamily": [
+              "IPv4"
+            ],
+            "operatingSystem": [
+              "SUSE"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "unassignedBranches": [
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-openfuyao",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-openfuyao-r1",
+          "version": 1,
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-openfuyao-work-cluster",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-openfuyao-work-cluster-r1",
+          "version": 1,
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-openfuyao-work-nodes",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-openfuyao-work-nodes-r1",
+          "version": 1,
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-k8s-1.17.5",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-k8s-1.17.5-r1",
+          "version": 1,
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-k8s-1.17.5-extended",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-k8s-1.17.5-extended-r1",
+          "version": 1,
+          "scope": {}
+        }
+      ]
+    }
+  ],
+  "categories": [],
+  "options": [],
+  "unlinkedOptions": [],
+  "directoryParameters": [
+    {
+      "releaseId": "release-bke-cert-25.12",
+      "componentId": "component-bke-cert",
+      "version": "v25.12",
+      "parameter": "certOutputPath",
+      "provider": null,
+      "visibility": "internal",
+      "declarationOnly": true
+    },
+    {
+      "releaseId": "release-bke-master-25.12",
+      "componentId": "component-bke-master",
+      "version": "v25.12",
+      "parameter": "JQ_MEDPATH",
+      "provider": null,
+      "visibility": "internal",
+      "declarationOnly": true
+    },
+    {
+      "releaseId": "release-bke-master-25.12",
+      "componentId": "component-bke-master",
+      "version": "v25.12",
+      "parameter": "certOutputPath",
+      "provider": null,
+      "visibility": "internal",
+      "declarationOnly": true
+    },
+    {
+      "releaseId": "release-bke-nodes-25.12",
+      "componentId": "component-bke-nodes",
+      "version": "v25.12",
+      "parameter": "JQ_MEDPATH",
+      "provider": null,
+      "visibility": "internal",
+      "declarationOnly": true
+    },
+    {
+      "releaseId": "release-kubelet-1.17.5",
+      "componentId": "component-kubelet",
+      "version": "1.17.5",
+      "parameter": "kubeInstallRoot",
+      "provider": null,
+      "visibility": "public",
+      "declarationOnly": true
+    },
+    {
+      "releaseId": "release-kube-proxy-1.17.5",
+      "componentId": "component-kube-proxy",
+      "version": "1.17.5",
+      "parameter": "kubeRoot",
+      "provider": null,
+      "visibility": "internal",
+      "declarationOnly": true
+    }
+  ]
+}

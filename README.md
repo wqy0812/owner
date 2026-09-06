@@ -1,6 +1,8 @@
 # NewPlatform Demo
 
-> 当前是项目首个版本（V1），当前环境仅为测试环境，不是生产环境。V1 只接受当前数据库合同，不提供历史迁移、旧字段或双合同兼容；其他合同全部失败关闭。详见 [首版与环境策略](docs/version-policy.md)。
+当前执行契约：场景编译为单个 Ansible 作业，组件使用独立 Role。参见[组件编写规范](docs/component-role-authoring.md)、[场景执行](docs/scenario-role-job.md)及[独立作业包](docs/standalone-role-job.md)。新库只初始化身份和平台目录；旧作业快照不自动装入。
+
+> 当前是项目首个版本（V1），当前环境仅为测试环境，不是生产环境。V1 只接受当前数据库合同，不提供运行时历史迁移、旧字段或双合同兼容；明确授权的场景生命周期转换使用[离线工具](docs/scenario-lifecycle.md#保留历史的离线数据库转换)，其他合同全部失败关闭。详见 [首版与环境策略](docs/version-policy.md)。
 
 一个用于管理 Ansible 组件、场景和测试环境的本地演示平台。后端使用 Go + SQLite，前端使用 React + TypeScript，提供按角色切换的 Demo 身份，并支持受控的真实 `ansible-playbook` 执行。
 
@@ -21,7 +23,9 @@
 - [平台功能与核心概念](docs/platform-capabilities.md)
 - [项目结构说明](docs/project-structure.md)
 - [平台设计文档（后端为主）](docs/backend-design.md)
+- [Run 活动读取、场景保存基线与工作台查询](docs/run-activity-and-workbench.md)
 - [平台说明书](docs/platform-manual.md)
+- [场景分支、版本演进与业务验收](docs/scenario-lifecycle.md)
 - [测试环境资产目录](docs/demo-catalog.md)
 
 > 这是本地 Demo，不是生产控制面。身份切换不包含密码认证；凭据仅允许保存文件路径或环境变量引用。
@@ -54,12 +58,14 @@ make seed
 
 ```bash
 make check-docs
-make test
+make test ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook
 make test-e2e
 make build
 ```
 
-`make build` 先构建前端，再将静态资源嵌入 `bin/newplatform`。
+`make build` 先构建前端，再生成嵌入静态资源的 `bin/newplatform`、备份工具 `bin/clusterforge-backup` 和独立作业工具 `bin/clusterforge-job`。
+
+本轮交付与验证边界见 [2026-09-07 分批审核记录](docs/records/2026-09-07-batched-code-review.md)。
 
 ## 部署到 192.168.88.55 测试环境
 
@@ -85,11 +91,13 @@ make build
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260905-adaptation-run-archive`，包含组件发布线、参数归属治理、Run 证据索引、唯一 Release 工作区身份、执行证据锁定、Action 文件恢复日志、统一适配标签和 Run 归档/清理结构。服务只接受该精确合同。不提供运行时历史迁移；其他结构合同只能在备份后显式重建测试库。明确授权的业务重置可用 `database foundation-snapshot` 将旧 V1 账号与基础目录复制到当前 schema 的新库，不复制旧业务或 Run，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎，无需依赖主机的 Python SQLite 版本。
+当前合同为 `clusterforge-v1-20260906-workbench-run-observations`，包含固定分支适配范围、组件发布线、参数归属治理、Run 证据索引、唯一 Release 工作区身份、执行证据锁定、Action 文件恢复日志、统一适配标签和 Run 归档/清理结构。服务只接受该精确合同。不提供运行时历史迁移；其他结构合同在常规启动时失败关闭；历史场景生命周期转换不能替代本次分支范围确认；缺少分支范围或存在冲突时，须先[盘点并单独制定数据处理方案](docs/configuration-provenance-branch-ui-plan-2026-09-06.md#v1-数据库与既有记录)。明确授权的业务重置可用 `database foundation-snapshot` 将旧 V1 账号与基础目录复制到当前 schema 的新库，不复制旧业务或 Run，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎，无需依赖主机的 Python SQLite 版本。
 
 只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并生成经过完整性与外键检查的一致 SQLite 备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
-`make test` 会执行 Go/React 测试，并用测试运行时生成的临时 Playbook 验证真实 `ansible-playbook` 进程。该夹具只写入测试专用临时目录，不作为平台组件、场景或环境保存。
+`make test` 会执行部署脚本门禁、夹具边界和 Go/React 测试，并用明确指定的 `ANSIBLE_PLAYBOOK` 运行原生 Role 作业门禁。可单独执行 `make test-role-job ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook`。该夹具只写入测试专用临时目录，不作为平台业务目录保存。
+
+部署参数 `--migrate-user-experience` 的历史白名单不支持当前合同，不会自动迁入旧库。应先保留源数据、盘点分支范围并确定具体转换方案。
 
 ## 组件分层
 

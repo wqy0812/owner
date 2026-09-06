@@ -1,0 +1,114 @@
+[
+  {
+    "name": "305/component_owner/legacy",
+    "samples": 31,
+    "medianMicros": 27326.041,
+    "p95Micros": 28152.041,
+    "bytesPerRequest": 17658661
+  },
+  {
+    "name": "305/component_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 7804.667,
+    "p95Micros": 8112.584,
+    "bytesPerRequest": 2156748
+  },
+  {
+    "name": "305/scenario_owner/legacy",
+    "samples": 31,
+    "medianMicros": 4227.042,
+    "p95Micros": 4557.791,
+    "bytesPerRequest": 981701
+  },
+  {
+    "name": "305/scenario_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 597.292,
+    "p95Micros": 732.208,
+    "bytesPerRequest": 29582
+  },
+  {
+    "name": "305/environment_owner/legacy",
+    "samples": 31,
+    "medianMicros": 26292.167,
+    "p95Micros": 28417.042,
+    "bytesPerRequest": 17251800
+  },
+  {
+    "name": "305/environment_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 2516.166,
+    "p95Micros": 2862.416,
+    "bytesPerRequest": 642033
+  },
+  {
+    "name": "305/platform_admin/legacy",
+    "samples": 31,
+    "medianMicros": 1282.958,
+    "p95Micros": 1587.958,
+    "bytesPerRequest": 819720
+  },
+  {
+    "name": "305/platform_admin/dedicated",
+    "samples": 31,
+    "medianMicros": 70.416,
+    "p95Micros": 76.042,
+    "bytesPerRequest": 2310
+  },
+  {
+    "name": "3050/component_owner/legacy",
+    "samples": 31,
+    "medianMicros": 267077.958,
+    "p95Micros": 282097.5,
+    "bytesPerRequest": 177757018
+  },
+  {
+    "name": "3050/component_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 34111.417,
+    "p95Micros": 39866.625,
+    "bytesPerRequest": 2205241
+  },
+  {
+    "name": "3050/scenario_owner/legacy",
+    "samples": 31,
+    "medianMicros": 49017.334,
+    "p95Micros": 49699.625,
+    "bytesPerRequest": 13086717
+  },
+  {
+    "name": "3050/scenario_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 2979.25,
+    "p95Micros": 3402.083,
+    "bytesPerRequest": 28983
+  },
+  {
+    "name": "3050/environment_owner/legacy",
+    "samples": 31,
+    "medianMicros": 265669.292,
+    "p95Micros": 268405.167,
+    "bytesPerRequest": 176760274
+  },
+  {
+    "name": "3050/environment_owner/dedicated",
+    "samples": 31,
+    "medianMicros": 14569.792,
+    "p95Micros": 18531.833,
+    "bytesPerRequest": 707649
+  },
+  {
+    "name": "3050/platform_admin/legacy",
+    "samples": 31,
+    "medianMicros": 11991.791,
+    "p95Micros": 12410.375,
+    "bytesPerRequest": 9536927
+  },
+  {
+    "name": "3050/platform_admin/dedicated",
+    "samples": 31,
+    "medianMicros": 242.25,
+    "p95Micros": 251.875,
+    "bytesPerRequest": 2311
+  }
+]

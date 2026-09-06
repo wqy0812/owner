@@ -1,0 +1,416 @@
+{
+  "database": "/private/tmp/clusterforge-branch-browser-20260906/prior-fixture-snapshot.db",
+  "inspectedAt": "2026-09-06T14:47:08.008743+00:00",
+  "readOnly": true,
+  "offlineSnapshot": true,
+  "schema": [
+    {
+      "id": 1,
+      "version": "clusterforge-v1-20260906-user-experience"
+    }
+  ],
+  "branchConflicts": [
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-b250174ac4c7d380b91776ef",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-revision-84a7750e95a725c3c463972b",
+          "version": 2,
+          "scope": {}
+        },
+        {
+          "id": "browser-historical-revision",
+          "version": 1,
+          "scope": {
+            "architecture": [
+              "amd64"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "legacyComponentScopeDifferences": [],
+  "legacyComponentGroups": [],
+  "unassignedBranches": [
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-line",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-release",
+          "version": "1.0",
+          "scope": {
+            "architecture": [
+              "amd64"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-0-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-0-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-1-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-1-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-2-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-2-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-3-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-3-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-4-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-4-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-5-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-5-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-6-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-6-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "component_release_lines",
+      "branchIdentityKnown": true,
+      "branchId": "line-consumer-7-release",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "consumer-7-release",
+          "version": "1.0",
+          "scope": {}
+        }
+      ]
+    },
+    {
+      "kind": "scenarios",
+      "branchIdentityKnown": true,
+      "branchId": "scenario-b250174ac4c7d380b91776ef",
+      "branchScope": null,
+      "versions": [
+        {
+          "id": "scenario-revision-84a7750e95a725c3c463972b",
+          "version": 2,
+          "scope": {}
+        },
+        {
+          "id": "browser-historical-revision",
+          "version": 1,
+          "scope": {
+            "architecture": [
+              "amd64"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "categories": [
+    {
+      "id": "platform-category-architecture",
+      "technical_key": "architecture",
+      "label": "架构",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-operating-system",
+      "technical_key": "operatingSystem",
+      "label": "操作系统",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-operating-system-version",
+      "technical_key": "operatingSystemVersion",
+      "label": "操作系统版本",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-ip-family",
+      "technical_key": "ipFamily",
+      "label": "IP 协议族",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-hardware-profile",
+      "technical_key": "hardwareProfile",
+      "label": "硬件类型",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-deployment-mode",
+      "technical_key": "deploymentMode",
+      "label": "部署形态",
+      "parent_category_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-category-host-group",
+      "technical_key": "hostGroup",
+      "label": "主机组",
+      "parent_category_id": null,
+      "retired_at": null
+    }
+  ],
+  "options": [
+    {
+      "id": "platform-option-9ee4d1cf6bdd9dee7b47ef2b",
+      "category_id": "platform-category-architecture",
+      "technical_value": "amd64",
+      "label": "x86/amd64",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-604afdfeb5ae8827a3cbbed6",
+      "category_id": "platform-category-architecture",
+      "technical_value": "arm64",
+      "label": "ARM/arm64",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-b9be709b850a236f19d61970",
+      "category_id": "platform-category-operating-system",
+      "technical_value": "Ubuntu",
+      "label": "Ubuntu",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-7f42e12aa9e6fee03c9938e9",
+      "category_id": "platform-category-operating-system",
+      "technical_value": "SUSE",
+      "label": "SUSE",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-a684a01ecc9eb0ee313bb6ee",
+      "category_id": "platform-category-operating-system",
+      "technical_value": "Kylin",
+      "label": "Kylin",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-7b52a5875b4a12414f9c4bf1",
+      "category_id": "platform-category-operating-system-version",
+      "technical_value": "18.04",
+      "label": "18.04",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-ef8581b81ea66d3d6e459b3f",
+      "category_id": "platform-category-operating-system-version",
+      "technical_value": "20.04",
+      "label": "20.04",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-3580be89287eab06334a7824",
+      "category_id": "platform-category-operating-system-version",
+      "technical_value": "22.04",
+      "label": "22.04",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-47556dcbe0ab07465d23c870",
+      "category_id": "platform-category-operating-system-version",
+      "technical_value": "24.04",
+      "label": "24.04",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-cd6f30cc147fe786735ee03f",
+      "category_id": "platform-category-operating-system-version",
+      "technical_value": "18.04 / 24.04",
+      "label": "18.04 / 24.04（混合）",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-843e3ebb28a3c167a2f68509",
+      "category_id": "platform-category-ip-family",
+      "technical_value": "IPv4",
+      "label": "IPv4",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-77f22e31e984e07d7a37adde",
+      "category_id": "platform-category-ip-family",
+      "technical_value": "IPv6",
+      "label": "IPv6",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-0676e909968b344ec0ad7c67",
+      "category_id": "platform-category-hardware-profile",
+      "technical_value": "general",
+      "label": "通用主机",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-97f909153b72c2f961c8e93c",
+      "category_id": "platform-category-hardware-profile",
+      "technical_value": "gpu",
+      "label": "GPU",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-78dd352330368b4679543c57",
+      "category_id": "platform-category-hardware-profile",
+      "technical_value": "dpu",
+      "label": "DPU",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-962c7be97b83e441c757ecf6",
+      "category_id": "platform-category-hardware-profile",
+      "technical_value": "bms",
+      "label": "BMS",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-c8427d9cd05ce1316c306bf9",
+      "category_id": "platform-category-deployment-mode",
+      "technical_value": "standard",
+      "label": "standard",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-40aefa861a7fd7c46d2a879d",
+      "category_id": "platform-category-deployment-mode",
+      "technical_value": "serverless",
+      "label": "serverless",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-572df22eab1fc1dd1ca09a89",
+      "category_id": "platform-category-deployment-mode",
+      "technical_value": "ingress",
+      "label": "ingress",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-b5bd81719362a2cefbe00f63",
+      "category_id": "platform-category-host-group",
+      "technical_value": "all",
+      "label": "all",
+      "parent_option_id": null,
+      "retired_at": null
+    },
+    {
+      "id": "platform-option-test-nodes",
+      "category_id": "platform-category-host-group",
+      "technical_value": "test_nodes",
+      "label": "Test nodes",
+      "parent_option_id": null,
+      "retired_at": null
+    }
+  ],
+  "unlinkedOptions": [],
+  "directoryParameters": [
+    {
+      "releaseId": "scenario-release",
+      "componentId": "component-1",
+      "version": "1.0",
+      "parameter": "pki_directory_with_a_long_parameter_name_for_desktop_layout",
+      "provider": "component_owner",
+      "visibility": "public",
+      "declarationOnly": true
+    }
+  ]
+}

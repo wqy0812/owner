@@ -155,3 +155,10 @@ Git 只保存介质和镜像的不可变身份与来源位置，不保存大型�
 将整个目录复制到本机，分别核对 `SHA256SUMS`，验证两个数据库，然后在远端目录创建 `local-copy.verified` 标记（内容为已核对的 `SHA256SUMS` 文件 SHA-256）。通过 `scripts/deploy-test-88-55.sh --business-reset-dir /var/lib/clusterforge/business-reset-backups/<编号>` 部署当前工作区。该模式要求服务已停止、源数据库摘要未变化、备份通过业务/基础库验证；使用当前合同基础库初始化，固定 `NEWPLATFORM_SEED_PROFILE=identities`，防止启动时自动录入示例业务；失败回退原程序和无 Run 的业务库。它不调用完整数据库快照或 Git Catalog 快照。
 
 普通部署如明确停用 Git 备份可使用 `--disable-catalog-backup`；未指定时保留原有 Git 备份门禁。专用 Git 仓库删除必须在部署验收后按已确认的仓库路径及对应工作副本精确执行；该部署选项本身不删除仓库，也不清理旧备份、真实主机、文件站或镜像仓库。
+
+
+## 场景生命周期转换与验收工作区
+
+场景版本演进的结构升级使用 `database convert-scenario-lifecycle`，保留全部业务、Run 历史、旧摘要与恢复引用，并生成独立数据库和工作区。它与清空业务的 `foundation-snapshot`、排除历史的 `business-snapshot` 用途不同，不能互换。具体命令与校验边界见[场景生命周期](scenario-lifecycle.md#保留历史的离线数据库转换)。
+
+Catalog 包含场景分支来源、版本升级来源、验收参数合同，以及已发布/已废弃 Revision 的验收入口、任务、模板和辅助文件。导出和恢复均校验工作区树摘要及入口 SHA；恢复来源关系时延后外键校验到同一事务提交。Catalog 不恢复环境安装基线和成功正式 Run 证据。

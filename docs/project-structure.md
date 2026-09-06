@@ -2,7 +2,7 @@
 
 > 版本与环境：本文属于项目首个版本（V1）；当前环境是测试环境，不是生产环境。V1 只接受当前精确合同，不提供历史迁移或双合同兼容；其他合同失败关闭。统一规则见 [首版与环境策略](version-policy.md)。
 
-> 文档基线：2026-09-05 当前工作区代码（不代表测试环境已部署）
+> 文档基线：2026-09-07 当前工作区代码（不代表测试环境已部署）
 >
 > 适用对象：首次接触本仓库的前端、后端、测试和运维开发人员
 >
@@ -19,9 +19,11 @@ owner/
 ├── cmd/
 │   ├── server/                       # 主平台可执行程序入口
 │   ├── backup/                       # 自动备份与恢复 CLI 入口
+│   ├── clusterforge-job/              # 独立作业执行与恢复 CLI 入口
 │   └── fss/                          # 文件介质站可执行程序入口
 ├── internal/
-│   ├── ansible/                      # Ansible 安全执行与日志处理
+│   ├── ansible/                      # 密封原生 Role 作业、资源边界、执行与恢复
+│   ├── jobcli/                       # 独立作业命令、结果锁和回执
 │   ├── api/                          # HTTP API、会话和 SSE
 │   ├── backup/                       # SQLite/Git Catalog 快照、恢复与调度
 │   ├── deploydb/                     # 部署数据库检查、独立完整历史备份入口
@@ -29,7 +31,7 @@ owner/
 │   ├── testutil/                     # 合成测试数据辅助
 │   ├── domain/                       # 领域对象、枚举和领域校验
 │   ├── fss/                          # 文件介质站服务实现
-│   ├── seed/                         # 演示数据初始化
+│   ├── seed/                         # 身份和平台目录初始化
 │   ├── sshcheck/                     # 原生 Go SSH 环境检查
 │   ├── service/                      # 模块应用服务、发布协调、规划、调度与静态适配端口
 │   ├── store/                        # SQLite 首版结构合同与持久化
@@ -40,14 +42,15 @@ owner/
 │   ├── package.json                  # 前端依赖和命令
 │   └── pnpm-lock.yaml                # 前端依赖锁文件
 ├── examples/
-│   ├── ansible/                      # 平台允许引用的示例 Playbook 树
+│   ├── ansible/                      # 保留的历史 Playbook 参考源码
+│   ├── components/                   # 可导入的当前 Role 合同样板
 │   └── images/                       # 示例镜像构建资源
 ├── deploy/                           # systemd 和 Docker 部署配置
-├── scripts/                          # 测试、部署和离线打包脚本
+├── scripts/                          # 测试、受保护部署和只读盘点脚本
 ├── docs/                             # 文档中心、设计、操作、Demo 目录和分类规则
 ├── data/                             # 本地运行数据，默认不纳入版本控制
 ├── bin/                              # 本地构建产物，默认不纳入版本控制
-├── dist/                             # 离线分发产物
+├── dist/                             # 忽略的本地生成产物（旧 USB 包已清理）
 ├── Makefile                          # 常用开发、测试和构建入口
 ├── go.mod                            # Go 模块及依赖
 └── README.md                         # 项目简介与快速开始
@@ -65,7 +68,7 @@ internal/service
     ├── Catalog / Scenario / Environment / Execution / Read Model
     ├── ReleaseCoordinator ───── 联合发布事务
     ├── internal/store ───────── SQLite
-    ├── ActionRunner ──────────── ansible-playbook ── 目标主机
+    ├── JobBackend ────────────── ansible-playbook ── 目标主机
     ├── ImageDelivery ─────────── Docker CLI ──────── 镜像仓库
     └── ArtifactDelivery ──────── HTTP ────────────── FSS 文件介质站
 ```
@@ -73,7 +76,7 @@ internal/service
 核心运行原则：
 
 - API 层负责 HTTP 协议转换，不承载核心业务规则。
-- API 层不取得 Store/DB，只调用对应模块应用服务；`Platform` 是静态装配门面。
+- API 层不取得 Store/DB，只调用对应模块应用服务；`Platform` 仅负责装配、配置、访问器和生命周期，模块不反向依赖它。
 - Service 层是权限、状态转换、参数合同和调度规则的权威实现。
 - Scenario 只维护 Revision/DAG/测试状态，联合发布由 `ReleaseCoordinator` 完成。
 - Run 规划、创建、调度、执行、证据记录、回滚规划和审批各有独立对象与文件。
@@ -92,8 +95,8 @@ internal/service
 
 1. 读取 `.env` 和 `NEWPLATFORM_*` 配置。
 2. 打开 SQLite；空库初始化当前结构，已有库必须精确匹配当前合同，否则拒绝启动。
-3. 按 Seed Profile 初始化身份或演示数据。
-4. 创建 Ansible Runner、Go SSH 环境检查器、Platform Service 和 EventHub。
+3. 初始化身份和平台目录；不把历史部署快照注册为可执行组件。
+4. 创建 Ansible Runner，以 `RunnerDependencies` 注入工作区检查、运行时身份和作业后端，处理 Platform 构造错误；配置 Go SSH 环境检查器和 EventHub。
 5. 启动队列恢复、HTTP 服务和优雅退出流程。
 
 开发启动使用 `go run ./cmd/server`；测试环境的单二进制构建使用 `-tags embed` 将前端资源嵌入可执行文件。
@@ -147,11 +150,17 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `artifacts.go` | 组件介质与镜像登记、来源修复和移除 |
 | `image_builds.go` | 组件镜像构建与查询 |
 | `scenarios.go` | 场景、Revision、DAG 校验、测试和运行 |
+| `scenario_lifecycle.go` | 场景分支、新建版本、安装与升级执行预览、基线复核 |
+| `scenario_acceptance.go` | 场景验收合同、工作区文件和上传 |
+| `job_exports.go` | 场景作业预览与独立作业包下载 |
 | `environments.go` | Inventory、Facts、变量和 CredentialRef |
 | `platform_parameters.go` | 环境变量字段与目录写入审计 |
 | `environment_transfer.go` | 环境 Revision 导入、导出和差异预检 |
 | `catalog_repository.go` | 私有 Catalog 仓库接入、备份和空库恢复 |
 | `runs.go` | Run 查询、审批、取消和日志 |
+| `run_logs.go` | Run 诊断、轻量 activity 和日志包下载 |
+| `preparation.go` | 执行器健康与执行准备任务 |
+| `yaml_authoring.go` | YAML 编写检查与迁入预览 |
 | `events.go` | SSE 事件通道 |
 | `notifications.go` | 站内通知和审计查询 |
 
@@ -171,6 +180,31 @@ Service 是业务核心，主要职责包括：
 - 调用 Docker CLI 构建镜像。
 - 维护介质/镜像内容身份与可变来源；规划目标优先、来源回退和逐项交付选择，执行时由目标 FSS/Registry 拉取或平移。
 
+主要实现位置：
+
+| 文件 | 所属模块与边界 |
+| --- | --- |
+| `platform.go` / `module_dependencies.go` | 组合根、模块结构和实际使用的依赖接口 |
+| `runner_dependencies.go` | 三个显式 Runner 端口和装配期缺失检查 |
+| `components.go` / `release_drafts.go` / `release_review.go` | Catalog 业务实现和 Readiness 装饰 |
+| `scenarios.go` / `scenario_lifecycle.go` / `scenario_acceptance.go` | Scenario 定义、生命周期与验收工作区 |
+| `environments.go` / `identity.go` / `workbench.go` | Environment、Identity 与 ReadModel 实现 |
+| `release_coordinator.go` / `readiness*.go` | 发布协调与统一 ReleaseRules |
+| `run_creation.go` / `run_creator.go` | Execution 提交编排，以及 RunCreator 的快照/审批持久化 |
+| `plan_builder.go` / `rollback_planner.go` / `action_steps.go` | 锁定计划、回滚规划和动作展开 |
+| `workspace_verifier.go` / `playbook_workspace.go` | 冻结工作区验证和共享文件锁 |
+| `run_scheduler.go` / `execution_control.go` | FIFO Worker 与执行取消注册 |
+| `run_executor.go` / `role_jobs.go` | 执行编排和唯一的作业包构建/保存/执行路径 |
+| `execution_recording.go` / `lifecycle_recorder.go` | 阶段记录、回执、安装基线、终态和事件 |
+| `delivery_execution.go` / `delivery_planner.go` / `delivery_binding.go` | DeliveryService 交付规划、来源绑定和传输 |
+| `approval_service.go` / `run_archive.go` | 审批/取消、独立归档工作线程 |
+
+旧的 `application_services.go`、`application_commands.go`、`execution_components.go`
+转发层已删除。新增业务逻辑直接放入所属模块；依赖通过具名接口声明，组合根负责提供实现。
+模块测试可以只提供相关 Store/协作替身，不必构造完整 Platform；跨模块回归继续使用组合根。
+`module_boundaries_test.go` 防止业务对象回指 Platform、引入具体 Store、形成装配依赖环，
+或恢复运行时 Runner 能力判断。
+
 新增业务能力时，应优先把可测试的规则写在 Service 层，而不是放进 API Handler 或 React 页面。
 
 ### 3.6 `internal/store`
@@ -186,7 +220,9 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260905-adaptation-run-archive`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260906-workbench-run-observations`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
+
+分支范围由 `branch_scope.go` 统一规范化，在发布线及场景父对象创建时固定；Store 对版本写入复核范围，SQLite 触发器保护父对象范围。`contract_patch.go` 按编辑分区提交，`environment_credential_sources.go` 聚合有权限的凭据声明来源。`scripts/inspect-branch-scopes.py` 只读盘点旧数据；`examples/components/host-foundation-example.json` 与 `scripts/test-host-foundation-example.py` 提供目录归属样板及隔离验证。
 
 ### 3.7 `internal/ansible`
 
@@ -250,6 +286,7 @@ web/src/
 | `/components` | `ComponentsPage` | 组件、Release、Playbook、介质和镜像 |
 | `/scenarios` | `ScenariosPage` | DAG 编排、校验、测试和发布 |
 | `/environments` | `EnvironmentsPage` | Inventory、Facts、变量和凭据引用 |
+| `/reference-rebuild` | 重定向入口 | 跳转到组件目录，不执行数据重建 |
 | `/disaster-recovery` | `DisasterRecoveryPage` | Catalog 仓库接入、备份状态和空库恢复 |
 | `/runs` | `RunsPage` | 队列、审批、步骤和实时日志 |
 | `/notifications` | `NotificationsPage` | 发布影响通知 |
@@ -291,7 +328,6 @@ web/src/
 | `test-k8s1175-components.sh` | Kubernetes 1.17.5 组件作业门禁 |
 | `test-openfuyao-components.sh` | OpenFuyao/BKE 脱敏快照的语法、任务清单和失败关闭合同门禁 |
 | `check-docs.py` | 离线核对文档链接、API/页面覆盖、API 文件索引和数据库合同 |
-| `pack-usb.sh` | 生成离线 USB 分发包 |
 
 部署脚本中的主机地址和路径属于具体环境配置，复用前必须重新确认目标、活动 Run、备份位置和服务状态。
 
@@ -301,9 +337,8 @@ web/src/
 - `bin/`：本机构建的可执行文件。
 - `web/dist/`：Vite 构建输出。
 - `internal/ui/dist/`：准备嵌入 Go 二进制的前端输出。
-- `dist/`：离线分发包；当前仓库可能保存经过确认的发布快照。
 
-除明确更新分发包外，不要把运行数据库、临时工作区或本机构建产物当作源码修改。
+运行数据库、临时工作区和构建产物不纳入源码仓库；IDE 配置保留在本机并由 Git 忽略。
 
 ## 7. 常用开发命令
 
@@ -318,21 +353,21 @@ make dev
 make dev-api
 make dev-web
 
-# 初始化或重建 Demo 数据
+# 初始化身份与平台目录；reset-demo 会清空当前库
 make seed
 make reset-demo
 
 # Go、React 和 Ansible 门禁
-make test
+make test ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook
 
 # Playwright 端到端测试
 make test-e2e
 
-# 构建嵌入前端的主平台二进制
+# 构建主平台、备份工具和独立作业工具
 make build
 ```
 
-`make test` 中的真实 Ansible 测试依赖本机存在 `ansible-playbook`。缺少运行依赖时应将该门禁报告为“未验证”，不能视为通过。
+`make test` 中的真实 Ansible 测试要求通过 `ANSIBLE_PLAYBOOK` 明确指定可执行文件。缺少运行依赖时应将该门禁报告为“未验证”，不能视为通过。
 
 ## 8. 开发定位指南
 
@@ -346,7 +381,7 @@ make build
 | 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；首版测试库在备份后显式重建，不保留历史迁移代码 |
 | 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
-| 新增组件示例 | `examples/ansible`、`internal/seed` 及 Seed/组件脚本测试 |
+| 新增组件示例 | `examples/components`、导入合同与本地隔离验证；历史 `examples/ansible` 不自动进入业务目录 |
 | 新增前端页面 | `web/src/pages`、`App.tsx`、API Client、类型和测试 |
 | 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`delivery_adapters.go`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
 | 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、Delivery 适配器、Store/API 和组件页 |
