@@ -35,14 +35,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
+CLUSTERFORGE_LIVE_API_FIXTURE="$test_root/fixture" \
+  go test ./internal/api -run '^TestLiveAPIComponentFixture$' -count=1
 # Run the built binary directly: killing `go run` leaves its server child alive
 # with an unlinked database, and later tests can accidentally connect to it.
 go build -o "$test_root/server" ./cmd/server
 NEWPLATFORM_ADDR="$API_ADDRESS" \
-NEWPLATFORM_DB_PATH="$test_root/platform.db" \
+NEWPLATFORM_DB_PATH="$test_root/fixture/platform.db" \
 NEWPLATFORM_RUN_ROOT="$test_root/runs" \
 NEWPLATFORM_IMAGE_BUILD_ROOT="$test_root/image-builds" \
-NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS="$PROJECT_ROOT/examples/ansible" \
+NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS="$test_root/fixture/playbooks" \
 NEWPLATFORM_ANSIBLE_BIN="false" \
 NEWPLATFORM_SEED_PROFILE="catalog" \
 CLUSTERFORGE_BACKUP_ENABLED="false" \

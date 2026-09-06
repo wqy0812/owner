@@ -22,18 +22,42 @@ clusterforge_read_schema_contract() {
   "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database contract --db "$1"
 }
 
+# Initialization requires an explicit empty-database deployment. Even dangling
+# links or SQLite sidecars must block this path.
+clusterforge_assert_empty_database() {
+  local database="$1"
+  local service_state="$2"
+  local path
+  [[ "$service_state" == inactive ]] || {
+    echo "empty-database initialization requires an inactive service" >&2
+    return 1
+  }
+  for path in "$database" "${database}-wal" "${database}-shm" "${database}-journal"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      echo "empty-database initialization refuses existing path: $path" >&2
+      return 1
+    fi
+  done
+}
+
 clusterforge_assert_schema_policy() {
   local actual="$1"
   local expected="$2"
   local rebuild_v1_db="$3"
+  local migrate_user_experience="${4:-0}"
   if [[ "$actual" == "$expected" ]]; then
     return 0
   fi
   if [[ "$rebuild_v1_db" -eq 1 ]]; then
     return 0
   fi
+  if [[ "$migrate_user_experience" -eq 1 && "$expected" == clusterforge-v1-20260906-user-experience ]]; then
+    case "$actual" in
+      clusterforge-v1-20260905-scenario-lifecycle|clusterforge-v1-20260905-role-jobs) return 0 ;;
+    esac
+  fi
   echo "unsupported schema contract: $actual" >&2
-  echo "this build accepts only $expected; rerun with --rebuild-v1-db only after reviewing the destructive rebuild" >&2
+  echo "this build accepts only $expected; preserve the source and review an explicit conversion plan; a destructive rebuild requires separate authorization" >&2
   return 1
 }
 

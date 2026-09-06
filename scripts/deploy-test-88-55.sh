@@ -9,6 +9,8 @@ SSH_PORT="${CLUSTERFORGE_DEPLOY_SSH_PORT:-22}"
 SKIP_TESTS=false
 ALLOW_ACTIVE_RUNS=false
 REBUILD_V1_DB=false
+MIGRATE_USER_EXPERIENCE=false
+INITIALIZE_EMPTY_DB=false
 DISABLE_CATALOG_BACKUP=false
 BUSINESS_RESET_DIR=""
 
@@ -24,6 +26,8 @@ Options:
   --skip-tests             Skip Go, frontend, and whitespace checks
   --allow-active-runs      Restart even when active platform runs exist
   --rebuild-v1-db          Back up, then rebuild the incompatible V1 test database
+  --migrate-user-experience Legacy migration gate (unavailable for the current schema)
+  --initialize-empty-db    Initialize an absent database while the service is stopped
   --disable-catalog-backup Deploy with Git Catalog backup explicitly disabled
   --business-reset-dir DIR Use a verified, copied business-only reset bundle
   -h, --help               Show this help
@@ -71,8 +75,16 @@ while [[ $# -gt 0 ]]; do
       DISABLE_CATALOG_BACKUP=true
       shift 2
       ;;
+    --migrate-user-experience)
+      MIGRATE_USER_EXPERIENCE=true
+      shift
+      ;;
     --rebuild-v1-db)
       REBUILD_V1_DB=true
+      shift
+      ;;
+    --initialize-empty-db)
+      INITIALIZE_EMPTY_DB=true
       shift
       ;;
     -h|--help)
@@ -86,8 +98,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die "SSH port must be numeric"
+if [[ "$INITIALIZE_EMPTY_DB" == true && ( "$REBUILD_V1_DB" == true || "$ALLOW_ACTIVE_RUNS" == true ) ]]; then
+  die "--initialize-empty-db cannot be combined with rebuild or active-Run overrides"
+fi
 
-for command_name in git go make pnpm scp ssh; do
+if [[ "$MIGRATE_USER_EXPERIENCE" == true && ( "$REBUILD_V1_DB" == true || "$ALLOW_ACTIVE_RUNS" == true || "$INITIALIZE_EMPTY_DB" == true ) ]]; then
+  die "--migrate-user-experience cannot combine with reset, initialization, or active-Run overrides"
+fi
+
+for command_name in git go make pnpm python3 scp ssh; do
   command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
 done
 
@@ -105,6 +124,30 @@ fi
 
 cd "$PROJECT_ROOT"
 
+# Keep tests and delivered artifacts bound to the same checkout, including
+# untracked source files, while other tasks may be editing this workspace.
+workspace_checksum() {
+  python3 - <<'PY_WORKSPACE'
+import hashlib, os, pathlib, subprocess
+digest = hashlib.sha256()
+paths = subprocess.check_output(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+for name in sorted(set(paths.split(b'\0')) - {b''}):
+    path = pathlib.Path(os.fsdecode(name))
+    digest.update(name + b'\0')
+    if not path.exists() and not path.is_symlink():
+        digest.update(b'deleted\0')
+        continue
+    digest.update(str(path.lstat().st_mode).encode() + b'\0')
+    digest.update(os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes())
+    digest.update(b'\0')
+print(digest.hexdigest())
+PY_WORKSPACE
+}
+source_checksum="$(workspace_checksum)"
+assert_workspace_unchanged() {
+  [[ "$(workspace_checksum)" == "$source_checksum" ]] || die "workspace changed during deployment checks; rerun after edits finish"
+}
+
 echo "==> Building embedded frontend"
 make build-web
 ui_index_checksum="$(checksum_file web/dist/index.html)"
@@ -120,12 +163,14 @@ if [[ "$SKIP_TESTS" == false ]]; then
 else
   echo "==> Skipping deployment gates"
 fi
+assert_workspace_unchanged
 
 artifact="$(mktemp "${TMPDIR:-/tmp}/clusterforge-platform-linux-amd64.XXXXXX")"
 backup_artifact="$(mktemp "${TMPDIR:-/tmp}/clusterforge-backup-linux-amd64.XXXXXX")"
+job_artifact="$(mktemp "${TMPDIR:-/tmp}/clusterforge-job-linux-amd64.XXXXXX")"
 remote_helper_source="$PROJECT_ROOT/scripts/deploy-test-88-55-remote-lib.sh"
 cleanup_local() {
-  rm -f "$artifact" "$backup_artifact"
+  rm -f "$artifact" "$backup_artifact" "$job_artifact"
 }
 trap cleanup_local EXIT
 trap 'exit 130' INT
@@ -136,11 +181,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -tags embed -trimpath -o "$artifact" ./cmd/server
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -o "$backup_artifact" ./cmd/backup
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -o "$job_artifact" ./cmd/clusterforge-job
+assert_workspace_unchanged
 checksum="$(checksum_file "$artifact")"
 backup_checksum="$(checksum_file "$backup_artifact")"
+job_checksum="$(checksum_file "$job_artifact")"
 remote_helper_checksum="$(checksum_file "$remote_helper_source")"
 remote_artifact="/opt/clusterforge/platform/.clusterforge-platform.deploy-${checksum:0:12}-$$"
 remote_backup_artifact="/opt/clusterforge/platform/.clusterforge-backup.deploy-${backup_checksum:0:12}-$$"
+remote_job_artifact="/opt/clusterforge/platform/.clusterforge-job.deploy-${job_checksum:0:12}-$$"
 remote_helper="/opt/clusterforge/platform/.deploy-remote-lib-${remote_helper_checksum:0:12}-$$.sh"
 
 ssh_options=(-o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT")
@@ -148,9 +198,11 @@ scp_options=(-o BatchMode=yes -o ConnectTimeout=8 -P "$SSH_PORT")
 
 disable_catalog_backup=0
 [[ "$DISABLE_CATALOG_BACKUP" != true ]] || disable_catalog_backup=1
+initialize_empty_db=0
+[[ "$INITIALIZE_EMPTY_DB" != true ]] || initialize_empty_db=1
 
 echo "==> Checking remote deployment prerequisites on $TARGET"
-ssh "${ssh_options[@]}" "$TARGET" bash -s -- "$disable_catalog_backup" <<'PREFLIGHT'
+ssh "${ssh_options[@]}" "$TARGET" bash -s -- "$disable_catalog_backup" "$initialize_empty_db" <<'PREFLIGHT'
 set -eu
 for command_name in awk curl flock git grep install sha256sum systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -159,7 +211,14 @@ for command_name in awk curl flock git grep install sha256sum systemctl; do
   }
 done
 test -x /opt/clusterforge/platform/clusterforge-platform
-test -f /var/lib/clusterforge/platform.db
+if [ "$2" = 1 ]; then
+  test "$(systemctl show clusterforge-platform -p ActiveState --value)" = inactive
+  for path in /var/lib/clusterforge/platform.db{,-wal,-shm,-journal}; do
+    test ! -e "$path" && test ! -L "$path"
+  done
+else
+  test -f /var/lib/clusterforge/platform.db
+fi
 test -f /etc/clusterforge/platform.env
 backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {enabled=tolower($2)} END {print enabled}' /etc/clusterforge/platform.env)"
 if [ "$backup_enabled" != "true" ] && [ "$1" != 1 ]; then
@@ -176,7 +235,7 @@ command -v "$ansible_binary" >/dev/null 2>&1 || {
 }
 PREFLIGHT
 
-if [[ -n "$BUSINESS_RESET_DIR" ]]; then
+if [[ -n "$BUSINESS_RESET_DIR" || "$INITIALIZE_EMPTY_DB" == true ]]; then
   ssh "${ssh_options[@]}" "$TARGET" '! systemctl is-active --quiet clusterforge-platform'
 else
   ssh "${ssh_options[@]}" "$TARGET" 'systemctl is-active --quiet clusterforge-platform'
@@ -185,6 +244,7 @@ fi
 echo "==> Uploading artifact $checksum"
 scp "${scp_options[@]}" "$artifact" "$TARGET:$remote_artifact"
 scp "${scp_options[@]}" "$backup_artifact" "$TARGET:$remote_backup_artifact"
+scp "${scp_options[@]}" "$job_artifact" "$TARGET:$remote_job_artifact"
 scp "${scp_options[@]}" "$remote_helper_source" "$TARGET:$remote_helper"
 
 allow_active_runs=0
@@ -195,9 +255,14 @@ rebuild_v1_db=0
 if [[ "$REBUILD_V1_DB" == true ]]; then
   rebuild_v1_db=1
 fi
+migrate_user_experience=0
+[[ "$MIGRATE_USER_EXPERIENCE" != true ]] || migrate_user_experience=1
 echo "==> Activating release"
-ssh "${ssh_options[@]}" "$TARGET" bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" <<'REMOTE_SCRIPT'
+# SSH sends one command string through the remote shell. Quote every argument
+# so the optional empty reset directory does not shift the following arguments.
+printf -v activate_command '%q ' bash -s -- \
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" "$remote_job_artifact" "$job_checksum" "$initialize_empty_db" "$migrate_user_experience"
+ssh "${ssh_options[@]}" "$TARGET" "$activate_command" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
 staged_artifact="$1"
@@ -212,11 +277,16 @@ expected_ui_index_checksum="$9"
 expected_ui_version_checksum="${10}"
 disable_catalog_backup="${11}"
 business_reset_dir="${12}"
+staged_job_artifact="${13}"
+expected_job_checksum="${14}"
+initialize_empty_db="${15}"
+migrate_user_experience="${16}"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
+live_job_binary="/opt/clusterforge/platform/clusterforge-job"
 database="/var/lib/clusterforge/platform.db"
-expected_schema_contract="clusterforge-v1-20260905-adaptation-run-archive"
+expected_schema_contract="clusterforge-v1-20260906-workbench-run-observations"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
@@ -228,7 +298,7 @@ if systemctl is-enabled --quiet clusterforge-backup.timer 2>/dev/null; then
 fi
 
 cleanup_staged() {
-  rm -f "$staged_artifact" "$staged_backup_artifact" "$staged_remote_helper"
+  rm -f "$staged_artifact" "$staged_backup_artifact" "$staged_remote_helper" "$staged_job_artifact"
 }
 
 finish_failure() {
@@ -244,6 +314,11 @@ finish_failure() {
       else
         rm -f "$live_backup_binary"
       fi
+      if [[ -f "$backup_dir/clusterforge-job" ]]; then
+        install -m 0755 "$backup_dir/clusterforge-job" "$live_job_binary"
+      else
+        rm -f "$live_job_binary"
+      fi
       for unit in clusterforge-backup.service clusterforge-backup.timer; do
         if [[ -f "$backup_dir/$unit" ]]; then
           install -m 0644 "$backup_dir/$unit" "/etc/systemd/system/$unit"
@@ -257,10 +332,19 @@ finish_failure() {
       else
         systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
       fi
-      rm -f "${database}-wal" "${database}-shm"
-      cp -a "$backup_dir/platform.db" "$database"
+      if [[ -f "$backup_dir/platform.env" ]]; then
+        cp -a "$backup_dir/platform.env" /etc/clusterforge/platform.env
+      fi
+      rm -f "${database}-wal" "${database}-shm" "${database}-journal"
+      if [[ "$initialize_empty_db" -eq 1 ]]; then
+        rm -f "$database"
+      else
+        cp -a "$backup_dir/platform.db" "$database"
+      fi
     fi
-    systemctl start "$service_name"
+    if [[ "$initialize_empty_db" -ne 1 ]]; then
+      systemctl start "$service_name"
+    fi
     echo "deployment failed; the previous service state was restored" >&2
     journalctl -u "$service_name" -n 40 --no-pager >&2 || true
   else
@@ -295,6 +379,11 @@ actual_backup_checksum="$(sha256sum "$staged_backup_artifact" | awk '{print $1}'
   echo "backup artifact checksum mismatch" >&2
   exit 1
 }
+actual_job_checksum="$(sha256sum "$staged_job_artifact" | awk '{print $1}')"
+[[ "$actual_job_checksum" == "$expected_job_checksum" ]] || {
+  echo "job executable checksum mismatch" >&2
+  exit 1
+}
 actual_remote_helper_checksum="$(sha256sum "$staged_remote_helper" | awk '{print $1}')"
 [[ "$actual_remote_helper_checksum" == "$expected_remote_helper_checksum" ]] || {
   echo "remote deployment helper checksum mismatch" >&2
@@ -304,10 +393,14 @@ actual_remote_helper_checksum="$(sha256sum "$staged_remote_helper" | awk '{print
 source "$staged_remote_helper"
 CLUSTERFORGE_DEPLOY_DB_TOOL="$staged_backup_artifact"
 
-active_runs="$(clusterforge_list_active_runs "$database")"
-predeploy_schema_contract="$(clusterforge_read_schema_contract "$database")"
-clusterforge_assert_schema_policy "$predeploy_schema_contract" "$expected_schema_contract" "$rebuild_v1_db"
-clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
+if [[ "$initialize_empty_db" -eq 1 ]]; then
+  clusterforge_assert_empty_database "$database" "$(systemctl show "$service_name" -p ActiveState --value)"
+else
+  active_runs="$(clusterforge_list_active_runs "$database")"
+  predeploy_schema_contract="$(clusterforge_read_schema_contract "$database")"
+  clusterforge_assert_schema_policy "$predeploy_schema_contract" "$expected_schema_contract" "$rebuild_v1_db" "$migrate_user_experience"
+  clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
+fi
 
 platform_env_value() {
   awk -F= -v key="$1" '$1==key {sub(/^[^=]*=/,""); value=$0} END {print value}' /etc/clusterforge/platform.env
@@ -356,7 +449,7 @@ run_automation_snapshot() {
 predeploy_backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_selection_file="${predeploy_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
-if [[ "$predeploy_backup_enabled" == "true" && "$disable_catalog_backup" -eq 0 ]]; then
+if [[ "$initialize_empty_db" -eq 0 && "$predeploy_backup_enabled" == "true" && "$disable_catalog_backup" -eq 0 ]]; then
   clusterforge_snapshot_if_configured "$predeploy_selection_file" "$live_backup_binary" run_automation_snapshot before-deploy
 fi
 
@@ -382,26 +475,54 @@ else
   if [[ -x "$live_backup_binary" ]]; then
     install -m 0755 "$live_backup_binary" "$backup_dir/clusterforge-backup"
   fi
+  if [[ -x "$live_job_binary" ]]; then
+    install -m 0755 "$live_job_binary" "$backup_dir/clusterforge-job"
+  fi
   for unit in clusterforge-backup.service clusterforge-backup.timer; do
     if [[ -f "/etc/systemd/system/$unit" ]]; then
       cp -a "/etc/systemd/system/$unit" "$backup_dir/$unit"
     fi
   done
-  service_touched=1
-  systemctl stop "$service_name"
-  active_runs="$(clusterforge_list_active_runs "$database")"
-  clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
-  clusterforge_backup_sqlite "$database" "$backup_dir/platform.db"
-  archive_root="$(platform_env_value CLUSTERFORGE_RUN_ARCHIVE_DIR)"
-  if [[ -n "$archive_root" ]]; then
-    "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-snapshot --db "$database" --archive-dir "$archive_root" --target "$backup_dir/run-history"
-    "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-verify --db "$backup_dir/run-history"
+  if [[ "$initialize_empty_db" -eq 1 ]]; then
+    clusterforge_assert_empty_database "$database" "$(systemctl show "$service_name" -p ActiveState --value)"
+    touch "$backup_dir/database.absent"
+  else
+    service_touched=1
+    systemctl stop "$service_name"
+    active_runs="$(clusterforge_list_active_runs "$database")"
+    clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
+    clusterforge_backup_sqlite "$database" "$backup_dir/platform.db"
+    archive_root="$(platform_env_value CLUSTERFORGE_RUN_ARCHIVE_DIR)"
+    if [[ -n "$archive_root" ]]; then
+      "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-snapshot --db "$database" --archive-dir "$archive_root" --target "$backup_dir/run-history"
+      "$CLUSTERFORGE_DEPLOY_DB_TOOL" database history-verify --db "$backup_dir/run-history"
+    fi
   fi
   if [[ -f /etc/clusterforge/platform.env ]]; then
     cp -a /etc/clusterforge/platform.env "$backup_dir/platform.env"
   fi
   backup_ready=1
+  service_touched=1
+fi
 
+if [[ "$migrate_user_experience" -eq 1 && "$predeploy_schema_contract" != "$expected_schema_contract" ]]; then
+  # Conversion works on a new copy and proves old rows and workspace contents
+  # unchanged. It never reseeds, clears history, or synthesizes declarations.
+  migration_active_work="$("$CLUSTERFORGE_DEPLOY_DB_TOOL" database active-work --db "$database")"
+  [[ -z "$migration_active_work" ]] || { echo "active work blocks migration" >&2; exit 1; }
+  source_playbooks="$(platform_env_value NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS)"
+  [[ -n "$source_playbooks" && "$source_playbooks" == /* && "$source_playbooks" != *:* ]] || { echo "migration requires one absolute managed Playbook root" >&2; exit 1; }
+  migrated_playbooks="${source_playbooks%/}-ux-${stamp}"
+  migrated_database="$backup_dir/migrated-platform.db"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database convert-user-experience --db "$database" --target "$migrated_database" --source-playbook-root "$source_playbooks" --target-playbook-root "$migrated_playbooks"
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$migrated_database" --expected-contract "$expected_schema_contract"
+  rm -f "${database}-wal" "${database}-shm" "${database}-journal"
+  install -m 0600 "$migrated_database" "$database"
+  pending_config="$backup_dir/platform.env.migrated"
+  awk '!/^NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS=/' /etc/clusterforge/platform.env > "$pending_config"
+  printf '\nNEWPLATFORM_ALLOWED_ANSIBLE_ROOTS=%s\n' "$migrated_playbooks" >> "$pending_config"
+  install -m 0600 "$pending_config" /etc/clusterforge/platform.env
+  echo "preserved-history migration completed; workspace=$migrated_playbooks"
 fi
 
 if [[ "$disable_catalog_backup" -eq 1 ]]; then
@@ -416,6 +537,7 @@ fi
 
 install -m 0755 "$staged_artifact" "$live_binary"
 install -m 0755 "$staged_backup_artifact" "$live_backup_binary"
+install -m 0755 "$staged_job_artifact" "$live_job_binary"
 systemctl disable --now clusterforge-backup.timer >/dev/null 2>&1 || true
 systemctl stop clusterforge-backup.service >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/clusterforge-backup.timer /etc/systemd/system/clusterforge-backup.service

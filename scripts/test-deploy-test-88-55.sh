@@ -10,6 +10,67 @@ cleanup() {
   rm -rf "$test_root"
 }
 trap cleanup EXIT
+
+empty_database="$test_root/empty.db"
+clusterforge_assert_empty_database "$empty_database" inactive
+for state in active activating deactivating failed; do
+  if clusterforge_assert_empty_database "$empty_database" "$state" 2>/dev/null; then
+    echo "empty database accepted unsafe service state: $state" >&2
+    exit 1
+  fi
+done
+for path in "$empty_database" "${empty_database}-wal" "${empty_database}-shm" "${empty_database}-journal"; do
+  touch "$path"
+  if clusterforge_assert_empty_database "$empty_database" inactive 2>/dev/null; then
+    echo "empty database accepted existing SQLite file: $path" >&2
+    exit 1
+  fi
+  rm "$path"
+  ln -s "$test_root/nonexistent" "$path"
+  if clusterforge_assert_empty_database "$empty_database" inactive 2>/dev/null; then
+    echo "empty database accepted dangling symlink: $path" >&2
+    exit 1
+  fi
+  rm "$path"
+done
+for option in --rebuild-v1-db --allow-active-runs; do
+  if "$PROJECT_ROOT/scripts/deploy-test-88-55.sh" --initialize-empty-db "$option" >/dev/null 2>&1; then
+    echo "empty database accepted incompatible option: $option" >&2
+    exit 1
+  fi
+done
+
+script_contract="$(sed -n 's/^expected_schema_contract="\([^"]*\)"$/\1/p' "$PROJECT_ROOT/scripts/deploy-test-88-55.sh")"
+store_contract="$(sed -n 's/.*schemaContract = "\([^"]*\)"$/\1/p' "$PROJECT_ROOT/internal/store/schema.go")"
+[[ -n "$script_contract" && "$script_contract" == "$store_contract" ]] || {
+  echo "deployment and server schema contracts differ" >&2
+  exit 1
+}
+
+# Execute the script's real SSH command construction through a second shell.
+# An empty optional reset directory must retain argument positions 12 through 15.
+python3 - "$PROJECT_ROOT/scripts/deploy-test-88-55.sh" <<'PY_SSH_ARGS'
+import pathlib, shlex, subprocess, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+start = source.index("printf -v activate_command ")
+end = source.index('\nssh ', start)
+construction = source[start:end]
+names = ['remote_artifact', 'checksum', 'remote_backup_artifact', 'backup_checksum',
+         'remote_helper', 'remote_helper_checksum', 'allow_active_runs', 'rebuild_v1_db',
+         'ui_index_checksum', 'ui_version_checksum', 'disable_catalog_backup',
+         'BUSINESS_RESET_DIR', 'remote_job_artifact', 'job_checksum', 'initialize_empty_db', 'migrate_user_experience']
+for reset in ['', '/path with spaces/reset']:
+    values = ['value-' + str(i) for i in range(1, 17)]
+    values[0], values[11], values[14] = "/artifact with 'quotes'", reset, '1'
+    setup = '\n'.join(name+'='+shlex.quote(value) for name, value in zip(names, values))
+    body = setup+'\n'+construction+'\nbash -c "$activate_command" <<\'REMOTE_CHECK\'\n'
+    body += 'test "$#" -eq 16\n'
+    for index, value in enumerate(values, 1):
+        body += 'test "${'+str(index)+'}" = '+shlex.quote(value)+'\n'
+    body += 'REMOTE_CHECK\n'
+    subprocess.run(['bash', '-e'], input=body, text=True, check=True)
+PY_SSH_ARGS
+
 CLUSTERFORGE_DEPLOY_DB_TOOL="$test_root/database-tool"
 go build -o "$CLUSTERFORGE_DEPLOY_DB_TOOL" "$PROJECT_ROOT/cmd/backup"
 
@@ -228,3 +289,16 @@ assert stat.S_IMODE(p.stat().st_mode) == 0o600
 PY_RESET_ENV
 
 echo "deploy rebuild policy tests passed"
+
+clusterforge_assert_schema_policy clusterforge-v1-20260905-scenario-lifecycle clusterforge-v1-20260906-user-experience 0 1
+if clusterforge_assert_schema_policy clusterforge-v1-20260906-user-experience clusterforge-v1-20260906-branch-scope 0 1 2>/dev/null; then
+  echo "old migration flag accepted unassigned branch scopes" >&2; exit 1
+fi
+if clusterforge_assert_schema_policy unknown clusterforge-v1-20260906-user-experience 0 1 2>/dev/null; then
+  echo "migration accepted unknown schema" >&2; exit 1
+fi
+for incompatible in --rebuild-v1-db --allow-active-runs --initialize-empty-db; do
+ if "$PROJECT_ROOT/scripts/deploy-test-88-55.sh" --migrate-user-experience "$incompatible" >/dev/null 2>&1; then
+  echo "migration accepted incompatible option" >&2; exit 1
+ fi
+done
