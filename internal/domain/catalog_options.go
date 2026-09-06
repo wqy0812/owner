@@ -90,13 +90,11 @@ func (lookup CatalogOptions) ValidateConstraints(constraints map[string]any) err
 		if len(values) == 0 {
 			return fmt.Errorf("%w: empty environment constraint %q must be omitted", ErrInvalid, key)
 		}
-		seen := map[string]bool{}
 		for _, rawValue := range values {
 			value, ok := rawValue.(string)
-			if !ok || !PlatformCategoryHasValue(category, value) || seen[value] {
+			if !ok || !PlatformCategoryHasValue(category, value) {
 				return fmt.Errorf("%w: invalid option for environment dimension %q", ErrInvalid, key)
 			}
-			seen[value] = true
 		}
 	}
 	for key, category := range lookup.Dimensions {

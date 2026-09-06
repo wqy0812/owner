@@ -168,24 +168,25 @@ type ComponentRelease struct {
 	// Candidate is an explicit component-owner handoff. A ready Draft marked as
 	// a candidate may be composed and tested by a scenario owner, then released
 	// atomically with that scenario revision.
-	Candidate              bool                    `json:"candidate"`
-	Review                 ReleaseReview           `json:"review"`
-	PublicationGeneration  int64                   `json:"-"`
-	Readiness              ReleaseReadiness        `json:"readiness"`
-	RiskLevel              RiskLevel               `json:"riskLevel"`
-	EnvironmentConstraints map[string]any          `json:"environmentConstraints"`
-	Parameters             []ParameterDefinition   `json:"parameters"`
-	Dependencies           []ComponentDependency   `json:"dependencies"`
-	Actions                []ActionDefinition      `json:"actions"`
-	PlaybookFiles          []ComponentPlaybookFile `json:"playbookFiles,omitempty"`
-	PlaybookFileCount      int                     `json:"playbookFileCount"`
-	PlaybookTreeSHA256     string                  `json:"playbookTreeSha256"`
-	PlaybookWorkspaceRoot  string                  `json:"playbookWorkspaceRoot"`
-	Artifacts              []ComponentArtifact     `json:"artifacts"`
-	Images                 []ComponentImage        `json:"images"`
-	CreatedAt              time.Time               `json:"createdAt"`
-	ReleasedAt             *time.Time              `json:"releasedAt,omitempty"`
-	DeprecatedAt           *time.Time              `json:"deprecatedAt,omitempty"`
+	Candidate                     bool                    `json:"candidate"`
+	Review                        ReleaseReview           `json:"review"`
+	PublicationGeneration         int64                   `json:"definitionGeneration"`
+	ExpectedPublicationGeneration *int64                  `json:"-"`
+	Readiness                     ReleaseReadiness        `json:"readiness"`
+	RiskLevel                     RiskLevel               `json:"riskLevel"`
+	EnvironmentConstraints        map[string]any          `json:"environmentConstraints"`
+	Parameters                    []ParameterDefinition   `json:"parameters"`
+	Dependencies                  []ComponentDependency   `json:"dependencies"`
+	Actions                       []ActionDefinition      `json:"actions"`
+	PlaybookFiles                 []ComponentPlaybookFile `json:"playbookFiles,omitempty"`
+	PlaybookFileCount             int                     `json:"playbookFileCount"`
+	PlaybookTreeSHA256            string                  `json:"playbookTreeSha256"`
+	PlaybookWorkspaceRoot         string                  `json:"playbookWorkspaceRoot"`
+	Artifacts                     []ComponentArtifact     `json:"artifacts"`
+	Images                        []ComponentImage        `json:"images"`
+	CreatedAt                     time.Time               `json:"createdAt"`
+	ReleasedAt                    *time.Time              `json:"releasedAt,omitempty"`
+	DeprecatedAt                  *time.Time              `json:"deprecatedAt,omitempty"`
 }
 
 type ReleaseCompatibility string
@@ -201,6 +202,7 @@ func (value ReleaseCompatibility) Valid() bool {
 }
 
 type ComponentReleaseLine struct {
+	EnvironmentConstraints map[string]any     `json:"environmentConstraints"`
 	ID                     string             `json:"id"`
 	ComponentID            string             `json:"componentId"`
 	Name                   string             `json:"name"`
@@ -469,25 +471,26 @@ const (
 )
 
 type ActionDefinition struct {
-	ID                  string     `json:"id"`
-	ReleaseID           string     `json:"releaseId"`
-	Name                string     `json:"name"`
-	Kind                ActionKind `json:"kind"`
-	Playbook            string     `json:"playbook"`
-	PlaybookSHA256      string     `json:"-"`
-	PreCheckActionID    string     `json:"preCheckActionId"`
-	PostCheckActionID   string     `json:"postCheckActionId"`
-	Become              bool       `json:"become"`
-	GatherFacts         bool       `json:"gatherFacts"`
-	Tags                []string   `json:"tags"`
-	HostGroup           string     `json:"hostGroup"`
-	RequiredCredentials []string   `json:"requiredCredentials"`
-	TimeoutSeconds      int        `json:"timeoutSeconds"`
-	RiskLevel           RiskLevel  `json:"riskLevel"`
-	Destructive         bool       `json:"destructive"`
-	Idempotent          bool       `json:"idempotent"`
-	FromReleaseID       string     `json:"fromReleaseId,omitempty"`
-	ToReleaseID         string     `json:"toReleaseId,omitempty"`
+	ResourceContract    *ResourceContract `json:"resourceContract,omitempty"`
+	ID                  string            `json:"id"`
+	ReleaseID           string            `json:"releaseId"`
+	Name                string            `json:"name"`
+	Kind                ActionKind        `json:"kind"`
+	Playbook            string            `json:"playbook"`
+	PlaybookSHA256      string            `json:"-"`
+	PreCheckActionID    string            `json:"preCheckActionId"`
+	PostCheckActionID   string            `json:"postCheckActionId"`
+	Become              bool              `json:"become"`
+	GatherFacts         bool              `json:"gatherFacts"`
+	Tags                []string          `json:"tags"`
+	HostGroup           string            `json:"hostGroup"`
+	RequiredCredentials []string          `json:"requiredCredentials"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	RiskLevel           RiskLevel         `json:"riskLevel"`
+	Destructive         bool              `json:"destructive"`
+	Idempotent          bool              `json:"idempotent"`
+	FromReleaseID       string            `json:"fromReleaseId,omitempty"`
+	ToReleaseID         string            `json:"toReleaseId,omitempty"`
 }
 
 // ComponentPlaybookFile is one file in a Release-scoped Ansible workspace.
@@ -526,18 +529,19 @@ const (
 )
 
 type Scenario struct {
-	ForkedFromScenarioID string             `json:"forkedFromScenarioId,omitempty"`
-	ForkedFromRevisionID string             `json:"forkedFromRevisionId,omitempty"`
-	ForkedFromDigest     string             `json:"forkedFromDigest,omitempty"`
-	ID                   string             `json:"id"`
-	Slug                 string             `json:"slug"`
-	Name                 string             `json:"name"`
-	Description          string             `json:"description"`
-	OwnerID              string             `json:"ownerId"`
-	CurrentRevisionID    string             `json:"currentRevisionId,omitempty"`
-	CreatedAt            time.Time          `json:"createdAt"`
-	UpdatedAt            time.Time          `json:"updatedAt"`
-	Revisions            []ScenarioRevision `json:"revisions,omitempty"`
+	EnvironmentConstraints map[string]any     `json:"environmentConstraints"`
+	ForkedFromScenarioID   string             `json:"forkedFromScenarioId,omitempty"`
+	ForkedFromRevisionID   string             `json:"forkedFromRevisionId,omitempty"`
+	ForkedFromDigest       string             `json:"forkedFromDigest,omitempty"`
+	ID                     string             `json:"id"`
+	Slug                   string             `json:"slug"`
+	Name                   string             `json:"name"`
+	Description            string             `json:"description"`
+	OwnerID                string             `json:"ownerId"`
+	CurrentRevisionID      string             `json:"currentRevisionId,omitempty"`
+	CreatedAt              time.Time          `json:"createdAt"`
+	UpdatedAt              time.Time          `json:"updatedAt"`
+	Revisions              []ScenarioRevision `json:"revisions,omitempty"`
 }
 
 type ScenarioRevision struct {

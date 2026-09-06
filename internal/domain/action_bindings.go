@@ -52,6 +52,11 @@ func ValidateActionBindings(release ComponentRelease, complete bool) error {
 			continue
 		}
 		for _, binding := range []struct{ name, id string }{{"pre", a.PreCheckActionID}, {"post", a.PostCheckActionID}} {
+			// Rollback may omit its precheck. An omitted postcheck is resolved
+			// from the actual source action when the recovery plan is locked.
+			if a.Kind == ActionRollback && binding.id == "" {
+				continue
+			}
 			if binding.id == "" && !complete {
 				continue
 			}
@@ -62,6 +67,25 @@ func ValidateActionBindings(release ComponentRelease, complete bool) error {
 		}
 	}
 	return nil
+}
+
+// RollbackPostCheck resolves the default using the action being undone, never
+// the latest release or an arbitrary install action. The caller locks this
+// identity together with the source parameters and workspace digest.
+func RollbackPostCheck(release ComponentRelease, rollback ActionDefinition, sourceActionID string) (ActionDefinition, error) {
+	id := rollback.PostCheckActionID
+	if id == "" {
+		source, ok := release.ActionByID(sourceActionID)
+		if !ok || (source.Kind != ActionInstall && source.Kind != ActionUpgrade && source.Kind != ActionConfigure) {
+			return ActionDefinition{}, fmt.Errorf("%w: 回滚后检查缺少唯一来源动作，请选择专用回滚后检查", ErrConflict)
+		}
+		id = source.PreCheckActionID
+	}
+	check, ok := release.ActionByID(id)
+	if !ok || check.Kind != ActionCheck {
+		return ActionDefinition{}, fmt.Errorf("%w: 回滚后检查必须引用同版本的检查 YAML", ErrConflict)
+	}
+	return check, nil
 }
 
 func (r ComponentRelease) ActionByID(id string) (ActionDefinition, bool) {

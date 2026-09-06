@@ -30,24 +30,25 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		ParameterMappings   []ParameterMapping `json:"parameterMappings"`
 	}
 	type actionSpec struct {
-		ID                  string     `json:"id"`
-		PreCheckActionID    string     `json:"preCheckActionId"`
-		PostCheckActionID   string     `json:"postCheckActionId"`
-		Become              bool       `json:"become"`
-		GatherFacts         bool       `json:"gatherFacts"`
-		Name                string     `json:"name"`
-		Kind                ActionKind `json:"kind"`
-		Playbook            string     `json:"playbook"`
-		PlaybookSHA256      string     `json:"playbookSha256"`
-		Tags                []string   `json:"tags"`
-		HostGroup           string     `json:"hostGroup"`
-		RequiredCredentials []string   `json:"requiredCredentials"`
-		TimeoutSeconds      int        `json:"timeoutSeconds"`
-		RiskLevel           RiskLevel  `json:"riskLevel"`
-		Destructive         bool       `json:"destructive"`
-		Idempotent          bool       `json:"idempotent"`
-		FromReleaseID       string     `json:"fromReleaseId"`
-		ToReleaseID         string     `json:"toReleaseId"`
+		ResourceContract    *ResourceContract `json:"resourceContract,omitempty"`
+		ID                  string            `json:"id"`
+		PreCheckActionID    string            `json:"preCheckActionId"`
+		PostCheckActionID   string            `json:"postCheckActionId"`
+		Become              bool              `json:"become"`
+		GatherFacts         bool              `json:"gatherFacts"`
+		Name                string            `json:"name"`
+		Kind                ActionKind        `json:"kind"`
+		Playbook            string            `json:"playbook"`
+		PlaybookSHA256      string            `json:"playbookSha256"`
+		Tags                []string          `json:"tags"`
+		HostGroup           string            `json:"hostGroup"`
+		RequiredCredentials []string          `json:"requiredCredentials"`
+		TimeoutSeconds      int               `json:"timeoutSeconds"`
+		RiskLevel           RiskLevel         `json:"riskLevel"`
+		Destructive         bool              `json:"destructive"`
+		Idempotent          bool              `json:"idempotent"`
+		FromReleaseID       string            `json:"fromReleaseId"`
+		ToReleaseID         string            `json:"toReleaseId"`
 	}
 	type playbookFileSpec struct {
 		Path      string `json:"path"`
@@ -95,7 +96,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		})
 	}
 	for _, action := range release.Actions {
-		spec.Actions = append(spec.Actions, actionSpec{
+		spec.Actions = append(spec.Actions, actionSpec{ResourceContract: action.ResourceContract,
 			ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, GatherFacts: action.GatherFacts, Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
 			HostGroup:           action.HostGroup,
 			RequiredCredentials: action.RequiredCredentials,
