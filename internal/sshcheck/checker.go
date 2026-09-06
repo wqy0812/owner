@@ -60,13 +60,18 @@ func DefaultKnownHostsPath() string {
 }
 
 func (c *Checker) Check(ctx context.Context, request Request) error {
+	_, err := c.run(ctx, request, "true")
+	return err
+}
+
+func (c *Checker) run(ctx context.Context, request Request, command string) ([]byte, error) {
 	callback, err := knownhosts.New(request.KnownHostsPath)
 	if err != nil {
-		return &CheckError{Kind: ErrorKnownHosts, Err: fmt.Errorf("load known_hosts: %w", err)}
+		return nil, &CheckError{Kind: ErrorKnownHosts, Err: fmt.Errorf("load known_hosts: %w", err)}
 	}
 	auth, err := authenticationMethods(request)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dial := c.DialContext
 	if dial == nil {
@@ -78,7 +83,7 @@ func (c *Checker) Check(ctx context.Context, request Request) error {
 		if timedOut(ctx, err) {
 			kind = ErrorTimeout
 		}
-		return &CheckError{Kind: kind, Err: fmt.Errorf("dial SSH endpoint: %w", err)}
+		return nil, &CheckError{Kind: kind, Err: fmt.Errorf("dial SSH endpoint: %w", err)}
 	}
 	defer connection.Close()
 
@@ -87,7 +92,7 @@ func (c *Checker) Check(ctx context.Context, request Request) error {
 		deadline = contextDeadline
 	}
 	if err := connection.SetDeadline(deadline); err != nil {
-		return &CheckError{Kind: ErrorNetwork, Err: fmt.Errorf("set SSH deadline: %w", err)}
+		return nil, &CheckError{Kind: ErrorNetwork, Err: fmt.Errorf("set SSH deadline: %w", err)}
 	}
 	stopCancel := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCancel()
@@ -98,7 +103,7 @@ func (c *Checker) Check(ctx context.Context, request Request) error {
 		HostKeyCallback: callback,
 	})
 	if err != nil {
-		return classifyHandshakeError(ctx, err)
+		return nil, classifyHandshakeError(ctx, err)
 	}
 	client := ssh.NewClient(clientConnection, channels, requests)
 	defer client.Close()
@@ -106,18 +111,20 @@ func (c *Checker) Check(ctx context.Context, request Request) error {
 	session, err := client.NewSession()
 	if err != nil {
 		if timedOut(ctx, err) {
-			return &CheckError{Kind: ErrorTimeout, Err: fmt.Errorf("open SSH session: %w", err)}
+			return nil, &CheckError{Kind: ErrorTimeout, Err: fmt.Errorf("open SSH session: %w", err)}
 		}
-		return &CheckError{Kind: ErrorHandshake, Err: fmt.Errorf("open SSH session: %w", err)}
+		return nil, &CheckError{Kind: ErrorHandshake, Err: fmt.Errorf("open SSH session: %w", err)}
 	}
 	defer session.Close()
-	if err := session.Run("true"); err != nil {
+	output := &probeBuffer{}
+	session.Stdout, session.Stderr = output, output
+	if err := session.Run(command); err != nil {
 		if timedOut(ctx, err) {
-			return &CheckError{Kind: ErrorTimeout, Err: fmt.Errorf("run SSH check command: %w", err)}
+			return nil, &CheckError{Kind: ErrorTimeout, Err: fmt.Errorf("run SSH check command: %w", err)}
 		}
-		return &CheckError{Kind: ErrorCommand, Err: fmt.Errorf("run SSH check command: %w", err)}
+		return output.data, &CheckError{Kind: ErrorCommand, Err: fmt.Errorf("run SSH check command: %w", err)}
 	}
-	return nil
+	return output.data, nil
 }
 
 func authenticationMethods(request Request) ([]ssh.AuthMethod, error) {
