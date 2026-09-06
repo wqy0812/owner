@@ -23,7 +23,7 @@ import { LoadingBlock } from './Primitives';
 const links = [
   { to: '/', label: '我的工作', icon: CircleGauge, end: true },
   { to: '/components', label: '组件', icon: Boxes },
-  { to: '/scenarios', label: '场景', icon: Network },
+  { to: '/scenarios', label: '集群', icon: Network },
   { to: '/environments', label: '环境', icon: CloudCog },
   { to: '/disaster-recovery', label: '灾备目录', icon: GitBranch, environmentOwnerOnly: true },
   { to: '/runs', label: '运行', icon: PlayCircle },

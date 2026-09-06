@@ -14,6 +14,7 @@ export function useApiData<T>(
   loader: (signal: AbortSignal) => Promise<T>,
   dependencies: readonly unknown[] = [],
   refreshTargets: RefreshTarget | readonly RefreshTarget[] = 'components',
+  shouldPoll?: (data: T) => boolean,
 ) {
   const { refreshTokens } = useApp();
   const targets: readonly RefreshTarget[] = typeof refreshTargets === 'string' ? [refreshTargets] : refreshTargets;
@@ -83,6 +84,17 @@ export function useApiData<T>(
       void reload();
     }
   }, [reload, refreshToken]);
+
+  const polling = data !== undefined && Boolean(shouldPoll?.(data));
+  useEffect(() => {
+    if (!polling) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      if (inFlight.current && !controller.current?.signal.aborted) refreshQueued.current = true;
+      else void reload();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [polling, reload]);
 
   const setData = useCallback((update: SetStateAction<T | undefined>) => {
     setStoredData((current) => {

@@ -8,6 +8,47 @@ function response(body: string, contentType: string, status = 200) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('API response contract', () => {
+  it('accepts Run activity logs without a step and keeps the waiting event typed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: {
+      runId: 'r', status: 'running', nextAfterId: 5, hasMore: false, archived: false,
+      logs: [{ id: 5, runId: 'r', stream: 'system', message: 'Starting', createdAt: '' }],
+      waitingObservations: [{ kind: 'waiting', stepId: 's', host: 'h', task: 'Ready', result: { waiting: { observed: 'Pending', attempt: 1 } } }],
+    } }), 'application/json')));
+    await expect(api.runActivity('r')).resolves.toMatchObject({ logs: [{ stepId: '' }], waitingObservations: [{ stepId: 's', host: 'h', waiting: { attempt: 1 } }] });
+  });
+
+  it.each([
+    { nextAfterId: 2, logs: [{ id: 3, runId: 'r' }] },
+    { nextAfterId: 2, logs: [{ id: 2, runId: 'other' }] },
+    { nextAfterId: 2, logs: [{ id: 2, runId: 'r' }, { id: 2, runId: 'r' }] },
+    { nextAfterId: 1, logs: [], hasMore: true },
+  ])('rejects an inconsistent Run activity cursor: %j', async invalid => {
+    const value = { runId: 'r', status: 'running', hasMore: false, archived: false, waitingObservations: [], ...invalid,
+      logs: invalid.logs.map(log => ({ stream: 'stdout', message: 'line', createdAt: '', ...log })) };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: value }), 'application/json')));
+    await expect(api.runActivity('r', 1)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+  it('previews a scenario job containing component checks and business acceptance', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: {
+      environmentId: 'env', environmentRevisionId: 'env-r1', destructive: false, requiresApproval: false, planDigest: 'locked', deliveryRequirements: [],
+      steps: [{ order: 1, name: 'Business API', phase: 'acceptance', stage: 'acceptance', sourceType: 'scenario_acceptance', actionId: 'business', componentId: '', componentName: '', releaseId: '', releaseVersion: '', action: 'acceptance', playbook: 'tasks/acceptance/business.yml', needsApproval: false }],
+    } }), 'application/json')));
+    await expect(api.previewScenarioJob('revision', 'env')).resolves.toMatchObject({ steps: [{ name: 'Business API', action: 'acceptance', phase: 'acceptance' }] });
+  });
+  it('accepts an aggregate scenario Run summary without a single component action', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ items: [{
+      id: 'scenario-upgrade', kind: 'scenario_test', name: 'Scenario r2', status: 'succeeded', action: '',
+      environmentId: 'env', environmentName: 'Test', createdAt: '2026-09-05T00:00:00Z',
+    }], page: 1, pageSize: 50, total: 1 }), 'application/json')));
+    await expect(api.runs()).resolves.toMatchObject({ items: [{ id: 'scenario-upgrade', action: undefined }], total: 1 });
+  });
+  it('preserves lifecycle mode and business acceptance identity in Run details', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: {
+      id: 'scenario-upgrade', kind: 'scenario_test', status: 'succeeded', environmentId: 'env', executionMode: 'upgrade', sourceRevisionId: 'r1', baselineRunId: 'formal-in-this-env',
+      steps: [{ id: 'acceptance-step', name: 'Business', status: 'succeeded', action: 'acceptance', sourceType: 'scenario_acceptance', stage: 'acceptance', acceptanceJobId: 'business', scenarioRevisionId: 'r2' }],
+    } }), 'application/json')));
+    await expect(api.run('scenario-upgrade')).resolves.toMatchObject({ executionMode: 'upgrade', baselineRunId: 'formal-in-this-env', steps: [{ sourceType: 'scenario_acceptance', stage: 'acceptance', acceptanceJobId: 'business', action: 'acceptance' }] });
+  });
   it('accepts the simplified Component DTO with tags and derived Release readiness', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ items: [{
       id: 'component-1', name: 'Runtime', slug: 'runtime', ownerId: 'owner-1', layer: 'runtime_state', tags: ['runtime'],

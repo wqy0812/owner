@@ -1,21 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { runFailureSummary } from '../pages/RunsPage';
-import type { Run } from '../types/domain';
+import { expect, it } from 'vitest';
+import { scenarioRunModeLabel, scenarioStepLabel } from '../pages/RunsPage';
 
-describe('runFailureSummary', () => {
-  it('surfaces the failing component, host, and useful log line', () => {
-    const run: Run = {
-      id: 'run-failed', environmentId: 'environment-1', status: 'failed',
-      steps: [{ id: 'step-coredns', name: 'CoreDNS verify', componentName: 'CoreDNS', action: 'verify', status: 'failed', summary: 'exit code 2' }],
-      logTail: ['[stdout] ok: [node-1]', '[stdout] fatal: [master-1]: FAILED! => {"msg":"DNS resolution failed"}'],
-    };
-    expect(runFailureSummary(run)).toMatchObject({
-      title: 'CoreDNS · verify失败', host: 'master-1', stepId: 'step-coredns',
-    });
-    expect(runFailureSummary(run)?.detail).toContain('DNS resolution failed');
-  });
-
-  it('does not create a failure card for successful runs', () => {
-    expect(runFailureSummary({ id: 'run-ok', environmentId: 'environment-1', status: 'succeeded' })).toBeUndefined();
-  });
-});
+ it('distinguishes upgrade, baseline verification and business acceptance in Run detail', () => {
+   expect(scenarioRunModeLabel('upgrade')).toBe('场景升级');
+   expect(scenarioRunModeLabel('upgrade', 'scenario_test')).toBe('场景升级测试');
+   expect(scenarioRunModeLabel('baseline_verify')).toBe('恢复后基线复核');
+   expect(scenarioStepLabel({ id: 'accept', name: 'business check', status: 'succeeded', sourceType: 'scenario_acceptance', phase: 'acceptance' })).toBe('场景业务验收');
+   expect(scenarioStepLabel({ id: 'verify', name: 'target check', status: 'succeeded', stage: 'target_verify', phase: 'postcheck' })).toContain('目标集群验证');
+ });

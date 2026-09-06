@@ -1,3 +1,4 @@
+import { activeWorkbench } from '../hooks/activeWork';
 import { AlertTriangle, ArrowRight, BellRing, Boxes, CheckCircle2, Clock3, CloudCog, Network, PlayCircle, ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -44,7 +45,7 @@ function WorkCard({ item, onReview }: { item: WorkItem; onReview?: (releaseId: s
 export function DashboardPage() {
   const { user, signalRefresh } = useApp();
   const [reviewReleaseId, setReviewReleaseId] = useState('');
-  const query = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
+  const query = useApiData((signal) => api.workbench(signal), [user.id], 'workbench', activeWorkbench);
   if (!query.data && !query.error) return <LoadingBlock label="正在整理我的交付待办…" />;
   if (query.error && !query.data) return <ErrorBlock message={query.error} onRetry={() => void query.reload()} />;
   const workbench = query.data!;
@@ -81,6 +82,6 @@ export function DashboardPage() {
         <Link to="/environments"><CloudCog size={19} /><div><strong>{workbench.assets.environments}</strong><span>环境</span></div><ArrowRight size={15} /></Link>
       </div>
     </section> : null}
-    {reviewReleaseId ? <ReleaseReviewModal releaseId={reviewReleaseId} onClose={() => setReviewReleaseId('')} onDecided={async () => { setReviewReleaseId(''); signalRefresh('components'); await query.reload(); }} /> : null}
+    {reviewReleaseId ? <ReleaseReviewModal releaseId={reviewReleaseId} onClose={() => setReviewReleaseId('')} onDecided={async () => { signalRefresh('components'); await query.reload(); }} /> : null}
   </div>;
 }

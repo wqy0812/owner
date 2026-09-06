@@ -8,7 +8,7 @@ export interface ScenarioGraphNode {
 }
 
 export interface ScenarioGraphIssue {
-  code: 'invalid_edge_kind' | 'missing_dependency_node' | 'dependency_source_required' | 'dependency_source_invalid' | 'mixed_lifecycle_direction' | 'sequence_conflicts_dependency' | 'sequence_redundant';
+  code: 'contract_unavailable' | 'invalid_edge_kind' | 'missing_dependency_node' | 'dependency_source_required' | 'dependency_source_invalid' | 'mixed_lifecycle_direction' | 'sequence_conflicts_dependency' | 'sequence_redundant';
   nodeId: string;
   dependencyId: string;
   message: string;
@@ -44,6 +44,13 @@ export function reconcileScenarioGraph(
     ...node,
     data: { ...node.data, dependencySources: { ...(node.data.dependencySources ?? {}) } },
   }));
+  // Missing detail is not an empty contract. Keep the persisted graph intact
+  // until every referenced contract can participate in normalization.
+  const unavailable = nodes.filter(node => !releases.has(node.data.releaseId));
+  if (unavailable.length) return {
+    nodes, edges: inputEdges.map(edge => ({ ...edge })),
+    issues: unavailable.map(node => ({ code: 'contract_unavailable' as const, nodeId: node.id, dependencyId: '', message: node.data.contractAvailability === 'missing' ? '组件版本不存在，请联系负责人核对' : node.data.contractAvailability === 'unshared' ? '组件尚未共享，详细合同暂不可用' : '组件合同尚未加载完成' })),
+  };
   const dependencyEdges: ScenarioEdge[] = [];
   const dependencyPairs = new Set<string>();
   const issues: ScenarioGraphIssue[] = [];
@@ -142,4 +149,39 @@ export function isScenarioNodeReachable(source: string, target: string, edges: A
     queue.push(...(forward.get(current) ?? []));
   }
   return false;
+}
+
+// Inspect the first undecided frontier without choosing among its nodes.
+export function scenarioExecutionOrderNodes(nodes: Array<{ id: string }>, edges: Array<Pick<ScenarioEdge, 'source' | 'target'>>) {
+  const indegree = new Map(nodes.map(node => [node.id, 0]));
+  const next = new Map<string, string[]>();
+  if (indegree.size !== nodes.length) return [];
+  for (const edge of edges) {
+    if (!indegree.has(edge.source) || !indegree.has(edge.target)) return [];
+    indegree.set(edge.target, indegree.get(edge.target)! + 1);
+    next.set(edge.source, [...(next.get(edge.source) ?? []), edge.target]);
+  }
+  // Detect cycles before reporting ordering choices.
+  const remaining = new Map(indegree);
+  const check = nodes.filter(node => remaining.get(node.id) === 0).map(node => node.id);
+  let visited = 0;
+  while (check.length) {
+    const id = check.pop()!;
+    visited++;
+    for (const target of next.get(id) ?? []) {
+      remaining.set(target, remaining.get(target)! - 1);
+      if (remaining.get(target) === 0) check.push(target);
+    }
+  }
+  if (visited !== nodes.length) return [];
+  const ready = nodes.filter(node => indegree.get(node.id) === 0).map(node => node.id);
+  while (ready.length) {
+    if (ready.length > 1) return ready.sort();
+    const id = ready.pop()!;
+    for (const target of next.get(id) ?? []) {
+      indegree.set(target, indegree.get(target)! - 1);
+      if (indegree.get(target) === 0) ready.push(target);
+    }
+  }
+  return [];
 }

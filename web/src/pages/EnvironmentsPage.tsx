@@ -1,3 +1,6 @@
+import { activeWorkbench, activeRun } from '../hooks/activeWork';
+import {EnvironmentFactFields} from '../components/EnvironmentFactFields';
+import { JobPlanPreview } from '../components/JobPlanPreview';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, AlertTriangle, Archive, ArchiveRestore, Braces, CheckCircle2, CloudCog, Cpu, Download, GitCompare, HardDrive, History, KeyRound, LockKeyhole, Network, Plus, RotateCcw, Save, Server, Trash2, Upload, UserRound, Wifi } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -8,8 +11,8 @@ import { ParameterValueEditor } from '../components/ParameterEditors';
 import { EnvironmentInventoryEditor } from '../components/EnvironmentInventoryEditor';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
-import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, EnvironmentSSHCheck, PlatformOptionCategory, WorkExplanation } from '../types/domain';
-import { activeEnvironmentConstraintDimensions, childOptionsForSelection, environmentConstraintDimensions } from '../types/environmentConstraints';
+import type { CredentialRef, Environment, EnvironmentExportDocument, EnvironmentHealthCheck, EnvironmentHost, EnvironmentImportPlan, EnvironmentLifecycle, EnvironmentRevision, EnvironmentRollbackPlan, EnvironmentSSHCheck, WorkExplanation } from '../types/domain';
+import { activeEnvironmentConstraintDimensions } from '../types/environmentConstraints';
 
 type Tab = 'inventory' | 'facts' | 'parameters' | 'variables' | 'credentials';
 type EnvironmentVariableRow = { name: string; value: string };
@@ -24,6 +27,14 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+type CredentialSource = Awaited<ReturnType<typeof api.environmentCredentialSources>>[number];
+function CredentialSourceList({sources,name,loading}:{sources?:CredentialSource[];name:string;loading:boolean}) {
+  if (!sources) return loading ? <small>正在读取声明来源…</small> : null;
+  const matching = sources.filter(source => source.name === name);
+  const render = (items: CredentialSource[]) => items.map(source => <div className="configuration-source" key={[source.kind,source.releaseId,source.revisionId,source.actionId,source.name].join(':')}><span>{source.kind === 'platform_ssh' ? '平台用途' : source.kind === 'component_action' ? '组件声明' : '业务验收声明'}</span>{source.kind === 'platform_ssh' ? <span>{source.description}</span> : <Link to={source.componentId ? `/components?selected=${encodeURIComponent(source.componentId)}&release=${encodeURIComponent(source.releaseId ?? '')}` : `/scenarios?selected=${encodeURIComponent(source.scenarioId ?? '')}&revision=${encodeURIComponent(source.revisionId ?? '')}`}>{source.componentId ? `${source.componentName} · ${source.lineName} · ${source.version}` : `${source.scenarioName} · r${source.revision}`} · {source.actionName}</Link>}</div>);
+  return <div className="credential-source-list">{matching.length ? <><small>{matching.length} 个可见声明来源</small>{render(matching.slice(0,3))}{matching.length > 3 && <details><summary>其余 {matching.length-3} 个来源</summary>{render(matching.slice(3))}</details>}</> : <small>暂无可见声明来源；不能据此判断是否可删除。</small>}</div>;
+}
+
 function schedulingLabel(environment: Environment): string {
   return SCHEDULING_LABELS[environment.schedulingStatus ?? 'idle'] ?? '调度未知';
 }
@@ -32,28 +43,6 @@ function revisionActor(revision: EnvironmentRevision, users: Array<{ id: string;
   return users.find((item) => item.id === revision.createdBy)?.name ?? revision.createdBy ?? '系统初始化';
 }
 
-function EnvironmentFactFields({ categories, facts, editable, onChange }: { categories: PlatformOptionCategory[]; facts: Record<string, unknown>; editable: boolean; onChange: (facts: Record<string, unknown>) => void }) {
-  const allDimensions = environmentConstraintDimensions(categories);
-  const dimensions = activeEnvironmentConstraintDimensions(categories);
-  function setFact(dimensionKey: string, value: string) {
-    const next = { ...facts };
-    if (value) next[dimensionKey] = value; else delete next[dimensionKey];
-    const dimension = dimensions.find((item) => item.key === dimensionKey);
-    if (dimension && !dimension.parentCategoryId) {
-      for (const child of dimensions.filter((item) => item.parentCategoryId === dimension.id)) delete next[child.key];
-    }
-    onChange(next);
-  }
-  return <div className="form-grid">{dimensions.map((dimension) => {
-    const category = categories.find((item) => item.id === dimension.id);
-    const parent = dimension.parentCategoryId ? dimensions.find((item) => item.id === dimension.parentCategoryId) : undefined;
-    const parentValue = parent && typeof facts[parent.key] === 'string' ? String(facts[parent.key]) : '';
-    const currentValue = typeof facts[dimension.key] === 'string' ? String(facts[dimension.key]) : '';
-    const activeOptions = childOptionsForSelection(dimension, parent, parentValue ? [parentValue] : []);
-    const currentRetired = dimension.options.find((option) => option.value === currentValue && option.retiredAt);
-    return <label key={dimension.key}><span>{dimension.label}{category?.environmentRequired ? '（必填）' : '（可选）'}</span><select aria-label={`适配标签 · 实际环境 ${dimension.label}`} required={category?.environmentRequired} value={currentValue} disabled={!editable || Boolean(parent && !parentValue)} onChange={(event) => setFact(dimension.key, event.target.value)}><option value="">{parent && !parentValue ? `请先选择${parent.label}` : '未选择'}</option>{currentRetired ? <option value={currentRetired.value} disabled>{currentRetired.label}（已退役，只读）</option> : null}{activeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
-  })}{allDimensions.filter((dimension) => dimension.retiredAt && typeof facts[dimension.key] === 'string').map((dimension) => <label key={dimension.key}><span>{dimension.label}（已退役，只读）</span><input disabled value={dimension.options.find((option) => option.value === facts[dimension.key])?.label ?? String(facts[dimension.key])} /></label>)}</div>;
-}
 
 export function EnvironmentsPage() {
   const { user, users, notify, signalRefresh, platformOptionCategories } = useApp();
@@ -63,10 +52,11 @@ export function EnvironmentsPage() {
   const { data: environments, loading, error, isRefreshing, reload } = useApiData((signal) => api.environments(signal, user.role === 'environment_owner' || user.role === 'platform_admin'), [user.id, user.role], 'environments');
   const { data: parameterFields } = useApiData((signal) => api.environmentParameterFields(signal), [user.id], 'environment-parameter-fields');
   const { data: variableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
-  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench', activeWorkbench);
   const selectedId = searchParams.get('selected') ?? '';
   const selected = useMemo(() => environments?.find((item) => item.id === selectedId) ?? environments?.[0], [environments, selectedId]);
-  const recentRunQuery = useApiData((signal) => selected ? api.runs({ environmentId: selected.id, pageSize: 4 }, signal) : Promise.resolve(undefined), [user.id, selected?.id], 'runs');
+  const credentialSources = useApiData((signal) => selected ? api.environmentCredentialSources(selected.id, selected.currentRevision?.id ?? '', signal) : Promise.resolve([]), [user.id, selected?.id, selected?.currentRevision?.id], ['components', 'scenarios', 'environments']);
+  const recentRunQuery = useApiData((signal) => selected ? api.runs({ environmentId: selected.id, pageSize: 4 }, signal) : Promise.resolve(undefined), [user.id, selected?.id], 'runs', page => Boolean(page?.items.some(activeRun)));
   const environmentWorkItem = workbench?.items.find((item) => item.subject.type === 'environment' && item.subject.id === selected?.id);
   const [tab, setTab] = useState<Tab>('inventory');
   const [hosts, setHosts] = useState<EnvironmentHost[]>([]);
@@ -265,7 +255,7 @@ export function EnvironmentsPage() {
     } catch (reason) { notify('error', '环境导出失败', displayError(reason)); }
   }
 
-  async function previewClusterRollback() {
+  async function previewClusterRollback(nodes?: string[]) {
     if (!selected || !editable) return;
     setRollbackOpen(true);
     setRollbackPlan(undefined);
@@ -273,7 +263,7 @@ export function EnvironmentsPage() {
     setRollbackExplanation(undefined);
     setRollbackBusy('preview');
     try {
-      setRollbackPlan(await api.previewEnvironmentRollback(selected.id));
+      setRollbackPlan(await api.previewEnvironmentRollback(selected.id, nodes));
     } catch (reason) {
       setRollbackError(displayError(reason));
       setRollbackExplanation(actionableExplanation(reason));
@@ -286,7 +276,7 @@ export function EnvironmentsPage() {
     setRollbackError(undefined);
     setRollbackExplanation(undefined);
     try {
-      const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName });
+      const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName, nodes: rollbackPlan.nodes });
       notify('success', '整集群回滚 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
       setRollbackOpen(false);
       setRollbackPlan(undefined);
@@ -370,7 +360,7 @@ export function EnvironmentsPage() {
           {(ownsSelected || (editable && selected.currentRevision)) && <div className="environment-hero__toolbar" role="group" aria-label="环境操作">
             {editable && selected.currentRevision && <><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button></>}
             {ownsSelected && <button className={selected.archivedAt ? 'button button--secondary' : 'button button--danger-soft'} disabled={anyDirty || lifecycleBusy !== undefined} onClick={() => void openLifecycle()}>{selected.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />} {selected.archivedAt ? '恢复环境' : '移除环境'}</button>}
-            {editable && selected.currentRevision && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 一键回滚至干净状态</button>}
+            {editable && selected.currentRevision && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 手动回滚组件</button>}
           </div>}
         </article>
         {selected.archivedAt && <div className="inline-warning"><Archive size={17} /><span>该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。</span></div>}
@@ -419,7 +409,7 @@ export function EnvironmentsPage() {
               const required = field.required;
               return <label key={field.valueKey} className={required && (value === undefined || value === null || (typeof value === 'string' && !value.trim())) ? 'field-invalid' : ''}>
                 <span>{field.label}{required ? '（必填）' : '（可选）'}</span>
-                <small>{field.description} · 被 {field.bindings.map((binding) => `${binding.componentName} ${binding.version}`).join('、')} 使用</small>
+                <small>{field.description}</small><div className="configuration-source"><span>定义来源</span>{field.bindings.map(binding => binding.canViewContract ? <a key={binding.releaseId} href={`/components?selected=${encodeURIComponent(binding.componentId)}&release=${encodeURIComponent(binding.releaseId)}&focus=parameters`}>{binding.componentName} · {binding.lineName} · {binding.version} · {binding.parameterName}</a> : <span key={binding.releaseId}>{binding.componentName} · {binding.lineName} · {binding.version}（合同未共享）</span>)}</div><small>当前值：{selected.name} · r{selected.currentRevision?.revision}</small>
                 <ParameterValueEditor parameter={{ name: field.label, type: field.type, enum: field.enum }} value={value ?? undefined} disabled={!editable} optional={!required} onChange={(nextValue) => setParameters((current) => { const next = { ...current }; if (nextValue === undefined) delete next[field.valueKey]; else next[field.valueKey] = nextValue ?? null; return next; })} />
                 {editable && value === undefined && field.suggestedValue !== undefined ? <button type="button" className="icon-text" onClick={() => setParameters((current) => ({ ...current, [field.valueKey]: field.suggestedValue }))}>采用建议值 {String(field.suggestedValue)}</button> : null}
               </label>;
@@ -430,7 +420,7 @@ export function EnvironmentsPage() {
             </section>}
           </div>}
           {tab === 'variables' && <div className="editor-section"><div className="section-title"><div><h3>组件作业环境变量</h3><p>变量键由平台 Owner 治理，环境 Owner 只选择字段并填写非敏感值。</p></div>{editable && <button className="button button--quiet" disabled={(variableDefinitions ?? []).every((definition) => variables.some((item) => item.name === definition.name))} onClick={() => setVariables((items) => [...items, { name: '', value: '' }])}><Plus size={15} /> 添加变量</button>}</div><div className="environment-variable-list">{variables.map((variable, index) => <div key={index} id={variable.name ? `environment-variable-${variable.name}` : undefined}><span className="variable-icon"><Braces size={17} /></span><select aria-label="环境变量名" value={variable.name} disabled={!editable} onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))}><option value="">请选择平台字段</option>{variable.name && !(variableDefinitions ?? []).some((definition) => definition.name === variable.name) ? <option value={variable.name}>{variable.name} · 历史字段</option> : null}{(variableDefinitions ?? []).filter((definition) => definition.name === variable.name || !variables.some((item) => item.name === definition.name)).map((definition) => <option key={definition.id} value={definition.name}>{definition.label} · {definition.name}</option>)}</select><input aria-label={`环境变量 ${variable.name || index} 的值`} value={variable.value} disabled={!editable} placeholder="非敏感字符串值" onChange={(event) => setVariables((items) => items.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除环境变量 ${variable.name || index}，保存后生效`} onClick={() => setVariables((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div>{!variables.length && <EmptyState title="尚未配置环境变量" description={editable ? '从平台字段目录选择变量。' : '环境 Owner 尚未配置环境变量。'} />}</div>}
-          {tab === 'credentials' && <div className="editor-section"><div className="section-title"><div><h3>CredentialRef</h3><p>数据库和 API 只保存引用，其他角色只看到脱敏值。</p></div>{editable && <button className="button button--quiet" onClick={() => setCredentials((items) => [...items, { name: '', type: 'envVarRef', reference: '' }])}><Plus size={15} /> 添加引用</button>}</div><div className="credential-list">{credentials.map((credential, index) => <div key={`${credential.name}-${index}`}><span className="credential-icon"><LockKeyhole size={17} /></span><input aria-label="凭据名称" value={credential.name} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} /><select aria-label={`凭据 ${credential.name || index} 类型`} value={credential.type} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, type: event.target.value as CredentialRef['type'] } : item))}><option value="envVarRef">envVarRef</option><option value="sshKeyPath">sshKeyPath</option></select><input aria-label={`凭据 ${credential.name || index} 引用`} value={editable ? credential.reference ?? '' : credential.maskedReference ?? '••••••••'} disabled={!editable} placeholder={credential.type === 'envVarRef' ? 'SECRET_ENV_VAR' : '/path/to/key'} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, reference: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除凭据 ${credential.name || index}，保存后生效`} onClick={() => setCredentials((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div>)}</div></div>}
+          {tab === 'credentials' && <div className="editor-section"><div className="section-title"><div><h3>CredentialRef</h3><p>查看凭据的声明来源，填写后端变量名或密钥文件路径。声明来源不表示已在本环境运行。</p></div>{editable && <button className="button button--quiet" onClick={() => setCredentials((items) => [...items, { name: '', type: 'envVarRef', reference: '' }])}><Plus size={15} /> 添加引用</button>}</div>{credentialSources.error && <ErrorBlock message={credentialSources.error} onRetry={() => void credentialSources.reload()} />}<div className="credential-list">{credentials.map((credential, index) => <div className="credential-entry" key={index}><div className="credential-fields"><span className="credential-icon"><LockKeyhole size={17} /></span><input aria-label="凭据名称" value={credential.name} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} /><select aria-label={`凭据 ${credential.name || index} 类型`} value={credential.type} disabled={!editable} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, type: event.target.value as CredentialRef['type'] } : item))}><option value="envVarRef">后端环境变量引用</option><option value="sshKeyPath">后端密钥文件路径</option></select><input aria-label={`凭据 ${credential.name || index} 引用`} value={editable ? credential.reference ?? '' : credential.maskedReference ?? '••••••••'} disabled={!editable} placeholder={credential.type === 'envVarRef' ? 'SECRET_ENV_VAR' : '/path/to/key'} onChange={(event) => setCredentials((items) => items.map((item, i) => i === index ? { ...item, reference: event.target.value } : item))} />{editable && <button className="icon-button icon-button--danger" aria-label={`移除凭据 ${credential.name || index}，保存后生效`} onClick={() => setCredentials((items) => items.filter((_, i) => i !== index))}><Trash2 size={15} /></button>}</div><small>当前值：{selected.name} · r{selected.currentRevision?.revision} · {(editable ? credential.reference : credential.configured) ? '已填写引用' : '未填写引用'}</small><CredentialSourceList sources={credentialSources.data} name={credential.name} loading={credentialSources.loading}/></div>)}</div></div>}
           {editable && <footer className="editor-footer"><span className={dirty ? 'editor-dirty' : ''}><LockKeyhole size={14} /> {dirty ? '当前页有未保存更改' : '当前页与已保存 Revision 一致'}</span><div>{dirty && <button className="button button--quiet" onClick={discardCurrent}>放弃本页更改</button>}<button className="button button--primary" disabled={busy || !dirty || (tab === 'parameters' && (parameterFields === undefined || staleParameterKeys.length > 0))} onClick={() => setSaveOpen(true)}><Save size={16} /> 保存新 Revision</button></div></footer>}
         </article>
 
@@ -443,7 +433,7 @@ export function EnvironmentsPage() {
     {importOpen && <EnvironmentImportModal environments={(environments ?? []).filter((environment) => !environment.archivedAt)} selected={selected?.archivedAt ? undefined : selected} onClose={() => setImportOpen(false)} onDone={(environment) => { setImportOpen(false); signalRefresh(['environments', 'workbench']); setSearchParams({ selected: environment.id }); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新 Revision" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧 Revision。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前 Revision。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
-    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
+    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onScope={(nodes) => void previewClusterRollback(nodes)} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
     {lifecycleOpen && selected && <EnvironmentLifecycleModal environment={selected} lifecycle={lifecycle} error={lifecycleError} explanation={lifecycleExplanation} busy={lifecycleBusy} onRetry={() => void openLifecycle()} onClose={() => { if (!lifecycleBusy) setLifecycleOpen(false); }} onConfirm={(action) => void applyLifecycle(action)} />}
   </div>;
 }
@@ -459,7 +449,7 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
     <div className="modal-body cluster-rollback-preview">
       {busy === 'load' ? <LoadingBlock label="正在核对 Run、构建记录和安装基线…" /> : error && !lifecycle ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></> : lifecycle ? <>
         <section className="cluster-rollback-summary"><div><span>Revision</span><strong>{lifecycle.revisionCount}</strong></div><div><span>历史 Run</span><strong>{lifecycle.runCount}</strong></div><div><span>镜像构建</span><strong>{lifecycle.imageBuildCount}</strong></div><div><span>安装基线</span><strong>{lifecycle.installationCount}</strong></div></section>
-        {lifecycle.archived ? <div className="warning-callout"><ArchiveRestore size={19} /><div><strong>恢复后可再次执行任务</strong><p>环境会重新出现在组件构建、组件验证和场景运行的目标选择中；历史记录不会改变。</p></div></div> : lifecycle.canDelete ? <div className="warning-callout"><Trash2 size={19} /><div><strong>这是不可恢复的永久删除</strong><p>仅因为该环境从未产生 Run、镜像构建或安装基线才允许删除。Environment Revision 和健康检查会删除，审计记录保留。</p></div></div> : lifecycle.canArchive ? <div className="warning-callout"><Archive size={19} /><div><strong>已有历史证据，只能归档</strong><p>归档不会删除 Run、构建和 Revision；环境将退出所有新任务选择，之后可以恢复。</p></div></div> : <div className="warning-callout"><AlertTriangle size={19} /><div><strong>当前不能移除环境</strong><p>{lifecycle.activeRunCount ? `仍有 ${lifecycle.activeRunCount} 个活动 Run；请先等待结束或取消。` : lifecycle.activeImageBuildCount ? `仍有 ${lifecycle.activeImageBuildCount} 个活动镜像构建；请先等待结束。` : `仍有 ${lifecycle.installationCount} 个安装基线；请先一键回滚至干净状态。`}</p></div></div>}
+        {lifecycle.archived ? <div className="warning-callout"><ArchiveRestore size={19} /><div><strong>恢复后可再次执行任务</strong><p>环境会重新出现在组件构建、组件验证和场景运行的目标选择中；历史记录不会改变。</p></div></div> : lifecycle.canDelete ? <div className="warning-callout"><Trash2 size={19} /><div><strong>这是不可恢复的永久删除</strong><p>仅因为该环境从未产生 Run、镜像构建或安装基线才允许删除。Environment Revision 和健康检查会删除，审计记录保留。</p></div></div> : lifecycle.canArchive ? <div className="warning-callout"><Archive size={19} /><div><strong>已有历史证据，只能归档</strong><p>归档不会删除 Run、构建和 Revision；环境将退出所有新任务选择，之后可以恢复。</p></div></div> : <div className="warning-callout"><AlertTriangle size={19} /><div><strong>当前不能移除环境</strong><p>{lifecycle.activeRunCount ? `仍有 ${lifecycle.activeRunCount} 个活动 Run；请先等待结束或取消。` : lifecycle.activeImageBuildCount ? `仍有 ${lifecycle.activeImageBuildCount} 个活动镜像构建；请先等待结束。` : `仍有 ${lifecycle.installationCount} 个安装基线；请先手动回滚组件。`}</p></div></div>}
         {error && <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></>}
         {!blocked && <label><span>输入环境名称以确认</span><input aria-label="确认环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>}
       </> : null}
@@ -468,16 +458,19 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
   </Modal>;
 }
 
-function ClusterRollbackModal({ environment, plan, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
+function ClusterRollbackModal({ environment, plan, error, explanation, busy, onScope, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onScope: (nodes?: string[]) => void; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
+  const [scopeCount, setScopeCount] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
-  return <Modal size="wide" title="一键回滚整个集群" description={`目标环境：${environment.name}。计划只允许恢复为安装前的干净状态。`} onClose={onClose}>
+  return <Modal size="wide" title="手动回滚组件" description={`目标环境：${environment.name}。按备份基线恢复安装前状态或指定版本。`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
-      <div className="warning-callout"><AlertTriangle size={19} /><div><strong>这是整集群破坏性操作</strong><p>平台将依据当前安装清单，按来源 Run 时间倒序、每个来源内部安装步骤逆序执行 rollback。任一基线不完整都会拒绝生成计划。</p></div></div>
+      <div className="warning-callout"><AlertTriangle size={19} /><div><strong>回滚会修改目标环境</strong><p>平台将依据已验证安装及未完成操作记录，按依赖逆序执行回滚和回滚后检查；组件已绑定的回滚前检查也会执行。备份基线不完整时拒绝生成计划。</p></div></div>
       {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : plan ? <>
         <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>回滚节点</span><strong>{plan.nodeCount}</strong></div><div><span>Environment Revision</span><strong>{plan.environmentRevisionId}</strong></div></section>
         <section className="cluster-rollback-sources" aria-label="安装基线来源">{plan.sources.map((source) => <Link key={source.runId} to={`/runs?selected=${source.runId}`}><span>{source.kind}</span><strong>{source.runId}</strong><small>{source.componentCount} 个组件</small></Link>)}</section>
-        <section className="test-plan-preview" aria-label="整集群回滚计划"><header><div><strong>逆序执行计划</strong><small>摘要 {plan.planDigest.slice(0, 16)}…</small></div><StatusPill status="awaiting_approval">提交后待审批</StatusPill></header><div>{plan.steps.map((step) => <article key={`${step.order}-${step.componentId}-${step.limit}`}><span>{step.order}</span><div><strong>{step.componentName} · rollback</strong><p>{step.releaseVersion} · 目标 {step.limit || 'all'}</p><small>基线 Run {step.backupInstallRunId} · {step.backupRef}</small></div></article>)}</div></section>
+        <label><span>回滚范围</span><select aria-label="回滚节点范围" value={scopeCount} onChange={(event) => setScopeCount(event.target.value)}><option value="">全部待恢复节点</option>{(plan.nodes ?? []).map((_, index) => <option key={index} value={index + 1}>逆序计划的前 {index + 1} 个节点</option>)}</select><small>范围包含所选组件的下游节点，以维持依赖关系。</small></label>
+        <div className="form-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={() => { onScope(scopeCount ? plan.nodes.slice(0, Number(scopeCount)) : undefined); setScopeCount(''); }}>预览所选范围</button></div>
+        <JobPlanPreview plan={plan} />
         <label><span>输入环境名称以确认</span><input aria-label="确认回滚环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>
       </> : null}
     </div>

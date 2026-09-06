@@ -11,6 +11,7 @@ import {
   ComponentUsagePanel,
   type ComponentUsage,
 } from "../components/ComponentUsagePanel";
+import { RunCleanupModal } from "../components/RunCleanupModal";
 import { RunRetentionPanel } from "../components/RunRetentionPanel";
 import { api } from "../api/client";
 import type { Component, RunSummary } from "../types/domain";
@@ -167,8 +168,7 @@ const runs = [
 ] as RunSummary[];
 it("archives only explicitly selected successful rows and clears selection on page changes", async () => {
   vi.spyOn(api, "archiveRuns").mockResolvedValue([]);
-  const view = render(<RunRetentionPanel runs={runs} />);
-  fireEvent.click(screen.getByText(/运行历史管理/));
+  const view = render(<RunRetentionPanel runs={runs} onDeleted={vi.fn()} />);
   await screen.findByText("归档目录已配置");
   fireEvent.click(screen.getByLabelText(/Success/));
   fireEvent.click(screen.getByRole("button", { name: "归档所选成功记录" }));
@@ -178,7 +178,7 @@ it("archives only explicitly selected successful rows and clears selection on pa
   await waitFor(() =>
     expect(screen.getByLabelText(/Success/)).not.toBeDisabled(),
   );
-  view.rerender(<RunRetentionPanel runs={[runs[1]]} />);
+  view.rerender(<RunRetentionPanel runs={[runs[1]]} onDeleted={vi.fn()} />);
   expect(
     screen.getByRole("button", { name: "归档所选成功记录" }),
   ).toBeDisabled();
@@ -190,25 +190,24 @@ it("requires a complete eligible preview and explicit confirmation before cleanu
     ])
     .mockResolvedValueOnce([{ runId: "failure", eligible: true, reasons: [] }]);
   vi.spyOn(api, "cleanupRuns").mockResolvedValue(undefined);
-  render(<RunRetentionPanel runs={runs} />);
-  fireEvent.click(screen.getByText(/运行历史管理/));
+  render(<RunRetentionPanel runs={runs} onDeleted={vi.fn()} />);
   await screen.findByText("归档目录已配置");
   fireEvent.click(screen.getByLabelText(/Failure/));
-  fireEvent.click(screen.getByRole("button", { name: "预览清理" }));
+  fireEvent.click(screen.getByRole("button", { name: "删除所选失败记录" }));
   expect(await screen.findByText(/被回滚备份引用/)).toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: "确认删除所选记录" }),
+    screen.getByRole("button", { name: "确认删除" }),
   ).toBeDisabled();
   expect(api.cleanupRuns).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
-  fireEvent.click(screen.getByRole("button", { name: "预览清理" }));
-  await screen.findByText(/可以清理/);
+  fireEvent.click(screen.getByRole("button", { name: "删除所选失败记录" }));
+  await screen.findByText(/可以删除/);
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "确认删除所选记录" }),
+      screen.getByRole("button", { name: "确认删除" }),
     ).not.toBeDisabled(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "确认删除所选记录" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
   await waitFor(() =>
     expect(api.cleanupRuns).toHaveBeenCalledWith(["failure"]),
   );
@@ -218,4 +217,24 @@ it("requires a complete eligible preview and explicit confirmation before cleanu
   expect(app.signalRefresh).toHaveBeenCalledWith(
     expect.arrayContaining(["runs", "workbench", "notifications"]),
   );
+});
+
+it("blocks deletion when the preview is incomplete or refers to different runs", async () => {
+  vi.spyOn(api, "cleanupPreview").mockResolvedValue([{ runId: "other", eligible: true, reasons: [] }]);
+  vi.spyOn(api, "cleanupRuns").mockResolvedValue(undefined);
+  render(<RunCleanupModal runIds={["failure"]} onClose={vi.fn()} onDeleted={vi.fn()} />);
+  await screen.findByText("可以删除");
+  expect(screen.getByRole("button", { name: "确认删除" })).toBeDisabled();
+  expect(api.cleanupRuns).not.toHaveBeenCalled();
+});
+it("rechecks protection after a deletion conflict and keeps the confirmation open", async () => {
+  vi.spyOn(api, "cleanupPreview").mockResolvedValueOnce([{ runId: "failure", eligible: true, reasons: [] }]).mockResolvedValueOnce([{ runId: "failure", eligible: false, reasons: ["被新的续跑引用"] }]);
+  vi.spyOn(api, "cleanupRuns").mockRejectedValue(new Error("引用已变化"));
+  const deleted = vi.fn();
+  render(<RunCleanupModal runIds={["failure"]} onClose={vi.fn()} onDeleted={deleted} />);
+  await screen.findByText("可以删除");
+  fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+  await screen.findByText("被新的续跑引用");
+  expect(screen.getByRole("button", { name: "确认删除" })).toBeDisabled();
+  expect(deleted).not.toHaveBeenCalled();
 });

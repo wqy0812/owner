@@ -59,7 +59,7 @@ function json(data: unknown, status = 200) {
         const fixedValue = parameter.type === 'boolean' ? false : parameter.type === 'integer' || parameter.type === 'number' ? 0 : parameter.type === 'array' ? [] : parameter.type === 'object' ? {} : '/opt/test';
         return { modifiable: false, valueProvider: 'component_owner', fixedValue, ...parameter };
       }) : [];
-      result.actions = Array.isArray(result.actions) ? result.actions.map((action: any) => ({ hostGroup: 'all', ...action })) : [];
+      result.actions = Array.isArray(result.actions) ? result.actions.map((action: any) => ({ id: `action-${action.kind}`, hostGroup: 'all', ...action })) : [];
       result.artifacts ??= [];
       result.images ??= [];
     }
@@ -172,6 +172,7 @@ function installFetch(options: {
     if (url.endsWith('/environment-parameter-fields')) return json(options.parameterFields ?? []);
     if (url.endsWith('/environment-variable-definitions')) return json([]);
     if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'Test Environment', ownerId: dave.id, currentRevision: { id: 'environment-test-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: options.environmentParameters ?? {}, variables: {}, credentialRefs: [] } }]);
+    if (url.endsWith('/run-retention')) return json({ configured: false, pending: 0, sizeBytes: 0, tasks: [], policy: { autoArchive: false, autoCleanup: false, archiveDays: 90, cleanupDays: 90 } });
     if (url.endsWith('/runs')) return json([]);
     if (/\/notifications\/[^/]+$/.test(url) && init?.method === 'PATCH') {
       const id = decodeURIComponent(url.split('/').pop() ?? '');
@@ -191,6 +192,13 @@ function installReadModelFixtures() {
   const currentFetch = globalThis.fetch;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://test');
+    if (url.pathname === '/api/v1/execution-preparations' && init?.method === 'POST') {
+      const request = JSON.parse(String(init.body));
+      const endpoint = request.kind === 'component_test' ? `/api/v1/component-releases/${request.subjectId}/test-plan` : `/api/v1/scenario-revisions/${request.subjectId}/execution-plan`;
+      const response = await currentFetch(endpoint, { ...init, body: JSON.stringify(request.kind === 'component_test' ? request.component : request.scenario) });
+      const result = await response.json();
+      return json({id: `preparation-${request.idempotencyKey}`,status:response.ok?'succeeded':'failed',input:request,output:{checks:[],...(response.ok?{plan:result.data}:{error:result.error.message,explanation:result.error.explanation})}});
+    }
     if (url.pathname.endsWith('/usage')) return json({components:[],scenarios:[],componentCount:0,scenarioCount:0});
     if (url.pathname === '/api/v1/run-retention') return json({configured:false,policy:{autoArchive:false,autoCleanup:false,archiveDays:90,cleanupDays:90},pending:0,sizeBytes:0,tasks:[]});
     if (url.pathname.endsWith('/platform-option-categories') && (!init?.method || init.method === 'GET')) return json(platformOptionCategories);
@@ -345,7 +353,7 @@ describe('platform shell and RBAC UI', () => {
   it('shows the dashboard summary and all primary navigation entries', async () => {
     renderApp();
     expect(await screen.findByRole('heading', { name: /早上好/ })).toBeInTheDocument();
-    for (const label of ['我的工作', '组件', '场景', '环境', '运行', '平台说明书', '通知中心']) {
+    for (const label of ['我的工作', '组件', '集群', '环境', '运行', '平台说明书', '通知中心']) {
       expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(within(screen.getByRole('navigation', { name: '主导航' })).queryByRole('link', { name: '通知中心' })).not.toBeInTheDocument();
@@ -379,14 +387,15 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.queryByRole('columnheader', { name: '技术值' })).not.toBeInTheDocument();
     expect(screen.queryByText('arm64', { selector: 'code' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Component Release 合同审核' })).not.toBeInTheDocument();
-    const hostGroupCard = screen.getByRole('heading', { name: '主机组' }).closest('section')!;
+    const hostGroupCard = screen.getAllByRole('heading', { name: '主机组' }).find(item => item.closest('section')?.querySelector('.category-actions'))!.closest('section')!;
     const hostGroupActions = hostGroupCard.querySelector<HTMLElement>('.category-actions')!;
     expect(within(hostGroupActions).getByRole('button', { name: '彻底删除' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '新增类别' }));
     await userEvent.type(screen.getByPlaceholderText('例如 CPU 厂商'), 'CPU 厂商');
     const requiredToggle = screen.getByRole('checkbox', { name: '环境录入时必填' });
     expect(requiredToggle.closest('label')).toHaveClass('required-toggle');
     await userEvent.click(requiredToggle);
-    await userEvent.click(screen.getByRole('button', { name: '新增类别' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '新增类别' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => {
       if (!String(input).endsWith('/platform-option-categories') || init?.method !== 'POST') return false;
       return JSON.parse(String(init.body)).label === 'CPU 厂商' && JSON.parse(String(init.body)).environmentRequired === true;
@@ -620,8 +629,9 @@ describe('platform shell and RBAC UI', () => {
     render(<MemoryRouter initialEntries={['/platform-management']}><AppProvider><App /></AppProvider></MemoryRouter>);
 
     expect(await screen.findByRole('heading', { name: '架构' })).toBeInTheDocument();
-    await userEvent.type(screen.getByPlaceholderText('例如 CPU 厂商'), 'CPU 厂商');
     await userEvent.click(screen.getByRole('button', { name: '新增类别' }));
+    await userEvent.type(screen.getByPlaceholderText('例如 CPU 厂商'), 'CPU 厂商');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '新增类别' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/platform-option-categories') && init?.method === 'POST')).toBe(true));
     act(() => EventSourceMock.instances.at(-1)?.emit('platform_options.updated'));
 
@@ -842,7 +852,7 @@ describe('platform shell and RBAC UI', () => {
   });
 
   it('guides an empty Catalog from an existing Git repository into restore-point selection', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(dave);
       if (url.endsWith('/catalog-repository/connect')) return json({
@@ -1228,7 +1238,7 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByRole('heading', { name: '组件 Owner 操作手册' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '组件 Owner 操作路径' })).toBeInTheDocument();
     let buttonDirectory = screen.getByRole('region', { name: '组件 Owner 按钮操作目录' });
-    for (const label of ['新建组件', '全新发布线', '空白创建 / 复制现有版本', '批量导入 / 预检并导入', '保存依赖和参数', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
+    for (const label of ['新建组件', '全新发布线', '空白创建 / 复制现有版本', '批量导入 / 预检并导入', '保存参数合同 / 保存直接依赖', '加入候选集 / 撤回候选', '保存 Playbook', '预览执行计划 / 刷新执行计划', '上传并构建']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
     expect(buttonDirectory).not.toHaveTextContent('允许以未验证状态发布');
@@ -1239,7 +1249,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '集群 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '组件 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '集群 Owner 按钮操作目录' });
-    for (const label of ['新建场景 / 创建场景', '导入模板 / 载入草稿', '导出 JSON', '保存草稿', '预览候选集并发布 / 确认原子发布', 'DAG / 节点表 / 参数总览', '放大 / 缩小 / 适配视图', '环境测试 / 开始完整测试']) {
+    for (const label of ['新建场景 / 创建场景', '新增版本', '新增分支', '导入模板 / 载入草稿', '导出 JSON', '保存草稿', '预览候选集并发布 / 确认原子发布', 'DAG / 节点表 / 参数总览', '放大 / 缩小 / 适配视图', '环境测试 / 环境运行', '提交安装测试 / 提交升级测试']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
 
@@ -1291,7 +1301,7 @@ describe('platform shell and RBAC UI', () => {
     }));
     renderApp('/components?selected=component-kube-proxy');
     expect((await screen.findAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot')).length).toBeGreaterThan(0);
-    expect(screen.getByText('内部')).toBeInTheDocument();
+    expect(screen.getByText('内部参数')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '查看详情' }));
     expect(screen.getByRole('dialog', { name: '1.17.5 Release 详情' })).toBeInTheDocument();
     expect(screen.getAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot').length).toBeGreaterThan(1);
@@ -1359,7 +1369,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components?selected=component-scheduler');
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
     expect(screen.getByRole('dialog', { name: '配置 Draft 1.17.5-r2' })).toBeInTheDocument();
-    expect(screen.getByText('rollback.yml')).toBeInTheDocument();
+    expect(screen.getByText('tasks/rollback.yml')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
     expect(await screen.findByRole('button', { name: '保存中…' })).toBeDisabled();
@@ -1376,7 +1386,7 @@ describe('platform shell and RBAC UI', () => {
     expect(proxyButton).toBeEnabled();
     await userEvent.click(proxyButton);
     expect(await screen.findByRole('heading', { name: 'kube-proxy' })).toBeInTheDocument();
-    expect(screen.queryByText('rollback.yml')).not.toBeInTheDocument();
+    expect(screen.queryByText('tasks/rollback.yml')).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input, init]) => String(input).includes('/component-releases/') && init?.method === 'PUT')).toHaveLength(1);
   });
 
@@ -1428,7 +1438,7 @@ describe('platform shell and RBAC UI', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-      if (url.endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PUT') {
+      if (url.endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PATCH') {
         return json({ ...draft, ...JSON.parse(String(init.body)), status: 'draft' });
       }
       if (url.endsWith('/components')) return json([{
@@ -1450,23 +1460,22 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components?selected=component-kube-proxy');
     await userEvent.click(await screen.findByRole('button', { name: '编辑直接依赖' }));
     expect(screen.getByRole('button', { name: '新增依赖' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新增参数' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: /内部/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '编辑参数 kubeRoot' }));
-    expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
-    await userEvent.click(screen.getByRole('radio', { name: /公开/ }));
+    expect(screen.queryByRole('button', { name: '编辑参数 kubeRoot' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '新增依赖' }));
     await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
     expect(within(screen.getByLabelText('已发布版本')).getByRole('option', { name: '1.34.3 · Draft' })).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('已发布版本'), 'release-kubelet');
     await userEvent.click(screen.getByRole('button', { name: '增加映射' }));
-    await userEvent.selectOptions(screen.getByLabelText('上游公开参数'), 'kubeInstallRoot');
+    await userEvent.selectOptions(screen.getAllByLabelText('上游公开参数')[0], 'kubeInstallRoot');
     await userEvent.selectOptions(screen.getByLabelText('本 Release 目标参数'), 'kubeRoot');
-    await userEvent.click(screen.getByRole('button', { name: '保存依赖和参数' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存直接依赖' }));
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PUT');
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/component-releases/release-kube-proxy-draft/contract') && init?.method === 'PATCH');
+      expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty('parameters');
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-        parameters: [{ name: 'kubeRoot', visibility: 'public' }],
+        section: 'dependencies', expectedDefinitionGeneration: 0, newParameters: [], removeParameters: [],
         dependencies: [{
           upstreamComponentId: 'component-kubelet',
           upstreamReleaseId: 'release-kubelet',
@@ -1476,7 +1485,7 @@ describe('platform shell and RBAC UI', () => {
     });
   });
 
-  it('creates a draft from the centralized contract entry', async () => {
+  it('creates a version from the dedicated entry with inherited scope', async () => {
     const released = components[0].releases[0];
     const draft = { ...released, id: 'release-containerd-draft', parentReleaseId: released.id, compatibility: 'compatible', version: 'v2.1.2', status: 'draft', parameters: [], dependencies: [] };
     let created = false;
@@ -1492,15 +1501,15 @@ describe('platform shell and RBAC UI', () => {
 
     vi.stubGlobal('confirm', vi.fn(() => true));
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '创建 Draft 编辑合同' }));
-    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
-    expect(screen.getByText(/复制内容不等于建立升级关系/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: '新增版本' }));
+    expect(screen.getByRole('dialog', { name: '新增版本 · containerd' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'x86/amd64' })).not.toBeInTheDocument();
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.2');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '调整合同');
-    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    await userEvent.click(screen.getByRole('button', { name: '创建版本' }));
 
-    expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '保存 Draft' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '配置 Draft v2.1.2' })).toBeInTheDocument();
   });
 
   it('groups versions by release line and renders the three compatibility badges', async () => {
@@ -1550,17 +1559,18 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('confirm', vi.fn(() => true));
 
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
-    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toHaveTextContent('复制内容不等于建立升级关系');
+    await userEvent.click(await screen.findByRole('button', { name: '新增分支' }));
+    expect(screen.getByRole('dialog', { name: '新增分支 · containerd' })).toHaveTextContent('内容模板不建立跨分支升级关系');
     expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'SUSE' })).not.toBeChecked();
-    await userEvent.type(screen.getByRole('textbox', { name: '发布线名称' }), 'containerd 2.2');
+    await userEvent.type(screen.getByRole('textbox', { name: '分支名称' }), 'containerd 2.2');
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.selectOptions(screen.getByLabelText('风险级别'), 'destructive');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '全新合同');
-    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /确认以上适配范围/ }));
+    await userEvent.click(screen.getByRole('button', { name: '创建分支' }));
 
-    expect(await screen.findByRole('button', { name: '保存依赖和参数' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '保存直接依赖' })).toBeInTheDocument();
     const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST');
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ mode: 'new_line', lineName: 'containerd 2.2', version: 'v2.2.0', releaseNotes: '全新合同', riskLevel: 'destructive', compatibility: 'not_applicable', environmentConstraints: {}, expectedPlanDigest: 'draft-plan' });
   });
@@ -1579,7 +1589,7 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('confirm', confirm);
 
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    await userEvent.click(await screen.findByRole('button', { name: '新增分支' }));
     const template = screen.getByRole('combobox', { name: '内容模板（可选）' });
     await userEvent.selectOptions(template, first.id);
     expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
@@ -1610,7 +1620,7 @@ describe('platform shell and RBAC UI', () => {
     }));
 
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
+    await userEvent.click(await screen.findByRole('button', { name: '新增分支' }));
     expect(screen.getByText(/最后一个曾发布版本 2.0.0 已废弃/)).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '基于现有发布线演进' })).not.toBeInTheDocument();
   });
@@ -1645,7 +1655,7 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components');
     expect(await screen.findByRole('heading', { name: 'containerd', level: 2 })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '新建空白 Draft' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新增分支' })).not.toBeInTheDocument();
   });
 
   it('shows the backend conflict when an empty Draft version already exists', async () => {
@@ -1661,13 +1671,14 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('confirm', vi.fn(() => true));
 
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '新建空白 Draft' }));
-    await userEvent.type(screen.getByRole('textbox', { name: '发布线名称' }), 'duplicate');
+    await userEvent.click(await screen.findByRole('button', { name: '新增分支' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '分支名称' }), 'duplicate');
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.1');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '重复版本');
-    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /确认以上适配范围/ }));
+    await userEvent.click(screen.getByRole('button', { name: '创建分支' }));
     expect(await screen.findByText('版本 v2.1.1 已存在')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '新增分支 · containerd' })).toBeInTheDocument();
   });
 
   it('scrolls to the matching contract section when editing a draft', async () => {
@@ -1689,9 +1700,9 @@ describe('platform shell and RBAC UI', () => {
     }));
     try {
       renderApp('/components?selected=component-kubelet');
-      await userEvent.click(await screen.findByRole('button', { name: '配置合同' }));
+      await userEvent.click(await screen.findByRole('button', { name: '编辑参数合同' }));
       expect(screen.getByRole('button', { name: '新增参数' })).toBeInTheDocument();
-      expect(scrolled).toContain('release-contract-editor');
+      expect(scrolled).toContain('contract-parameters');
       await userEvent.click(screen.getByRole('button', { name: '取消' }));
       scrolled.length = 0;
       await userEvent.click(await screen.findByRole('button', { name: '编辑参数合同' }));
@@ -1721,7 +1732,7 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     }));
     renderApp('/components?selected=component-kubelet');
-    await userEvent.click(await screen.findByRole('button', { name: '配置合同' }));
+    await userEvent.click(await screen.findByRole('button', { name: '编辑参数合同' }));
     expect(screen.queryByRole('radio', { name: /内部/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '编辑参数 kubeInstallRoot' }));
     expect(screen.getByRole('radio', { name: /内部/ })).toBeChecked();
@@ -1771,8 +1782,8 @@ describe('platform shell and RBAC UI', () => {
   it('describes released environment validation as a state-changing Run instead of a Draft-only test', async () => {
     renderApp('/components');
     await userEvent.click(await screen.findByRole('button', { name: '环境验证' }));
-    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('对已发布版本执行生命周期作业');
-    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('提交后会创建 Run，并可能修改目标环境');
+    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('先预览锁定计划，确认提交后创建单个 Ansible 作业');
+    expect(screen.getByRole('dialog', { name: '环境验证 v2.1.1' })).toHaveTextContent('回滚按其绑定的检查确认恢复基线');
     expect(screen.queryByText(/直接对当前 Draft/)).not.toBeInTheDocument();
   });
 
@@ -1803,7 +1814,14 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components');
     const readiness = await screen.findByLabelText('Draft v2.2.0-rc1 发布就绪度');
     expect(readiness).toHaveTextContent('5/5');
-    expect(within(readiness).getAllByRole('link', { name: /Six node lab/ })).toHaveLength(2);
+    expect(within(readiness).queryByRole('link', { name: /Six node lab/ })).not.toBeInTheDocument();
+    expect(within(readiness).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '5');
+    await userEvent.click(within(readiness).getByRole('button', { name: '安装与验证 · 已完成' }));
+    expect(within(readiness).getByRole('link', { name: /Six node lab/ })).toHaveAttribute('href', '/runs?selected=run-install');
+    await userEvent.click(within(readiness).getByRole('button', { name: '回退与回退后验证 · 已完成' }));
+    expect(within(readiness).getByRole('link', { name: /Six node lab/ })).toHaveAttribute('href', '/runs?selected=run-rollback');
+    await userEvent.click(within(readiness).getByRole('button', { name: '收起详情' }));
+    expect(within(readiness).queryByRole('link', { name: /Six node lab/ })).not.toBeInTheDocument();
     expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeEnabled();
   });
 
@@ -2069,6 +2087,7 @@ describe('platform shell and RBAC UI', () => {
     expect(dialog).toHaveTextContent('第二项：补齐验证说明。');
     expect(within(dialog).queryByRole('button', { name: /批准|驳回/ })).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByText('关闭'));
+    await userEvent.click(screen.getByRole('button', { name: '平台合同审核 · 待完成' }));
     await userEvent.click(screen.getByRole('button', { name: '查看审批意见' }));
     expect(screen.getByRole('dialog', { name: '1.0.0 审批意见' })).toHaveTextContent('第二项：补齐验证说明。');
     await userEvent.click(within(screen.getByRole('dialog')).getByText('关闭'));
@@ -2112,7 +2131,7 @@ describe('platform shell and RBAC UI', () => {
         id: 'component-readonly', name: 'Readonly Component', slug: 'readonly-component', ownerId: alice.id,
         layer: 'runtime_state', tags: ['runtime'], latestRelease: released, releases: [released],
       }]);
-      if (url.includes('/component-releases/release-readonly/playbook?actionKind=install')) return json({
+      if (url.includes('/component-releases/release-readonly/playbook?actionId=action-install')) return json({
         path: 'managed/readonly/install.yml', filename: 'install.yml', content: '---\n- hosts: workers\n  tasks: []\n', sha256: 'abc123',
       });
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -2121,7 +2140,8 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components');
     expect(await screen.findByRole('button', { name: '查看详情' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '创建 Draft 编辑合同' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新增版本' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '创建 Draft 编辑合同' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /创建 Draft 后编辑/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '编辑直接依赖' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '查看详情' }));
@@ -2150,22 +2170,22 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     }));
     renderApp('/components');
-    expect(await screen.findByText('适配标签')).toBeInTheDocument();
-    expect(screen.getByText('架构')).toBeInTheDocument();
-    expect(screen.getByText('x86/amd64')).toBeInTheDocument();
-    expect(screen.getByText('ARM/arm64')).toBeInTheDocument();
-    expect(screen.getByText('操作系统')).toBeInTheDocument();
-    expect(screen.getByText('SUSE')).toBeInTheDocument();
-    expect(screen.getByText('Kylin')).toBeInTheDocument();
-    expect(screen.getByText('IP 协议族')).toBeInTheDocument();
-    expect(screen.getByText('IPv4')).toBeInTheDocument();
+    expect((await screen.findAllByText('适配标签')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('架构').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('x86/amd64').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ARM/arm64').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('操作系统').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('SUSE').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Kylin').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('IP 协议族').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('IPv4').length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole('button', { name: '查看详情' }));
     expect(screen.getAllByText('架构').length).toBeGreaterThan(1);
     expect(screen.getAllByText('x86/amd64').length).toBeGreaterThan(1);
   });
 
-  it('lets the owner choose environment constraints when creating a version', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  it('keeps inherited scope read-only when creating a version', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/components')) return json([{
@@ -2194,26 +2214,22 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('confirm', vi.fn(() => true));
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '创建 Draft 编辑合同' }));
-    expect(screen.getByRole('dialog', { name: '创建 Draft 编辑依赖和参数' })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'x86/amd64' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'ARM/arm64' })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'SUSE' })).toBeChecked();
-    await userEvent.click(screen.getByRole('checkbox', { name: 'ARM/arm64' }));
-    await userEvent.click(screen.getByRole('checkbox', { name: 'IPv4' }));
-    await userEvent.click(screen.getByRole('checkbox', { name: '24.04' }));
+    await userEvent.click(await screen.findByRole('button', { name: '新增版本' }));
+    expect(screen.getByRole('dialog', { name: '新增版本 · containerd' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).queryByRole('checkbox')).not.toBeInTheDocument();
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '增加 ARM 适配');
-    await userEvent.click(screen.getByRole('button', { name: '创建 Draft' }));
+    await userEvent.click(screen.getByRole('button', { name: '创建版本' }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/components/component-containerd/release-drafts') && init?.method === 'POST');
+      expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty('environmentConstraints');
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
         mode: 'evolution',
         parentReleaseId: 'release-containerd-2',
         compatibility: 'compatible',
         version: 'v2.2.0',
         releaseNotes: '增加 ARM 适配',
-        environmentConstraints: { architecture: ['amd64', 'arm64'], operatingSystem: ['SUSE'], operatingSystemVersion: ['24.04'], ipFamily: ['IPv4'] },
+
       });
     });
   });
@@ -2245,83 +2261,46 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText(/权限不足：只有资源 Owner 可以修改组件/)).toBeInTheDocument();
   });
 
-  it('requires target verification for a version rollback and submits the locked digest', async () => {
+  it('previews rollback with its bound checks and submits the selected action and locked digest', async () => {
     const draft = {
-      id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1',
-      status: 'draft', releaseNotes: 'Rollback candidate', parameters: [], dependencies: [],
+      id: 'release-runtime-draft', componentId: 'component-runtime', version: '2.0.0-rc1', status: 'draft', releaseNotes: 'Rollback candidate',
       actions: [
-        { name: 'install', kind: 'install', playbook: 'managed/runtime/install.yml' },
-        { name: 'verify', kind: 'verify', playbook: 'managed/runtime/verify.yml' },
-        { name: 'rollback', kind: 'rollback', playbook: 'managed/runtime/rollback.yml', fromReleaseId: 'release-runtime-draft', toReleaseId: 'release-runtime-stable' },
+        { id: 'check-before', name: '确认可回滚', kind: 'check', playbook: 'tasks/checks/check-before.yml' },
+        { id: 'check-restored', name: '确认旧版本恢复', kind: 'check', playbook: 'tasks/checks/check-restored.yml' },
+        { id: 'rollback-runtime', name: '回滚运行时', kind: 'rollback', playbook: 'tasks/rollback.yml', preCheckActionId: 'check-before', postCheckActionId: 'check-restored', fromReleaseId: 'release-runtime-draft', toReleaseId: 'release-runtime-stable' },
       ],
     };
     const previews: Array<Record<string, unknown>> = [];
     let submitted: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
       if (url.endsWith('/component-releases/release-runtime-draft/test-plan') && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        previews.push(body);
-        const rollbackVerification = body.rollbackVerification as { kind: string };
-        const rollbackStep = {
-          order: 1, componentId: 'component-runtime', componentName: 'Runtime', releaseId: 'release-runtime-draft', releaseVersion: '2.0.0-rc1',
-          action: 'rollback', playbook: 'managed/runtime/rollback.yml', limit: 'runtime_nodes', needsApproval: true,
-          fromReleaseId: 'release-runtime-draft', fromReleaseVersion: '2.0.0-rc1', toReleaseId: 'release-runtime-stable', toReleaseVersion: '1.9.0',
-        };
-        return json({
-          environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, requiresApproval: true,
-          planDigest: rollbackVerification.kind === 'rollback_only' ? 'digest-rollback-only' : 'digest-target',
-          deliveryRequirements: [],
-          steps: rollbackVerification.kind === 'rollback_only' ? [rollbackStep] : [rollbackStep, {
-            order: 2, componentId: 'component-runtime', componentName: 'Runtime', releaseId: 'release-runtime-stable', releaseVersion: '1.9.0',
-            action: 'verify', playbook: 'managed/runtime/verify.yml', limit: 'runtime_nodes', needsApproval: false,
-          }],
-        });
+        previews.push(JSON.parse(String(init.body)));
+        return json({ environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, requiresApproval: true, planDigest: 'digest-bound-rollback', deliveryRequirements: [], steps: [
+          { phase: 'pre', action: 'check', actionId: 'check-before' }, { phase: 'execute', action: 'rollback', actionId: 'rollback-runtime' }, { phase: 'post', action: 'check', actionId: 'check-restored' },
+        ].map((step, index) => ({ ...step, order: index + 1, componentId: 'component-runtime', componentName: 'Runtime', releaseId: draft.id, releaseVersion: draft.version, playbook: `tasks/${step.actionId}.yml`, limit: 'runtime_nodes', needsApproval: true })) });
       }
       if (url.endsWith('/component-releases/release-runtime-draft/test-runs') && init?.method === 'POST') {
         submitted = JSON.parse(String(init.body));
         return json({ id: 'run-rollback-draft', kind: 'component_test', status: 'awaiting_approval', environmentId: 'environment-test', destructive: true });
       }
-      if (url.endsWith('/components')) return json([{
-        id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: alice.id,
-        layer: 'runtime_state', tags: ['runtime'],
-        latestRelease: draft, releases: [draft, {
-          id: 'release-runtime-stable', componentId: 'component-runtime', version: '1.9.0',
-          status: 'released', releaseNotes: 'Stable', parameters: [], dependencies: [],
-          actions: [{ name: 'verify', kind: 'verify', playbook: 'managed/runtime/verify.yml', hostGroup: 'runtime_nodes' }],
-        }],
-      }]);
+      if (url.endsWith('/components')) return json([{ id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: alice.id, layer: 'runtime_state', tags: [], latestRelease: draft, releases: [draft] }]);
       if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Six node test', ownerId: dave.id, status: 'ready' }]);
       if (url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return json({});
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
+    }));
     renderApp('/components?selected=component-runtime');
     await userEvent.click((await screen.findAllByRole('button', { name: '环境验证' }))[0]);
-    expect(screen.getByRole('option', { name: '安装验证（主动作 + verify）' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: '回退验证（rollback + 可选目标版本 verify）' })).toBeEnabled();
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '验证模式' }), 'rollback');
-    expect(screen.getByText('回退验证将修改环境状态')).toBeInTheDocument();
-    expect(screen.getByText('来源：2.0.0-rc1 · Draft')).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '1.9.0 · released · 合同目标' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '仅执行 Draft 回退' })).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '验证动作' }), 'rollback-runtime');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '目标环境' }), 'environment-test');
+    expect(screen.getByRole('button', { name: '确认提交验证' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
-
-    expect(await screen.findByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 2.0.0-rc1');
-    expect(screen.getByRole('region', { name: '完整执行计划' })).toHaveTextContent('所属版本 1.9.0');
-    expect(screen.getByRole('button', { name: '确认提交回退验证' })).toBeEnabled();
-
-    await userEvent.click(screen.getByRole('button', { name: '确认提交回退验证' }));
-
-    await waitFor(() => expect(submitted).toMatchObject({
-      environmentId: 'environment-test', mode: 'rollback',
-      rollbackVerification: { kind: 'target_release', releaseId: 'release-runtime-stable' }, expectedPlanDigest: 'digest-target',
-    }));
-    expect(previews).toHaveLength(1);
-    expect(previews[0]).toMatchObject({ rollbackVerification: { kind: 'target_release', releaseId: 'release-runtime-stable' } });
+    const plan = await screen.findByRole('region', { name: '完整执行计划' });
+    for (const phase of ['前置检查', '执行动作', '后置检查']) expect(plan).toHaveTextContent(`Runtime · ${phase}`);
+    await userEvent.click(screen.getByRole('button', { name: '确认提交验证' }));
+    await waitFor(() => expect(submitted).toMatchObject({ environmentId: 'environment-test', mode: 'install_verify', actionId: 'rollback-runtime', expectedPlanDigest: 'digest-bound-rollback' }));
+    expect(previews).toEqual([{ environmentId: 'environment-test', mode: 'install_verify', actionId: 'rollback-runtime' }]);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -2349,7 +2328,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/environments');
     const environmentActions = await screen.findByRole('group', { name: '环境操作' });
     expect(within(environmentActions).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
-      '安全导出', '导出含引用', '移除环境', '一键回滚至干净状态',
+      '安全导出', '导出含引用', '移除环境', '手动回滚组件',
     ]);
     await userEvent.click(await screen.findByRole('tab', { name: '环境变量' }));
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
@@ -2484,7 +2463,7 @@ describe('platform shell and RBAC UI', () => {
     await waitFor(() => expect(screen.queryByText('该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。')).not.toBeInTheDocument());
   });
 
-  it('previews and submits a whole-cluster clean rollback with exact-name confirmation', async () => {
+  it('previews and submits restoration to backup baselines with exact-name confirmation', async () => {
     let submitted: Record<string, string> | undefined;
     const environment = {
       id: 'environment-test', name: 'Test Environment', ownerId: dave.id, schedulingStatus: 'idle',
@@ -2517,10 +2496,10 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderApp('/environments');
-    await userEvent.click(await screen.findByRole('button', { name: '一键回滚至干净状态' }));
-    const rollbackDialog = await screen.findByRole('dialog', { name: '一键回滚整个集群' });
+    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
+    const rollbackDialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
     expect(rollbackDialog).toHaveClass('modal--wide');
-    expect(await within(rollbackDialog).findByRole('region', { name: '整集群回滚计划' })).toHaveTextContent('CoreDNS · rollback');
+    expect(await within(rollbackDialog).findByRole('region', { name: '完整执行计划' })).toHaveTextContent('CoreDNS · 执行动作');
     const confirm = screen.getByRole('textbox', { name: '确认回滚环境名称' });
     const submit = screen.getByRole('button', { name: '创建回滚 Run（待审批）' });
     expect(submit).toBeDisabled();
@@ -2528,8 +2507,28 @@ describe('platform shell and RBAC UI', () => {
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
 
-    await waitFor(() => expect(submitted).toEqual({ expectedPlanDigest: plan.planDigest, confirmEnvironmentName: environment.name }));
+    await waitFor(() => expect(submitted).toEqual({ expectedPlanDigest: plan.planDigest, confirmEnvironmentName: environment.name, nodes: [] }));
     expect(await screen.findByText('整集群回滚 Run 已创建')).toBeInTheDocument();
+  });
+
+  it('loads completed image build logs when opening the new log disclosure', async () => {
+    const baseFetch = installFetch();
+    const build = { id: 'completed-build', releaseId: 'release-containerd-2', requestedBy: alice.id,
+      status: 'failed', dockerfileSha256: 'a'.repeat(64), imageTag: 'historical',
+      imageRef: 'registry.example.test/components/runtime:historical', createdAt: new Date().toISOString() };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/component-releases/release-containerd-2/image-builds')) return json([build]);
+      if (url.endsWith('/image-builds/completed-build')) return json({ ...build,
+        logs: [{ id: 1, buildId: build.id, stream: 'stderr', message: 'Completed build diagnostic retained', createdAt: build.createdAt }] });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderApp('/components?selected=component-containerd&release=release-containerd-2');
+    await userEvent.click(await screen.findByRole('button', { name: '构建镜像' }));
+    await userEvent.click(await screen.findByText('查看构建日志'));
+    await waitFor(() => expect(screen.getByLabelText('镜像构建日志')).toHaveTextContent('Completed build diagnostic retained'));
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/image-builds/completed-build'))).toHaveLength(1);
   });
 
   it('locks the selected environment when submitting a Dockerfile image build', async () => {
@@ -2587,7 +2586,7 @@ describe('platform shell and RBAC UI', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-		  if (url.includes('/component-releases/release-credential-draft/playbook?actionKind=install')) return json({ path: 'managed/credential/install.yml', filename: 'install.yml', content: '---\n- hosts: all\n  tasks: []\n', sha256: 'credential-playbook-sha' });
+		  if (url.includes('/component-releases/release-credential-draft/playbook?actionId=action-install')) return json({ path: 'managed/credential/install.yml', filename: 'install.yml', content: '---\n- hosts: all\n  tasks: []\n', sha256: 'credential-playbook-sha' });
 		  if (url.endsWith('/component-releases/release-credential-draft/playbook-workspace')) return json({ root: 'managed/credential/', treeSha256: 'credential-tree-sha', files: [{ releaseId: 'release-credential-draft', path: 'install.yml', sha256: 'credential-playbook-sha', sizeBytes: 32, mediaType: 'application/yaml', editable: true }] });
 		  if (url.endsWith('/component-releases/release-credential-draft/playbook') && init?.method === 'PUT') {
 			const parsed = JSON.parse(String(init.body)); atomicAction = parsed.action;
@@ -2639,16 +2638,16 @@ describe('platform shell and RBAC UI', () => {
     let draft = {
       id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0',
       status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
-      actions: [{ name: 'install', kind: 'install', playbook: 'managed/docker/release-docker-draft/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
+      actions: [{ name: 'install', kind: 'install', playbook: 'managed/docker/release-docker-draft/tasks/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
     };
     let submittedActions: Array<Record<string, unknown>> = [];
     let deletedActionKind = '';
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-      if (url.includes('/component-releases/release-docker-draft/playbook?actionKind=install') && (!init?.method || init.method === 'GET')) {
+      if (url.includes('/component-releases/release-docker-draft/playbook?actionId=action-install') && (!init?.method || init.method === 'GET')) {
         return json({
-          path: 'managed/docker/release-docker-draft/install.yml',
+          path: 'managed/docker/release-docker-draft/tasks/install.yml',
           filename: 'install.yml',
           content: '---\n- name: Install Docker\n  hosts: all\n  tasks: []\n',
           sha256: 'existing-playbook-sha256',
@@ -2658,21 +2657,21 @@ describe('platform shell and RBAC UI', () => {
         return json({
           root: 'managed/docker/release-docker-draft/',
           treeSha256: 'workspace-tree-sha256',
-          files: [{ releaseId: 'release-docker-draft', path: 'install.yml', sha256: 'existing-playbook-sha256', sizeBytes: 64, mediaType: 'application/yaml', editable: true }],
+          files: [{ releaseId: 'release-docker-draft', path: 'tasks/install.yml', sha256: 'existing-playbook-sha256', sizeBytes: 64, mediaType: 'application/yaml', editable: true }],
         });
       }
       if (url.endsWith('/component-releases/release-docker-draft/playbook') && init?.method === 'PUT') {
         const body = JSON.parse(String(init.body));
         return json({
-          path: `managed/docker/release-docker-draft/${body.actionKind}.yml`,
+          path: `managed/docker/release-docker-draft/tasks/${body.actionKind}.yml`,
           filename: `${body.actionKind}.yml`,
           content: body.content,
           sha256: 'playbook-sha256',
-		  action: { ...body.action, id: body.action.id || `action-${body.actionKind}`, playbook: `managed/docker/release-docker-draft/${body.actionKind}.yml` },
+		  action: { ...body.action, id: body.action.id || `action-${body.actionKind}`, playbook: `managed/docker/release-docker-draft/tasks/${body.actionKind}.yml` },
         });
       }
-      if (url.includes('/component-releases/release-docker-draft/playbook?actionKind=') && init?.method === 'DELETE') {
-        deletedActionKind = new URL(url, 'http://localhost').searchParams.get('actionKind') ?? '';
+      if (url.includes('/component-releases/release-docker-draft/playbook?actionId=') && init?.method === 'DELETE') {
+        deletedActionKind = new URL(url, 'http://localhost').searchParams.get('actionId')?.replace('action-', '') ?? '';
         draft = { ...draft, actions: draft.actions.filter((action) => action.kind !== deletedActionKind) };
         return json({ root: 'managed/docker/release-docker-draft/', treeSha256: 'workspace-tree-after-delete', files: [] });
       }
@@ -2694,8 +2693,8 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components?selected=component-docker');
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
-    expect(screen.getAllByText('install.yml')).not.toHaveLength(0);
-    await userEvent.click(screen.getByRole('checkbox', { name: /幂等安装，同时作为升级作业/ }));
+    expect(screen.getAllByText(/install.yml/)).not.toHaveLength(0);
+    await userEvent.click(screen.getByRole('checkbox', { name: /可安全重试/ }));
 
     await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
     expect(await screen.findByDisplayValue(/Install Docker/)).toBeInTheDocument();
@@ -2717,9 +2716,9 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('confirm', confirm);
     await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
     expect(confirm).toHaveBeenCalledWith('当前 Playbook 有未保存内容，确认放弃并新增动作？');
-    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: '安装' }).at(-1)).toHaveClass('active');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '动作类型' }), 'verify');
-    expect(screen.getByText('verify.yml')).toBeInTheDocument();
+    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: 'rollback' }).at(-1)).toHaveClass('active');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '动作类型' }), 'check');
+    expect(screen.getByText('tasks/checks/待保存.yml')).toBeInTheDocument();
 	fireEvent.change(screen.getByRole('textbox', { name: 'Playbook 在线编辑器' }), {
 	  target: { value: '---\n- name: Verify Docker\n  hosts: all\n  tasks: []\n' },
 	});
@@ -2727,9 +2726,9 @@ describe('platform shell and RBAC UI', () => {
 		await waitFor(() => expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled());
 
     await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
-    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: '安装' }).at(-1)).toHaveClass('active');
+    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: 'rollback' }).at(-1)).toHaveClass('active');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '动作类型' }), 'rollback');
-    expect(screen.getByText('rollback.yml')).toBeInTheDocument();
+    expect(screen.getByText('tasks/rollback.yml')).toBeInTheDocument();
     const sourceRelease = screen.getByRole('combobox', { name: '来源 Release' });
     const targetRelease = screen.getByRole('combobox', { name: '目标 Release' });
     expect(within(sourceRelease).getByRole('option', { name: '26.1.0 · release-docker-draft' })).toBeInTheDocument();
@@ -2744,25 +2743,25 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
 
     await waitFor(() => expect(submittedActions).toHaveLength(3));
-    expect(submittedActions.map((action) => action.kind)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions.map((action) => action.kind)).toEqual(['install', 'check', 'rollback']);
     expect(submittedActions[0].idempotent).toBe(true);
-    expect(submittedActions.map((action) => action.name)).toEqual(['install', 'verify', 'rollback']);
+    expect(submittedActions.map((action) => action.name)).toEqual(['install', 'check', 'rollback']);
     expect(submittedActions.every((action) => !('playbook' in action))).toBe(true);
     expect(submittedActions[2]).toMatchObject({ fromReleaseId: 'release-docker-draft', toReleaseId: 'release-docker-previous' });
-    expect(await screen.findByText('动作 3/3：安装、验证、回退')).toBeInTheDocument();
+    expect(await screen.findByText('Draft 配置已保存')).toBeInTheDocument();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
-    expect(screen.getByRole('button', { name: '安装' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '验证' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '回滚' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'install' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'check' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'rollback' })).toBeInTheDocument();
 
     vi.stubGlobal('confirm', vi.fn(() => true));
-    await userEvent.click(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getByRole('button', { name: '验证' }));
+    await userEvent.click(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getByRole('button', { name: 'check' }));
     await userEvent.click(screen.getByRole('button', { name: '移除动作' }));
-    await waitFor(() => expect(deletedActionKind).toBe('verify'));
+    await waitFor(() => expect(deletedActionKind).toBe('check'));
     expect(await screen.findByText('Action 已删除')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '取消' }));
-    expect(await screen.findByText('动作 2/3：安装、回退')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('downloads the current scenario Revision as JSON instead of using the clipboard', async () => {
@@ -2812,7 +2811,8 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('button', { name: '保存草稿' })).toBeInTheDocument();
     fireEvent.click(node);
     expect(screen.getByDisplayValue('all')).toBeDisabled();
-    expect(screen.getByRole('option', { name: 'rollback' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'rollback' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '目标集群动作' })).toBeDisabled();
     expect(screen.queryByRole('option', { name: 'uninstall' })).not.toBeInTheDocument();
   });
 
@@ -2844,7 +2844,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/scenario-revisions/scenario-auto-r1/graph') && init?.method === 'PUT') {
         const submittedGraph = JSON.parse(String(init.body));
         savedGraph = submittedGraph;
-        return json({ ...revision, nodes: submittedGraph.nodes, edges: submittedGraph.edges });
+        return json({ ...revision, ...submittedGraph.graph, nodes: submittedGraph.graph.nodes.map((node: any) => ({ ...node, data: { ...revision.nodes.find(item => item.id === node.id)?.data, ...node.data } })) });
       }
       if (url.endsWith('/scenarios')) return json([{ id: 'scenario-auto', name: 'Automatic graph', slug: 'automatic-graph', ownerId: carol.id, currentRevisionId: revision.id, currentRevision: revision, revisions: [revision] }]);
       if (url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -2859,7 +2859,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
     await waitFor(() => expect(savedGraph).toBeDefined());
     const submittedGraph = (savedGraph as Record<string, any>).graph;
-    expect(submittedGraph.nodes[1].data.dependencySources).toEqual({ 'dep-runtime-auto': 'runtime' });
+    expect(submittedGraph.nodes.find((node: any) => node.id === 'control').data.dependencySources).toEqual({ 'dep-runtime-auto': 'runtime' });
     expect(submittedGraph.edges).toEqual([expect.objectContaining({ source: 'runtime', target: 'control', kind: 'dependency', dependencyId: 'dep-runtime-auto' })]);
   });
 
@@ -2907,9 +2907,9 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByText('当前 DAG 的参数全部由组件、环境或上游映射提供。')).toBeInTheDocument();
   });
 
-  it('confirms before cloning a test-passed revision and does not submit when cancelled', async () => {
+  it('previews a new version from a released source and does not submit when cancelled', async () => {
     const testPassed = {
-      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'test_passed',
+      id: 'scenario-confirm-r1', scenarioId: 'scenario-confirm', revision: 1, state: 'released',
       nodes: [], edges: [],
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2917,7 +2917,7 @@ describe('platform shell and RBAC UI', () => {
       if (url.endsWith('/session/me')) return json(carol);
       if (url.endsWith('/components')) return json(components);
       if (url.endsWith('/scenarios/scenario-confirm/revision-clone-plan') && init?.method === 'POST') {
-        return json({ scenarioId: 'scenario-confirm', sourceRevisionId: testPassed.id, sourceRevision: 1, nextRevision: 2, nodeCount: 0, edgeCount: 0, planDigest: 'scenario-clone-plan' });
+        return json({ scenarioId: 'scenario-confirm', sourceRevisionId: testPassed.id, sourceRevision: 1, nextRevision: 2, nodeCount: 0, edgeCount: 0, sourceRunId: 'formal-acceptance-run', planDigest: 'scenario-clone-plan' });
       }
       if (url.endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST') {
         return json({ ...testPassed, id: 'scenario-confirm-r2', revision: 2, state: 'draft' }, 201);
@@ -2931,17 +2931,17 @@ describe('platform shell and RBAC UI', () => {
       return json({});
     });
     vi.stubGlobal('fetch', fetchMock);
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirm);
     renderApp('/scenarios');
-
-    await userEvent.click(await screen.findByRole('button', { name: '复制为新 Revision' }));
-    await waitFor(() => expect(confirm).toHaveBeenCalledWith('复制预览\nRevision 1 → Revision 2\n0 个节点 · 0 条依赖\n\n确认创建当前 Draft？'));
+    await userEvent.click(await screen.findByRole('button', { name: '新增版本' }));
+    await screen.findByRole('dialog', { name: '新增版本预览' });
+    expect(screen.getByText('锁定来源正式 Run：formal-acceptance-run')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST')).toBe(false);
-
-    confirm.mockReturnValue(true);
-    await userEvent.click(screen.getByRole('button', { name: '复制为新 Revision' }));
+    await userEvent.click(screen.getByRole('button', { name: '新增版本' }));
+    await userEvent.click(await screen.findByRole('button', { name: '确认新增版本' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST')).toBe(true));
+    const submitted = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/scenarios/scenario-confirm/revisions') && init?.method === 'POST');
+    expect(JSON.parse(String(submitted?.[1]?.body))).toMatchObject({ sourceRunId: 'formal-acceptance-run', expectedPlanDigest: 'scenario-clone-plan' });
   });
 
   it('shows revision history and can abandon the current draft', async () => {
@@ -2989,7 +2989,7 @@ describe('platform shell and RBAC UI', () => {
     expect(await screen.findByText('草稿已放弃')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Revision' })).toHaveValue(released.id));
     expect(within(screen.getByRole('combobox', { name: 'Revision' })).getByRole('option', { name: 'r2 · 已放弃' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '复制为新 Revision' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新增版本' })).toBeInTheDocument();
   });
 
   it('confirms and deletes a never-published scenario', async () => {
@@ -3025,7 +3025,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '删除场景' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-delete') && init?.method === 'DELETE')).toBe(true));
     expect(await screen.findByText('场景已删除')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('暂无场景')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('开始编排第一个场景')).toBeInTheDocument());
   });
 
   it('allows the same release to be added more than once with independent host groups', async () => {
@@ -3050,16 +3050,103 @@ describe('platform shell and RBAC UI', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument());
   });
 
+  it('keeps persisted scenario content clean through selection, views and metadata refresh', async () => {
+    installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    await screen.findByText('component-step');
+    const dirty = () => screen.queryByText(/目标集群有未保存的修改/);
+    expect(dirty()).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('component-step'));
+    await userEvent.click(screen.getByRole('button', { name: '参数总览' }));
+    expect(dirty()).not.toBeInTheDocument();
+    EventSourceMock.instances.at(-1)?.emit('release.published');
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 450)); });
+    expect(dirty()).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '环境测试' })).toBeEnabled();
+  });
+
+  it.each(['success', 'failure', 'conflict'] as const)('preserves edits made during a scenario save: %s', async outcome => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    let complete: ((response: Response) => void) | undefined;
+    let submitted: any;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/scenario-revisions/scenario-sample-r1/graph') && init?.method === 'PUT') {
+        submitted = JSON.parse(String(init.body));
+        return new Promise<Response>(resolve => { complete = resolve; });
+      }
+      return base(input, init);
+    }));
+    renderApp('/scenarios');
+    await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(complete).toBeDefined());
+    await userEvent.click(screen.getByRole('button', { name: /containerd.*已使用 1 次/ }));
+    await act(async () => {
+      complete!(await (outcome === 'success'
+        ? json({ id: 'scenario-sample-r1', scenarioId: 'scenario-sample', revision: 1, state: 'draft', revisionDigest: 'saved-digest', ...submitted.graph, nodes: submitted.graph.nodes.map((node: any) => ({ ...node, data: { ...node.data, componentId: 'component-containerd' } })) })
+        : json({ error: { code: outcome === 'conflict' ? 'conflict' : 'internal_error', message: outcome } }, outcome === 'conflict' ? 409 : 500)));
+    });
+    await screen.findByText(outcome === 'success' ? '场景图已保存' : '保存失败');
+    expect(screen.getByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument();
+    expect(screen.getByText(/目标集群有未保存的修改/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '环境测试' })).toBeDisabled();
+  });
+
+  it('ignores a late save after leaving and returning to a Revision', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    let complete: ((response: Response) => void) | undefined;
+    let submitted: any;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/scenario-revisions/scenario-sample-r1/graph') && init?.method === 'PUT') {
+        submitted = JSON.parse(String(init.body));
+        return new Promise<Response>(resolve => { complete = resolve; });
+      }
+      if (url.endsWith('/scenarios')) {
+        const body = await (await base(input, init)).json();
+        body.items[0].revisions.push({ ...body.items[0].currentRevision, id: 'other-revision', revision: 2, state: 'released', nodes: [] });
+        return json(body.items);
+      }
+      return base(input, init);
+    }));
+    renderApp('/scenarios');
+    await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(complete).toBeDefined());
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), 'other-revision');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), 'scenario-sample-r1');
+    await userEvent.click(screen.getByRole('button', { name: /containerd.*已使用 1 次/ }));
+    await act(async () => { complete!(await json({ id: 'scenario-sample-r1', scenarioId: 'scenario-sample', revision: 1, state: 'draft', revisionDigest: 'late-digest', ...submitted.graph, nodes: submitted.graph.nodes.map((node: any) => ({ ...node, data: { ...node.data, componentId: 'component-containerd' } })) })); });
+    await screen.findByText('场景图已保存');
+    expect(screen.getByRole('button', { name: /containerd.*已使用 2 次/ })).toBeInTheDocument();
+    expect(screen.getByText(/目标集群有未保存的修改/)).toBeInTheDocument();
+  });
+
   it('does not reload scenario component metadata for a run log event', async () => {
     const fetchMock = installFetch({ initialUser: carol, withScenario: true });
     renderApp('/scenarios');
     await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
     const componentCallsBefore = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components')).length;
 
-    EventSourceMock.instances.at(-1)?.emit('run.log');
+    EventSourceMock.instances.at(-1)?.emit('run.log', { runId: 'parallel-run', logId: 123 });
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 450)); });
 
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components'))).toHaveLength(componentCallsBefore);
+  });
+
+  it('aligns business state once when the SSE connection reopens', async () => {
+    const fetchMock = installFetch({ initialUser: carol, withScenario: true });
+    renderApp('/scenarios');
+    await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    const source = EventSourceMock.instances.at(-1)!;
+    const count = () => fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/components')).length;
+    const before = count();
+    act(() => source.onopen?.(new Event('open')));
+    expect(count()).toBe(before);
+    act(() => { source.onerror?.(new Event('error')); source.onopen?.(new Event('open')); });
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 450)); });
+    expect(count()).toBe(before + 1);
+    expect(screen.queryByText(/目标集群有未保存的修改/)).not.toBeInTheDocument();
   });
 
   it('renders actionable missing-CredentialRef details in the component validation modal', async () => {
@@ -3088,10 +3175,11 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/components?selected=component-containerd&release=release-containerd-2');
     await userEvent.click(await screen.findByRole('button', { name: '环境验证' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '验证动作' }), 'action-upgrade');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '目标环境' }), 'environment-test');
     await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
 
-    expect(await screen.findByRole('heading', { name: '验证操作被阻断' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '执行准备被阻断' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /查看目标环境凭据/ })).toHaveAttribute('href', '/environments?selected=environment-test&tab=credentials');
     await userEvent.click(screen.getByRole('button', { name: '展开 1 项原因' }));
     expect(screen.getAllByText(/K8S_ENCRYPTION_KEY/)).toHaveLength(2);
@@ -3113,24 +3201,32 @@ describe('platform shell and RBAC UI', () => {
 
     renderApp('/scenarios?selected=scenario-empty');
     await userEvent.click(await screen.findByRole('button', { name: '环境测试' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-test');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '场景执行环境' }), 'environment-test');
 
     expect(screen.getByRole('alert')).toHaveTextContent('当前 DAG 为空');
-    expect(screen.getByRole('button', { name: '开始完整测试' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '提交安装测试' })).toBeDisabled();
     expect(fetchMock.mock.calls.some(([request, requestInit]) => String(request).endsWith('/scenario-revisions/scenario-empty-r1/test-runs') && requestInit?.method === 'POST')).toBe(false);
   });
 
-  it('submits a scenario test with only the selected environment', async () => {
-    const fetchMock = installFetch({ initialUser: carol, withScenario: true });
+  it('submits a scenario test with a preview digest, execution mode and stable idempotency key', async () => {
+    const baseFetch = installFetch({ initialUser: carol, withScenario: true });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/scenario-revisions/scenario-sample-r1/execution-plan')) return json({ scenarioRevisionId: 'scenario-sample-r1', environmentId: 'environment-test', executionMode: 'install', planDigest: 'install-plan', ready: true, operations: [], steps: [], issues: [] });
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
     renderApp('/scenarios');
     await userEvent.click(await screen.findByRole('button', { name: '环境测试' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '共享测试环境' }), 'environment-test');
-    await userEvent.click(screen.getByRole('button', { name: '开始完整测试' }));
-
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '场景执行环境' }), 'environment-test');
+    expect(screen.getByRole('button', { name: '提交安装测试' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '预览执行计划' }));
+    await screen.findByText('计划已就绪');
+    await userEvent.click(screen.getByRole('button', { name: '提交安装测试' }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/scenario-revisions/scenario-sample-r1/test-runs'));
       expect(call).toBeDefined();
-      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-test' });
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ environmentId: 'environment-test', executionMode: 'install', expectedPlanDigest: 'install-plan', idempotencyKey: expect.any(String) });
     });
   });
 });
@@ -3144,4 +3240,132 @@ describe('action capability conversion', () => {
       { type: 'upgrade', playbook: 'upgrade.yml' },
     ])).toEqual(['install', 'upgrade']);
   });
+});
+
+
+describe('scenario workspace loading and settings', () => {
+  it('waits for initial contracts without flashing missing-contract or order warnings', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/components') ? new Promise<Response>(resolve => { finish = resolve; }) : base(input, init)));
+    renderApp('/scenarios');
+    expect(await screen.findByText('正在加载场景工作区…')).toBeVisible();
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(screen.queryByText('组件合同暂不可用')).not.toBeInTheDocument();
+    expect(screen.queryByText('执行顺序尚未确定，请补充手工顺序线')).not.toBeInTheDocument();
+    await act(async () => finish(await json(components)));
+    expect(await screen.findByRole('button', { name: /containerd.*已使用 1 次/ })).toBeVisible();
+    expect(screen.queryByText('组件合同暂不可用')).not.toBeInTheDocument();
+  });
+
+  it('shows contract failures after the request ends and recovers with retry', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    let failed = true;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => failed && String(input).endsWith('/components') ? json({error:{message:'contract read failed'}},500) : base(input,init)));
+    renderApp('/scenarios');
+    expect(await screen.findByText('组件合同加载失败')).toBeVisible();
+    expect(screen.queryByText('执行顺序尚未确定，请补充手工顺序线')).not.toBeInTheDocument();
+    failed = false;
+    await userEvent.click(screen.getByRole('button', { name: '重新检查' }));
+    expect(await screen.findByRole('button', { name: /containerd.*已使用 1 次/ })).toBeVisible();
+    expect(screen.queryByText('组件合同加载失败')).not.toBeInTheDocument();
+  });
+
+  it('keeps the canvas and frozen branch scope during a background contract refresh', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    let refreshing = false;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => refreshing && String(input).endsWith('/components') ? new Promise<Response>(resolve => { finish = resolve; }) : base(input,init)));
+    renderApp('/scenarios');
+    await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
+    const settings = screen.getByRole('region', { name: '适配检查' });
+    expect(settings.closest('aside')).toHaveClass('node-inspector');
+    const disclosure = settings.querySelector('details')!;
+    expect(disclosure.open).toBe(false);
+    await userEvent.click(within(settings).getByText('适配检查'));
+    expect(within(settings).queryByRole('checkbox')).not.toBeInTheDocument();
+    refreshing = true;
+    EventSourceMock.instances.at(-1)?.emit('release.published');
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: /containerd.*已使用 1 次/ })).toBeVisible();
+    expect(screen.getByLabelText('分支适配标签')).toBeInTheDocument();
+    await act(async () => finish(await json(components)));
+    expect(screen.getByLabelText('分支适配标签')).toBeInTheDocument();
+    expect(disclosure.open).toBe(true);
+  });
+
+  it('redirects the removed reference rebuild route without showing its navigation entry', async () => {
+    installFetch({ initialUser: carol });
+    renderApp('/reference-rebuild');
+    expect(await screen.findByRole('heading', { name: '场景编排' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: '参考重建' })).not.toBeInTheDocument();
+    expect(screen.queryByText('从旧备份重建')).not.toBeInTheDocument();
+  });
+
+  it('resets settings on Revision changes and keeps historical adaptation values read-only', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    const sample = (await (await base('/api/v1/scenarios')).json()).items[0];
+    const historical = { ...sample.currentRevision, id: 'historical-r1', state: 'released', environmentConstraints: { architecture: ['arm64'] } };
+    sample.currentRevision.revision = 2;
+    sample.revisions = [sample.currentRevision, historical];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/scenarios') ? json([sample]) : base(input, init)));
+    renderApp('/scenarios');
+    const settings = await screen.findByRole('region', { name: '适配检查' });
+    await userEvent.click(within(settings).getByText('适配检查'));
+    expect(within(settings).queryByRole('checkbox')).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), historical.id);
+    await waitFor(() => expect(settings.querySelector('details')!.open).toBe(false));
+    expect(settings.querySelector('.scenario-settings__summary')).toHaveTextContent('ARM/arm64');
+    await userEvent.click(within(settings).getByText('适配检查'));
+    expect(within(settings).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('分支适配标签')).toHaveTextContent('ARM/arm64');
+    expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), sample.currentRevision.id);
+    await waitFor(() => expect(settings.querySelector('details')!.open).toBe(false));
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeEnabled();
+  });
+
+  it('keeps the latest scene selected when switching during a slow background contract request', async () => {
+    const base = installFetch({ initialUser: carol, withScenario: true });
+    const sample = (await (await base('/api/v1/scenarios')).json()).items[0];
+    const secondRevision = { ...sample.currentRevision, id: 'second-r1', scenarioId: 'second-scene', nodes: sample.currentRevision.nodes.map((node: {data: object}) => ({ ...node, data: { ...node.data, label: 'Second scene node' } })), environmentConstraints: { architecture: ['arm64'] } };
+    const second = { ...sample, id: 'second-scene', name: 'Second scene', currentRevisionId: secondRevision.id, currentRevision: secondRevision, revisions: [secondRevision] };
+    let slow = false;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/scenarios')) return json([sample, second]);
+      if (slow && String(input).endsWith('/components')) return new Promise<Response>(resolve => { finish = resolve; });
+      return base(input, init);
+    }));
+    renderApp('/scenarios');
+    await screen.findByRole('region', { name: '适配检查' });
+    slow = true;
+    EventSourceMock.instances.at(-1)?.emit('release.published');
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    const picker = screen.getByRole('combobox', { name: '当前场景' });
+    await userEvent.selectOptions(picker, second.id);
+    await userEvent.selectOptions(picker, sample.id);
+    await userEvent.selectOptions(picker, second.id);
+    await act(async () => finish(await json(components)));
+    expect(picker).toHaveValue(second.id);
+    await userEvent.click(screen.getByRole('button', { name: '节点表' }));
+    expect(screen.getByText('Second scene node')).toBeVisible();
+    expect(screen.queryByText('组件合同暂不可用')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '适配检查' }).querySelector('.scenario-settings__summary')).toHaveTextContent('ARM/arm64');
+  });
+});
+
+it('opens Run history management on demand for the platform admin', async () => {
+  const fetchMock = installFetch({ initialUser: admin });
+  renderApp('/runs', true);
+  await screen.findByRole('button', { name: '运行历史管理' });
+  expect(screen.queryByRole('dialog', { name: '运行历史管理' })).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/run-retention'))).toBe(false);
+  await userEvent.click(screen.getByRole('button', { name: '运行历史管理' }));
+  const dialog = screen.getByRole('dialog', { name: '运行历史管理' });
+  expect(dialog).toBeInTheDocument();
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/run-retention'))).toBe(true));
+  await userEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+  expect(screen.queryByRole('dialog', { name: '运行历史管理' })).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '集群' })).toHaveAttribute('href', '/scenarios');
 });

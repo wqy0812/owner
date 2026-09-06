@@ -1,10 +1,14 @@
 import type { ReactNode } from 'react';
-import { AlertCircle, Inbox, LoaderCircle, RefreshCcw } from 'lucide-react';
+import { AlertCircle, Inbox, Info, LoaderCircle, RefreshCcw } from 'lucide-react';
 import { STATUS_LABELS } from '../types/domain';
 
 export function StatusPill({ status, children }: { status: string; children?: ReactNode }) {
   const normalized = status?.toLowerCase().replaceAll('-', '_') ?? 'unknown';
   return <span className={`status-pill status-pill--${normalized}`}>{children ?? STATUS_LABELS[normalized] ?? status}</span>;
+}
+
+export function InfoNote({ title, children }: { title?: string; children: ReactNode }) {
+  return <div className="info-note"><Info size={16} aria-hidden="true" /><div>{title && <strong>{title}</strong>}<p>{children}</p></div></div>;
 }
 
 export function PageHeader({

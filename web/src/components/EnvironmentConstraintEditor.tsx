@@ -23,14 +23,14 @@ export function EnvironmentConstraintEditor({
       <legend>适配标签 · {title}</legend>
       <p>{title === "场景支持范围" ? "选择场景支持的环境范围；组件有限制的分类必须补选，草稿可暂存缺项。" : "选择该版本可安装的环境。某个维度不选，表示不限制该维度。"}</p>
       <div className="constraint-editor__grid">
-        {platformOptionsLoading ? <span>正在加载环境维度…</span> : dimensions.map((dimension) => {
+        {platformOptionsLoading && !allDimensions.length ? <span>正在加载环境维度…</span> : dimensions.map((dimension) => {
           const selected = value[dimension.key] ?? [];
           const parent = dimension.parentCategoryId ? dimensions.find((item) => item.id === dimension.parentCategoryId) : undefined;
           const options = childOptionsForSelection(dimension, parent, parent ? value[parent.key] ?? [] : []);
           const groups = parent ? parent.options.filter((option) => (value[parent.key] ?? []).includes(option.value)).map((parentOption) => ({ label: parentOption.label, options: options.filter((option) => option.parentOptionId === parentOption.id) })) : [{ label: '', options }];
           return (
             <div className="constraint-dimension" key={dimension.key}>
-              <strong>{dimension.label}</strong>
+              <strong>{dimension.label}</strong><small>{selected.length ? `已选择 ${selected.length} 项` : '不限制'}</small>
               {parent && options.length === 0 ? <small>请先选择{parent.label}</small> : null}
               {groups.map((group) => <div key={group.label || dimension.key}>{group.label ? <small>{group.label}</small> : null}<div className="constraint-options" role="group" aria-label={group.label ? `${dimension.label} ${group.label}` : dimension.label}>
                 {group.options.map((option) => {

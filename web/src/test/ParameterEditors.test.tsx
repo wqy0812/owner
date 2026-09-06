@@ -197,7 +197,20 @@ describe('parameter contract editor', () => {
       <ParameterContractList release={proxyRelease} components={[kubelet, proxy]} />
     </>);
     expect(screen.getAllByText('本组件参数 kubeRoot 来自 kubelet 1.17.5 的公开参数 kubeInstallRoot').length).toBeGreaterThan(1);
-    expect(screen.getByText('内部')).toBeInTheDocument();
+    expect(screen.getByText('内部参数')).toBeInTheDocument();
     expect(screen.getByText('kubeRoot')).toBeInTheDocument();
   });
+});
+
+
+it('keeps public values and lineage collapsed until a parameter is opened', async () => {
+  render(<ParameterContractList release={kubeletRelease} components={[kubelet, proxy]} />);
+  expect(screen.getByText('1 项引用')).toBeVisible();
+  expect(screen.getAllByText('组件 Owner 固定')[0]).toBeVisible();
+  expect(screen.queryByText('component_owner')).not.toBeInTheDocument();
+  expect(screen.getByText('/opt/kube')).not.toBeVisible();
+  await userEvent.click(screen.getByLabelText('查看参数 kubeInstallRoot'));
+  expect(screen.getByText('/opt/kube')).toBeVisible();
+  expect(screen.getByText('kube-proxy 1.17.5')).toBeVisible();
+  expect(screen.getByText('kubeRoot')).toBeVisible();
 });

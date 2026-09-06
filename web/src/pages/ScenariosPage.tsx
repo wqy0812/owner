@@ -1,7 +1,17 @@
-import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
+import { activeWorkbench } from '../hooks/activeWork';
+import {HostGroupName,useHostGroupLabel} from '../components/HostGroupName';
+import { scenarioGraphSignature } from '../types/scenarioGraphContent';
+import { ScenarioAcceptanceEditor } from '../components/ScenarioAcceptanceEditor';
+import { ScenarioExecutionPanel, ScenarioEvidence } from '../components/ScenarioExecutionPanel';
+import { ScenarioCreateModal } from '../components/ScenarioCreateModal';
+import { replaceScenarioNodeRelease, changedReleaseParameterIssues, changedReleaseDependencyIssues, scenarioParameterError } from './scenarioLifecycle';
+import type { ScenarioClonePlan } from '../types/domain';
+import { JobPlanPreview } from '../components/JobPlanPreview';
+import type { ComponentTestPlan } from '../types/domain';
+import { BranchScope } from '../components/BranchScope';
 import { parseConstraintSelection, environmentConstraintDimensions, serializeConstraintSelection, type ConstraintSelection } from '../types/environmentConstraints';
 import { adaptationValues, scenarioAdaptationIssues, environmentAdaptationIssues, commonAdaptationRanges } from '../types/adaptation';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   Controls,
@@ -16,6 +26,7 @@ import {
   type EdgeChange,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Beaker, Boxes, CheckCircle2, Download, GitCommitHorizontal, LockKeyhole, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
@@ -27,8 +38,8 @@ import { describeParameterMapping, mappedParameterNames, ParameterValueEditor } 
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { COMPONENT_LAYERS, componentLayer } from '../types/componentClassification';
-import { executableActionTypes, type CandidateReleaseSet, type Component, type ComponentRelease, type Environment, type ParameterDefinition, type Scenario, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
-import { isScenarioNodeReachable, reconcileScenarioGraph, scenarioDependenciesForNode, scenarioDependencyKey } from './scenarioGraph';
+import { type CandidateReleaseSet, type Component, type ComponentRelease, type Environment, type ParameterDefinition, type ScenarioEdge, type ScenarioNodeData, type WorkExplanation } from '../types/domain';
+import { scenarioExecutionOrderNodes, isScenarioNodeReachable, reconcileScenarioGraph, scenarioDependenciesForNode, scenarioDependencyKey } from './scenarioGraph';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from './scenarioTemplate';
 
 type FlowNode = Node<ScenarioNodeData>;
@@ -57,12 +68,13 @@ function inheritedHostGroup(release: ComponentRelease | undefined, action: Scena
 }
 
 export function ScenariosPage() {
+  const hostGroupLabel=useHostGroupLabel();
   const { user, notify, signalRefresh, platformOptionCategories } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: scenarios, loading, error, isRefreshing, reload } = useApiData((signal) => api.scenarios(signal), [user.id], 'scenarios');
-  const { data: components } = useApiData((signal) => api.components(signal), [user.id], 'components');
+  const { data: components, loading: componentsLoading, error: componentsError, reload: reloadComponents } = useApiData((signal) => api.components(signal), [user.id], 'components');
   const { data: environments } = useApiData((signal) => api.environments(signal), [user.id], 'environments');
-  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench');
+  const { data: workbench } = useApiData((signal) => api.workbench(signal), [user.id], 'workbench', activeWorkbench);
   const selectedScenarioId = searchParams.get('selected') ?? '';
   const selectedScenario = useMemo(() => scenarios?.find((item) => item.id === selectedScenarioId) ?? scenarios?.[0], [scenarios, selectedScenarioId]);
   const currentRevision = selectedScenario?.currentRevision;
@@ -70,13 +82,22 @@ export function ScenariosPage() {
   const loadedRevisionRef = useRef<{ scenarioId?: string; currentRevisionId?: string }>({});
   const revision = useMemo(() => selectedScenario?.revisions?.find((item) => item.id === selectedRevisionId) ?? currentRevision, [currentRevision, selectedRevisionId, selectedScenario?.revisions]);
   const revisionWorkItem = workbench?.items.find((item) => item.subject.type === 'scenario_revision' && item.subject.id === revision?.id);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => setSettingsOpen(false), [revision?.id]);
   const [constraints, setConstraints] = useState<ConstraintSelection>({});
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>([]);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<FlowNode, FlowEdge>>();
+  const [locateNodeId, setLocateNodeId] = useState<string>();
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [validation, setValidation] = useState<{ valid: boolean; errors: string[] }>();
   const [testOpen, setTestOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [forkSource, setForkSource] = useState('');
+  const [section, setSection] = useState<'target' | 'upgrade' | 'acceptance'>('target');
+  const [clonePlan, setClonePlan] = useState<ScenarioClonePlan>();
+  const [replacementIssues, setReplacementIssues] = useState<string[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [candidateSet, setCandidateSet] = useState<CandidateReleaseSet>();
   const [operationExplanation, setOperationExplanation] = useState<WorkExplanation>();
@@ -84,11 +105,23 @@ export function ScenariosPage() {
   const [view, setView] = useState<'graph' | 'table' | 'parameters'>('graph');
   const [testEnvironment, setTestEnvironment] = useState('');
   const [busy, setBusy] = useState<string>();
+  const [savedGraphSignature, setSavedGraphSignature] = useState('');
+  const [loadedGraphDigest, setLoadedGraphDigest] = useState('');
+  const [graphReloadToken, setGraphReloadToken] = useState(0);
+  const graphRevisionRef = useRef<string>();
+  const editorVisit = useRef({ key: '', generation: 0 });
+  const editorKey = `${user.id}:${revision?.id ?? ''}:${graphReloadToken}`;
+  if (editorVisit.current.key !== editorKey) editorVisit.current = { key: editorKey, generation: editorVisit.current.generation + 1 };
+  const graphSignature = useMemo(() => scenarioGraphSignature({ nodes, edges, environmentConstraints: constraints }), [nodes, edges, constraints]);
+  const currentEditor = useRef({ generation: editorVisit.current.generation, signature: graphSignature });
+  currentEditor.current = { generation: editorVisit.current.generation, signature: graphSignature };
+  const graphDirty = Boolean(savedGraphSignature && savedGraphSignature !== graphSignature);
 
   const isCurrentRevision = Boolean(revision && revision.id === (selectedScenario?.currentRevisionId ?? currentRevision?.id));
-  const editable = Boolean(user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'draft');
+  const contractsUnavailable = components === undefined || Boolean(componentsError) || (revision?.nodes ?? []).some(node => !(components ?? []).some(component => component.releases?.some(release => release.id === node.data.releaseId)));
+  const editable = !contractsUnavailable && Boolean(user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'draft');
   const canLaunch = Boolean((user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id) || user.role === 'environment_owner');
-  const canLaunchRevision = Boolean(canLaunch && revision && (isCurrentRevision || revision.state === 'released'));
+  const canLaunchRevision = Boolean(!contractsUnavailable && canLaunch && revision && (isCurrentRevision || revision.state === 'released'));
   const canAbandonDraft = Boolean(editable && selectedScenario?.revisions?.some((item) => item.id !== revision?.id && (item.state === 'released' || item.state === 'deprecated')));
   const canRequestScenarioDelete = Boolean(
     selectedScenario?.ownerId === user.id
@@ -116,12 +149,18 @@ export function ScenariosPage() {
   }, [canLaunchRevision, revision, searchParams, selectedScenario, setSearchParams, user.id]);
 
   useEffect(() => {
-    setConstraints(Object.fromEntries(Object.entries(revision?.environmentConstraints ?? {}).map(([key, value]) => [key, adaptationValues(value)])));
+    if (graphRevisionRef.current === revision?.id && graphDirty) return;
+    graphRevisionRef.current = revision?.id;
+    setLoadedGraphDigest(revision?.revisionDigest ?? '');
+    const nextConstraints = Object.fromEntries(Object.entries(revision?.environmentConstraints ?? {}).map(([key, value]) => [key, adaptationValues(value)]));
+    setConstraints(nextConstraints);
+    setSavedGraphSignature(scenarioGraphSignature({ nodes: revision?.nodes ?? [], edges: revision?.edges ?? [], environmentConstraints: nextConstraints }));
     setNodes((revision?.nodes ?? []).map((node) => ({ ...node, type: 'component' })) as FlowNode[]);
     setEdges((revision?.edges ?? []) as FlowEdge[]);
     setSelectedNodeId(undefined);
+    setReplacementIssues([]);
     setValidation(undefined);
-  }, [revision?.id, setEdges, setNodes]);
+  }, [revision?.id, revision?.revisionDigest, graphReloadToken, setEdges, setNodes]);
 
   useEffect(() => setDeleteExplanation(undefined), [selectedScenario?.id]);
 
@@ -138,10 +177,20 @@ export function ScenariosPage() {
     if (sourceSignature(nodes) !== sourceSignature(reconciledGraph.nodes as FlowNode[])) setNodes(reconciledGraph.nodes as FlowNode[]);
     if (edgeSignature(edges) !== edgeSignature(reconciledGraph.edges)) setEdges(reconciledGraph.edges as FlowEdge[]);
   }, [editable, edges, nodes, reconciledGraph, releasesByID.size, setEdges, setNodes]);
+  const orderNodes = useMemo(() => reconciledGraph.issues.some(issue => issue.code === 'contract_unavailable') ? [] : scenarioExecutionOrderNodes(reconciledGraph.nodes, reconciledGraph.edges), [reconciledGraph]);
+  const orderBlocked = contractsUnavailable || orderNodes.length > 0;
+  useEffect(() => {
+    if (view !== 'graph') { setFlowInstance(undefined); return; }
+    if (!flowInstance || !locateNodeId) return;
+    void flowInstance.fitView({ nodes: [{ id: locateNodeId }], maxZoom: 1.2, duration: 250 });
+    setLocateNodeId(undefined);
+  }, [view, flowInstance, locateNodeId]);
   const displayNodes = useMemo(() => nodes.map((node) => {
     const metadata = releaseMetadata.get(node.data.releaseId);
     return {
       ...node,
+      className: orderNodes.includes(node.id) ? 'scenario-node--order-pending' : undefined,
+      selected: node.id === selectedNodeId,
       data: {
         ...node.data,
         componentId: node.data.componentId || metadata?.component.id || '',
@@ -150,7 +199,7 @@ export function ScenariosPage() {
         layer: node.data.layer ?? metadata?.component.layer,
       },
     };
-  }), [nodes, releaseMetadata]);
+  }), [nodes, releaseMetadata, orderNodes, selectedNodeId]);
   const displayEdges = useMemo(() => reconciledGraph.edges.map((edge) => ({
     ...edge,
     className: edge.kind === 'dependency' ? 'scenario-edge scenario-edge--dependency' : 'scenario-edge scenario-edge--sequence',
@@ -170,15 +219,11 @@ export function ScenariosPage() {
     const candidates = displayNodes.filter((node) => node.id !== selectedNodeId && node.data.releaseId === dependency.releaseId);
     return [selectedRelease ? scenarioDependencyKey(selectedRelease, dependency) : dependency.releaseId, candidates];
   }));
-  const availableNodeActions = useMemo(() => {
-    const explicit = executableActionTypes(selectedRelease?.actions);
-    return [...new Set(explicit.length ? explicit : [selectedNode?.data.action ?? 'install'])];
-  }, [selectedNode?.data.action, selectedRelease?.actions]);
+  const availableNodeActions: Array<ScenarioNodeData['action']> = ['install'];
 
   function addComponent(component: Component, release: ComponentRelease) {
     if (!editable) return;
-    const declaredActions = executableActionTypes(release.actions);
-    const defaultAction = declaredActions.includes('install') ? 'install' : declaredActions.includes('upgrade') ? 'upgrade' : declaredActions.includes('configure') ? 'configure' : declaredActions.includes('preflight') ? 'preflight' : declaredActions.includes('inspect') ? 'inspect' : declaredActions.includes('verify') ? 'verify' : declaredActions[0] ?? 'install';
+    const defaultAction = 'install' as const;
     setNodes((items) => {
       const count = items.length;
       return [...items, {
@@ -265,6 +310,7 @@ export function ScenariosPage() {
   }
   async function save() {
     if (!revision) return;
+    const submittedEditor = { ...currentEditor.current };
     const conflicts = scenarioAdaptationIssues(constraints, adaptationReleases, false, adaptationLabel);
     if (conflicts.length) { notify('error', '适配标签不匹配', conflicts.slice(0, 3).join('；') + (conflicts.length > 3 ? `；另有 ${conflicts.length - 3} 项，请查看适配标签区。` : '')); return; }
     const normalized = reconcileScenarioGraph(nodes, edges, releasesByID);
@@ -281,11 +327,21 @@ export function ScenariosPage() {
     }
     setBusy('save');
     try {
-      await api.saveGraph(revision.id, {
+      const saved = await api.saveGraph(revision.id, {
         nodes: normalized.nodes.map(({ id, position, data }) => ({ id, type: 'component' as const, position, data })),
         edges: normalized.edges,
-        environmentConstraints: serializeConstraintSelection(constraints, environmentConstraintDimensions(platformOptionCategories)),
+        environmentConstraints: constraints,
+        expectedDigest: loadedGraphDigest || undefined,
       });
+      if (currentEditor.current.generation === submittedEditor.generation) {
+        setLoadedGraphDigest(saved.revisionDigest ?? '');
+        setSavedGraphSignature(scenarioGraphSignature(saved));
+        if (currentEditor.current.signature === submittedEditor.signature) {
+          setNodes(saved.nodes as FlowNode[]);
+          setEdges(saved.edges as FlowEdge[]);
+          setConstraints(Object.fromEntries(Object.entries(saved.environmentConstraints ?? {}).map(([key, value]) => [key, adaptationValues(value)])));
+        }
+      }
       notify('success', '场景图已保存', '图或参数变更会使之前的测试结果失效。'); signalRefresh('scenarios');
     } catch (reason) { notify('error', '保存失败', displayError(reason)); } finally { setBusy(undefined); }
   }
@@ -296,19 +352,15 @@ export function ScenariosPage() {
     catch (reason) { notify('error', '校验失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
-  async function test() {
-    if (!revision || !testEnvironment || (revision.state !== 'released' && nodes.length === 0)) return; setBusy('test');
-    setOperationExplanation(undefined);
-    try {
-      if (revision.state === 'released') await api.runScenario(revision.id, testEnvironment);
-      else await api.testScenario(revision.id, testEnvironment);
-      notify('success', revision.state === 'released' ? '场景运行已提交' : '完整场景测试已提交', revision.state === 'released' ? '可以在运行中心查看执行进度。' : '场景状态将进入 Testing。'); setTestOpen(false); signalRefresh(['scenarios', 'runs', 'environments', 'workbench']);
-    }
-    catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '测试提交失败', displayError(reason)); } finally { setBusy(undefined); }
-  }
-
+  const [jobPlan,setJobPlan]=useState<ComponentTestPlan>();
+  const [jobMedia,setJobMedia]=useState<Record<string,string>>({});
+  const [exportReady,setExportReady]=useState(false);
+  const jobChoices=Object.entries(jobMedia).map(([requirementId,mode])=>({requirementId,mode}));
+  useEffect(()=>{setJobPlan(undefined);setJobMedia({});setExportReady(false);},[testEnvironment,revision?.id]);
+  async function previewJob() { if(!revision||!testEnvironment)return;setBusy('job-preview');try{const plan=await api.previewScenarioJob(revision.id,testEnvironment,jobChoices);setJobPlan(plan);setExportReady(plan.deliveryRequirements.every(item=>!!jobMedia[item.id]));}catch(reason){notify('error','计划预览失败',displayError(reason));}finally{setBusy(undefined);} }
+  async function exportJob() { if(!revision||!jobPlan)return;setBusy('job-export');try{const blob=await api.exportScenarioJob(revision.id,testEnvironment,jobPlan.planDigest,jobChoices);const href=URL.createObjectURL(blob);const link=document.createElement('a');link.href=href;link.download=`scenario-job-${revision.id}.tar.gz`;link.click();URL.revokeObjectURL(href);notify('success','作业包已导出','下载不会创建或启动 Run。');}catch(reason){notify('error','导出失败',displayError(reason));setJobPlan(undefined);}finally{setBusy(undefined);} }
   async function previewPublish() {
-    if (!revision) return; setBusy('publish-preview');
+    if (orderBlocked || !revision) return; setBusy('publish-preview');
     setOperationExplanation(undefined);
     try { setCandidateSet(await api.candidateReleaseSet(revision.id)); }
     catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '候选发布集检查失败', displayError(reason)); }
@@ -316,7 +368,7 @@ export function ScenariosPage() {
   }
 
   async function publish() {
-    if (!revision) return; setBusy('publish');
+    if (orderBlocked || !revision) return; setBusy('publish');
     setOperationExplanation(undefined);
     try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景 Revision 与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components', 'workbench']); }
     catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
@@ -326,7 +378,9 @@ export function ScenariosPage() {
     try {
       const parsed = parseScenarioTemplate(text);
       validateScenarioTemplateReferences(parsed, components ?? []);
-      setConstraints(parseConstraintSelection(parsed.environmentConstraints, environmentConstraintDimensions(platformOptionCategories)));
+      const importedScope = parseConstraintSelection(parsed.environmentConstraints, environmentConstraintDimensions(platformOptionCategories));
+      const normalize = (scope: ConstraintSelection) => JSON.stringify(Object.entries(scope).filter(([, values]) => values.length).sort(([a],[b]) => a.localeCompare(b)).map(([key,values]) => [key,[...values].sort()]));
+      if (normalize(importedScope) !== normalize(constraints)) throw new Error('模板适配范围与当前分支不同，请新增分支后导入。');
       setNodes(parsed.nodes.map((node) => {
         const release = releaseMetadata.get(node.data.releaseId)?.release;
         return { ...node, data: { ...node.data, hostGroup: inheritedHostGroup(release, node.data.action) } };
@@ -361,15 +415,33 @@ export function ScenariosPage() {
 
   async function cloneRevision() {
     if (!selectedScenario || !revision) return; setBusy('clone');
+    try { setClonePlan(await api.previewScenarioClone(selectedScenario.id, revision.id)); }
+    catch (reason) { notify('error', '新增版本预览失败', displayError(reason)); } finally { setBusy(undefined); }
+  }
+  async function createVersion() {
+    if (!selectedScenario || !clonePlan) return; setBusy('clone');
     try {
-      const plan = await api.previewScenarioClone(selectedScenario.id, revision.id);
-      if (!window.confirm(`复制预览\nRevision ${plan.sourceRevision} → Revision ${plan.nextRevision}\n${plan.nodeCount} 个节点 · ${plan.edgeCount} 条依赖\n\n确认创建当前 Draft？`)) return;
-      const created = await api.cloneScenarioRevision(selectedScenario.id, revision.id, plan.planDigest);
+      const created = await api.cloneScenarioRevision(selectedScenario.id, clonePlan.sourceRevisionId, clonePlan.planDigest, clonePlan.sourceRunId);
       setSearchParams({ selected: selectedScenario.id, revision: created.id }, { replace: true });
-      notify('success', '新 Revision 已创建', '已从当前不可变版本克隆为 Draft。');
-      signalRefresh('scenarios');
-    }
-    catch (reason) { notify('error', '创建 Revision 失败', displayError(reason)); } finally { setBusy(undefined); }
+      setClonePlan(undefined); setSection('target'); notify('success', '新版本已创建', '来源版本和成功正式 Run 已锁定；请编辑目标集群并完成安装、升级测试。'); signalRefresh('scenarios');
+    } catch (reason) { notify('error', '新增版本失败', displayError(reason)); } finally { setBusy(undefined); }
+  }
+  async function reopenRevision() {
+    if (!revision?.revisionDigest) return; setBusy('edit');
+    try { await api.reopenScenarioRevision(revision.id, revision.revisionDigest); notify('success', '版本已恢复编辑', '安装和升级测试证据已失效，需要重新测试。'); signalRefresh('scenarios'); }
+    catch (reason) { notify('error', '继续编辑失败', displayError(reason)); } finally { setBusy(undefined); }
+  }
+  function replaceRelease(releaseId: string) {
+    const target = releasesByID.get(releaseId);
+    if (!selectedNode || !target || !editable) return;
+    try {
+      const dependencyChanges = changedReleaseDependencyIssues(releasesByID.get(selectedNode.data.releaseId), target);
+      if (dependencyChanges.length && !window.confirm(`更换为 ${target.version} 将改变依赖或公开参数映射：\n${dependencyChanges.join('\n')}\n\n确认按目标版本合同重新匹配依赖来源？缺少上游或存在多个来源时，需要继续补齐。`)) return;
+      const data = replaceScenarioNodeRelease(selectedNode, target);
+      setReplacementIssues([...changedReleaseParameterIssues(selectedNode, target), ...dependencyChanges]);
+      updateSelected(data); setValidation(undefined);
+      notify('info', '目标组件版本已更换', '原参数已保留；依赖按确认后的目标合同匹配，请处理失效项并保存目标集群。');
+    } catch (reason) { notify('error', '更换组件版本失败', displayError(reason)); }
   }
 
   async function abandonDraft() {
@@ -410,29 +482,50 @@ export function ScenariosPage() {
   }
 
   return <div className="page page--scenario">
-    <PageHeader eyebrow="Scenario composer" title="场景编排" description="集群 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' ? <button className="button button--primary" onClick={() => setCreateOpen(true)}><Plus size={16} /> 新建场景</button> : undefined} />
+    <PageHeader eyebrow="Scenario composer" title="场景编排" description="集群 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' ? <button className="button button--primary" onClick={() => { setForkSource(''); setCreateOpen(true); }}><Plus size={16} /> 新建场景</button> : undefined} />
     <RefreshNotice loading={isRefreshing} error={scenarios ? error : undefined} onRetry={() => void reload()} />
-    {loading && !scenarios ? <LoadingBlock label="正在加载场景图…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : <>
+    {(loading && !scenarios) || (componentsLoading && components === undefined && !error) ? <LoadingBlock label="正在加载场景工作区…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : !scenarios?.length ? <section className="panel scenario-start"><EmptyState title="开始编排第一个场景" description="创建场景后再选择适配范围、添加组件和配置验收。" /><div className="scenario-inline-actions">{user.role === 'scenario_owner' && <button className="button button--primary" onClick={() => setCreateOpen(true)}>新建场景</button>}<a className="button button--quiet" href="/manual">查看参考资料</a></div></section> : <>
+      {contractsUnavailable && <section className="panel scenario-contract-status" aria-label="组件合同待就绪"><h3>{componentsError ? '组件合同加载失败' : '组件合同暂不可用'}</h3><p>已保存的连线和参数保持完整；合同齐备前暂停拓扑与参数编辑、测试和发布。</p><div className="scenario-contract-status__items">{(revision?.nodes ?? []).filter(node => !(components ?? []).some(component => component.releases?.some(release => release.id === node.data.releaseId))).map(node => <p key={node.id}>{node.data.label} · {node.data.contractAvailability === 'unshared' ? '组件尚未共享' : node.data.contractAvailability === 'missing' ? '组件版本不存在' : '未返回此版本合同'} · 负责人：{node.data.componentOwnerName || '待核对'}</p>)}</div><button className="button button--quiet" onClick={() => { void reloadComponents(); void reload(); }}>重新检查</button></section>}
       <div className="scenario-toolbar panel">
         <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSearchParams({ selected: event.target.value })}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
 				{revision && <label><span>Revision</span><select aria-label="Revision" value={revision.id} onChange={(event) => { if (selectedScenario) setSearchParams({ selected: selectedScenario.id, revision: event.target.value }); }}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
         {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前 Revision' : '历史 Revision'}</span><StatusPill status={revision.state} /></div>}
+        {revision && <BranchScope scope={revision.environmentConstraints}/>}
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>
           {editable && <button className="button button--quiet" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入模板</button>}
           {revision && <button className="button button--quiet" onClick={exportTemplate}><Download size={16} /> 导出 JSON</button>}
           {editable && <button className="button button--secondary" disabled={busy === 'save'} onClick={() => void save()}><Save size={16} /> 保存草稿</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && (revision?.state === 'test_passed' || revision?.state === 'released' || revision?.state === 'deprecated') && !selectedScenario.revisions?.some((item) => item.id !== revision.id && ['draft', 'testing', 'test_passed'].includes(item.state)) && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 复制为新 Revision</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && !selectedScenario.revisions?.some((item) => item.id !== revision.id && ['draft', 'testing', 'test_passed'].includes(item.state)) && <button className="button button--secondary" disabled={busy === 'clone'} onClick={() => void cloneRevision()}><Plus size={16} /> 新增版本</button>}
+          {user.role === 'scenario_owner' && revision?.state === 'released' && <button className="button button--secondary" onClick={() => { setForkSource(revision.id); setCreateOpen(true); }}><Plus size={16} /> 新增分支</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--secondary" disabled={busy === 'edit'} onClick={() => void reopenRevision()}>继续编辑</button>}
           {canAbandonDraft && <button className="button button--danger-soft" disabled={busy === 'abandon'} onClick={() => void abandonDraft()}><Undo2 size={16} /> 放弃草稿</button>}
           {canRequestScenarioDelete && <button className="button button--danger-soft" disabled={busy === 'delete-scenario'} onClick={() => void deleteScenario()}><Trash2 size={16} /> 删除场景</button>}
           {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && revision?.state === 'released' && <button className="button button--danger-soft" disabled={busy === 'deprecate'} onClick={() => void deprecateRevision()}>废弃</button>}
-          {canLaunchRevision && <button className="button button--secondary" onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
-          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={busy === 'publish-preview'} onClick={() => void previewPublish()}><Rocket size={16} /> 预览候选集并发布</button>}
+          {canLaunchRevision && <button className="button button--secondary" disabled={orderBlocked || graphDirty} onClick={() => setTestOpen(true)}><Beaker size={16} /> {revision?.state === 'released' ? '环境运行' : '环境测试'}</button>}
+          {user.role === 'scenario_owner' && selectedScenario?.ownerId === user.id && isCurrentRevision && revision?.state === 'test_passed' && <button className="button button--primary" disabled={orderBlocked || graphDirty || busy === 'publish-preview'} onClick={() => void previewPublish()}><Rocket size={16} /> 预览候选集并发布</button>}
         </div>
       </div>
+      {selectedScenario?.forkedFromScenarioId && <p className="scenario-origin panel">分支来源：<a href={`/scenarios?selected=${encodeURIComponent(selectedScenario.forkedFromScenarioId)}&revision=${encodeURIComponent(selectedScenario.forkedFromRevisionId ?? '')}`}>查看来源场景及已发布版本</a> · 当前场景独立维护</p>}
+      {revision && <><ScenarioEvidence revision={revision} /><nav className="scenario-section-tabs" aria-label="场景版本工作区"><button className={section === 'target' ? 'active' : ''} onClick={() => setSection('target')}>目标集群</button><button className={section === 'upgrade' ? 'active' : ''} onClick={() => setSection('upgrade')}>升级作业</button><button className={section === 'acceptance' ? 'active' : ''} onClick={() => setSection('acceptance')}>业务验收{revision.acceptanceJobs?.length ? ` · ${revision.acceptanceJobs.length}` : ' · 待录入'}</button></nav></>}
+      {graphDirty && <p className="inline-warning" role="status">目标集群有未保存的修改；请先保存草稿，再编辑业务验收或预览执行计划。</p>}
+      {graphDirty && loadedGraphDigest && revision?.revisionDigest !== loadedGraphDigest && <div className="inline-warning" role="alert"><span>当前版本已被其他操作更新，保存会被阻止，请重新载入后合并修改。</span><button className="button button--quiet" onClick={() => { if (window.confirm('重新载入会放弃当前未保存的目标集群修改，确认重新载入？')) { setSavedGraphSignature(graphSignature); setGraphReloadToken(token => token + 1); } }}>重新载入目标集群</button></div>}
       <StatusExplanationPanel item={revisionWorkItem} />
+      {!contractsUnavailable && orderNodes.length > 0 && <div className="scenario-order-warning" role="alert">
+        <strong>执行顺序尚未确定，请补充手工顺序线</strong>
+        <p>以下节点均可作为下一步，需由场景 Owner 决定先后。顺序明确前，不能完整测试、发布或发起新运行；草稿仍可保存。</p>
+        {revision?.state === 'released' && <p>请由场景 Owner 新增版本，补线并重新测试发布。</p>}
+        <div>{orderNodes.map(id => {
+          const node = displayNodes.find(item => item.id === id)!;
+          return <button type="button" className="button button--quiet" key={id} onClick={() => { setSelectedNodeId(id); setView('graph'); setLocateNodeId(id); }}>
+            {node.data.label} · {node.data.version ?? '—'} · {node.data.action} · {hostGroupLabel(node.data.hostGroup)} · {id}
+          </button>;
+        })}</div>
+      </div>}
       <StatusExplanationPanel explanation={deleteExplanation} title="场景删除被阻断" />
-      <section className="panel adaptation-panel"><fieldset disabled={!editable}><EnvironmentConstraintEditor title="场景支持范围" value={constraints} onChange={setConstraints} /></fieldset>{Object.entries(commonRanges).filter(([key])=>!(constraints[key]?.length)).map(([key,values])=><p key={key}>{adaptationLabel(key)} · 组件共同支持：{values.map(v=>adaptationLabel(key,v)).join("、") || "无共同范围"}；请由场景 Owner 选择。</p>)}{adaptationIssues.length ? <div className="form-validation">{adaptationIssues.slice(0, 3).map(issue => <p key={issue}>{issue}</p>)}{adaptationIssues.length > 3 ? <details><summary>查看其余 {adaptationIssues.length - 3} 项匹配问题</summary>{adaptationIssues.slice(3).map(issue => <p key={issue}>{issue}</p>)}</details> : null}</div> : null}</section>
+      {revision && <div hidden={section !== 'acceptance'}><ScenarioAcceptanceEditor key={revision.id} revisionId={revision.id} editable={editable && !graphDirty} nodes={revision.nodes} components={components ?? []} environments={environments ?? []} onSaved={() => signalRefresh('scenarios')} /></div>}
+      {revision && <div hidden={section !== 'upgrade'}><div className="panel scenario-upgrade-panel">{revision.sourceRevisionId ? <ScenarioExecutionPanel revision={revision} environments={environments ?? []} editable={editable} canLaunch={canLaunchRevision && !graphDirty} blockedReason={contractsUnavailable ? '请先等待组件共享并加载完整合同。' : graphDirty ? '请先保存目标集群修改。' : undefined} initialMode="upgrade" environmentIssues={environmentIssues} onSaved={() => signalRefresh('scenarios')} /> : <EmptyState title="这是场景首版" description="完成完整安装测试及业务验收后即可发布。从本场景已发布且正式运行成功的版本新增版本时，将生成升级作业。" />}</div></div>}
+      <div hidden={section !== 'target'}>
         {selectedScenario ? <div className="scenario-editor">
         <aside className="scenario-palette panel">
           <header><h3>组件版本</h3><p>{editable ? '点击加入画布' : '当前为只读视图'}</p></header>
@@ -450,16 +543,27 @@ export function ScenariosPage() {
         </aside>
         <section className="flow-canvas panel" aria-label="场景 DAG 画布">
           <div className="scenario-view-toggle"><button className={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}><Network size={14} /> DAG</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><Table2 size={14} /> 节点表</button><button className={view === 'parameters' ? 'active' : ''} onClick={() => setView('parameters')}><Settings2 size={14} /> 参数总览</button></div>
-          {nodes.length && view === 'graph' ? <ReactFlow nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? handleEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
+          {nodes.length && view === 'graph' ? <ReactFlow onInit={setFlowInstance} nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} onNodesChange={editable ? onNodesChange : undefined} onEdgesChange={editable ? handleEdgesChange : undefined} onConnect={connect} onNodeClick={(_, node) => setSelectedNodeId(node.id)} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable fitView deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}>
             <Background gap={22} size={1} color="#d8deeb" /><MiniMap pannable zoomable nodeColor="#6075e8" /><Controls showInteractive={false} />
-          </ReactFlow> : nodes.length && view === 'table' ? <div className="scenario-node-table"><div><strong>节点</strong><strong>版本</strong><strong>动作</strong><strong>主机组</strong><strong>前置/后置</strong></div>{displayNodes.map((node) => <button key={node.id} className={selectedNodeId === node.id ? 'active' : ''} onClick={() => setSelectedNodeId(node.id)}><span>{node.data.label}</span><span>{node.data.version}</span><span>{node.data.action}</span><span>{node.data.hostGroup}</span><span>{displayEdges.filter((edge) => edge.target === node.id).length} / {displayEdges.filter((edge) => edge.source === node.id).length}</span></button>)}</div> : nodes.length && view === 'parameters' ? <ScenarioParameterOverviewPanel nodes={displayNodes} releases={releaseMetadata} editable={editable} onChange={(nodeId, parameterValues) => setNodes((items) => items.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, parameterValues } } : node))} onLocate={(nodeId) => { setSelectedNodeId(nodeId); setView('graph'); }} /> : <EmptyState title="场景画布为空" description={editable ? '从左侧添加已发布或候选组件版本。' : '这个场景还没有组件节点。'} />}
+          </ReactFlow> : nodes.length && view === 'table' ? <div className="scenario-node-table"><div><strong>节点</strong><strong>版本</strong><strong>动作</strong><strong>主机组</strong><strong>前置/后置</strong></div>{displayNodes.map((node) => <button key={node.id} className={selectedNodeId === node.id ? 'active' : ''} onClick={() => setSelectedNodeId(node.id)}><span>{node.data.label}</span><span>{node.data.version}</span><span>{node.data.action}</span><span>{<HostGroupName value={node.data.hostGroup}/>}</span><span>{displayEdges.filter((edge) => edge.target === node.id).length} / {displayEdges.filter((edge) => edge.source === node.id).length}</span></button>)}</div> : nodes.length && view === 'parameters' ? contractsUnavailable ? <EmptyState title="等待完整组件合同" description="已保存参数与来源绑定保持原样，共享完成后重新校验。"/> : <ScenarioParameterOverviewPanel nodes={displayNodes} releases={releaseMetadata} editable={editable} onChange={(nodeId, parameterValues) => setNodes((items) => items.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, parameterValues } } : node))} onLocate={(nodeId) => { setSelectedNodeId(nodeId); setView('graph'); }} /> : <EmptyState title="场景画布为空" description={editable ? '从左侧添加已发布或候选组件版本。' : '这个场景还没有组件节点。'} />}
           {nodes.length && view === 'graph' ? <div className="scenario-edge-legend"><span><i className="dependency" /><LockKeyhole size={12} /> 自动依赖</span><span><i className="sequence" /> 手工顺序</span></div> : null}
           {dependencyIssues.length ? <div className="scenario-dependency-issues" role="status"><strong>{dependencyIssues.length} 项依赖待处理</strong>{dependencyIssues.map((issue) => <span key={`${issue.nodeId}-${issue.dependencyId}`}>{displayNodes.find((node) => node.id === issue.nodeId)?.data.label ?? issue.nodeId}：{issue.message}</span>)}</div> : null}
           {validation && <div className={`validation-result${validation.valid ? ' validation-result--ok' : ''}`}><strong>{validation.valid ? '校验通过' : `${validation.errors.length} 个问题`}</strong>{validation.errors.map((item) => <span key={item}>{item}</span>)}</div>}
         </section>
         <aside className="node-inspector panel">
+          <section className="scenario-settings" aria-label="适配检查">
+            <details ref={settingsRef} open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)}>
+              <summary><strong>适配检查</strong><span>{adaptationIssues.length ? `${adaptationIssues.length} 项待处理` : '范围已固定'}</span></summary>
+              <div className="scenario-settings__editor"><p>本分支适配范围已固定。调整组件以满足范围，或新增分支。</p>
+              {Object.entries(commonRanges).filter(([key]) => !constraints[key]?.length).map(([key, values]) => <p key={key}>{adaptationLabel(key)} · 组件共同支持：{values.map(v => adaptationLabel(key, v)).join('、') || '无共同范围'}；请在新分支中确定所需范围。</p>)}
+              {adaptationIssues.length > 0 && <div className="form-validation" id="scenario-adaptation-issues">{adaptationIssues.map(issue => <p key={issue}>{issue}</p>)}</div>}
+              </div>
+            </details>
+            {!settingsOpen && <div className="scenario-settings__summary">{Object.entries(constraints).filter(([,values]) => values.length > 0).map(([key,values]) => <p key={key}><strong>{adaptationLabel(key)}</strong><span>{values.map(v => adaptationLabel(key,v)).join('、')}</span></p>)}{!Object.values(constraints).some(values => values.length) && <p>不限制适配范围</p>}</div>}
+            {!settingsOpen && adaptationIssues.length > 0 && <button className="scenario-settings__issues" onClick={() => { setSettingsOpen(true); requestAnimationFrame(() => settingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })); }}>{adaptationIssues[0]}{adaptationIssues.length > 1 ? `（共 ${adaptationIssues.length} 项）` : ''} · 展开处理</button>}
+          </section>
           <header><Settings2 size={17} /><div><h3>节点配置</h3><p>参数与目标主机组</p></div></header>
-          {selectedNode ? <div className="inspector-form"><label><span>显示名称</span><input value={selectedNode.data.label} disabled={!editable} onChange={(event) => updateSelected({ label: event.target.value })} /></label><label><span>组件分层</span><input value={selectedNodeComponent ? `${componentLayer(selectedNodeComponent.layer).code} · ${componentLayer(selectedNodeComponent.layer).label}` : '—'} disabled /></label><label><span>精确版本</span><input value={selectedNode.data.version ?? ''} disabled /></label><label><span>生命周期动作</span><select value={selectedNode.data.action ?? availableNodeActions[0]} disabled={!editable} onChange={(event) => { const action = event.target.value as ScenarioNodeData['action']; updateSelected({ action, hostGroup: inheritedHostGroup(selectedRelease, action) }); }}>{availableNodeActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label><label><span>主机组（继承组件 Action）</span><input value={selectedNode.data.hostGroup ?? inheritedHostGroup(selectedRelease, selectedNode.data.action)} disabled /></label>{nodeDependencies.length ? <div className="source-picker"><strong>版本依赖与配置来源</strong>{nodeDependencies.map((dependency) => {
+          {selectedNode ? <div className="inspector-form"><label><span>显示名称</span><input value={selectedNode.data.label} disabled={!editable} onChange={(event) => updateSelected({ label: event.target.value })} /></label><label><span>组件分层</span><input value={selectedNodeComponent ? `${componentLayer(selectedNodeComponent.layer).code} · ${componentLayer(selectedNodeComponent.layer).label}` : '—'} disabled /></label><label><span>{editable ? '更换组件版本' : '精确版本'}</span><select aria-label="更换组件版本" value={selectedNode.data.releaseId} disabled={!editable} onChange={event => replaceRelease(event.target.value)}>{selectedNodeComponent?.releases?.filter(item => item.state === 'released' || item.candidate || item.id === selectedNode.data.releaseId).map(item => <option key={item.id} value={item.id}>{item.version} · {item.state === 'released' ? '已发布' : '候选'}</option>)}</select></label>{replacementIssues.map(issue => <p className="inline-warning" key={issue}>{issue}</p>)}<label><span>目标集群动作</span><select value={selectedNode.data.action ?? availableNodeActions[0]} disabled onChange={(event) => { const action = event.target.value as ScenarioNodeData['action']; updateSelected({ action, hostGroup: inheritedHostGroup(selectedRelease, action) }); }}>{availableNodeActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label><label><span>主机组（继承组件 Action）</span><input title={selectedNode.data.hostGroup} value={hostGroupLabel(selectedNode.data.hostGroup ?? inheritedHostGroup(selectedRelease, selectedNode.data.action))} disabled /></label>{nodeDependencies.length ? <div className="source-picker"><strong>版本依赖与配置来源</strong>{nodeDependencies.map((dependency) => {
             const dependencyId = selectedRelease ? scenarioDependencyKey(selectedRelease, dependency) : dependency.releaseId;
             const options = sourceOptionsByDependency[dependencyId] ?? [];
             const selectedSource = selectedNode.data.dependencySources?.[dependencyId];
@@ -467,17 +571,18 @@ export function ScenariosPage() {
               <p className="parameter-lineage">{dependency.componentName ?? dependency.componentId} · {dependency.version ?? dependency.releaseId}{dependency.purpose ? ` · ${dependency.purpose}` : ''}</p>
               {(dependency.parameterMappings ?? []).map((mapping) => <p key={`${mapping.upstreamParameter}-${mapping.targetParameter}`} className="parameter-lineage">{describeParameterMapping(dependency, mapping, components ?? [])}</p>)}
               {options.length <= 1
-                ? <label><span>来源节点</span><input value={options[0] ? `${options[0].data.label} · ${options[0].data.version} · ${options[0].data.hostGroup} · 自动绑定` : '缺少匹配的上游节点'} disabled /></label>
-                : <label><span>来源节点</span><select required value={selectedSource ?? ''} disabled={!editable} onChange={(event) => chooseDependencySource(selectedNode.id, dependencyId, event.target.value)}><option value="">请选择来源节点</option>{options.map((option) => <option key={option.id} value={option.id}>{option.data.label} · {option.data.version} · {option.data.hostGroup}</option>)}</select></label>}
+                ? <label><span>来源节点</span><input value={options[0] ? `${options[0].data.label} · ${options[0].data.version} · ${hostGroupLabel(options[0].data.hostGroup)} · 自动绑定` : '缺少匹配的上游节点'} disabled /></label>
+                : <label><span>来源节点</span><select required value={selectedSource ?? ''} disabled={!editable} onChange={(event) => chooseDependencySource(selectedNode.id, dependencyId, event.target.value)}><option value="">请选择来源节点</option>{options.map((option) => <option key={option.id} value={option.id}>{option.data.label} · {option.data.version} · {hostGroupLabel(option.data.hostGroup)}</option>)}</select></label>}
             </div>;
-          })}</div> : null}{mappedTargets.size ? <p className="palette-hint">已由上游映射的参数不可再配置：{[...mappedTargets].join(', ')}</p> : null}<ScenarioParameterFields parameters={scenarioOwnedParameters(selectedRelease)} values={selectedNode.data.parameterValues ?? {}} editable={editable} onChange={(parameterValues) => updateSelected({ parameterValues })} />{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和节点参数。" />}
+          })}</div> : null}{mappedTargets.size ? <p className="palette-hint">已由上游映射的参数不可再配置：{[...mappedTargets].join(', ')}</p> : null}{contractsUnavailable?<p className="workspace-references">等待完整组件合同。已保存的参数值和来源绑定保持原样，暂不判断字段是否失效。</p>:<ScenarioParameterFields parameters={scenarioOwnedParameters(selectedRelease)} values={selectedNode.data.parameterValues ?? {}} editable={editable} onChange={(parameterValues) => updateSelected({ parameterValues })} />}{editable && <button className="button button--danger-soft" onClick={() => { setNodes((items) => items.filter((node) => node.id !== selectedNode.id)); setEdges((items) => items.filter((edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id)); setSelectedNodeId(undefined); }}><Trash2 size={15} /> 删除节点</button>}</div> : <EmptyState title="选择一个节点" description="查看版本、动作和节点参数。" />}
         </aside>
-      </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由集群 Owner 创建一个场景。" /></div>}
+      </div> : <div className="panel"><EmptyState title="暂无场景" description="请先由集群 Owner 创建一个场景。" /></div>}</div>
     </>}
-    {testOpen && revision && <Modal title={revision.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="运行将锁定当前场景、组件、Environment Revision、参数来源和 Playbook 摘要；不接受临时 Run 参数。" onClose={() => setTestOpen(false)}><div className="modal-body"><label><span>共享测试环境</span><select value={testEnvironment} onChange={(event) => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map((environment: Environment) => <option key={environment.id} value={environment.id} disabled={environmentIssues(environment).length > 0}>{environment.name} · {environmentIssues(environment).length ? "不匹配" : environment.status || "ready"}</option>)}</select></label>{environments?.filter(environment => environmentIssues(environment).length > 0).map(environment => <details key={environment.id} className="environment-mismatch"><summary>{environment.name}：不匹配（{environmentIssues(environment).length} 项）</summary>{environmentIssues(environment).map((issue, index) => <p key={index}>{issue}</p>)}</details>)}{revision.state !== 'released' && nodes.length === 0 ? <div className="form-validation" role="alert">当前 DAG 为空；请先添加组件节点并保存草稿。</div> : null}<StatusExplanationPanel explanation={operationExplanation} title="场景运行被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setTestOpen(false); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!testEnvironment || environments?.some(environment => environment.id === testEnvironment && environmentIssues(environment).length > 0) || busy === 'test' || (revision.state !== 'released' && nodes.length === 0)} onClick={() => void test()}><Beaker size={16} /> {revision.state === 'released' ? '开始运行' : '开始完整测试'}</button></footer></Modal>}
-    {createOpen && <CreateScenarioModal onClose={() => setCreateOpen(false)} onDone={() => { setCreateOpen(false); signalRefresh('scenarios'); }} />}
+    {testOpen && revision && <Modal size="wide" title={revision.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="先预览锁定的组件、参数、环境基线与验收作业，再提交执行。" onClose={() => setTestOpen(false)}><div className="modal-body"><ScenarioExecutionPanel revision={revision} environments={environments ?? []} editable={editable} canLaunch={canLaunchRevision && !graphDirty} blockedReason={graphDirty ? '请先保存目标集群修改。' : undefined} environmentIssues={environmentIssues} onSubmitted={() => setTestOpen(false)} onSaved={() => signalRefresh('scenarios')} /><details className="scenario-job-export"><summary>独立安装作业包</summary><label><span>导出目标环境</span><select value={testEnvironment} onChange={event => setTestEnvironment(event.target.value)}><option value="">请选择</option>{environments?.map(environment => <option key={environment.id} value={environment.id} disabled={environmentIssues(environment).length > 0}>{environment.name}</option>)}</select></label>{jobPlan && <><JobPlanPreview plan={jobPlan} />{jobPlan.deliveryRequirements.map(item => <label key={item.id}><span>导出介质来源：{item.name}</span><select value={jobMedia[item.id] ?? ''} onChange={event => { setJobMedia(current => ({ ...current, [item.id]: event.target.value })); setExportReady(false); }}><option value="">请选择后重新预览</option><option value="direct">直接使用锁定来源</option>{item.transferAvailable && <option value="transfer">平移到环境目标并校验</option>}</select></label>)}</>}<div className="scenario-inline-actions"><button className="button button--secondary" disabled={orderBlocked || !testEnvironment || !!busy} onClick={() => void previewJob()}>预览导出作业</button><button className="button button--quiet" disabled={!jobPlan || !exportReady || !!busy} onClick={() => void exportJob()}>导出独立作业包</button></div></details></div></Modal>}
+    {createOpen && <ScenarioCreateModal scenarios={scenarios ?? []} initialSourceRevisionId={forkSource} onClose={() => setCreateOpen(false)} onDone={scenario => { setCreateOpen(false); setSection('target'); setSearchParams({ selected: scenario.id }); signalRefresh('scenarios'); }} />}
+    {clonePlan && <Modal title="新增版本预览" description="仅从本场景已发布且正式运行、业务验收均成功的版本创建。" onClose={() => setClonePlan(undefined)}><div className="modal-body"><p>r{clonePlan.sourceRevision} → r{clonePlan.nextRevision} 草稿</p><BranchScope scope={revision?.environmentConstraints} full/><p>新版本沿用当前分支的适配范围。</p><p>{clonePlan.nodeCount} 个节点 · {clonePlan.edgeCount} 条依赖与编排顺序</p><p>锁定来源正式 Run：{clonePlan.sourceRunId}</p><p>新版本需分别通过安装测试、升级测试及完整业务验收。</p></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setClonePlan(undefined)}>取消</button><button className="button button--primary" disabled={busy === 'clone'} onClick={() => void createVersion()}>确认新增版本</button></footer></Modal>}
     {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate} />}
-    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={!candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
+    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={orderBlocked || !candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
   </div>;
 }
 
@@ -485,19 +590,7 @@ function scenarioOwnedParameters(release?: ComponentRelease) {
   return (release?.parameters ?? []).filter((parameter) => parameter.modifiable && parameter.valueProvider === 'scenario_owner');
 }
 
-function parameterValueError(parameter: ParameterDefinition, value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return parameter.required ? `${parameter.name} 为必填项` : undefined;
-  const validType = parameter.type === 'string' ? typeof value === 'string'
-    : parameter.type === 'boolean' ? typeof value === 'boolean'
-      : parameter.type === 'integer' ? typeof value === 'number' && Number.isInteger(value)
-        : parameter.type === 'number' ? typeof value === 'number' && Number.isFinite(value)
-          : parameter.type === 'array' ? Array.isArray(value)
-            : typeof value === 'object' && !Array.isArray(value);
-  if (!validType) return `${parameter.name} 必须是 ${parameter.type}`;
-  if (parameter.minLength && typeof value === 'string' && [...value].length < parameter.minLength) return `${parameter.name} 长度不能小于 ${parameter.minLength}`;
-  if (parameter.enum?.length && !parameter.enum.some((item) => JSON.stringify(item) === JSON.stringify(value))) return `${parameter.name} 不在允许选项中`;
-  return undefined;
-}
+const parameterValueError = scenarioParameterError;
 
 function scenarioParameterIssues(nodes: FlowNode[], releases: Map<string, { component: Component; release: ComponentRelease }>) {
   return nodes.flatMap((node) => {
@@ -552,7 +645,7 @@ function ScenarioParameterOverviewPanel({ nodes, releases, editable, onChange, o
       const values = node.data.parameterValues ?? {};
       const required = parameters.filter((parameter) => parameter.required);
       const completed = required.filter((parameter) => !parameterValueError(parameter, values[parameter.name])).length;
-      return <article key={node.id}><div className="parameter-overview-node"><div><strong>{node.data.label}</strong><small>{node.data.action} · {node.data.hostGroup}</small></div><span>{completed}/{required.length} 已完成</span><button type="button" className="icon-text" onClick={() => onLocate(node.id)}>定位节点</button></div><ScenarioParameterFields parameters={parameters} values={values} editable={editable} onChange={(next) => onChange(node.id, next)} /></article>;
+      return <article key={node.id}><div className="parameter-overview-node"><div><strong>{node.data.label}</strong><small>{node.data.action} · {<HostGroupName value={node.data.hostGroup}/>}</small></div><span>{completed}/{required.length} 已完成</span><button type="button" className="icon-text" onClick={() => onLocate(node.id)}>定位节点</button></div><ScenarioParameterFields parameters={parameters} values={values} editable={editable} onChange={(next) => onChange(node.id, next)} /></article>;
     })}</section>)}
   </div>;
 }
@@ -560,15 +653,4 @@ function ScenarioParameterOverviewPanel({ nodes, releases, editable, onChange, o
 function ScenarioTemplateModal({ onClose, onImport }: { onClose: () => void; onImport: (text: string) => void }) {
   const [text, setText] = useState('{\n  "nodes": [],\n  "edges": []\n}');
   return <Modal size="wide" title="导入场景模板" description="一次导入节点和边；载入后仍需人工检查并保存。" onClose={onClose}><div className="modal-body"><textarea aria-label="场景模板 JSON" className="code-editor" rows={18} value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} /></div><footer className="modal-actions"><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" onClick={() => onImport(text)}><Upload size={16} /> 载入草稿</button></footer></Modal>;
-}
-
-function CreateScenarioModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const { notify } = useApp();
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget);
-    try { await api.createScenario({ name: String(form.get('name')), slug: String(form.get('slug')), description: String(form.get('description')) }); notify('success', '场景已创建', '初始 Draft 已准备好，可以加入组件节点。'); onDone(); }
-    catch (reason) { notify('error', '创建场景失败', displayError(reason)); } finally { setBusy(false); }
-  }
-  return <Modal title="新建场景" description="场景会创建一个可编辑的初始 Draft Revision。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>场景名称</span><input name="name" required placeholder="例如 Kylin Kubernetes 集群" /></label><label><span>标识</span><input name="slug" required pattern="[a-z0-9-]+" placeholder="kylin-k8s-cluster" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy}>{busy ? '创建中…' : '创建场景'}</button></footer></form></Modal>;
 }

@@ -101,10 +101,19 @@ export interface ResolvedParameter {
   targetParameter?: string;
 }
 
+export interface RuntimeCheck { id: string; kind: 'command' | 'image_command' | 'path_present' | 'path_absent' | 'service_inactive' | 'network_rules_absent' | 'tcp'; target: string; providedByReleaseId?: string }
+export interface LegacyYamlSettings { readonly gatherFacts: boolean; readonly checks: RuntimeCheck[] }
+export interface ResourceContract { version: 1; noManagedPaths: boolean; claims: ResourceClaim[] }
+export interface ResourceClaim { id: string; path: string; scope: 'file' | 'tree'; access: 'manage' | 'read' | 'verify'; exclusive?: boolean; excludes?: string[]; sharedPaths?: string[]; sharedWith?: { releaseId: string; claimId: string } }
 export interface ActionDefinition {
+  resourceContract?: ResourceContract;
+  preCheckActionId?: string;
+  postCheckActionId?: string;
+  become?: boolean;
+  legacyYamlSettings?: LegacyYamlSettings;
   id?: string;
   name?: string;
-  type: 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
+  type: 'check' | 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
   playbook: string;
   tags?: string[];
   hostGroup?: string;
@@ -118,7 +127,7 @@ export interface ActionDefinition {
 }
 
 export function executableActionTypes(actions: ActionDefinition[] = []): ActionDefinition['type'][] {
-  const types = actions.map((action) => action.type);
+  const types = actions.filter((action) => action.type !== 'check').map((action) => action.type);
   if (actions.some((action) => action.type === 'install' && action.idempotent)) types.push('upgrade');
   return [...new Set(types)];
 }
@@ -143,7 +152,14 @@ export interface PlaybookWorkspaceFile {
   content?: string;
 }
 
+export interface WorkspaceReference {
+  actions: Array<{ actionId: string; actionName: string; usedAs: string[] }>;
+  staticReferences: string[];
+  dynamicReferencesUnknown: boolean;
+  protectionReason?: string;
+}
 export interface PlaybookWorkspace {
+  references?: Record<string, WorkspaceReference>;
   root: string;
   treeSha256: string;
   files: PlaybookWorkspaceFile[];
@@ -168,6 +184,7 @@ export interface ReleaseReviewPreview {
 }
 
 export interface ComponentRelease {
+  definitionGeneration?: number;
   id: string;
   componentId: string;
   lineId: string;
@@ -215,6 +232,7 @@ export interface ReleaseReadiness {
 
 
 export interface ComponentReleaseLine {
+  environmentConstraints?: Record<string, unknown>;
   id: string;
   componentId: string;
   name: string;
@@ -377,6 +395,9 @@ export interface Component {
 export type ScenarioState = 'draft' | 'testing' | 'test_passed' | 'released' | 'deprecated' | 'abandoned';
 
 export interface ScenarioNodeData extends Record<string, unknown> {
+  contractAvailability?: 'available' | 'unshared' | 'missing';
+  componentOwnerId?: string;
+  componentOwnerName?: string;
   label: string;
   componentId: string;
   releaseId: string;
@@ -403,7 +424,52 @@ export interface ScenarioEdge {
   dependencyId?: string;
 }
 
+export type ScenarioExecutionMode = 'install' | 'upgrade' | 'baseline_verify';
+
+export interface ScenarioAcceptanceJob {
+ legacyYamlSettings?: LegacyYamlSettings;
+  id: string; name: string; purpose: string; hostGroup: string; timeoutSeconds: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'destructive'; requiredCredentials: string[];
+  become: boolean; playbook: string; playbookSha256: string; mayMutate: boolean;
+}
+export interface ScenarioParameterBinding {
+  parameter: string; source: 'node' | 'environment'; nodeId?: string; sourceParameter: string;
+}
+export interface ScenarioAcceptance {
+  revisionId: string; revisionDigest: string; editable: boolean;
+  jobs: ScenarioAcceptanceJob[]; parameters: ParameterDefinition[]; values: Record<string, unknown>;
+  bindings: ScenarioParameterBinding[]; workspace: PlaybookWorkspace;
+}
+export interface ScenarioForkInput { environmentConstraints?: Record<string, unknown>; sourceRevisionId: string; name: string; slug: string; description: string; expectedPlanDigest?: string }
+export interface ScenarioForkPlan {
+ environmentConstraints?: Record<string,unknown>; sourceEnvironmentConstraints?: Record<string,unknown>;
+  sourceScenarioId: string; sourceRevisionId: string; sourceRevision: number; sourceDigest: string;
+  nodeCount: number; acceptanceJobCount: number; planDigest: string;
+}
+export interface ScenarioClonePlan {
+  scenarioId: string; sourceRevisionId: string; sourceRunId: string; sourceRevision: number;
+  nextRevision: number; nodeCount: number; edgeCount: number; planDigest: string;
+}
+export interface ScenarioExecutionRequest {
+  environmentId: string; executionMode: ScenarioExecutionMode; expectedPlanDigest?: string;
+  idempotencyKey?: string; testOnly?: boolean;
+}
+export interface ScenarioExecutionPreview {
+  scenarioRevisionId: string; environmentId: string; executionMode: ScenarioExecutionMode;
+  planDigest: string; sourceRevisionId?: string; baselineRunId?: string; ready: boolean; needsApproval?: boolean;
+  operations: Array<{ nodeId: string; name: string; change: string; fromReleaseId?: string; toReleaseId?: string }>;
+  steps: Array<{ nodeId?: string; name?: string; action?: string; phase?: string; kind?: string; playbook?: string; hostGroup?: string }>;
+  issues: Array<{ code: string; message: string; nodeId?: string }>;
+  installationTest?: ScenarioTestEvidence; upgradeTest?: ScenarioTestEvidence;
+}
+export interface ScenarioTestEvidence { runId?: string; valid: boolean; reason?: string; testedAt?: string }
+
 export interface ScenarioRevision {
+  sourceRevisionId?: string; sourceRunId?: string; revisionDigest?: string; digestVersion?: number;
+  upgradeConstraints?: ScenarioEdge[]; acceptanceJobs?: ScenarioAcceptanceJob[];
+  acceptanceParameters?: ParameterDefinition[]; acceptanceValues?: Record<string, unknown>;
+  acceptanceBindings?: ScenarioParameterBinding[]; acceptanceWorkspaceRoot?: string; acceptanceTreeSha256?: string;
+  installationTest?: ScenarioTestEvidence; upgradeTest?: ScenarioTestEvidence;
   environmentConstraints?: Record<string, unknown>;
   id: string;
   scenarioId: string;
@@ -416,6 +482,8 @@ export interface ScenarioRevision {
 }
 
 export interface Scenario {
+  environmentConstraints?: Record<string, unknown>;
+  forkedFromScenarioId?: string; forkedFromRevisionId?: string; forkedFromDigest?: string;
   id: string;
   slug: string;
   name: string;
@@ -444,6 +512,7 @@ export interface EnvironmentHost {
 }
 
 export interface CredentialRef {
+  configured?: boolean;
   name: string;
   type: 'sshKeyPath' | 'envVarRef';
   reference?: string;
@@ -573,7 +642,7 @@ export interface EnvironmentParameterField {
   suggestedValue?: unknown;
   enum?: unknown[];
   minLength?: number;
-  bindings: Array<{ componentId: string; componentName: string; releaseId: string; version: string; parameterName: string }>;
+  bindings: Array<{ componentId: string; componentName: string; releaseId: string; version: string; parameterName: string; lineId?: string; lineName?: string; canViewContract?: boolean }>;
 }
 
 export interface ScenarioParameterOverview {
@@ -682,6 +751,15 @@ export type RunStatus =
   | 'rejected';
 
 export interface RunStep {
+ hostGroup?:string;
+ parentAction?: string;
+ sourceType?: string; stage?: string; acceptanceJobId?: string; scenarioRevisionId?: string;
+ phase?: string;
+ parentActionId?: string;
+ actionId?: string;
+ sourceNodeId?: string;
+ role?: string;
+ contentDigest?: string;
   id: string;
   name: string;
   componentName?: string;
@@ -745,7 +823,27 @@ export interface DeliveryResult {
   completedAt?: string;
 }
 
+export interface RunWaitingObservation {
+  host: string;
+  task: string;
+  stepId: string;
+  waiting: { object?: string; expected?: string; observed?: string; attempt?: number; deadline?: string };
+}
+
+export interface RunActivity {
+  runId: string;
+  status: RunStatus;
+  logs: Array<{ id: number; runId: string; stepId: string; stream: string; message: string; createdAt: string }>;
+  nextAfterId: number;
+  hasMore: boolean;
+  waitingObservations: RunWaitingObservation[];
+  archived: boolean;
+}
+
 export interface Run {
+ executionMode?: ScenarioExecutionMode; sourceRevisionId?: string; baselineRunId?: string;
+ jobDigest?: string;
+ exitCode?: number;
   archive?: import("../components/RunRetentionPanel").ArchiveInfo;
   id: string;
   kind?: 'component_test' | 'scenario_test' | 'scenario_run' | 'environment_rollback';
@@ -771,7 +869,8 @@ export interface Run {
   progress?: number;
   steps?: RunStep[];
   approval?: Approval;
-  logTail?: string[];
+  purposeCounts?: {components:number;finalVerification:number;acceptance:number;total:number};
+
   resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
   backups?: RunBackup[];
   artifactTransfers?: Array<{ alias: string; sourceUrl: string; targetStation: string; relativePath: string; sha256: string }>;
@@ -802,6 +901,7 @@ export type RollbackVerification =
   | { kind: 'rollback_only' };
 
 export interface ComponentTestRequest {
+ actionId?: string;
   environmentId: string;
   mode: ComponentTestMode;
   rollbackVerification?: RollbackVerification;
@@ -809,12 +909,20 @@ export interface ComponentTestRequest {
 }
 
 export interface ComponentTestPlanStep {
+  rollbackSourceActionId?: string;
+ name?: string;
+ sourceType?: string;
+ stage?: string;
+ phase?: string;
+ parentActionId?: string;
+ actionId?: string;
+ nodeId?: string;
   order: number;
   componentId: string;
   componentName: string;
   releaseId: string;
   releaseVersion: string;
-  action: ActionDefinition['type'];
+  action: ActionDefinition['type'] | 'acceptance';
   playbook: string;
   limit?: string;
   needsApproval: boolean;
@@ -839,6 +947,7 @@ export interface ComponentTestPlan {
 }
 
 export interface EnvironmentRollbackPlan extends ComponentTestPlan {
+  nodes: string[];
   environmentName: string;
   sources: Array<{ runId: string; kind: NonNullable<Run['kind']>; scenarioRevisionId?: string; componentCount: number }>;
   componentCount: number;
@@ -958,3 +1067,28 @@ export const STATUS_LABELS: Record<string, string> = {
   locked: '占用中',
   offline: '离线',
 };
+
+export interface RunDiagnostic {
+  stepId?: string;
+  logId?: number;
+  component?: string;
+  phase?: string;
+  task?: string;
+  host?: string;
+  message: string;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  raw?: string;
+  source: 'event' | 'text' | 'run';
+  truncated?: boolean;
+}
+export interface RunDiagnostics {
+  runId: string;
+  status: Run['status'];
+  capturedAt: string;
+  lastLogId: number;
+  logCount: number;
+  items: RunDiagnostic[];
+  omitted?: number;
+}

@@ -28,11 +28,11 @@ test('identity switch changes owner-specific component controls', async ({ page 
   await expect(page.getByRole('button', { name: '新建组件' })).toBeVisible();
   await page.getByLabel('切换演示身份').selectOption('environment-owner-a');
   await expect(page.getByRole('button', { name: '新建组件' })).toHaveCount(0);
-  await page.getByRole('link', { name: '场景' }).click();
+  await page.getByRole('link', { name: '集群', exact: true }).click();
   await expect(page.getByRole('heading', { name: '场景编排' })).toBeVisible();
 });
 
-test('scenario-owned parameters are saved in the graph and runs accept only an environment', async ({ page }) => {
+test('scenario parameters stay in the graph and test submission binds the execution preview', async ({ page }) => {
   let submitted: unknown;
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -44,21 +44,24 @@ test('scenario-owned parameters are saved in the graph and runs accept only an e
       id: 'test-runtime', name: 'Test Runtime', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'],
       latestRelease: {
         id: 'test-runtime-1.1', componentId: 'test-runtime', lineId: 'line-runtime', lineName: 'Runtime', compatibility: 'not_applicable', version: 'v1.1.0', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] },
-        parameters: [{ name: 'rollback_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
+        parameters: [{ name: 'runtime_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
+        actions: [{ kind: 'install', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
       },
       releases: [{
         id: 'test-runtime-1.1', componentId: 'test-runtime', lineId: 'line-runtime', lineName: 'Runtime', compatibility: 'not_applicable', version: 'v1.1.0', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] },
-        parameters: [{ name: 'rollback_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
-        actions: [{ kind: 'upgrade', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
+        parameters: [{ name: 'runtime_version', description: 'rollback target', type: 'string', required: true, visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner', suggestedValue: '1.0.0' }], dependencies: [], artifacts: [], images: [],
+        actions: [{ kind: 'install', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
       }],
     }];
     else if (path.endsWith('/scenarios')) data = [{
       id: 'safe-upgrade', slug: 'safe-upgrade', name: 'Safe upgrade', ownerId: 'scenario-owner-a', currentRevisionId: 'safe-upgrade-r2',
-      currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', parameterValues: { rollback_version: '1.0.0' }, dependencySources: {} } }], edges: [] },
-      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Rollback runtime', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'rollback', hostGroup: 'test_nodes', parameterValues: { rollback_version: '1.0.0' }, dependencySources: {} } }], edges: [] }],
+      currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Runtime node', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'install', hostGroup: 'test_nodes', parameterValues: { runtime_version: '1.0.0' }, dependencySources: {} } }], edges: [] },
+      revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Runtime node', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'install', hostGroup: 'test_nodes', parameterValues: { runtime_version: '1.0.0' }, dependencySources: {} } }], edges: [] }],
     }];
     else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-owner-a', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], parameters: {}, variables: {}, credentialRefs: [] } }];
+    else if (path.endsWith('/platform-option-categories')) data = [{id:'host-groups',key:'hostGroup',label:'主机组',kind:'host_group',options:[{id:'test-group',categoryId:'host-groups',value:'test_nodes',label:'测试节点'}]}];
+    else if (path.endsWith('/execution-preparations')) data = {id:'prepared-ui-plan',status:'succeeded',input:request.postDataJSON(),output:{checks:[],plan:{scenarioRevisionId:'safe-upgrade-r2',environmentId:'test',executionMode:'install',planDigest:'locked-ui-plan',ready:true,operations:[],steps:[],issues:[]}}};
+    else if (path.endsWith('/execution-plan')) data = { scenarioRevisionId: 'safe-upgrade-r2', environmentId: 'test', executionMode: 'install', planDigest: 'locked-ui-plan', ready: true, operations: [], steps: [], issues: [] };
     else if (path.endsWith('/test-runs')) {
       submitted = request.postDataJSON();
       data = { id: 'run-1', status: 'queued', environmentId: 'test' };
@@ -71,17 +74,20 @@ test('scenario-owned parameters are saved in the graph and runs accept only an e
   const overview = page.locator('.scenario-parameter-overview');
   await expect(overview.getByText('Test Runtime')).toBeVisible();
   await expect(overview.getByText('v1.1.0 · test-runtime-1.1')).toBeVisible();
-  await expect(overview.getByText('rollback · test_nodes')).toBeVisible();
+  await expect(overview.getByText('install · 测试节点')).toBeVisible();
   await expect(overview.getByText('1/1 已完成')).toBeVisible();
-  await expect(overview.getByRole('textbox', { name: 'rollback_version 的值' })).toHaveValue('1.0.0');
+  await expect(overview.getByRole('textbox', { name: 'runtime_version 的值' })).toHaveValue('1.0.0');
   await overview.getByRole('button', { name: '定位节点' }).click();
-  await page.getByText('Rollback runtime').click();
-  await expect(page.getByRole('combobox', { name: '生命周期动作' })).toHaveValue('rollback');
+  await page.getByText('Runtime node').click();
+  await expect(page.getByRole('combobox', { name: '目标集群动作' })).toHaveValue('install');
+  await expect(page.getByRole('combobox', { name: '目标集群动作' })).toBeDisabled();
   await expect(page.getByRole('option', { name: 'uninstall' })).toHaveCount(0);
   await page.getByRole('button', { name: '环境测试' }).click();
-  await page.getByRole('combobox', { name: '共享测试环境' }).selectOption('test');
-  await page.getByRole('button', { name: '开始完整测试' }).click();
-  await expect.poll(() => submitted).toEqual({ environmentId: 'test' });
+  await page.getByRole('combobox', { name: '场景执行环境' }).selectOption('test');
+  await expect(page.getByRole('button', { name: '提交安装测试' })).toBeDisabled();
+  await page.getByRole('button', { name: '预览执行计划' }).click();
+  await page.getByRole('button', { name: '提交安装测试' }).click();
+  await expect.poll(() => submitted).toEqual({ environmentId: 'test', executionMode: 'install', expectedPlanDigest: 'locked-ui-plan', idempotencyKey: expect.any(String) });
 });
 
 test('scenario dependencies are generated and an ambiguous exact Release source is selected explicitly', async ({ page }) => {
@@ -117,8 +123,10 @@ test('scenario dependencies are generated and an ambiguous exact Release source 
     ];
     else if (path.endsWith('/scenarios')) data = [{ id: 'auto', slug: 'auto', name: 'Automatic dependencies', ownerId: 'scenario-owner-a', currentRevisionId: revision.id, currentRevision: revision, revisions: [revision] }];
     else if (path.endsWith('/scenario-revisions/auto-r1/graph') && request.method() === 'PUT') {
-      savedGraph = request.postDataJSON();
-      data = { ...revision, nodes: savedGraph.nodes, edges: savedGraph.edges };
+      savedGraph = request.postDataJSON().graph;
+      // The API enriches submitted nodes with the locked component identity.
+      Object.assign(revision, { nodes: savedGraph.nodes.map((node: any) => ({ ...node, data: { ...revision.nodes.find(item => item.id === node.id)?.data, ...node.data } })), edges: savedGraph.edges, revisionDigest: `saved-${Date.now()}` });
+      data = revision;
     } else if (path.endsWith('/workbench')) data = { generatedAt: '', role: 'scenario_owner', summary: {}, assets: {}, items: [] };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
   });
@@ -132,4 +140,30 @@ test('scenario dependencies are generated and an ambiguous exact Release source 
   await page.getByRole('button', { name: '保存草稿' }).click();
   await expect.poll(() => savedGraph?.nodes?.find((node: any) => node.id === 'control')?.data?.dependencySources).toEqual({ 'dep-runtime': 'runtime-b' });
   await expect.poll(() => savedGraph?.edges).toEqual([expect.objectContaining({ source: 'runtime-b', target: 'control', kind: 'dependency', dependencyId: 'dep-runtime' })]);
+  const warning = page.locator('.scenario-order-warning');
+  await expect(warning).toContainText('执行顺序尚未确定');
+  await expect(warning.getByRole('button')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '环境测试', exact: true })).toBeDisabled();
+  await expect(page.locator('.scenario-node--order-pending')).toHaveCount(2);
+  await page.getByRole('button', { name: '节点表', exact: true }).click();
+  await warning.getByRole('button').first().click();
+  await expect(page.locator('.react-flow__node[data-id="runtime-a"]')).toHaveClass(/selected/);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole('button', { name: 'Fit View', exact: true }).click();
+  const source = page.locator('.react-flow__node[data-id="runtime-a"] .react-flow__handle.source');
+  const target = page.locator('.react-flow__node[data-id="runtime-b"] .react-flow__handle.target');
+  await source.scrollIntoViewIfNeeded();
+  const from = (await source.boundingBox())!;
+  const to = (await target.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 15 });
+  await page.mouse.up();
+  await expect(warning).toHaveCount(0);
+  await expect(page.locator('.scenario-node--order-pending')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '环境测试', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '保存草稿' }).click();
+  await expect.poll(() => savedGraph?.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'runtime-a', target: 'runtime-b', kind: 'sequence' })]));
+  await expect(page.getByRole('button', { name: '环境测试', exact: true })).toBeEnabled();
+
 });

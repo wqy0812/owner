@@ -15,10 +15,10 @@ export type ComponentImportEntry = {
   playbooks?: Array<{ filename: string; content: string }>;
 };
 
-const ACTION_TYPES = new Set<ActionDefinition['type']>(['inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall']);
+const ROLE_PATH=/^(tasks|templates|files|handlers|defaults|vars)\/[A-Za-z0-9_-][A-Za-z0-9_./-]*$/;
+const ACTION_TYPES = new Set<ActionDefinition['type']>(['check', 'install', 'configure', 'upgrade', 'rollback', 'uninstall']);
 const PARAMETER_TYPES = new Set<ParameterDefinition['type']>(['string', 'integer', 'number', 'boolean', 'object', 'array']);
 const RISK_LEVELS = new Set<NonNullable<ComponentRelease['riskLevel']>>(['low', 'medium', 'high', 'destructive']);
-const PLAYBOOK_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:yml|yaml)$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_PLAYBOOK_BYTES = 1 << 20;
 const SENSITIVE_KEY = /(password|passwd|secret|token|private[_-]?key|encryption[_-]?key|credential)/i;
@@ -96,6 +96,23 @@ function findSensitivePath(value: unknown, prefix = ''): string | undefined {
     }
   }
   return undefined;
+}
+
+function parseResourceContract(value: unknown): ActionDefinition['resourceContract'] {
+  if(value===undefined || value===null)return undefined;
+  if(!isRecord(value) || value.version!==1 || typeof value.noManagedPaths!=='boolean' || !Array.isArray(value.claims))throw new Error('资源声明必须包含 version: 1、noManagedPaths 和 claims。');
+  assertOnlyKeys(value,['version','noManagedPaths','claims'],'资源声明');
+  const claims=value.claims.map((claim,i)=>{
+    if(!isRecord(claim))throw new Error(`资源声明 ${i+1} 必须是对象。`);
+    assertOnlyKeys(claim,['id','path','scope','access','exclusive','excludes','sharedPaths','sharedWith'],'资源路径');
+    if(claim.scope!=='file' && claim.scope!=='tree')throw new Error('资源范围必须为 file 或 tree。');
+    if(claim.access!=='manage' && claim.access!=='read' && claim.access!=='verify')throw new Error('资源用途无效。');
+    let sharedWith;
+    if(claim.sharedWith!==undefined){if(!isRecord(claim.sharedWith))throw new Error('共享来源必须明确版本及资源。');sharedWith={releaseId:nonEmptyString(claim.sharedWith.releaseId,'共享版本'),claimId:nonEmptyString(claim.sharedWith.claimId,'共享资源')};}
+    return {id:nonEmptyString(claim.id,'资源 ID'),path:nonEmptyString(claim.path,'资源路径'),scope:claim.scope,access:claim.access,exclusive:optionalBoolean(claim.exclusive,'独占范围'),excludes:stringArray(claim.excludes,'排除路径'),sharedPaths:stringArray(claim.sharedPaths,'共享子路径'),sharedWith};
+  });
+  if(value.noManagedPaths===Boolean(claims.length))throw new Error('请填写资源声明，或明确确认无受管路径。');
+  return {version:1,noManagedPaths:value.noManagedPaths,claims:claims as NonNullable<ActionDefinition['resourceContract']>['claims']};
 }
 
 function parseEntry(value: unknown, index: number): ComponentImportEntry {
@@ -194,12 +211,12 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
 
   const actions = optionalArray(release.actions, `${slug}.release.actions`).map((raw, actionIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${actionIndex + 1} 个 Action 必须是对象。`);
-    assertOnlyKeys(raw, ['name', 'type', 'playbook', 'tags', 'hostGroup', 'timeoutSeconds', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
+    assertOnlyKeys(raw, ['resourceContract','id','preCheckActionId','postCheckActionId','become','name', 'type', 'playbook', 'tags', 'hostGroup', 'timeoutSeconds', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
     const type = nonEmptyString(raw.type, `${slug}.actions[${actionIndex}].type`) as ActionDefinition['type'];
     if (!ACTION_TYPES.has(type)) throw new Error(`${slug} 的 Action 类型 ${type} 无效。`);
     if (type === 'upgrade') throw new Error(`${slug} 的导入模板不能声明显式 upgrade；请使用幂等 install，或创建后在前台绑定既有 Release ID。`);
     const playbook = nonEmptyString(raw.playbook, `${slug}.actions[${actionIndex}].playbook`);
-    if (!PLAYBOOK_FILENAME.test(playbook)) throw new Error(`${slug} 的 Action Playbook 必须填写模板内的文件名。`);
+    if ((!ROLE_PATH.test(playbook)||playbook.split('/').some(part=>part==='..'||part==='.'))) throw new Error(`${slug} 的 Action Playbook 必须填写模板内的文件名。`);
     const name = optionalString(raw.name, `${slug}.actions[${actionIndex}].name`) ?? '';
     const tags = stringArray(raw.tags, `${slug}.${type}.tags`);
     const requiredCredentials = stringArray(raw.requiredCredentials, `${slug}.${type}.requiredCredentials`);
@@ -209,27 +226,28 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
     if (!RISK_LEVELS.has(actionRisk)) throw new Error(`${slug}.${type}.riskLevel 无效。`);
     const destructive = optionalBoolean(raw.destructive, `${slug}.${type}.destructive`, actionRisk === 'destructive');
     const idempotent = optionalBoolean(raw.idempotent, `${slug}.${type}.idempotent`);
-    if (idempotent && type !== 'install') throw new Error(`${slug} 只有 install Action 可以声明 idempotent。`);
+    if (idempotent && type === 'check') throw new Error(`${slug} 检查动作不能声明可安全重试。`);
     const fromReleaseId = optionalString(raw.fromReleaseId, `${slug}.${type}.fromReleaseId`) ?? '';
     const toReleaseId = optionalString(raw.toReleaseId, `${slug}.${type}.toReleaseId`) ?? '';
     if (type === 'rollback' && (fromReleaseId || toReleaseId)) throw new Error(`${slug} 的导入模板只支持不绑定 Release ID 的安装回退。`);
     if (type !== 'rollback' && (fromReleaseId || toReleaseId)) throw new Error(`${slug}.${type} 不能携带 fromReleaseId/toReleaseId。`);
     return {
-      name, type, playbook, tags,
+      id:nonEmptyString(raw.id,`${slug}.actions[${actionIndex}].id`),preCheckActionId:optionalString(raw.preCheckActionId,'preCheckActionId'),postCheckActionId:optionalString(raw.postCheckActionId,'postCheckActionId'),become:optionalBoolean(raw.become,'become')??false,name, type, playbook, tags,
       hostGroup: optionalString(raw.hostGroup, `${slug}.${type}.hostGroup`) ?? '',
       timeoutSeconds, requiredCredentials,
       riskLevel: actionRisk, destructive, idempotent,
+      resourceContract: parseResourceContract(raw.resourceContract),
       ...(fromReleaseId ? { fromReleaseId } : {}),
       ...(toReleaseId ? { toReleaseId } : {}),
     };
   });
-  if (new Set(actions.map((action) => action.type)).size !== actions.length) throw new Error(`${slug} 包含重复 Action 类型。`);
+  if (new Set(actions.filter(action=>action.type!=='check').map((action) => action.type)).size !== actions.filter(action=>action.type!=='check').length) throw new Error(`${slug} 包含重复 Action 类型。`);
 
   const playbooks = optionalArray(value.playbooks, `${slug}.playbooks`).map((raw, playbookIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${playbookIndex + 1} 个 Playbook 必须是对象。`);
     assertOnlyKeys(raw, ['filename', 'content'], `${slug}.playbooks[${playbookIndex}]`);
     const filename = nonEmptyString(raw.filename, `${slug}.playbooks[${playbookIndex}].filename`);
-    if (!PLAYBOOK_FILENAME.test(filename)) throw new Error(`${slug} 的 Playbook 文件名 ${filename} 无效。`);
+    if ((!ROLE_PATH.test(filename)||filename.split('/').some(part=>part==='..'||part==='.'))) throw new Error(`${slug} 的 Playbook 文件名 ${filename} 无效。`);
     if (typeof raw.content !== 'string' || !raw.content.trim()) throw new Error(`${slug}.${filename}.content不能为空。`);
     const content = raw.content;
     if (new TextEncoder().encode(content).length > MAX_PLAYBOOK_BYTES) throw new Error(`${slug}/${filename} 超过 1 MiB。`);
@@ -239,7 +257,7 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
   if (new Set(filenames).size !== filenames.length) throw new Error(`${slug} 包含重复 Playbook 文件名。`);
   const referenced = new Set(actions.map((action) => action.playbook));
   for (const filename of referenced) if (!filenames.includes(filename)) throw new Error(`${slug} 的 Action 引用了未提供的 Playbook ${filename}。`);
-  for (const filename of filenames) if (!referenced.has(filename)) throw new Error(`${slug} 的 Playbook ${filename} 未被任何 Action 引用。`);
+
 
   return {
     component: {

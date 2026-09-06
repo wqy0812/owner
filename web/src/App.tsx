@@ -12,6 +12,7 @@ const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ defau
 const ScenariosPage = lazy(() => import('./pages/ScenariosPage').then((module) => ({ default: module.ScenariosPage })));
 const PlatformManagementPage = lazy(() => import('./pages/PlatformManagementPage').then((module) => ({ default: module.PlatformManagementPage })));
 
+
 function DefaultPage() {
   return <DashboardPage />;
 }
@@ -24,6 +25,7 @@ export function App() {
         <Route path="components" element={<ComponentsPage />} />
         <Route path="scenarios" element={<ScenariosPage />} />
         <Route path="environments" element={<EnvironmentsPage />} />
+        <Route path="reference-rebuild" element={<Navigate to="/scenarios" replace />} />
         <Route path="disaster-recovery" element={<DisasterRecoveryPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />

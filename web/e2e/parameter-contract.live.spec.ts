@@ -35,7 +35,7 @@ test('component page shows upstream parameter lineage and visibility editor', as
     }
     if (selected) break;
   }
-  expect(selected, 'seeded catalog must expose a component dependency contract').toBeTruthy();
+  expect(selected, 'isolated fixture must expose a component dependency contract').toBeTruthy();
 
   await page.goto(`/components?selected=${encodeURIComponent(selected!.componentId)}`);
   await expect(page.getByRole('heading', { name: '组件中心' })).toBeVisible();
@@ -44,21 +44,10 @@ test('component page shows upstream parameter lineage and visibility editor', as
   expect(await page.getByText(/本组件参数 .* 来自 .* 的公开参数/).count()).toBeGreaterThan(0);
   await expect(page.getByText('各版本参数来源')).toBeVisible();
 
-  const editContract = page.getByRole('button', { name: /创建 Draft 编辑合同|选择 Draft 编辑合同|编辑依赖和参数/ });
+  const editContract = page.getByRole('button', { name: '编辑参数合同', exact: true });
   await expect(editContract).toBeVisible();
   await editContract.click();
-  if (await page.getByRole('dialog', { name: /创建 Draft 编辑依赖和参数/ }).count()) {
-    // Catalog examples have no executable workspace; exercise parameter authoring
-    // with a new line instead of cloning their incomplete Playbook manifests.
-    await page.getByRole('combobox', { name: '创建方式' }).selectOption('new_line');
-    await page.getByRole('textbox', { name: '发布线名称' }).fill(`UI contract ${Date.now()}`);
-    await page.getByPlaceholder('v1.1.0').fill(`1.0.0-ui-${Date.now()}`);
-    await page.locator('textarea[name="notes"]').fill('验证页面内依赖和参数编辑');
-    page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: '创建 Draft', exact: true }).click();
-  }
-
-  await expect(page.getByRole('button', { name: '新增依赖' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '新增依赖' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '新增参数' })).toBeVisible();
   if (await page.getByRole('button', { name: /编辑参数/ }).count() === 0) {
     await page.getByRole('button', { name: '新增参数' }).click();
@@ -74,5 +63,5 @@ test('component page shows upstream parameter lineage and visibility editor', as
   await valueProvider.click();
   await valueProvider.selectOption('scenario_owner');
   await expect(valueProvider).toHaveValue('scenario_owner');
-  await expect(page.getByRole('button', { name: '保存依赖和参数' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存参数合同', exact: true })).toBeVisible();
 });

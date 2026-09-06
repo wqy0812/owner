@@ -1,3 +1,4 @@
+import sample from '../../../examples/components/host-foundation-example.json';
 import { describe, expect, it } from 'vitest';
 import { parseComponentImportTemplate } from '../pages/componentTemplateImport';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from '../pages/scenarioTemplate';
@@ -11,24 +12,24 @@ function componentTemplate(overrides: Record<string, unknown> = {}) {
     release: {
       lineName: 'Runtime 1.0', version: '1.0.0', parameters: [], dependencies: [],
       actions: [
-        { name: 'install', type: 'install', playbook: 'install.yml', timeoutSeconds: 60 },
-        { name: 'verify', type: 'verify', playbook: 'verify.yml', timeoutSeconds: 60 },
+        { id: 'install', name: 'install', type: 'install', playbook: 'tasks/install.yml', timeoutSeconds: 60 },
+        { id: 'health', name: 'health', type: 'check', playbook: 'tasks/checks/health.yml', timeoutSeconds: 60 },
       ],
     },
     playbooks: [
-      { filename: 'install.yml', content: '---\n- hosts: all\n  tasks: []\n' },
-      { filename: 'verify.yml', content: '---\n- hosts: all\n  tasks: []\n' },
+      { filename: 'tasks/install.yml', content: '- assert:\n    that: true\n' },
+      { filename: 'tasks/checks/health.yml', content: '- assert:\n    that: true\n' },
     ],
     ...overrides,
   }];
 }
 
 describe('component template import', () => {
-  it('rejects missing, duplicate, and unreferenced playbooks before execution', () => {
+  it('rejects missing, duplicate, and invalid role paths before execution', () => {
     const base = componentTemplate()[0];
     const cases = [
-      { ...base, playbooks: [{ filename: 'install.yml', content: '---\n[]\n' }] },
-      { ...base, playbooks: [{ filename: 'install.yml', content: '---\n[]\n' }, { filename: 'install.yml', content: '---\n[]\n' }, { filename: 'verify.yml', content: '---\n[]\n' }] },
+      { ...base, playbooks: [{ filename: 'tasks/install.yml', content: '---\n[]\n' }] },
+      { ...base, playbooks: [{ filename: 'tasks/install.yml', content: '---\n[]\n' }, { filename: 'tasks/install.yml', content: '---\n[]\n' }, { filename: 'tasks/checks/health.yml', content: '---\n[]\n' }] },
       { ...base, playbooks: [...base.playbooks, { filename: 'unused.yml', content: '---\n[]\n' }] },
     ];
     for (const value of cases) expect(() => parseComponentImportTemplate(JSON.stringify([value]))).toThrow();
@@ -141,4 +142,10 @@ describe('scenario template import', () => {
     verifiedTemplate.nodes[0].data.componentId = 'component-other';
     expect(() => validateScenarioTemplateReferences(verifiedTemplate, [component])).toThrow(/不匹配/);
   });
+});
+
+it('validates the shared directory sample with an explicit dependency and public mapping', () => {
+  const entries = parseComponentImportTemplate(JSON.stringify(sample));
+  expect(entries).toHaveLength(2);
+  expect(entries[1].release.dependencies?.[0]).toMatchObject({componentSlug:'host-foundation-example',parameterMappings:[{upstreamParameter:'shared_root',targetParameter:'prepared_root'}]});
 });

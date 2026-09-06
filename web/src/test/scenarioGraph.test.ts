@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcileScenarioGraph, scenarioDependencyEdgeId } from '../pages/scenarioGraph';
+import { scenarioExecutionOrderNodes, reconcileScenarioGraph, scenarioDependencyEdgeId } from '../pages/scenarioGraph';
 import type { ComponentRelease, ScenarioNode } from '../types/domain';
 
 const upstream = { id: 'release-runtime', dependencies: [] } as unknown as ComponentRelease;
@@ -102,4 +102,43 @@ describe('scenario dependency graph reconciliation', () => {
 	expect(result.issues).toContainEqual(expect.objectContaining({ code: 'mixed_lifecycle_direction', nodeId: 'control' }));
 	expect(result.edges).toEqual([]);
   });
+});
+
+
+describe('Scenario Owner execution order', () => {
+  const nodes = ['a', 'b', 'c', 'd'].map(id => node(id, upstream.id));
+  const edge = (source: string, target: string) => ({ source, target });
+  it('reports only the first undecided frontier and updates after each choice', () => {
+    const edges = [edge('a', 'b'), edge('a', 'c'), edge('b', 'd'), edge('c', 'd')];
+    expect(scenarioExecutionOrderNodes(nodes, edges)).toEqual(['b', 'c']);
+    expect(scenarioExecutionOrderNodes([...nodes].reverse(), edges)).toEqual(['b', 'c']);
+    expect(scenarioExecutionOrderNodes(nodes, [...edges, edge('c', 'b')])).toEqual([]);
+    expect(scenarioExecutionOrderNodes(nodes.slice(0, 3), [])).toEqual(['a', 'b', 'c']);
+    expect(scenarioExecutionOrderNodes(nodes.slice(0, 3), [edge('b', 'a')])).toEqual(['b', 'c']);
+  });
+  it('accepts singleton and indirect order, and leaves cycles to graph validation', () => {
+    expect(scenarioExecutionOrderNodes(nodes.slice(0, 1), [])).toEqual([]);
+    expect(scenarioExecutionOrderNodes(nodes.slice(0, 3), [edge('a', 'b'), edge('b', 'c')])).toEqual([]);
+    expect(scenarioExecutionOrderNodes(nodes, [edge('a', 'b'), edge('b', 'a')])).toEqual([]);
+  });
+  it('does not treat configuration references as execution order', () => {
+    const configured = { ...downstream, dependencies: [{ ...dependency, kind: 'configuration' as const }] };
+    const graph = reconcileScenarioGraph([node('a', upstream.id), node('b', configured.id)], [], new Map([[upstream.id, upstream], [configured.id, configured]]));
+    expect(scenarioExecutionOrderNodes(graph.nodes, graph.edges)).toEqual(['a', 'b']);
+  });
+});
+
+ describe('unavailable scenario contracts', () => {
+ it('preserves all 31 edges and bindings until all 15 contracts are visible', () => {
+ const nodes = Array.from({ length: 15 }, (_, i) => node(`n${i}`, `r${i}`));
+ nodes[14].data.dependencySources = { dep: 'n0' };
+ nodes[14].data.parameterValues = { source: 'unchanged' };
+ const edges = Array.from({ length: 31 }, (_, i) => ({ id: `e${i}`, source: `n${i % 14}`, target: 'n14', kind: i < 4 ? 'sequence' as const : 'dependency' as const }));
+ for (const metadata of [new Map<string, ComponentRelease>(), new Map([['r0', { id: 'r0', dependencies: [] } as unknown as ComponentRelease]])]) {
+ const result = reconcileScenarioGraph(nodes, edges, metadata);
+ expect(result.edges).toEqual(edges);
+ expect(result.nodes).toEqual(nodes);
+ expect(result.issues.every(issue => issue.code === 'contract_unavailable')).toBe(true);
+ }
+ });
 });

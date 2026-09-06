@@ -18,6 +18,8 @@ function showValue(value: unknown) {
 export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseId: string; onClose: () => void; onDecided: () => void | Promise<void> }) {
   const { notify, platformOptionCategories } = useApp();
   const query = useApiData((signal) => api.previewReleaseReview(releaseId, signal), [releaseId], 'workbench');
+  const [decision, setDecision] = useState<'approve'|'reject'>();
+  const [affected, setAffected] = useState<import('./ComponentUsagePanel').ComponentUsage>();
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState<'approve' | 'reject' | ''>('');
   const [decisionError, setDecisionError] = useState('');
@@ -36,6 +38,8 @@ export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseI
     try {
       await api.decideReleaseReview(releaseId, decision, comment.trim(), query.data.previewDigest);
       notify('success', decision === 'approve' ? '合同审核已通过' : '合同审核已驳回');
+      setDecision(decision);
+      try { setAffected(await api.componentUsage(query.data.componentId,releaseId,false)); } catch { /* The result stays visible even if usage requires a refresh. */ }
       await onDecided();
     } catch (reason) {
       setDecisionError(displayError(reason));
@@ -48,6 +52,7 @@ export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseI
   const preview = query.data;
   const release = preview?.release;
   const optionLabel = (key: string, value: string) => platformOptionCategories.find((item) => item.key === key)?.options.find((item) => item.value === value)?.label ?? value;
+  if (decision && preview && release) return <Modal size="wide" title="合同评审结果" onClose={onClose}><div className="modal-body"><div className="release-detail-grid"><div><span>审核状态</span><strong>{decision==='approve'?'审核通过':'已驳回'}</strong></div><div><span>共享状态</span><strong>{release.candidate?'已共享':'尚未共享'}</strong></div><div><span>组件 Owner</span><strong>{preview.ownerName}</strong></div></div><p>{decision==='approve'?'审核通过后仍需组件 Owner 显式共享，引用场景才能读取并继续校验合同。':'修改后需重新提交合同审核。'}</p><h3>受影响的直接引用场景</h3>{affected ? affected.scenarios.length ? affected.scenarios.map(item=><p key={item.revisionId}>{item.name} · r{item.revision} · {item.ownerName}</p>) : <p>当前没有直接引用场景。</p> : <p>引用信息暂不可用，请在组件详情查看。</p>}</div><footer className="modal-actions"><button className="button button--primary" onClick={onClose}>关闭</button></footer></Modal>;
   return <Modal size="wide" title="Component Release 合同审核" description="批准或驳回前必须完整读取当前合同与所有锁定 Playbook；任何内容漂移都需要重新预览。" onClose={onClose}>
     {!preview && query.loading ? <LoadingBlock label="正在加载待审组件…" /> : !preview && query.error ? <ErrorBlock message={query.error} onRetry={() => void reload()} /> : preview && release ? <>
       <div className="modal-body inspect-contract release-review-preview">
@@ -57,7 +62,7 @@ export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseI
             <div><span>组件</span><strong>{preview.componentName}</strong></div>
             <div><span>组件 Owner</span><strong>{preview.ownerName}</strong></div>
             <div><span>版本</span><strong>{release.version}</strong></div>
-            <div><span>状态</span><StatusPill status={release.review.status}>待审核</StatusPill></div>
+            <div><span>审核状态</span><StatusPill status={release.review.status}>待审核</StatusPill></div><div><span>共享状态</span><strong>{release.candidate?'已共享':'尚未共享'}</strong></div>
             <div><span>发布线</span><strong>{release.lineName}</strong></div>
             <div><span>版本关系</span><strong>{release.compatibility === 'not_applicable' ? '全新基线' : release.compatibility === 'compatible' ? '兼容升级' : '破坏性升级'}</strong></div>
             <div><span>风险等级</span><strong>{release.riskLevel ?? 'low'}</strong></div>
@@ -98,8 +103,9 @@ export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseI
           {(release.actions ?? []).map((action) => {
             const playbook = preview.playbooks.find((item) => item.actionId === action.id && item.path === action.playbook);
             return <article className="review-playbook" key={action.id ?? `${action.type}-${action.playbook}`}>
-              <header><div><strong>{action.type} · {action.name || action.type}</strong><small>{action.hostGroup || '未指定主机组'} · {action.timeoutSeconds ?? 1800}s · {action.riskLevel ?? 'low'}</small></div><code>{action.playbook}</code></header>
+              <header><div><strong>{action.type} · {action.name || action.type}</strong><small><span title={action.hostGroup}>{optionLabel('hostGroup',action.hostGroup??'')}</span> · {action.timeoutSeconds ?? 1800}s · {action.riskLevel ?? 'low'}</small></div><code>{action.playbook}</code></header>
               <div className="release-action-facts"><div><span>CredentialRef</span><strong>{action.requiredCredentials?.join('、') || '无'}</strong></div><div><span>能力</span><strong>{[action.idempotent ? '幂等' : '', action.destructive ? '破坏性' : ''].filter(Boolean).join('、') || '标准'}</strong></div><div><span>版本转换</span><strong>{action.fromReleaseId || '—'} → {action.toReleaseId || '—'}</strong></div></div>
+              <section><h4>资源管理声明</h4>{!action.resourceContract?<p>未声明，不能发起新的测试或执行</p>:action.resourceContract.noManagedPaths?<p>Owner 确认无受管路径</p>:action.resourceContract.claims.map(claim=><p key={claim.id}>{claim.id} · {claim.path} · {claim.scope} · {claim.access}{claim.exclusive?' · 独占整个范围':''}{claim.sharedWith?` · 共享来源 ${claim.sharedWith.releaseId}/${claim.sharedWith.claimId}`:''}{claim.excludes?.length?` · 排除 ${claim.excludes.join('、')}`:''}{claim.sharedPaths?.length?` · 下游子路径 ${claim.sharedPaths.join('、')}`:''}</p>)}</section>
               {playbook ? <div className="release-playbook-source"><div><span>{playbook.filename}</span><code>sha256:{playbook.sha256}</code></div><pre className="code-editor release-playbook-preview">{playbook.content}</pre></div> : <div className="inline-warning" role="alert"><span>预览响应缺少该 Action 的 Playbook，不能审批。</span></div>}
             </article>;
           })}

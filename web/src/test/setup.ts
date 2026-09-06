@@ -45,8 +45,8 @@ export class EventSourceMock {
   }
   dispatchEvent() { return true; }
   close() { this.readyState = 2; }
-  emit(type: string) {
-    const event = new MessageEvent(type);
+  emit(type: string, data: unknown = {}) {
+    const event = new MessageEvent(type, { data: JSON.stringify(data) });
     if (type === 'message') this.onmessage?.(event);
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }

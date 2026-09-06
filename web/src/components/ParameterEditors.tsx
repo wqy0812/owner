@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
-import type { Component, ComponentDependency, ComponentRelease, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider, ParameterVisibility } from '../types/domain';
+import type { Component, ComponentDependency, ComponentRelease, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider } from '../types/domain';
 
 const PARAMETER_TYPES: ParameterType[] = ['string', 'boolean', 'integer', 'number', 'object', 'array'];
 const VALUE_PROVIDER_LABELS: Record<ParameterValueProvider, string> = {
@@ -358,51 +358,32 @@ export function ParameterContractList({ release, components, consumers: provided
   const consumers = providedConsumers ?? downstreamParameterConsumers(release?.componentId, components);
   const publicItems = parameters.filter((item) => item.visibility === 'public');
   const internalItems = parameters.filter((item) => item.visibility !== 'public');
-  return <div className="parameter-preview">
-    <section>
-      <strong>公开参数</strong>
-      <p className="section-hint">下游组件只能引用这里列出的参数</p>
-      {publicItems.length ? publicItems.map((item) => {
-        const usedBy = consumers.filter((consumer) => consumer.upstreamParameter === item.name);
-        return <div key={item.name} className="parameter-preview__item">
-          <div><span>{item.name}</span><em className="visibility-badge visibility-badge--public">公开</em></div>
-          <small>{item.type} · {item.description} · {item.valueProvider}{item.fixedValue !== undefined ? ` · 固定 ${String(item.fixedValue)}` : ''}</small>
-          {usedBy.length ? usedBy.map((consumer) => <small key={consumer.label} className="parameter-lineage">{consumer.label}</small>) : <small className="mapping-empty">尚未被下游引用</small>}
-        </div>;
-      }) : <div className="empty-state"><strong>没有公开参数</strong></div>}
-    </section>
-    <section>
-      <strong>内部参数</strong>
-      <p className="section-hint">只给本组件使用；如果来自上游，会标明具体来源</p>
-      {internalItems.length ? internalItems.map((item) => {
+  const formatValue = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return <div className="parameter-contract-list">
+    {([{ title: '公开参数', items: publicItems, hint: '下游组件可通过映射引用' }, { title: '内部参数', items: internalItems, hint: '仅供本组件使用' }]).map(group => <section key={group.title}>
+      <header className="parameter-contract-list__heading"><strong>{group.title}</strong><span>{group.items.length}</span><small>{group.hint}</small></header>
+      {group.items.length ? group.items.map(item => {
+        const usedBy = consumers.filter(consumer => consumer.upstreamParameter === item.name);
         const source = sources.get(item.name);
-        return <div key={item.name} className="parameter-preview__item">
-          <div><span>{item.name}</span><em className="visibility-badge visibility-badge--internal">内部</em></div>
-          <small>{item.type} · {item.description} · {item.valueProvider}{item.fixedValue !== undefined ? ` · 固定 ${String(item.fixedValue)}` : ''}</small>
-          {source ? <small className="parameter-lineage">{source.label}</small> : null}
-        </div>;
-      }) : <div className="empty-state"><strong>没有内部参数</strong></div>}
-    </section>
+        return <details className="contract-parameter" key={`${release?.id}:${item.name}`}>
+          <summary aria-label={`查看参数 ${item.name}`}>
+            <span className="contract-parameter__identity"><strong>{item.name}</strong><small title={item.description}>{item.description || '暂无说明'}</small></span>
+            <span className="contract-parameter__meta"><span>{VALUE_PROVIDER_LABELS[item.valueProvider]}</span>{item.visibility === 'public' && <span>{usedBy.length} 项引用</span>}</span>
+            <ChevronDown size={15} aria-hidden="true" />
+          </summary>
+          <div className="contract-parameter__details">
+            <p>{item.description || '暂无说明'}</p>
+            <dl><div><dt>类型</dt><dd>{item.type}</dd></div><div><dt>值的负责人</dt><dd>{VALUE_PROVIDER_LABELS[item.valueProvider]}</dd></div><div><dt>修改规则</dt><dd>{item.modifiable ? '允许负责人修改' : '不允许外部修改'} · {item.required ? '正式运行必填' : '可选'}</dd></div></dl>
+            {([{label: '固定值', value: item.fixedValue}, {label: '建议值（不自动生效）', value: item.suggestedValue}, {label: '独立测试值', value: item.testValue}]).filter(entry => entry.value !== undefined).map(entry => <div className="contract-parameter__value" key={entry.label}><strong>{entry.label}</strong><pre>{formatValue(entry.value)}</pre></div>)}
+            {source && <div><strong>上游来源</strong><p className="parameter-lineage">{source.label}</p></div>}
+            {item.visibility === 'public' && <div><strong>下游引用</strong>{usedBy.length ? <ul>{usedBy.map(consumer => <li key={consumer.label}><span>{consumer.componentName} {consumer.version}</span><code>{consumer.targetParameter}</code></li>)}</ul> : <p>尚未被下游引用</p>}</div>}
+          </div>
+        </details>;
+      }) : <p className="contract-parameter__empty">没有{group.title}</p>}
+    </section>)}
   </div>;
 }
 
 export function mappedParameterNames(release?: ComponentRelease): Set<string> {
   return new Set((release?.dependencies ?? []).flatMap((dependency) => (dependency.parameterMappings ?? []).map((item) => item.targetParameter)));
-}
-
-export function publicParameters(release?: ComponentRelease): ParameterDefinition[] {
-  return (release?.parameters ?? []).filter((item) => item.visibility === 'public');
-}
-
-export function defaultFixtureValues(release?: ComponentRelease, components?: Component[]): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const dependency of release?.dependencies ?? []) {
-    const upstream = components?.flatMap((component) => component.releases ?? []).find((item) => item.id === dependency.releaseId);
-    for (const mapping of dependency.parameterMappings ?? []) {
-      const source = upstream?.parameters?.find((item) => item.name === mapping.upstreamParameter);
-      const testValue = source?.testValue ?? source?.fixedValue;
-      if (testValue !== undefined) values[mapping.targetParameter] = typeof testValue === 'string' ? testValue : JSON.stringify(testValue);
-    }
-  }
-  return values;
 }

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, eventsURL } from '../api/client';
-import { ROLE_LABELS, type PlatformOptionCategory, type Role, type User } from '../types/domain';
+import { RunActivityEvents } from './runActivityEvents';
+import { ROLE_LABELS, type PlatformOptionCategory, type User } from '../types/domain';
 
 export const DEMO_USERS: User[] = [
   { id: 'component-alice', name: '林晓', role: 'component_owner' },
@@ -24,6 +25,7 @@ export const ALL_REFRESH_TARGETS: readonly RefreshTarget[] = ['components', 'sce
 type RefreshTokens = Record<RefreshTarget, number>;
 
 interface AppContextValue {
+  runActivityEvents: RunActivityEvents;
   user: User;
   users: User[];
   switching: boolean;
@@ -49,6 +51,7 @@ function displayError(error: unknown): string {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User>(DEMO_USERS[0]);
+  const runActivityEvents = useMemo(() => new RunActivityEvents(), [user.id]);
   const [users, setUsers] = useState<User[]>(DEMO_USERS);
   const [sessionReady, setSessionReady] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -171,13 +174,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!sessionReady) return;
     const stream = new EventSource(eventsURL(), { withCredentials: true });
-    stream.onopen = () => setConnected(true);
+    let opened = false;
+    stream.onopen = () => {
+      setConnected(true);
+      if (opened) { runActivityEvents.refresh(); scheduleRefresh(ALL_REFRESH_TARGETS); }
+      opened = true;
+    };
     stream.onerror = () => setConnected(false);
     stream.onmessage = () => scheduleRefresh(ALL_REFRESH_TARGETS);
-    const listeners: Array<[string, () => void]> = [
+    const activity = (event: Event, type: 'log' | 'state') => {
+      try {
+        const value = JSON.parse((event as MessageEvent).data);
+        if (typeof value.runId === 'string') runActivityEvents.emit(value.runId, { type, logId: typeof value.logId === 'number' ? value.logId : undefined });
+      } catch { /* Invalid events cannot invalidate unrelated resources. */ }
+    };
+    const onVisible = () => { if (!document.hidden) { runActivityEvents.refresh(); scheduleRefresh(ALL_REFRESH_TARGETS); } };
+    document.addEventListener('visibilitychange', onVisible);
+    const listeners: Array<[string, (event: Event) => void]> = [
       ['notification', () => scheduleRefresh(['notifications', 'workbench'])],
-      ['run.log', () => scheduleRefresh('runs')],
-      ['run.updated', () => scheduleRefresh(['components', 'runs', 'environments', 'scenarios', 'workbench'])],
+      ['run.log', event => activity(event, 'log')],
+      ['run.updated', event => { activity(event, 'state'); scheduleRefresh(['components', 'runs', 'environments', 'scenarios', 'workbench']); }],
       ['approval.updated', () => scheduleRefresh(['runs', 'workbench'])],
       ['release.published', () => scheduleRefresh(['components', 'notifications', 'workbench'])],
       ['component_release.review_updated', () => scheduleRefresh(['components', 'workbench'])],
@@ -196,6 +212,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     for (const [event, listener] of listeners) stream.addEventListener(event, listener);
     return () => {
       stream.close();
+      document.removeEventListener('visibilitychange', onVisible);
       for (const [event, listener] of listeners) stream.removeEventListener(event, listener);
       if (refreshTimer.current !== undefined) {
         window.clearTimeout(refreshTimer.current);
@@ -203,11 +220,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       pendingRefreshTargets.current.clear();
     };
-  }, [scheduleRefresh, sessionReady, user.id]);
+  }, [runActivityEvents, scheduleRefresh, sessionReady, user.id]);
 
   const value = useMemo(
-    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh, scheduleRefresh, platformOptionCategories, platformOptionsLoading }),
-    [connected, notify, platformOptionCategories, platformOptionsLoading, refreshTokens, scheduleRefresh, signalRefresh, switchUser, switching, user, users],
+    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh, scheduleRefresh, platformOptionCategories, platformOptionsLoading, runActivityEvents }),
+    [connected, notify, platformOptionCategories, platformOptionsLoading, refreshTokens, scheduleRefresh, signalRefresh, switchUser, switching, user, users, runActivityEvents],
   );
 
   return (
@@ -232,14 +249,6 @@ export function useApp(): AppContextValue {
   const context = useContext(AppContext);
   if (!context) throw new Error('useApp must be used within AppProvider');
   return context;
-}
-
-export function canManage(role: Role, resource: 'component' | 'scenario' | 'environment'): boolean {
-  return (
-    (role === 'component_owner' && resource === 'component') ||
-    (role === 'scenario_owner' && resource === 'scenario') ||
-    (role === 'environment_owner' && resource === 'environment')
-  );
 }
 
 export { displayError };

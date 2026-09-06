@@ -3,8 +3,9 @@ import { api } from "../api/client";
 import { displayError, useApp } from "../context/AppContext";
 import { useApiData } from "../hooks/useApiData";
 import { STATUS_LABELS, type RunSummary } from "../types/domain";
-import { ErrorBlock, Modal, formatFileSize, formatTime } from "./Primitives";
-const ARCHIVE_STATUS: Record<string, string> = {queued:"待归档",running:"归档中",archived:"已归档",failed:"归档失败"};
+import { EmptyState, ErrorBlock, LoadingBlock, formatFileSize, formatTime } from "./Primitives";
+import { RunCleanupModal } from "./RunCleanupModal";
+const ARCHIVE_STATUS: Record<string, string> = {unarchived:"未归档",queued:"待归档",running:"归档中",archived:"已归档",failed:"归档失败"};
 export interface RetentionPolicy {
   autoArchive: boolean;
   autoCleanup: boolean;
@@ -43,15 +44,15 @@ export interface ArchiveHealth {
   lastScanAt?: string;
   lastScanResult?: string;
 }
-export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
+export function RunRetentionPanel({ runs, onDeleted }: { runs: RunSummary[]; onDeleted: (ids: string[]) => void }) {
   const { user, notify, signalRefresh } = useApp();
-  const { data, error, reload } = useApiData(
+  const { data, loading, error, reload } = useApiData(
     (signal) => api.archiveHealth(signal),
     [user.id],
     "runs",
   );
   const [selected, setSelected] = useState<string[]>([]);
-  const [preview, setPreview] = useState<CleanupItem[]>();
+  const [cleanupIds, setCleanupIds] = useState<string[]>();
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState<RetentionPolicy>();
   const pageKey = runs.map((r) => r.id).join(":");
@@ -91,11 +92,9 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
   }
   const chosen = runs.filter((r) => selected.includes(r.id));
   return (
-    <details className="panel retention-panel">
-      <summary>
-        运行历史管理 · 待归档 {data?.pending ?? 0} · 已归档{" "}
-        {formatFileSize(data?.sizeBytes ?? 0)}
-      </summary>
+    <div className="retention-panel">
+      <div className="retention-overview"><span>待归档 <strong>{data?.pending ?? 0}</strong></span><span>归档占用 <strong>{formatFileSize(data?.sizeBytes ?? 0)}</strong></span><span>成功记录压缩归档，可下载留存</span></div>
+      {loading && !data ? <LoadingBlock label="正在读取历史管理配置…" /> : null}
       {error ? (
         <ErrorBlock message={error} onRetry={() => void reload()} />
       ) : null}
@@ -107,7 +106,7 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
       </p>
       {policy ? (
         <form
-          className="filter-bar"
+          className="retention-policy"
           onSubmit={(e) => {
             e.preventDefault();
             void act(() => api.saveRetention(policy), "自动处理配置已保存");
@@ -164,7 +163,8 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
         </form>
       ) : null}
       <p>{data?.lastScanResult || "自动处理尚未运行"}</p>
-      <h3>当前页记录（最多 100 条）</h3>
+      <h3>当前页记录 · 已选 {chosen.length} 条</h3>
+      <p>列表与运行中心当前筛选一致。成功记录可归档；失败记录须超过保留期限且无引用，删除后保留最小审计。</p>
       <div className="retention-selection">
         {runs
           .filter((r) => r.status === "succeeded" || r.status === "failed")
@@ -173,7 +173,7 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
               <input
                 type="checkbox"
                 checked={selected.includes(r.id)}
-                disabled={busy || r.archiveStatus === "archived"}
+                disabled={busy || ["archived", "queued", "running"].includes(r.archiveStatus ?? "")}
                 onChange={(e) =>
                   setSelected((ids) =>
                     e.target.checked
@@ -182,11 +182,12 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
                   )
                 }
               />
-              {r.name} · {STATUS_LABELS[r.status] ?? r.status} ·{" "}
+              {r.name} · {STATUS_LABELS[r.status] ?? r.status}{r.archiveStatus ? ` · ${ARCHIVE_STATUS[r.archiveStatus] ?? r.archiveStatus}` : ""} ·{" "}
               {r.finishedAt ? formatTime(r.finishedAt) : "无结束时间"} · {r.id}
             </label>
           ))}
       </div>
+      {!runs.some(r => r.status === "succeeded" || r.status === "failed") && <EmptyState title="当前页没有可管理的已结束记录" />}
       <div className="row-actions">
         <button
           className="button button--quiet"
@@ -195,25 +196,20 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
             !data?.configured ||
             !!data.storageError ||
             !chosen.length ||
-            chosen.some((r) => r.status !== "succeeded")
+            chosen.some((r) => r.status !== "succeeded" || ["archived", "queued", "running"].includes(r.archiveStatus ?? ""))
           }
           onClick={() =>
-            void act(() => api.archiveRuns(selected), "归档任务已受理")
+            void act(async () => { await api.archiveRuns(selected); setSelected([]); }, "归档任务已受理")
           }
         >
           归档所选成功记录
         </button>
         <button
           className="button button--danger-soft"
-          disabled={busy || !chosen.length}
-          onClick={() =>
-            void act(
-              async () => setPreview(await api.cleanupPreview(selected)),
-              "清理预览已生成",
-            )
-          }
+          disabled={busy || !chosen.length || chosen.some(r => r.status !== 'failed')}
+          onClick={() => setCleanupIds([...selected])}
         >
-          预览清理
+          删除所选失败记录
         </button>
       </div>
       <h3>最近归档任务</h3>
@@ -260,41 +256,7 @@ export function RunRetentionPanel({ runs }: { runs: RunSummary[] }) {
           </div>
         </>
       ) : null}
-      {preview ? (
-        <Modal
-          title="确认清理失败记录"
-          description="删除后不能恢复；整批重新校验，任一记录被保护则整批取消。"
-          onClose={() => setPreview(undefined)}
-        >
-          <div className="modal-body">
-            {preview.map((p) => (
-              <p key={p.runId}>
-                {p.runId}：{p.eligible ? "可以清理" : p.reasons.join("；")}
-              </p>
-            ))}
-          </div>
-          <footer className="modal-actions">
-            <button disabled={busy} onClick={() => setPreview(undefined)}>
-              取消
-            </button>
-            <button
-              className="button button--danger-soft"
-              disabled={
-                busy || !preview.length || preview.some((p) => !p.eligible)
-              }
-              onClick={() =>
-                void act(async () => {
-                  await api.cleanupRuns(preview.map((p) => p.runId));
-                  setPreview(undefined);
-                  setSelected([]);
-                }, "失败记录已清理")
-              }
-            >
-              确认删除所选记录
-            </button>
-          </footer>
-        </Modal>
-      ) : null}
-    </details>
+      {cleanupIds && <RunCleanupModal runIds={cleanupIds} onClose={() => setCleanupIds(undefined)} onDeleted={(ids) => { setSelected([]); onDeleted(ids); }} />}
+    </div>
   );
 }

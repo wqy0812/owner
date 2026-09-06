@@ -1,10 +1,10 @@
 import { ArchiveRestore, Ban, Plus, Trash2 } from 'lucide-react';
-import { useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from '../api/client';
 import { useApp, displayError } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { PlatformOption, PlatformOptionCategory, PlatformOptionUsage } from '../types/domain';
-import { EmptyState, LoadingBlock, PageHeader } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader } from '../components/Primitives';
 
 function usageTotal(usage: PlatformOptionUsage) {
   return usage.componentReleases + usage.scenarioRevisions + usage.environmentRevisions;
@@ -28,18 +28,22 @@ type RenameTarget = {
 
 export function PlatformManagementPage() {
   const { user, platformOptionCategories, platformOptionsLoading, notify, scheduleRefresh } = useApp();
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [createdCategoryId, setCreatedCategoryId] = useState('');
   const [categoryForm, setCategoryForm] = useState({ label: '', parentCategoryId: '', environmentRequired: false });
   const [optionLabels, setOptionLabels] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const renameSubmitting = useRef(false);
   const [variableForm, setVariableForm] = useState({ name: '', label: '', description: '' });
-  const { data: variableDefinitions, reload: reloadVariableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
+  const { data: variableDefinitions, loading: variablesLoading, error: variablesError, reload: reloadVariableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
   const admin = user.role === 'platform_admin';
 
   const categoryById = new Map(platformOptionCategories.map((category) => [category.id, category]));
   const visibleCategories = platformOptionCategories.filter((category) => !category.parentCategoryId || !categoryById.has(category.parentCategoryId));
 
+  useEffect(() => { if (createdCategoryId && categoryById.has(createdCategoryId)) { document.getElementById(`category-${createdCategoryId}`)?.scrollIntoView({behavior:'smooth', block:'center'}); setCreatedCategoryId(''); } }, [createdCategoryId, platformOptionCategories]);
+  function openCategory(parentCategoryId = '') { setCategoryForm({label:'', parentCategoryId, environmentRequired:false}); setCategoryOpen(true); }
   function childCategories(categoryId: string) {
     return platformOptionCategories.filter((category) => category.parentCategoryId === categoryId);
   }
@@ -49,10 +53,11 @@ export function PlatformManagementPage() {
     if (!categoryForm.label.trim()) return;
     setBusy('category:new');
     try {
-      await api.createPlatformOptionCategory({ label: categoryForm.label.trim(), parentCategoryId: categoryForm.parentCategoryId || undefined, environmentRequired: categoryForm.environmentRequired });
+      const created = await api.createPlatformOptionCategory({ label: categoryForm.label.trim(), parentCategoryId: categoryForm.parentCategoryId || undefined, environmentRequired: categoryForm.environmentRequired });
       setCategoryForm({ label: '', parentCategoryId: '', environmentRequired: false });
+      setCategoryOpen(false); setCreatedCategoryId(created.id);
       scheduleRefresh('platform-options');
-      notify('success', '类别已新增');
+      notify('success', '类别已新增', '请在类别中继续添加选项。');
     } catch (error) { notify('error', '新增类别失败', displayError(error)); } finally { setBusy(''); }
   }
 
@@ -183,6 +188,7 @@ export function PlatformManagementPage() {
     const categoryUsed = usageTotal(category.usage) > 0;
     const deleteTitle = protectedCategory ? '主机组类别受系统保护' : categoryUsed ? usageText(category.usage) : hasChildren ? '存在从属类别，不能删除' : '彻底删除类别';
     return <div className="form-actions category-actions">
+      {category.kind === 'environment_dimension' && !category.parentCategoryId && !category.retiredAt ? <button type="button" className="button button--quiet button--small" onClick={() => openCategory(category.id)}><Plus size={14} /> 新增子类别</button> : null}
       {!protectedCategory ? <button type="button" className="button button--quiet button--small" disabled={Boolean(busy)} onClick={() => void setRetired('category', category.id, !category.retiredAt)}>
         {category.retiredAt ? <ArchiveRestore size={14} /> : <Ban size={14} />}{category.retiredAt ? '恢复' : '退役'}
       </button> : null}
@@ -216,7 +222,7 @@ export function PlatformManagementPage() {
   function flatCategoryCard(category: PlatformOptionCategory) {
     const orphaned = Boolean(category.parentCategoryId && !categoryById.has(category.parentCategoryId));
     const protectedCategory = category.kind === 'host_group';
-    return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}`} key={category.id}>
+    return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}`} id={`category-${category.id}`} key={category.id}>
       <div className="section-heading">
         <div>{categoryLabel(category, true)}<div className="category-status-row">{requiredPill(category)}{protectedCategory ? <span className="category-status">系统保护 · 主机组</span> : null}</div></div>
         {categoryActions(category)}
@@ -233,7 +239,7 @@ export function PlatformManagementPage() {
   function hierarchicalCategoryCard(root: PlatformOptionCategory, children: PlatformOptionCategory[]) {
     const rootOptionIds = new Set(root.options.map((option) => option.id));
     const orphanOptions = children.flatMap((child) => child.options.filter((option) => !option.parentOptionId || !rootOptionIds.has(option.parentOptionId)).map((option) => ({ child, option })));
-    return <section className="panel category-card category-card--hierarchical" key={root.id}>
+    return <section className="panel category-card category-card--hierarchical" id={`category-${root.id}`} key={root.id}>
       <div className="section-heading hierarchy-heading">
         <div>
           <div className="category-path">{categoryLabel(root, true)}{children.map((child) => <span className="category-path__child" key={child.id}><span aria-hidden="true">→</span>{categoryLabel(child)}</span>)}</div>
@@ -285,20 +291,37 @@ export function PlatformManagementPage() {
   return <div className="page-stack">
     <PageHeader eyebrow="Platform directory" title="平台管理" description="集中维护环境适配维度与主机组。技术键和值由平台生成，已被任何历史业务快照引用的数据不能删除。" />
     {!admin ? <EmptyState title="仅平台 Owner 可管理目录" description="其他 Owner 可以在各自表单中选择目录数据，但不能新增或删除。" /> : <>
-      <div className="two-column">
-        <section className="panel"><div className="section-heading"><div><h2>环境变量字段</h2><p>环境 Owner 只能从此目录选择键。</p></div></div><form className="form-grid" onSubmit={(event) => void createVariableDefinition(event)}><label><span>变量名</span><input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))} /></label><label><span>显示名</span><input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))} /></label><label className="span-2"><span>说明</span><input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))} /></label><button className="button button--primary" disabled={Boolean(busy)}><Plus size={15} /> 新增变量字段</button></form><div className="managed-definition-list">{variableDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.name} · 引用 {item.usage}</small></div><button className="icon-text" disabled={item.usage > 0 || Boolean(busy)} onClick={() => void api.deleteEnvironmentVariableDefinition(item.id).then(() => reloadVariableDefinitions()).catch((error) => notify('error', '删除失败', displayError(error)))}><Trash2 size={14} /> 删除</button></div>)}</div></section>
-      </div>
-      <form className="panel category-create-form" onSubmit={(event) => void createCategory(event)}>
-        <label><span>新增环境维度类别</span><input value={categoryForm.label} onChange={(event) => setCategoryForm((current) => ({ ...current, label: event.target.value }))} placeholder="例如 CPU 厂商" required /></label>
-        <label><span>父类别（可选）</span><select value={categoryForm.parentCategoryId} onChange={(event) => setCategoryForm((current) => ({ ...current, parentCategoryId: event.target.value }))}><option value="">无（根类别）</option>{platformOptionCategories.filter((item) => item.kind === 'environment_dimension' && !item.parentCategoryId && !item.retiredAt).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-        <div className="category-create-actions"><label className="required-toggle"><input type="checkbox" checked={categoryForm.environmentRequired} onChange={(event) => setCategoryForm((current) => ({ ...current, environmentRequired: event.target.checked }))} /><span className="required-toggle__track" aria-hidden="true"><span /></span><span>环境录入时必填</span></label><button className="button button--primary" disabled={busy === 'category:new'}><Plus size={16} /> 新增类别</button></div>
-      </form>
+      <section className="panel environment-variable-panel" aria-label="环境变量字段">
+        <div className="section-heading"><div><h2>环境变量字段</h2><p>环境 Owner 只能从此目录选择键。</p></div></div>
+        <div className="environment-variable-layout">
+          <form className="form-grid environment-variable-create" onSubmit={(event) => void createVariableDefinition(event)}>
+            <h3 className="span-2">新增字段</h3>
+            <label><span>变量名</span><input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))} /></label>
+            <label><span>显示名</span><input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))} /></label>
+            <label className="span-2"><span>说明</span><input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))} /></label>
+            <button className="button button--primary" disabled={Boolean(busy)}><Plus size={15} /> 新增变量字段</button>
+          </form>
+          <section className="environment-variable-existing" aria-label="现有环境变量字段">
+            <h3>现有字段 <span>{variableDefinitions?.length ?? 0}</span></h3>
+            {variablesError ? <ErrorBlock message={variablesError} onRetry={() => void reloadVariableDefinitions()} /> : null}
+            {variablesLoading && !variableDefinitions ? <LoadingBlock label="正在读取环境变量字段…" /> : <div className="managed-definition-list">{variableDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.name} · 引用 {item.usage}</small>{item.description && <p>{item.description}</p>}</div><button type="button" className="icon-text" disabled={item.usage > 0 || Boolean(busy)} title={item.usage > 0 ? '字段已被引用，不能删除' : undefined} onClick={async () => { setBusy(`variable:${item.id}`); try { await api.deleteEnvironmentVariableDefinition(item.id); await reloadVariableDefinitions(); } catch (error) { notify('error', '删除失败', displayError(error)); } finally { setBusy(''); } }}><Trash2 size={14} /> 删除</button></div>)}</div>}
+            {!variablesLoading && !variablesError && !variableDefinitions?.length ? <EmptyState title="暂无环境变量字段" description="从左侧新增，已创建字段会显示在这里。" /> : null}
+          </section>
+        </div>
+      </section>
+      <section className="directory-section" aria-label="环境适配维度"><header className="section-heading"><div><h2>环境适配维度</h2><p>类别下维护选项，父子类别在同一组中管理。</p></div><button className="button button--primary" onClick={() => openCategory()}><Plus size={16} /> 新增类别</button></header>
       {platformOptionsLoading ? <LoadingBlock label="正在加载平台目录…" /> : <div className="card-grid">
-        {visibleCategories.map((category) => {
+        {visibleCategories.filter(category => category.kind === 'environment_dimension').map((category) => {
           const children = childCategories(category.id);
           return children.length ? hierarchicalCategoryCard(category, children) : flatCategoryCard(category);
         })}
-      </div>}
+      </div>}</section>
+      <section className="directory-section" aria-label="主机组目录"><header className="section-heading"><h2>主机组</h2></header><div className="card-grid">{visibleCategories.filter(category => category.kind === 'host_group').map(category => flatCategoryCard(category))}</div></section>
+      {categoryOpen && <Modal title={categoryForm.parentCategoryId ? `新增子类别 · ${categoryById.get(categoryForm.parentCategoryId)?.label ?? ''}` : '新增环境维度类别'} description="创建后在类别中录入选项。" onClose={() => setCategoryOpen(false)}><div className="category-create-dialog">      <form className="category-create-form" onSubmit={(event) => void createCategory(event)}>
+        <label><span>类别名称</span><input value={categoryForm.label} onChange={(event) => setCategoryForm((current) => ({ ...current, label: event.target.value }))} placeholder="例如 CPU 厂商" required /></label>
+        <label><span>父类别（可选）</span><select value={categoryForm.parentCategoryId} onChange={(event) => setCategoryForm((current) => ({ ...current, parentCategoryId: event.target.value }))}><option value="">无（根类别）</option>{platformOptionCategories.filter((item) => item.kind === 'environment_dimension' && !item.parentCategoryId && !item.retiredAt).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        <div className="category-create-actions"><label className="required-toggle"><input type="checkbox" checked={categoryForm.environmentRequired} onChange={(event) => setCategoryForm((current) => ({ ...current, environmentRequired: event.target.checked }))} /><span className="required-toggle__track" aria-hidden="true"><span /></span><span>环境录入时必填</span></label><button className="button button--primary" disabled={busy === 'category:new'}><Plus size={16} /> 新增类别</button></div>
+      </form></div></Modal>}
     </>}
   </div>;
 }
