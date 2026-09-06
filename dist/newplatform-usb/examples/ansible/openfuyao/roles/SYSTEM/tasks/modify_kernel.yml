@@ -1,6 +1,0 @@
----
-
-- block:
-    - import_tasks: "roles/SYSTEM/tasks/Kylin/modify_kernel.yml"
-  when:
-    - ansible_os_family == 'Kylin' or ansible_os_family == 'Kylin Linux Advanced Server' or ansible_os_family == 'RedHat'

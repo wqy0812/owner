@@ -1,9 +1,0 @@
----
-- name: Apply host-preflight on all
-  hosts: all
-  gather_facts: true
-  become: false
-  roles:
-    - role: k8s1175_components
-      k8s1175_component_task: host-preflight
-

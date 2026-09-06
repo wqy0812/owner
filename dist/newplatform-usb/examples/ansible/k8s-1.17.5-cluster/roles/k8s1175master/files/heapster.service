@@ -1,9 +1,0 @@
-[Unit]
-Description=Heapster Server
-After=network.target
-[Service]
-Type=simple
-WorkingDirectory=/root/heapster
-ExecStart=/bin/bash -c "/root/heapster/startheapster.sh"
-[Install]
-WantedBy=multi-user.target

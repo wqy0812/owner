@@ -1,5 +1,0 @@
-FLANNEL_ETCD="https://{{ groups['k8setcd'][0] }}:{{ K8SETCD_CLIENT_PORT }},https://{{ groups['k8setcd'][1] }}:{{ K8SETCD_CLIENT_PORT }},https://{{ groups['k8setcd'][2] }}:{{ K8SETCD_CLIENT_PORT }}"
-FLANNEL_ETCD_KEY="-etcd-prefix=/coreos.com/network"
-FLANNEL_OPTIONS="--etcd-cafile=/approot1/paas/kube/cert/ca.pem"
-FLANNEL_OPTIONS1="--etcd-certfile=/approot1/paas/kube/cert/flanneld.pem"
-FLANNEL_OPTIONS2="--etcd-keyfile=/approot1/paas/kube/cert/flanneld-key.pem"

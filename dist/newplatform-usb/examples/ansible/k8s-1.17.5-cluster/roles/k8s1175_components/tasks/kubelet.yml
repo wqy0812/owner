@@ -1,6 +1,0 @@
----
-- name: Install kubelet only
-  ansible.builtin.include_role:
-    name: "{{ 'k8s1175master' if inventory_hostname in (groups['k8smaster'] | default([])) else 'k8s1175node' }}"
-    tasks_from: component_kubelet
-

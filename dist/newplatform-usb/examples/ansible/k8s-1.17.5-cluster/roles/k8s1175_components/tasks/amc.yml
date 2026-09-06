@@ -1,5 +1,0 @@
----
-- name: Install AMC only
-  ansible.builtin.include_role:
-    name: k8s1175master
-    tasks_from: install_k8snode_amc

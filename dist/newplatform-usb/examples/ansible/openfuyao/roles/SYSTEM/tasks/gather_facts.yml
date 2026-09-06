@@ -1,6 +1,0 @@
----
-
-- name: gather facts
-  tags: always
-  setup:
-    filter: ansible_*

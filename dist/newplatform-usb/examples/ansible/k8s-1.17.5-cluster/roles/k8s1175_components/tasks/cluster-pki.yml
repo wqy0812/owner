@@ -1,5 +1,0 @@
----
-- name: Generate the cluster PKI artifact set
-  ansible.builtin.include_role:
-    name: k8s1175_cert
-

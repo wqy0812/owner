@@ -6,7 +6,7 @@ APP := bin/newplatform
 BACKUP_APP := bin/clusterforge-backup
 EMBED_DIR := internal/ui/dist
 
-.PHONY: bootstrap dev dev-api dev-web seed reset-demo test check-docs test-deploy-script test-fixture-boundary test-ansible test-e2e test-e2e-live test-e2e-real-scenarios-preflight test-e2e-real-scenarios build build-web
+.PHONY: bootstrap dev dev-api dev-web seed reset-demo test check-docs test-deploy-script test-fixture-boundary test-ansible test-e2e test-e2e-live build build-web
 
 check-docs:
 	python3 scripts/check-docs.py
@@ -55,12 +55,6 @@ test-e2e:
 
 test-e2e-live:
 	./scripts/test-live-api-e2e.sh
-
-test-e2e-real-scenarios-preflight:
-	CLUSTERFORGE_REAL_E2E=1 CLUSTERFORGE_REAL_E2E_PREFLIGHT_ONLY=1 $(GO) test ./automation/scenarios -run '^TestRealScenarioAutomation$$' -count=1 -v -timeout=10m
-
-test-e2e-real-scenarios:
-	CLUSTERFORGE_REAL_E2E=1 $(GO) test ./automation/scenarios -run '^TestRealScenarioAutomation$$' -count=1 -v -timeout=3h
 
 build-web:
 	$(PNPM) --dir web build

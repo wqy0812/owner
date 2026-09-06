@@ -1,8 +1,0 @@
----
-- name: Verify kubernetes-encryption-config on k8smaster
-  hosts: k8smaster
-  gather_facts: false
-  become: true
-  roles:
-    - role: k8s1175_component_verify
-      k8s1175_component_task: kubernetes-encryption-config

@@ -1,8 +1,0 @@
----
-
-- import_tasks: init.yml
-  tags: always
-- import_tasks: recovery.yml
-  tags: rcv
-- import_tasks: install.yml
-  tags: ins

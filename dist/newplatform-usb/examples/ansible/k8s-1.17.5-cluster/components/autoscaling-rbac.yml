@@ -1,9 +1,0 @@
----
-- name: Apply autoscaling-rbac on k8smaster
-  hosts: k8smaster
-  gather_facts: false
-  become: true
-  roles:
-    - role: k8s1175_components
-      k8s1175_component_task: autoscaling-rbac
-

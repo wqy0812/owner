@@ -1,8 +1,0 @@
-#!/bin/bash
-result=$(ping -c 2 -w 2 {{ groups['k8s_F5'][0] }})
-if [ $? -eq 0 ]
-then
-    exit 0
-else
-    exit 1
-fi

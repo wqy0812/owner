@@ -1,6 +1,0 @@
----
-- name: Install Blackbox Exporter only
-  ansible.builtin.include_role:
-    name: "{{ 'k8setcd_serverless' if inventory_hostname in (groups['k8setcd'] | default([])) else ('k8s1175master' if inventory_hostname in (groups['k8smaster'] | default([])) else 'k8s1175node') }}"
-    tasks_from: install_exporter
-

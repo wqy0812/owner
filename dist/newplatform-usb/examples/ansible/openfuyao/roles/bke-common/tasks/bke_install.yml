@@ -1,6 +1,0 @@
----
-
-- import_tasks: roles/SYSTEM/tasks/install_tools.yml
-  vars:
-    tools:
-      - "{{ BKE_ADMIN }}"

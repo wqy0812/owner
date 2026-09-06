@@ -1,6 +1,0 @@
----
-#有状态负载扁平网络集群策略
-- name: install clustermonitor
-  shell: helm install clustermonitor {{ helm_repo_name }}/clustermonitor --namespace default --set-json='params={{ addon_params.clustermonitor | to_json }}' --insecure-skip-tls-verify
-  ignore_errors: true
-  run_once: true

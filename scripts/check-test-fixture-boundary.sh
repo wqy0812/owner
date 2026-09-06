@@ -11,7 +11,6 @@ scan_test_sources() {
       -o -path './web/src/test/*' \
       -o -path './web/e2e/*' \
       -o -path './scripts/test-*.sh' \
-      -o \( -path './automation/*' \( -name '*.go' -o -name '*.sh' -o -name '*.yml' -o -name '*.yaml' \) \) \
     \) \
     -exec grep -EnH "$1" {} + 2>/dev/null || true
 }

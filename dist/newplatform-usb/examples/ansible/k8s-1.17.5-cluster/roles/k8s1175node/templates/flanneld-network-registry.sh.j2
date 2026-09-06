@@ -1,7 +1,0 @@
-#!/bin/sh
-su - kube
-curl https://{{ groups['k8setcd'][0] }}:{{ K8SETCD_CLIENT_PORT }}/v2/keys/{{ FLANNEL_ETCD_KEY }}   \
-  --cacert /approot1/paas/kube/cert/cb-ca.pem   \
-  --cert /approot1/paas/kube/cert/flanneld.pem   \
-  --key /approot1/paas/kube/cert/flanneld-key.pem   \
-  -XPUT -d value={\"Network\":\"{{ CLUSTER_IP_RANGE }}\"} 

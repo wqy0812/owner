@@ -1,5 +1,0 @@
----
-
-- import_tasks: "roles/SYSTEM/tasks/Kylin/install_tools.yml"
-  when:
-    - ansible_os_family == 'Kylin' or ansible_os_family == 'Kylin Linux Advanced Server' or ansible_os_family == 'RedHat'

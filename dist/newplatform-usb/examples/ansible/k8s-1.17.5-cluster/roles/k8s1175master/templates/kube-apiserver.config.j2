@@ -1,7 +1,0 @@
-KUBE_APISERVER_LOGTOSTDERR="--logtostderr=true"
-
-KUBE_APISERVER_LOG_LEVEL="--v=4"
-
-KUBE_APISERVER_ALLOW_PRIV="--allow-privileged=true"
-
-KUBE_MASTER="--master=https://{{ groups['k8s_F5'][0] }}:6443"

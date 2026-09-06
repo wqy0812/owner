@@ -1,6 +1,0 @@
----
-- name: Install Metrics Server only
-  ansible.builtin.include_role:
-    name: k8s1175master
-    tasks_from: install_metrics-server
-

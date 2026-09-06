@@ -1,9 +1,0 @@
----
-
-# The following tasks are only valid when referenced via roles.
-
-- import_tasks: image_plugin.yml
-  tags: image_plugin
-
-- import_tasks: k8s_log.yml
-  tags: ins
