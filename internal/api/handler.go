@@ -202,6 +202,8 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/environments/{id}/cluster-rollback-plan", h.previewEnvironmentRollback)
 	h.router.HandleFunc("POST /api/v1/environments/{id}/cluster-rollback-runs", h.startEnvironmentRollback)
 	h.router.HandleFunc("POST /api/v1/environments/{id}/revisions/{revisionId}/restore", h.restoreEnvironmentRevision)
+	h.router.HandleFunc("GET /api/v1/environments/{id}/revisions/{revisionId}/deletion-impact", h.environmentRevisionDeletionImpact)
+	h.router.HandleFunc("DELETE /api/v1/environments/{id}/revisions/{revisionId}", h.deleteEnvironmentRevision)
 	h.router.HandleFunc("POST /api/v1/environments/{id}/revisions/{revisionId}/export", h.exportEnvironmentRevision)
 	h.router.HandleFunc("POST /api/v1/environment-imports/plan", h.previewEnvironmentImport)
 	h.router.HandleFunc("POST /api/v1/environment-imports", h.importEnvironment)

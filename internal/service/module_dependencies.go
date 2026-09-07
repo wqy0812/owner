@@ -154,6 +154,8 @@ type EnvironmentService struct {
 }
 
 type environmentsStore interface {
+	EnvironmentRevisionDeletionImpact(ctx context.Context, environmentID, revisionID string) (store.EnvironmentRevisionDeletionImpact, error)
+	DeleteEnvironmentRevision(ctx context.Context, environmentID, revisionID, ownerID string, audit domain.AuditEvent) error
 	ListScenarios(ctx context.Context, viewer domain.User) ([]domain.Scenario, error)
 	ArchiveEnvironment(ctx context.Context, environmentID string, archivedAt time.Time, audit domain.AuditEvent) error
 	CreateEnvironment(ctx context.Context, e domain.Environment, r domain.EnvironmentRevision, writes ...store.EnvironmentRevisionWrite) error

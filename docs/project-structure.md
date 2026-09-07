@@ -158,6 +158,7 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `environments.go` | Inventory、Facts、变量和 CredentialRef |
 | `platform_parameters.go` | 环境变量字段与目录写入审计 |
 | `environment_transfer.go` | 环境 Revision 导入、导出和差异预检 |
+| `environment_revision_deletion.go` | 环境历史版本删除影响预览与 Owner 删除入口 |
 | `catalog_repository.go` | 私有 Catalog 仓库接入、备份和空库恢复 |
 | `runs.go` | Run 查询、审批、取消和日志 |
 | `run_logs.go` | Run 诊断、轻量 activity 和日志包下载 |

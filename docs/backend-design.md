@@ -492,6 +492,10 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 
 ### 7.9 环境变更、恢复与健康检查
 
+- 前台统一称“版本”，API 字段、路径和 rN 编号沿用现有合同。
+- `GET /api/v1/environments/{id}/revisions/{revisionId}/deletion-impact` 按需返回目标版本的当前/归档状态、可删除状态、阻塞原因及 Run、构建、TCP/SSH 检查数量；仅资源所属环境 Owner 可读。
+- 同一版本路径的 `DELETE` 仅允许环境 Owner 删除自有、未归档环境的非当前且未被 Run 或镜像构建引用的版本。Run 引用使用 `retained_run_history`，包含归档及清理保留记录；其他版本的引用不构成阻塞。
+- 删除通过 `beginCatalogWrite` 取得写锁后重查归属、当前版本与全部引用，在同一事务中删除该版本的 TCP/SSH 检查、版本记录和写入审计；任一失败全部回滚。成功发布 `environment.revision_deleted`，前台刷新环境和工作台。审计保留版本身份与检查删除数量，不复制配置或凭据。当前版本保留，因此版本号继续递增且不重排，无需修改数据库结构。
 - Inventory、Facts、Variables 和 CredentialRefs 分区独立保存；每次保存都由前台要求填写变更原因并创建新 Revision。
 - 历史 Revision 只读。“基于此恢复”复制其完整快照生成新 Revision，不移动旧记录、不删除历史，也不修改已经提交的 Run。
 - Revision 导入从实际非空 CredentialRef `reference` 推导敏感确认要求，不信任文件中的摘要布尔值；预览摘要和正式落库共用同一份规范化快照。
@@ -691,6 +695,8 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
 | POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
+| GET | `/environments/{id}/revisions/{revisionId}/deletion-impact` | 环境 Owner 按需核对历史版本的 Run、构建引用与检查删除数量 |
+| DELETE | `/environments/{id}/revisions/{revisionId}` | 环境 Owner 删除未归档环境中非当前且未被 Run 或构建引用的版本；检查清理与审计同事务提交 |
 | GET | `/runs` | 按当前身份、环境、状态、归档范围分页返回摘要 |
 | GET | `/approvals/batch-candidates` | 环境 Owner 批量审批候选，独立于运行列表分页 |
 | POST | `/runs/archive` | 平台 Owner 提交成功 Run 归档任务 |
