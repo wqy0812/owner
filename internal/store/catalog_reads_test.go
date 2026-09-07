@@ -30,13 +30,12 @@ func (q *definitionsOnlyQuery) QueryContext(ctx context.Context, query string, a
 func TestCatalogDefinitionsExcludeHistoryAndPreserveManagementUsage(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	definition := domain.EnvironmentParameterDefinition{ID: "region", Key: "region", Label: "Region", Type: domain.ParameterTypeString, Enum: []any{"north", "south"}, DefaultValue: "north", CreatedBy: "component-owner-a", CreatedAt: testNow}
 	c := componentFixture("catalog-reader", "component-owner-a")
 	if err := s.CreateComponent(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	r := releaseFixture("catalog-reader-r1", c.ID, "1.0.0", domain.ReleaseDraft)
-	r.Parameters = []domain.ParameterDefinition{{Name: "region", Type: domain.ParameterTypeString, Enum: definition.Enum, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}
+	r.Parameters = []domain.ParameterDefinition{{Name: "region", Type: domain.ParameterTypeString, Enum: []any{"north", "south"}, ValueProvider: domain.ParameterProviderEnvironmentOwner, Modifiable: true, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}
 	if err := s.CreateComponentRelease(ctx, r); err != nil {
 		t.Fatal(err)
 	}

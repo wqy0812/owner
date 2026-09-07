@@ -14,9 +14,9 @@ import (
 // argument dictionaries as tasks. Commands declared read-only still require
 // owner review: changed_when does not sandbox a shell command.
 func ValidateRoleTasks(content []byte, check bool) error {
-	return validateTasks(content, check, nil)
+	return validateTasks(content, check, nil, nil)
 }
-func validateTasks(content []byte, check bool, include func(string) error) error {
+func validateTasks(content []byte, check bool, include func(string) error, scope *TaskTargetScope) error {
 	var document yaml.Node
 	if err := yaml.Unmarshal(content, &document); err != nil {
 		return fmt.Errorf("invalid role tasks: %w", err)
@@ -57,8 +57,20 @@ func validateTasks(content []byte, check bool, include func(string) error) error
 			for i := 0; i < len(task.Content); i += 2 {
 				values[task.Content[i].Value] = task.Content[i+1]
 			}
+			if err := validateTaskTargetAttributes(task, scope); err != nil {
+				return err
+			}
+			if args := values["args"]; args != nil && args.Kind == yaml.MappingNode {
+				for i := 0; i < len(args.Content); i += 2 {
+					if args.Content[i].Value == "apply" {
+						if err := tasks(&yaml.Node{Kind: yaml.SequenceNode, Content: []*yaml.Node{args.Content[i+1]}}); err != nil {
+							return err
+						}
+					}
+				}
+			}
 			for key, value := range values {
-				module := strings.TrimPrefix(key, "ansible.builtin.")
+				module := strings.TrimPrefix(strings.TrimPrefix(key, "ansible.builtin."), "ansible.legacy.")
 				if module == "copy" || module == "template" || module == "unarchive" || module == "script" {
 					if err := validateLocalSource(module, value); err != nil {
 						return err
@@ -97,6 +109,15 @@ func validateTasks(content []byte, check bool, include func(string) error) error
 						}
 					}
 				case "include_tasks", "import_tasks":
+					if value.Kind == yaml.MappingNode {
+						for i := 0; i < len(value.Content); i += 2 {
+							if value.Content[i].Value == "apply" {
+								if err := tasks(&yaml.Node{Kind: yaml.SequenceNode, Content: []*yaml.Node{value.Content[i+1]}}); err != nil {
+									return err
+								}
+							}
+						}
+					}
 					target := value.Value
 					if value.Kind == yaml.MappingNode {
 						for i := 0; i < len(value.Content); i += 2 {
@@ -202,7 +223,7 @@ func validateRoleEntry(root, relative string, check bool, visiting map[string]bo
 			candidate = target
 		}
 		return validateRoleEntry(root, candidate, check, visiting)
-	})
+	}, nil)
 }
 
 func validateRoleVariables(data []byte) error {

@@ -243,7 +243,7 @@ func (p *CatalogService) discardActionFileMutation(ctx context.Context, id strin
 	return p.store.DeletePendingActionFileMutation(ctx, id)
 }
 
-// RecoverActionFileMutations restores the pre-request entrypoint whenever a
+// RecoverActionFileMutations restores pre-request files whenever a
 // durable mutation marker survived a process exit. A successful catalog
 // transaction deletes the marker in the same commit as the Action/manifest,
 // so a remaining marker unambiguously means the filesystem change must roll
@@ -273,19 +273,29 @@ func (p *CatalogService) RecoverActionFileMutations(ctx context.Context) error {
 			return fmt.Errorf("%w: pending Action mutation %s has an unsafe workspace root", domain.ErrInvalid, mutation.ID)
 		}
 		relative, err := cleanWorkspaceRelative(mutation.RelativePath)
-		if err != nil || !isActionEntrypoint(relative) {
-			return fmt.Errorf("%w: pending Action mutation %s has an unsafe entrypoint", domain.ErrInvalid, mutation.ID)
+		if err != nil {
+			return fmt.Errorf("%w: pending workspace mutation %s has an unsafe path", domain.ErrInvalid, mutation.ID)
 		}
-		fullRelative := workspace + "/" + relative
-		parentRelative := filepath.ToSlash(filepath.Dir(fullRelative))
-		if mutation.BeforeExists {
-			if err := ensureRealDirectories(root, parentRelative); err != nil {
+		switch mutation.Kind {
+		case "file":
+			if !isActionEntrypoint(relative) {
+				return fmt.Errorf("%w: pending Action mutation has an invalid entrypoint", domain.ErrInvalid)
+			}
+			fullRelative := workspace + "/" + relative
+			if mutation.BeforeExists {
+				if err := ensureRealDirectories(root, filepath.ToSlash(filepath.Dir(fullRelative))); err != nil {
+					return err
+				}
+			}
+			if err := restoreWorkspaceFile(filepath.Join(root, filepath.FromSlash(fullRelative)), mutation.BeforeExists, mutation.BeforeContents); err != nil {
 				return fmt.Errorf("recover pending Action mutation %s: %w", mutation.ID, err)
 			}
-		}
-		target := filepath.Join(root, filepath.FromSlash(fullRelative))
-		if err := restoreWorkspaceFile(target, mutation.BeforeExists, mutation.BeforeContents); err != nil {
-			return fmt.Errorf("recover pending Action mutation %s: %w", mutation.ID, err)
+		case "directory":
+			if err := restoreWorkspaceDirectory(root, workspace, relative, mutation.BeforeContents); err != nil {
+				return fmt.Errorf("recover pending directory mutation %s: %w", mutation.ID, err)
+			}
+		default:
+			return fmt.Errorf("%w: unknown workspace mutation kind %q", domain.ErrInvalid, mutation.Kind)
 		}
 		if err := p.store.DeletePendingActionFileMutation(ctx, mutation.ID); err != nil {
 			return fmt.Errorf("finish pending Action mutation %s recovery: %w", mutation.ID, err)
@@ -464,6 +474,8 @@ func (p *CatalogService) publishWorkspaceMetadataWithAction(ctx context.Context,
 		err = p.store.ReplaceDraftPlaybookFilesAndUpsertAction(ctx, release.ID, workspaceRoot, treeSHA, files, digests, *mutation.upsert, mutation.journalID)
 	} else if mutation.deleteID != nil {
 		err = p.store.ReplaceDraftPlaybookFilesAndDeleteAction(ctx, release.ID, workspaceRoot, treeSHA, files, digests, *mutation.deleteID, mutation.journalID)
+	} else if mutation.journalID != "" {
+		err = p.store.ReplaceDraftPlaybookFilesAndDeleteMutation(ctx, release.ID, workspaceRoot, treeSHA, files, digests, mutation.journalID)
 	} else {
 		err = p.store.ReplaceDraftPlaybookFilesAndInvalidate(ctx, release.ID, workspaceRoot, treeSHA, files, digests)
 	}
@@ -572,7 +584,7 @@ func (p *CatalogService) SavePlaybookWorkspaceFileWithExpectation(ctx context.Co
 	return p.saveReleaseWorkspaceFileLocked(ctx, user, releaseID, relative, contents, expectedSHA256, expectedTreeSHA256, workspaceActionMutation{})
 }
 
-func (p *CatalogService) saveReleaseWorkspaceActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string, confirmYAMLMigration bool) (WorkspaceFile, domain.ActionDefinition, error) {
+func (p *CatalogService) saveReleaseWorkspaceActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (WorkspaceFile, domain.ActionDefinition, error) {
 	p.workspace.mu.Lock()
 	defer p.workspace.mu.Unlock()
 	release, component, err := p.authorizePlaybook(ctx, user, releaseID, true)
@@ -597,12 +609,6 @@ func (p *CatalogService) saveReleaseWorkspaceActionAtomic(ctx context.Context, u
 	}
 	if action.ID != "" && existingIndex < 0 {
 		return WorkspaceFile{}, action, fmt.Errorf("%w: action %s no longer exists", domain.ErrConflict, action.ID)
-	}
-	if action.NeedsYAMLMigration() {
-		return WorkspaceFile{}, action, fmt.Errorf("%w: 旧 facts 与固定探测不可写入，请直接编写 YAML", domain.ErrInvalid)
-	}
-	if existingIndex >= 0 && !confirmYAMLMigration {
-		preserveActionLegacy(&action, release.Actions[existingIndex])
 	}
 	if action.ID == "" {
 		action.ID = newID("action")

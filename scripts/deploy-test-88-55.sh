@@ -9,7 +9,6 @@ SSH_PORT="${CLUSTERFORGE_DEPLOY_SSH_PORT:-22}"
 SKIP_TESTS=false
 ALLOW_ACTIVE_RUNS=false
 REBUILD_V1_DB=false
-MIGRATE_USER_EXPERIENCE=false
 INITIALIZE_EMPTY_DB=false
 DISABLE_CATALOG_BACKUP=false
 BUSINESS_RESET_DIR=""
@@ -26,7 +25,6 @@ Options:
   --skip-tests             Skip Go, frontend, and whitespace checks
   --allow-active-runs      Restart even when active platform runs exist
   --rebuild-v1-db          Back up, then rebuild the incompatible V1 test database
-  --migrate-user-experience Legacy migration gate (unavailable for the current schema)
   --initialize-empty-db    Initialize an absent database while the service is stopped
   --disable-catalog-backup Deploy with Git Catalog backup explicitly disabled
   --business-reset-dir DIR Use a verified, copied business-only reset bundle
@@ -75,10 +73,6 @@ while [[ $# -gt 0 ]]; do
       DISABLE_CATALOG_BACKUP=true
       shift 2
       ;;
-    --migrate-user-experience)
-      MIGRATE_USER_EXPERIENCE=true
-      shift
-      ;;
     --rebuild-v1-db)
       REBUILD_V1_DB=true
       shift
@@ -102,9 +96,6 @@ if [[ "$INITIALIZE_EMPTY_DB" == true && ( "$REBUILD_V1_DB" == true || "$ALLOW_AC
   die "--initialize-empty-db cannot be combined with rebuild or active-Run overrides"
 fi
 
-if [[ "$MIGRATE_USER_EXPERIENCE" == true && ( "$REBUILD_V1_DB" == true || "$ALLOW_ACTIVE_RUNS" == true || "$INITIALIZE_EMPTY_DB" == true ) ]]; then
-  die "--migrate-user-experience cannot combine with reset, initialization, or active-Run overrides"
-fi
 
 for command_name in git go make pnpm python3 scp ssh; do
   command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
@@ -255,13 +246,11 @@ rebuild_v1_db=0
 if [[ "$REBUILD_V1_DB" == true ]]; then
   rebuild_v1_db=1
 fi
-migrate_user_experience=0
-[[ "$MIGRATE_USER_EXPERIENCE" != true ]] || migrate_user_experience=1
 echo "==> Activating release"
 # SSH sends one command string through the remote shell. Quote every argument
 # so the optional empty reset directory does not shift the following arguments.
 printf -v activate_command '%q ' bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" "$remote_job_artifact" "$job_checksum" "$initialize_empty_db" "$migrate_user_experience"
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" "$remote_job_artifact" "$job_checksum" "$initialize_empty_db"
 ssh "${ssh_options[@]}" "$TARGET" "$activate_command" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
@@ -280,13 +269,12 @@ business_reset_dir="${12}"
 staged_job_artifact="${13}"
 expected_job_checksum="${14}"
 initialize_empty_db="${15}"
-migrate_user_experience="${16}"
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
 live_job_binary="/opt/clusterforge/platform/clusterforge-job"
 database="/var/lib/clusterforge/platform.db"
-expected_schema_contract="clusterforge-v1-20260906-workbench-run-observations"
+expected_schema_contract="clusterforge-v1-20260907-no-resource-contract"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
@@ -398,7 +386,7 @@ if [[ "$initialize_empty_db" -eq 1 ]]; then
 else
   active_runs="$(clusterforge_list_active_runs "$database")"
   predeploy_schema_contract="$(clusterforge_read_schema_contract "$database")"
-  clusterforge_assert_schema_policy "$predeploy_schema_contract" "$expected_schema_contract" "$rebuild_v1_db" "$migrate_user_experience"
+  clusterforge_assert_schema_policy "$predeploy_schema_contract" "$expected_schema_contract" "$rebuild_v1_db"
   clusterforge_assert_active_run_policy "$active_runs" "$allow_active_runs" "$rebuild_v1_db"
 fi
 
@@ -460,10 +448,9 @@ if [[ -n "$business_reset_dir" ]]; then
   [[ "$(cat "$business_reset_dir/local-copy.verified")" == "$(sha256sum "$business_reset_dir/SHA256SUMS" | awk '{print $1}')" ]]
   (cd "$business_reset_dir" && sha256sum --quiet -c SHA256SUMS)
   sha256sum --quiet -c "$business_reset_dir/source-database.sha256"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$business_reset_dir/platform.db" --expected-contract "$predeploy_schema_contract"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$business_reset_dir/foundation.db" --expected-contract "$expected_schema_contract"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-business --db "$business_reset_dir/platform.db"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-foundation --db "$business_reset_dir/foundation.db"
+  clusterforge_verify_reset_databases "$business_reset_dir/clusterforge-backup" \
+    "$predeploy_schema_contract" "$business_reset_dir/platform.db" \
+    "$expected_schema_contract" "$business_reset_dir/foundation.db"
   backup_dir="$business_reset_dir"
   backup_ready=1
   service_touched=1
@@ -503,26 +490,6 @@ else
   fi
   backup_ready=1
   service_touched=1
-fi
-
-if [[ "$migrate_user_experience" -eq 1 && "$predeploy_schema_contract" != "$expected_schema_contract" ]]; then
-  # Conversion works on a new copy and proves old rows and workspace contents
-  # unchanged. It never reseeds, clears history, or synthesizes declarations.
-  migration_active_work="$("$CLUSTERFORGE_DEPLOY_DB_TOOL" database active-work --db "$database")"
-  [[ -z "$migration_active_work" ]] || { echo "active work blocks migration" >&2; exit 1; }
-  source_playbooks="$(platform_env_value NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS)"
-  [[ -n "$source_playbooks" && "$source_playbooks" == /* && "$source_playbooks" != *:* ]] || { echo "migration requires one absolute managed Playbook root" >&2; exit 1; }
-  migrated_playbooks="${source_playbooks%/}-ux-${stamp}"
-  migrated_database="$backup_dir/migrated-platform.db"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database convert-user-experience --db "$database" --target "$migrated_database" --source-playbook-root "$source_playbooks" --target-playbook-root "$migrated_playbooks"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$migrated_database" --expected-contract "$expected_schema_contract"
-  rm -f "${database}-wal" "${database}-shm" "${database}-journal"
-  install -m 0600 "$migrated_database" "$database"
-  pending_config="$backup_dir/platform.env.migrated"
-  awk '!/^NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS=/' /etc/clusterforge/platform.env > "$pending_config"
-  printf '\nNEWPLATFORM_ALLOWED_ANSIBLE_ROOTS=%s\n' "$migrated_playbooks" >> "$pending_config"
-  install -m 0600 "$pending_config" /etc/clusterforge/platform.env
-  echo "preserved-history migration completed; workspace=$migrated_playbooks"
 fi
 
 if [[ "$disable_catalog_backup" -eq 1 ]]; then

@@ -378,19 +378,6 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	if err := injectEnvironmentVariables(*environment.Revision, plan.Steps); err != nil {
 		return lockedPlan{}, "", false, err
 	}
-	if kind != domain.RunEnvironmentRollback {
-		allFrozen := len(plan.Steps) > 0
-		for _, step := range plan.Steps {
-			if !step.SourceParametersFrozen && step.SourceType != "scenario_acceptance" {
-				allFrozen = false
-			}
-		}
-		if !allFrozen {
-			if err := validateResourcePlan(ctx, b.store, environment, &plan); err != nil {
-				return lockedPlan{}, "", false, err
-			}
-		}
-	}
 	if err := observePreparationPlan(ctx, environment, plan); err != nil {
 		return lockedPlan{}, "", false, err
 	}
@@ -443,11 +430,19 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		}
 	}
 	if kind == domain.RunEnvironmentRollback {
-		current, err := b.rollback.recoveryBaselines(ctx, environment.ID)
+		state, err := b.rollback.environmentResetState(ctx, *environment.Revision)
 		if err != nil {
 			return lockedPlan{}, "", false, err
 		}
-		plan.RecoveryEnvironmentDigest = digestValue(current)
+		plan.ResetTargets = state.targetHosts
+		plan.ResetBoundaryDigest, err = resetBoundaryDigest(ctx, *environment.Revision, plan.ResetTargets)
+		if err != nil {
+			return lockedPlan{}, "", false, err
+		}
+		if err := b.rollback.validateEnvironmentReset(ctx, *environment.Revision, plan, false); err != nil {
+			return lockedPlan{}, "", false, err
+		}
+		plan.RecoveryEnvironmentDigest = digestValue(state.installations)
 		plan.InstallationBaseline = installationBaselineFromSteps(plan.Steps)
 		plan.InstallationBaselineDigest = installationBaselineDigest(plan.InstallationBaseline)
 	}
@@ -468,32 +463,31 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 
 func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) string {
 	type digestStep struct {
-		SourceParametersFrozen         bool   `json:",omitempty"`
-		RollbackSourceActionID         string `json:",omitempty"`
-		PreCheckRequired               bool   `json:",omitempty"`
-		NodeID, ParentActionID, Phase  string
-		Become, GatherFacts, RetrySafe bool
-		ComponentID                    string
-		ReleaseID                      string
-		ReleaseVersion                 string
-		ReleaseSpecDigest              string
-		ActionID                       string
-		Action                         domain.ActionKind
-		FromReleaseID                  string
-		ToReleaseID                    string
-		Playbook                       string
-		PlaybookDigest                 string
-		WorkspaceDigest                string
-		Tags                           []string
-		Limit                          string
-		Variables                      map[string]any
-		RequiredCredentials            []string
-		TimeoutSeconds                 int
-		NeedsApproval                  bool
-		BackupRef                      string
-		BackupInstallRunID             string
-		BackupPlaybookSHA              string
-		BackupCapturedAt               string
+		SourceParametersFrozen        bool   `json:",omitempty"`
+		RollbackSourceActionID        string `json:",omitempty"`
+		NodeID, ParentActionID, Phase string
+		Become, RetrySafe             bool
+		ComponentID                   string
+		ReleaseID                     string
+		ReleaseVersion                string
+		ReleaseSpecDigest             string
+		ActionID                      string
+		Action                        domain.ActionKind
+		FromReleaseID                 string
+		ToReleaseID                   string
+		Playbook                      string
+		PlaybookDigest                string
+		WorkspaceDigest               string
+		Tags                          []string
+		Limit                         string
+		Variables                     map[string]any
+		RequiredCredentials           []string
+		TimeoutSeconds                int
+		NeedsApproval                 bool
+		BackupRef                     string
+		BackupInstallRunID            string
+		BackupPlaybookSHA             string
+		BackupCapturedAt              string
 	}
 	digestSteps := make([]digestStep, 0, len(plan.Steps))
 	sameRunBackupRefs := map[string]bool{}
@@ -522,8 +516,8 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 			}
 		}
 		digestSteps = append(digestSteps, digestStep{
-			SourceParametersFrozen: step.SourceParametersFrozen, RollbackSourceActionID: step.RollbackSourceActionID, PreCheckRequired: step.PreCheckRequired,
-			NodeID: step.SourceNodeID, ParentActionID: step.ParentActionID, Phase: step.Phase, Become: step.Become, GatherFacts: step.GatherFacts, RetrySafe: step.RetrySafe,
+			SourceParametersFrozen: step.SourceParametersFrozen, RollbackSourceActionID: step.RollbackSourceActionID,
+			NodeID: step.SourceNodeID, ParentActionID: step.ParentActionID, Phase: step.Phase, Become: step.Become, RetrySafe: step.RetrySafe,
 			ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, ReleaseSpecDigest: step.ReleaseSpecDigest,
 			ActionID: step.ActionID, Action: step.Action, FromReleaseID: step.FromReleaseID, ToReleaseID: step.ToReleaseID,
 			Playbook: step.Playbook, PlaybookDigest: step.PlaybookDigest, WorkspaceDigest: step.WorkspaceDigest, Tags: step.Tags, Limit: step.Limit,
@@ -547,7 +541,8 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		DeliveryRequirements       []mediadelivery.Requirement
 		InstallationBaselineDigest string
 		RecoveryEnvironmentDigest  string
-	}{Runtime: plan.Runtime, EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, DeliveryRequirements: digestRequirements, InstallationBaselineDigest: plan.InstallationBaselineDigest, RecoveryEnvironmentDigest: plan.RecoveryEnvironmentDigest})
+		ResetBoundaryDigest        string `json:",omitempty"`
+	}{Runtime: plan.Runtime, EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, DeliveryRequirements: digestRequirements, InstallationBaselineDigest: plan.InstallationBaselineDigest, RecoveryEnvironmentDigest: plan.RecoveryEnvironmentDigest, ResetBoundaryDigest: plan.ResetBoundaryDigest})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }

@@ -32,7 +32,7 @@ func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environm
 		}
 		for j := i - 1; step.RollbackSourceActionID == "" && j >= 0; j-- {
 			source := steps[j]
-			if source.ComponentID != step.ComponentID || source.ReleaseID != step.ReleaseID || resourceOwner(source) != resourceOwner(*step) {
+			if source.ComponentID != step.ComponentID || source.ReleaseID != step.ReleaseID || stepSourceNodeID(source) != stepSourceNodeID(*step) {
 				continue
 			}
 			if source.Action == domain.ActionInstall || source.Action == domain.ActionUpgrade || source.Action == domain.ActionConfigure {
@@ -68,7 +68,7 @@ func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environm
 			}
 			matches := 0
 			for _, source := range original.Steps {
-				if source.Phase == "execute" && source.ComponentID == step.ComponentID && source.ReleaseID == step.ReleaseID && source.ActionID == step.RollbackSourceActionID && resourceOwner(source) == resourceOwner(*step) {
+				if source.Phase == "execute" && source.ComponentID == step.ComponentID && source.ReleaseID == step.ReleaseID && source.ActionID == step.RollbackSourceActionID && stepSourceNodeID(source) == stepSourceNodeID(*step) {
 					step.RollbackSourceVariables = cloneMap(source.Variables)
 					step.RollbackSourceFrozen = true
 					matches++
@@ -83,4 +83,12 @@ func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environm
 		}
 	}
 	return nil
+}
+
+// stepSourceNodeID identifies the original Scenario node across expanded phases.
+func stepSourceNodeID(step lockedStep) string {
+	if step.SourceNodeID != "" {
+		return step.SourceNodeID
+	}
+	return step.NodeID
 }

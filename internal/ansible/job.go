@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"codex/platform-demo/internal/domain"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -18,14 +17,11 @@ import (
 	"time"
 )
 
-const JobContract = "clusterforge-native-job-v3"
-const PreviousNativeJobContract = "clusterforge-native-job-v2"
+const JobContract = "clusterforge-native-job-v4"
 
 func IsNativeJobContract(contract string) bool {
-	return contract == JobContract || contract == PreviousNativeJobContract
+	return contract == JobContract
 }
-
-const LegacyJobContract = "clusterforge-role-job-v1"
 
 //go:embed job_plugins
 var jobPlugins embed.FS
@@ -36,35 +32,30 @@ type JobRuntime struct {
 }
 
 type JobStep struct {
-	PreCheckRequired   bool                      `json:"preCheckRequired,omitempty"`
-	RuntimeChecks      []domain.RuntimeCheck     `json:"runtimeChecks,omitempty"`
-	ResourceContract   *domain.ResourceContract  `json:"resourceContract,omitempty"`
-	Resources          []domain.ResourceInstance `json:"resources,omitempty"`
-	Media              []JobMedia                `json:"media,omitempty"`
-	Stage              string                    `json:"stage,omitempty"`
-	SourceType         string                    `json:"sourceType,omitempty"`
-	ScenarioRevisionID string                    `json:"scenarioRevisionId,omitempty"`
-	RecoveryOfStepID   string                    `json:"recoveryOfStepId,omitempty"`
-	ID                 string                    `json:"id"`
-	NodeID             string                    `json:"nodeId"`
-	Name               string                    `json:"name"`
-	ReleaseID          string                    `json:"releaseId"`
-	ComponentID        string                    `json:"componentId"`
-	ParentActionID     string                    `json:"parentActionId"`
-	ActionID           string                    `json:"actionId"`
-	Action             string                    `json:"action"`
-	Phase              string                    `json:"phase"`
-	Playbook           string                    `json:"source"`
-	PlaybookDigest     string                    `json:"sourceDigest"`
-	WorkspaceDigest    string                    `json:"workspaceDigest"`
-	Role               string                    `json:"role"`
-	TasksFrom          string                    `json:"tasksFrom"`
-	Limit              string                    `json:"limit"`
-	Variables          map[string]any            `json:"variables"`
-	TimeoutSeconds     int                       `json:"timeoutSeconds"`
-	Become             bool                      `json:"become"`
-	GatherFacts        bool                      `json:"gatherFacts"`
-	RetrySafe          bool                      `json:"retrySafe"`
+	Media              []JobMedia     `json:"media,omitempty"`
+	Stage              string         `json:"stage,omitempty"`
+	SourceType         string         `json:"sourceType,omitempty"`
+	ScenarioRevisionID string         `json:"scenarioRevisionId,omitempty"`
+	RecoveryOfStepID   string         `json:"recoveryOfStepId,omitempty"`
+	ID                 string         `json:"id"`
+	NodeID             string         `json:"nodeId"`
+	Name               string         `json:"name"`
+	ReleaseID          string         `json:"releaseId"`
+	ComponentID        string         `json:"componentId"`
+	ParentActionID     string         `json:"parentActionId"`
+	ActionID           string         `json:"actionId"`
+	Action             string         `json:"action"`
+	Phase              string         `json:"phase"`
+	Playbook           string         `json:"source"`
+	PlaybookDigest     string         `json:"sourceDigest"`
+	WorkspaceDigest    string         `json:"workspaceDigest"`
+	Role               string         `json:"role"`
+	TasksFrom          string         `json:"tasksFrom"`
+	Limit              string         `json:"limit"`
+	Variables          map[string]any `json:"variables"`
+	TimeoutSeconds     int            `json:"timeoutSeconds"`
+	Become             bool           `json:"become"`
+	RetrySafe          bool           `json:"retrySafe"`
 }
 
 type JobMedia struct {
@@ -75,14 +66,15 @@ type JobMedia struct {
 }
 
 type JobPlan struct {
-	Recovery            []JobStep      `json:"recovery"`
-	Contract            string         `json:"contract"`
-	EnvironmentID       string         `json:"environmentId"`
-	Runtime             JobRuntime     `json:"runtime"`
-	Steps               []JobStep      `json:"steps"`
-	Inventory           string         `json:"inventory"`
-	Metadata            map[string]any `json:"metadata,omitempty"`
-	RequiredCredentials []string       `json:"requiredCredentials"`
+	TaskTargetScope     *TaskTargetScope `json:"taskTargetScope,omitempty"`
+	Recovery            []JobStep        `json:"recovery"`
+	Contract            string           `json:"contract"`
+	EnvironmentID       string           `json:"environmentId"`
+	Runtime             JobRuntime       `json:"runtime"`
+	Steps               []JobStep        `json:"steps"`
+	Inventory           string           `json:"inventory"`
+	Metadata            map[string]any   `json:"metadata,omitempty"`
+	RequiredCredentials []string         `json:"requiredCredentials"`
 }
 
 type JobManifest struct {
@@ -185,9 +177,6 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 			return fail(fmt.Errorf("job step IDs must be nonempty and unique"))
 		}
 		ids[step.ID] = true
-		if step.GatherFacts || len(step.RuntimeChecks) > 0 || (step.ResourceContract != nil && len(step.ResourceContract.Checks) > 0) {
-			return fail(domain.YAMLMigrationRequired(step.Name))
-		}
 		root, source, clean, err := r.resolvePlaybook(step.Playbook)
 		if err != nil {
 			return fail(err)
@@ -254,6 +243,9 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 			seen[step.Role] = actual
 		}
 		if err := validateRoleEntry(target, step.TasksFrom, step.Action == "check", map[string]bool{}); err != nil {
+			return fail(fmt.Errorf("%s: %w", step.Name, err))
+		}
+		if err := validateRoleTaskTargets(target, step.TasksFrom, plan.TaskTargetScope); err != nil {
 			return fail(fmt.Errorf("%s: %w", step.Name, err))
 		}
 
@@ -417,10 +409,10 @@ func (b *JobBundle) Validate() error {
 	m := b.Manifest
 	expected := m.Digest
 	m.Digest = ""
-	if (!IsNativeJobContract(m.Contract) && m.Contract != LegacyJobContract) || expected == "" || jsonDigest(m) != expected {
+	if !IsNativeJobContract(m.Contract) || expected == "" || jsonDigest(m) != expected {
 		return fmt.Errorf("job manifest digest mismatch")
 	}
-	if IsNativeJobContract(m.Contract) && (m.EntryPoint != "site.yml" || m.FullPlanDigest != PlanDigest(m.Plan)) {
+	if m.Plan.Contract != JobContract || m.EntryPoint != "site.yml" || m.FullPlanDigest != PlanDigest(m.Plan) {
 		return fmt.Errorf("native job full plan identity mismatch")
 	}
 	for relative, expected := range m.Files {

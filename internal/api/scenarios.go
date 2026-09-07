@@ -287,7 +287,7 @@ func (h *Handler) revisionDTO(r *http.Request, revision domain.ScenarioRevision,
 		"upgradeConstraints": revision.UpgradeConstraints, "acceptanceJobs": revision.AcceptanceJobs,
 		"acceptanceParameters": revision.AcceptanceParameters, "acceptanceValues": revision.AcceptanceValues, "acceptanceBindings": revision.AcceptanceBindings,
 		"acceptanceWorkspaceRoot": revision.AcceptanceWorkspaceRoot, "acceptanceTreeSha256": revision.AcceptanceTreeSHA256,
-		"revisionDigest": domain.ScenarioRevisionSpecDigest(revision), "digestVersion": revision.DigestVersion,
+		"revisionDigest":         domain.ScenarioRevisionSpecDigest(revision),
 		"environmentConstraints": revision.EnvironmentConstraints, "state": state, "nodes": nodes, "edges": revision.Graph.Edges,
 		"testPassedAt": revision.TestPassedAt, "releasedAt": revision.ReleasedAt, "abandonedAt": revision.AbandonedAt, "createdAt": revision.CreatedAt,
 	}

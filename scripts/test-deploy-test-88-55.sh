@@ -58,13 +58,13 @@ construction = source[start:end]
 names = ['remote_artifact', 'checksum', 'remote_backup_artifact', 'backup_checksum',
          'remote_helper', 'remote_helper_checksum', 'allow_active_runs', 'rebuild_v1_db',
          'ui_index_checksum', 'ui_version_checksum', 'disable_catalog_backup',
-         'BUSINESS_RESET_DIR', 'remote_job_artifact', 'job_checksum', 'initialize_empty_db', 'migrate_user_experience']
+         'BUSINESS_RESET_DIR', 'remote_job_artifact', 'job_checksum', 'initialize_empty_db']
 for reset in ['', '/path with spaces/reset']:
-    values = ['value-' + str(i) for i in range(1, 17)]
+    values = ['value-' + str(i) for i in range(1, 16)]
     values[0], values[11], values[14] = "/artifact with 'quotes'", reset, '1'
     setup = '\n'.join(name+'='+shlex.quote(value) for name, value in zip(names, values))
     body = setup+'\n'+construction+'\nbash -c "$activate_command" <<\'REMOTE_CHECK\'\n'
-    body += 'test "$#" -eq 16\n'
+    body += 'test "$#" -eq 15\n'
     for index, value in enumerate(values, 1):
         body += 'test "${'+str(index)+'}" = '+shlex.quote(value)+'\n'
     body += 'REMOTE_CHECK\n'
@@ -241,6 +241,25 @@ foundation_backup="$test_root/backup/foundation.db"
 "$CLUSTERFORGE_DEPLOY_DB_TOOL" database foundation-snapshot --db "$current_database" --target "$foundation_backup"
 "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-business --db "$business_backup"
 "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-foundation --db "$foundation_backup"
+clusterforge_verify_reset_databases "$CLUSTERFORGE_DEPLOY_DB_TOOL" \
+  "$store_contract" "$business_backup" "$store_contract" "$foundation_backup"
+for invalid_source_tool in "$test_root/missing-backup-tool" /usr/bin/false; do
+  if clusterforge_verify_reset_databases "$invalid_source_tool" \
+    "$store_contract" "$business_backup" "$store_contract" "$foundation_backup" 2>/dev/null; then
+    echo "reset accepted an unavailable or rejecting source verifier" >&2
+    exit 1
+  fi
+done
+if clusterforge_verify_reset_databases "$CLUSTERFORGE_DEPLOY_DB_TOOL" \
+  wrong-contract "$business_backup" "$store_contract" "$foundation_backup" 2>/dev/null; then
+  echo "reset accepted a recovery image with the wrong source contract" >&2
+  exit 1
+fi
+if clusterforge_verify_reset_databases "$CLUSTERFORGE_DEPLOY_DB_TOOL" \
+  "$store_contract" "$business_backup" "$store_contract" "$business_backup" 2>/dev/null; then
+  echo "reset accepted business data in the replacement foundation" >&2
+  exit 1
+fi
 if "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-business --db "$current_database" 2>/dev/null; then
   echo "Run-bearing database accepted as business-only backup" >&2
   exit 1
@@ -261,17 +280,21 @@ for filename,want in [(sys.argv[1],1),(sys.argv[2],0)]:
 assert 'runs' not in json.load(open(sys.argv[3]))['tables']
 PY_BUSINESS
 
-# Verify cross-contract reset through the CLI; no deployment/service is invoked.
-source_contract="$(clusterforge_read_schema_contract "$current_database")"
+# Historical contracts cannot be converted through either preservation path.
 python3 - "$current_database" <<'PY_OLD_CONTRACT'
 import sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as db:
     db.execute("UPDATE schema_contract SET version='clusterforge-v1-previous-contract'")
 PY_OLD_CONTRACT
-converted_foundation="$test_root/backup/converted-foundation.db"
-"$CLUSTERFORGE_DEPLOY_DB_TOOL" database foundation-snapshot --db "$current_database" --target "$converted_foundation"
-"$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$converted_foundation" --expected-contract "$source_contract"
-"$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-foundation --db "$converted_foundation"
+for snapshot_command in foundation-snapshot business-snapshot; do
+  rejected_target="$test_root/backup/rejected-$snapshot_command.db"
+  if "$CLUSTERFORGE_DEPLOY_DB_TOOL" database "$snapshot_command" --db "$current_database" --target "$rejected_target" >"$test_root/rejected-contract.log" 2>&1; then
+    echo "error: $snapshot_command accepted a historical contract" >&2
+    exit 1
+  fi
+  rg -q 'unexpected schema contract' "$test_root/rejected-contract.log"
+  [[ ! -e "$rejected_target" ]]
+done
 [[ "$(clusterforge_read_schema_contract "$current_database")" == "clusterforge-v1-previous-contract" ]]
 
 reset_config="$test_root/reset.env"
@@ -290,15 +313,7 @@ PY_RESET_ENV
 
 echo "deploy rebuild policy tests passed"
 
-clusterforge_assert_schema_policy clusterforge-v1-20260905-scenario-lifecycle clusterforge-v1-20260906-user-experience 0 1
-if clusterforge_assert_schema_policy clusterforge-v1-20260906-user-experience clusterforge-v1-20260906-branch-scope 0 1 2>/dev/null; then
-  echo "old migration flag accepted unassigned branch scopes" >&2; exit 1
-fi
-if clusterforge_assert_schema_policy unknown clusterforge-v1-20260906-user-experience 0 1 2>/dev/null; then
-  echo "migration accepted unknown schema" >&2; exit 1
-fi
-for incompatible in --rebuild-v1-db --allow-active-runs --initialize-empty-db; do
- if "$PROJECT_ROOT/scripts/deploy-test-88-55.sh" --migrate-user-experience "$incompatible" >/dev/null 2>&1; then
-  echo "migration accepted incompatible option" >&2; exit 1
- fi
+for removed in --migrate-user-experience --resume-converted-contract; do
+  output="$("$PROJECT_ROOT/scripts/deploy-test-88-55.sh" "$removed" 2>&1)" && exit 1
+  [[ "$output" == *"unknown option: $removed"* ]] || exit 1
 done

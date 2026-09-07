@@ -73,7 +73,7 @@ from ansible.release import __version__
 if sys.platform == 'darwin' and __version__.startswith('2.8.') and multiprocessing.get_start_method() != 'fork':
  raise RuntimeError('Ansible 2.8 on macOS requires a fork-based Python control environment; configure the executor runtime before execution')
 sys.path.insert(0,sys.argv[1])
-for name in ('action_plugins.cf_gate','callback_plugins.cf_events','cf_compatibility','cf_native','cf_recovery','cf_media','cf_resources'):
+for name in ('action_plugins.cf_gate','callback_plugins.cf_events','cf_compatibility','cf_native','cf_recovery','cf_media'):
  importlib.import_module(name)
 `, root)
 	diagnostic, err := command.CombinedOutput()

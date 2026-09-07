@@ -4,7 +4,6 @@ package testutil
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +49,7 @@ func Workspaces(t testing.TB, db *store.Store, root string, releaseIDs ...string
 		}
 		r.Actions = BoundFixtureActions(r.ID, r.Actions)
 		for _, a := range r.Actions {
-			_, err := db.DB().Exec(`INSERT INTO action_definitions(id,release_id,name,kind,playbook,host_group,timeout_seconds,risk_level,destructive,idempotent,tags_json,required_credentials_json,pre_check_action_id,post_check_action_id,resource_contract_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,pre_check_action_id=excluded.pre_check_action_id,post_check_action_id=excluded.post_check_action_id,resource_contract_json=excluded.resource_contract_json`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.HostGroup, a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, "[]", "[]", a.PreCheckActionID, a.PostCheckActionID, resourceFixtureJSON(a.ResourceContract))
+			_, err := db.DB().Exec(`INSERT INTO action_definitions(id,release_id,name,kind,playbook,host_group,timeout_seconds,risk_level,destructive,idempotent,tags_json,required_credentials_json,pre_check_action_id,post_check_action_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,pre_check_action_id=excluded.pre_check_action_id,post_check_action_id=excluded.post_check_action_id`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.HostGroup, a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, "[]", "[]", a.PreCheckActionID, a.PostCheckActionID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,6 +142,9 @@ func BoundFixtureActions(releaseID string, input []domain.ActionDefinition) []do
 			continue
 		}
 		for _, phase := range []string{"pre", "post"} {
+			if phase == "pre" && a.Kind == domain.ActionRollback {
+				continue
+			}
 			id := a.ID + "-" + phase
 			if phase == "pre" && a.PreCheckActionID != "" {
 				continue
@@ -159,15 +161,5 @@ func BoundFixtureActions(releaseID string, input []domain.ActionDefinition) []do
 			a = &actions[i]
 		}
 	}
-	for i := range actions {
-		if actions[i].ResourceContract == nil {
-			actions[i].ResourceContract = &domain.ResourceContract{Version: 1, NoManagedPaths: true, Claims: []domain.ResourceClaim{}}
-		}
-	}
 	return actions
-}
-
-func resourceFixtureJSON(contract *domain.ResourceContract) string {
-	data, _ := json.Marshal(contract)
-	return string(data)
 }

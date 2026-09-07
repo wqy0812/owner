@@ -1,6 +1,7 @@
 import { AlertTriangle, Trash2, Upload } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../../api/client';
+import { FilePicker } from '../../../components/FilePicker';
 import { EmptyState, Modal, StatusPill } from '../../../components/Primitives';
 import { displayError, useApp } from '../../../context/AppContext';
 import { useApiData } from '../../../hooks/useApiData';
@@ -138,7 +139,7 @@ export function ImageBuildModal({ release, onClose }: { release: ComponentReleas
           <div className="warning-callout"><AlertTriangle size={19} /><div><strong>Dockerfile 会在平台构建机上执行</strong><p>构建上下文仅包含该 Dockerfile，不接受本地目录或主机路径；请只上传可信内容。</p></div></div>
           <div className="form-grid image-build-form">
             <label className="span-2"><span>目标环境</span><select aria-label="目标环境" required value={environmentId} disabled={environmentsLoading} onChange={(event) => setEnvironmentId(event.target.value)}><option value="">请选择环境</option>{environments?.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · r{environment.currentRevision?.revision ?? '?'}</option>)}</select><small>{registry ? `IMAGE_REGISTRY=${registry}` : selectedEnvironment ? '该环境尚未配置 IMAGE_REGISTRY，请联系环境 Owner。' : '正在读取可用环境…'}</small></label>
-            <label className="span-2"><span>Dockerfile</span><input aria-label="Dockerfile" type="file" required onChange={(event) => setDockerfile(event.target.files?.[0])} /><small>UTF-8，最大 1 MiB，必须包含 FROM 指令</small></label>
+            <label className="span-2"><span>Dockerfile</span><FilePicker aria-label="Dockerfile" required disabled={busy} onChange={(event) => setDockerfile(event.target.files?.[0])} /><small>UTF-8，最大 1 MiB，必须包含 FROM 指令</small></label>
             <label className="span-2"><span>镜像标签</span><input value={tag} required pattern="[a-z0-9][a-z0-9._\-]{0,127}" onChange={(event) => setTag(event.target.value.toLowerCase())} /><small>镜像路径固定为 IMAGE_REGISTRY / components / 组件 slug : 标签</small></label>
           </div>
           <button disabled={busy || !dockerfile || !environmentId || !registry} className="button button--primary" type="submit"><Upload size={16} /> {busy ? '提交中…' : '上传并构建'}</button>

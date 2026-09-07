@@ -169,8 +169,8 @@ export function EnvironmentsPage() {
     if (tab === 'facts') {
       try {
         const keys = new Set([...Object.keys(baseline.facts), ...Object.keys(facts)]);
-        return [...keys].filter((key) => stable(baseline.facts[key]) !== stable(facts[key])).map((key) => `适配标签 · 实际环境 ${key}：${JSON.stringify(baseline.facts[key] ?? '（无）')} → ${JSON.stringify(facts[key] ?? '（删除）')}`);
-      } catch { return ['适配标签 · 实际环境无法生成差异']; }
+        return [...keys].filter((key) => stable(baseline.facts[key]) !== stable(facts[key])).map((key) => `环境标签 ${key}：${JSON.stringify(baseline.facts[key] ?? '（无）')} → ${JSON.stringify(facts[key] ?? '（删除）')}`);
+      } catch { return ['环境标签无法生成差异']; }
     }
     if (tab === 'variables') {
       const keys = new Set([...Object.keys(baseline.variables), ...Object.keys(variablesObject)]);
@@ -266,7 +266,7 @@ export function EnvironmentsPage() {
     } catch (reason) { notify('error', '环境导出失败', displayError(reason)); } finally { setExportBusy(false); }
   }
 
-  async function previewClusterRollback(nodes?: string[]) {
+  async function previewClusterRollback() {
     if (!selected || !editable) return;
     setRollbackOpen(true);
     setRollbackPlan(undefined);
@@ -274,7 +274,7 @@ export function EnvironmentsPage() {
     setRollbackExplanation(undefined);
     setRollbackBusy('preview');
     try {
-      setRollbackPlan(await api.previewEnvironmentRollback(selected.id, nodes));
+      setRollbackPlan(await api.previewEnvironmentRollback(selected.id));
     } catch (reason) {
       setRollbackError(displayError(reason));
       setRollbackExplanation(actionableExplanation(reason));
@@ -287,8 +287,8 @@ export function EnvironmentsPage() {
     setRollbackError(undefined);
     setRollbackExplanation(undefined);
     try {
-      const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName, nodes: rollbackPlan.nodes });
-      notify('success', '整集群回滚 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
+      const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName });
+      notify('success', '集群重置 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
       setRollbackOpen(false);
       setRollbackPlan(undefined);
       signalRefresh(['runs', 'environments', 'workbench']);
@@ -370,9 +370,9 @@ export function EnvironmentsPage() {
           <div className="environment-hero__summary"><span className="environment-icon"><CloudCog size={25} /></span><div><div className="eyebrow">环境版本 {selected.currentRevision?.revision ?? 1}</div><h2>{selected.name}</h2><p>{selected.description ?? '用于平台组件与场景测试的共享环境'}</p></div></div>
           <div className="environment-owner"><UserRound size={15} /> {selected.ownerName ?? selected.ownerId}<StatusPill status={selected.archivedAt ? 'offline' : selected.schedulingStatus ?? 'idle'}>{selected.archivedAt ? '已归档' : schedulingLabel(selected)}</StatusPill></div>
           {(ownsSelected || (editable && selected.currentRevision)) && <div className="environment-hero__toolbar" role="group" aria-label="环境操作">
-            {editable && selected.currentRevision && <><button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含引用</button></>}
+            {editable && selected.currentRevision && <><button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(selected.currentRevision!, false)}><Download size={15} /> 安全导出</button><button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(selected.currentRevision!, true)}><KeyRound size={15} /> 导出含凭据</button></>}
             {ownsSelected && <button className={selected.archivedAt ? 'button button--secondary' : 'button button--danger-soft'} disabled={anyDirty || lifecycleBusy !== undefined} onClick={() => void openLifecycle()}>{selected.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />} {selected.archivedAt ? '恢复环境' : '移除环境'}</button>}
-            {editable && selected.currentRevision && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 手动回滚组件</button>}
+            {editable && selected.currentRevision && <button className="button button--danger" disabled={(selected.schedulingStatus ?? 'idle') !== 'idle' || anyDirty || rollbackBusy !== undefined} title={(selected.schedulingStatus ?? 'idle') !== 'idle' ? '请先处理当前活动 Run' : anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => void previewClusterRollback()}><RotateCcw size={15} /> 重置环境</button>}
           </div>}
         </article>
         {selected.archivedAt && <div className="inline-warning"><Archive size={17} /><span>该环境已归档，仅保留配置和历史证据；不能创建版本、健康检查、构建或 Run。需要再次使用时先恢复环境。</span></div>}
@@ -411,10 +411,10 @@ export function EnvironmentsPage() {
 
         <article className="panel environment-editor">
           <div className="tabs" role="tablist">{([
-            ['inventory', 'Inventory', <Server size={16} />], ['facts', '适配标签 · 实际环境', <Cpu size={16} />], ['parameters', '组件环境参数', <CloudCog size={16} />], ['variables', '环境变量', <Braces size={16} />], ['credentials', '凭据引用', <KeyRound size={16} />],
+            ['inventory', 'Inventory', <Server size={16} />], ['facts', '环境标签', <Cpu size={16} />], ['parameters', '组件环境参数', <CloudCog size={16} />], ['variables', '环境变量', <Braces size={16} />], ['credentials', '凭据引用', <KeyRound size={16} />],
           ] as const).map(([value, label, icon]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{icon}{label}{dirtyByTab[value] && <span className="dirty-dot" aria-label="有未保存更改" />}</button>)}</div>
           {tab === 'inventory' && <EnvironmentInventoryEditor key={`${selected.id}:${selected.currentRevision?.id}`} hosts={hosts} options={hostGroupOptions} editable={Boolean(editable)} onChange={setHosts} />}
-          {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>适配标签 · 实际环境</h3><p>每个分类选择一个实际值；子分类须与所选父分类对应。</p></div></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable={editable} onChange={setFacts} /></div>}
+          {tab === 'facts' && <div className="editor-section"><div className="section-title"><div><h3>环境标签</h3><p>每个分类选择一个实际值；子分类须与所选父分类对应。</p></div></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable={editable} onChange={setFacts} /></div>}
           {tab === 'parameters' && <div className="editor-section"><div className="section-title"><div><h3>组件环境参数</h3><p>字段由组件版本定义，环境 Owner 填写实际值或采用组件建议值。保存后记录到环境版本。</p></div></div>
             <div className="scenario-parameter-fields">{(parameterFields ?? []).map((field) => {
               const value = effectiveParameters[field.valueKey];
@@ -446,7 +446,7 @@ export function EnvironmentsPage() {
                 <button className="button button--quiet" disabled={anyDirty || revisionActionBusy} onClick={() => setRestoreRevision(revision)}><RotateCcw size={14} /> 基于此恢复</button>
                 <button className="button button--danger-soft" aria-label={`删除版本 r${revision.revision}`} disabled={anyDirty || revisionActionBusy} title={anyDirty ? '请先保存或放弃环境配置更改' : undefined} onClick={() => setDeleteRevision(revision)}><Trash2 size={14} /> 删除版本</button>
               </>}
-              {editable && <button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(revision, false)}><Download size={14} /> 导出</button>}
+              {editable && <button className="button button--quiet" disabled={revisionActionBusy} onClick={() => void exportRevision(revision, false)}><Download size={14} /> 安全导出</button>}
             </div>
           </div>)}</div>
         </article>
@@ -463,7 +463,7 @@ export function EnvironmentsPage() {
     {importOpen && <EnvironmentImportModal environments={(environments ?? []).filter((environment) => !environment.archivedAt)} selected={selected?.archivedAt ? undefined : selected} onClose={() => setImportOpen(false)} onDone={(environment) => { setImportOpen(false); signalRefresh(['environments', 'workbench']); setSearchParams({ selected: environment.id }); }} />}
     {saveOpen && selected && <ChangeReasonModal title="保存为新版本" description={`r${selected.currentRevision?.revision ?? 0} → r${(selected.currentRevision?.revision ?? 0) + 1}`} busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 仍锁定旧版本。` : undefined} diffLines={diffLines} onClose={() => setSaveOpen(false)} onConfirm={(reason) => void saveCurrent(reason)} />}
     {restoreRevision && selected && <ChangeReasonModal title={`基于 r${restoreRevision.revision} 恢复`} description="将复制该历史快照并创建新的当前版本。" busy={busy} warning={selected.schedulingStatus !== 'idle' ? `当前环境处于“${schedulingLabel(selected)}”，活动 Run 不会被修改。` : undefined} diffLines={[`目标快照：r${restoreRevision.revision}`, `主机 ${restoreRevision.hosts.length} 台 · 环境变量 ${Object.keys(restoreRevision.variables).length} 个 · CredentialRef ${restoreRevision.credentialRefs.length} 个`]} onClose={() => setRestoreRevision(undefined)} onConfirm={(reason) => void restore(reason)} />}
-    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onScope={(nodes) => void previewClusterRollback(nodes)} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
+    {rollbackOpen && selected && <ClusterRollbackModal environment={selected} plan={rollbackPlan} error={rollbackError} explanation={rollbackExplanation} busy={rollbackBusy} onRetry={() => void previewClusterRollback()} onClose={() => { if (!rollbackBusy) { setRollbackOpen(false); setRollbackPlan(undefined); setRollbackError(undefined); setRollbackExplanation(undefined); } }} onConfirm={(confirmation) => void submitClusterRollback(confirmation)} />}
     {lifecycleOpen && selected && <EnvironmentLifecycleModal environment={selected} lifecycle={lifecycle} error={lifecycleError} explanation={lifecycleExplanation} busy={lifecycleBusy} onRetry={() => void openLifecycle()} onClose={() => { if (!lifecycleBusy) setLifecycleOpen(false); }} onConfirm={(action) => void applyLifecycle(action)} />}
   </div>;
 }
@@ -479,7 +479,7 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
     <div className="modal-body cluster-rollback-preview">
       {busy === 'load' ? <LoadingBlock label="正在核对 Run、构建记录和安装基线…" /> : error && !lifecycle ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></> : lifecycle ? <>
         <section className="cluster-rollback-summary"><div><span>版本</span><strong>{lifecycle.revisionCount}</strong></div><div><span>历史 Run</span><strong>{lifecycle.runCount}</strong></div><div><span>镜像构建</span><strong>{lifecycle.imageBuildCount}</strong></div><div><span>安装基线</span><strong>{lifecycle.installationCount}</strong></div></section>
-        {lifecycle.archived ? <div className="warning-callout"><ArchiveRestore size={19} /><div><strong>恢复后可再次执行任务</strong><p>环境会重新出现在组件构建、组件验证和场景运行的目标选择中；历史记录不会改变。</p></div></div> : lifecycle.canDelete ? <div className="warning-callout"><Trash2 size={19} /><div><strong>这是不可恢复的永久删除</strong><p>仅因为该环境从未产生 Run、镜像构建或安装基线才允许删除。环境版本和健康检查会删除，审计记录保留。</p></div></div> : lifecycle.canArchive ? <div className="warning-callout"><Archive size={19} /><div><strong>已有历史证据，只能归档</strong><p>归档不会删除 Run、构建和版本；环境将退出所有新任务选择，之后可以恢复。</p></div></div> : <div className="warning-callout"><AlertTriangle size={19} /><div><strong>当前不能移除环境</strong><p>{lifecycle.activeRunCount ? `仍有 ${lifecycle.activeRunCount} 个活动 Run；请先等待结束或取消。` : lifecycle.activeImageBuildCount ? `仍有 ${lifecycle.activeImageBuildCount} 个活动镜像构建；请先等待结束。` : `仍有 ${lifecycle.installationCount} 个安装基线；请先手动回滚组件。`}</p></div></div>}
+        {lifecycle.archived ? <div className="warning-callout"><ArchiveRestore size={19} /><div><strong>恢复后可再次执行任务</strong><p>环境会重新出现在组件构建、组件验证和场景运行的目标选择中；历史记录不会改变。</p></div></div> : lifecycle.canDelete ? <div className="warning-callout"><Trash2 size={19} /><div><strong>这是不可恢复的永久删除</strong><p>仅因为该环境从未产生 Run、镜像构建或安装基线才允许删除。环境版本和健康检查会删除，审计记录保留。</p></div></div> : lifecycle.canArchive ? <div className="warning-callout"><Archive size={19} /><div><strong>已有历史证据，只能归档</strong><p>归档不会删除 Run、构建和版本；环境将退出所有新任务选择，之后可以恢复。</p></div></div> : <div className="warning-callout"><AlertTriangle size={19} /><div><strong>当前不能移除环境</strong><p>{lifecycle.activeRunCount ? `仍有 ${lifecycle.activeRunCount} 个活动 Run；请先等待结束或取消。` : lifecycle.activeImageBuildCount ? `仍有 ${lifecycle.activeImageBuildCount} 个活动镜像构建；请先等待结束。` : `仍有 ${lifecycle.installationCount} 个安装基线；请先重置环境。`}</p></div></div>}
         {error && <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="环境生命周期操作被阻断" /></>}
         {!blocked && <label><span>输入环境名称以确认</span><input aria-label="确认环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>}
       </> : null}
@@ -488,24 +488,22 @@ function EnvironmentLifecycleModal({ environment, lifecycle, error, explanation,
   </Modal>;
 }
 
-function ClusterRollbackModal({ environment, plan, error, explanation, busy, onScope, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onScope: (nodes?: string[]) => void; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
-  const [scopeCount, setScopeCount] = useState('');
+function ClusterRollbackModal({ environment, plan, error, explanation, busy, onRetry, onClose, onConfirm }: { environment: Environment; plan?: EnvironmentRollbackPlan; error?: string; explanation?: WorkExplanation; busy?: 'preview' | 'submit'; onRetry: () => void; onClose: () => void; onConfirm: (confirmation: string) => void }) {
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
   const empty = !busy && !error && plan?.componentCount === 0;
-  return <Modal size="wide" title="手动回滚组件" description={`目标环境：${environment.name}。按备份基线恢复组件安装前的状态。`} onClose={onClose}>
+  return <Modal size="wide" title="重置环境" description={`目标环境：${environment.name}。恢复全部集群节点，保留 File Station 和镜像仓库。`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
-      {!empty && <div className="warning-callout"><AlertTriangle size={19} /><div><strong>回滚会修改目标环境</strong><p>平台将依据已验证安装及未完成操作记录，按依赖逆序执行回滚和回滚后检查；组件已绑定的回滚前检查也会执行。备份基线不完整时拒绝生成计划。</p></div></div>}
-      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : empty ? <EmptyState title="暂无可回滚组件" description="平台当前没有该环境的组件安装基线或待恢复操作，无需创建回滚 Run。" /> : plan ? <>
-        <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>回滚节点</span><strong>{plan.nodeCount}</strong></div><div><span>环境版本</span><strong>{plan.environmentRevisionId}</strong></div></section>
+      {!empty && <div className="warning-callout"><AlertTriangle size={19} /><div><strong>重置会修改集群节点</strong><p>平台按组件安装主机组的当前成员恢复全部待恢复组件，依次执行回滚和回滚后检查。新增组成员纳入，已移出节点排除。File Station 的介质文件和镜像仓库中的镜像会保留。</p></div></div>}
+      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="重置操作被阻断" /></> : empty ? <EmptyState title="暂无需要重置的集群组件" description="平台没有记录需要恢复的集群安装基线或未完成操作，无需创建重置 Run。" /> : plan ? <>
+        <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>恢复动作</span><strong>{plan.nodeCount}</strong></div><div><span>环境版本</span><strong>{plan.environmentRevisionId}</strong></div></section>
         <section className="cluster-rollback-sources" aria-label="安装基线来源">{plan.sources.map((source) => <Link key={source.runId} to={`/runs?selected=${source.runId}`}><span>{source.kind}</span><strong>{source.runId}</strong><small>{source.componentCount} 个组件</small></Link>)}</section>
-        <label><span>回滚范围</span><select aria-label="回滚节点范围" value={scopeCount} onChange={(event) => setScopeCount(event.target.value)}><option value="">全部待恢复节点</option>{(plan.nodes ?? []).map((_, index) => <option key={index} value={index + 1}>逆序计划的前 {index + 1} 个节点</option>)}</select><small>范围包含所选组件的下游节点，以维持依赖关系。</small></label>
-        <div className="form-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={() => { onScope(scopeCount ? plan.nodes.slice(0, Number(scopeCount)) : undefined); setScopeCount(''); }}>预览所选范围</button></div>
+        <section className="cluster-reset-targets" aria-label="重置目标主机"><strong>目标主机 · {plan.targetHosts.length} 台</strong><ul>{plan.targetHosts.map((host) => <li key={host.name}><strong>{host.name}</strong><span>{host.address}</span><small>{host.groups.join('、')}</small></li>)}</ul></section>
         <JobPlanPreview plan={plan} />
-        <label><span>输入环境名称以确认</span><input aria-label="确认回滚环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>
+        <label><span>输入环境名称以确认</span><input aria-label="确认重置环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>
       </> : null}
     </div>
-    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>{empty ? '关闭' : '取消'}</button>{!empty && <button className="button button--danger" disabled={!plan || !plan.planDigest || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)}>{busy === 'submit' ? '正在锁定计划…' : '创建回滚 Run（待审批）'}</button>}</footer>
+    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>{empty ? '关闭' : '取消'}</button>{!empty && <button className="button button--danger" disabled={!plan || !plan.planDigest || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)}>{busy === 'submit' ? '正在锁定计划…' : '创建重置 Run（待审批）'}</button>}</footer>
   </Modal>;
 }
 
@@ -596,5 +594,5 @@ function CreateEnvironmentModal({ onClose, onDone }: { onClose: () => void; onDo
       notify('success', '环境已创建', '请继续配置 Inventory 和 CredentialRef。'); onDone();
     } catch (reason) { notify('error', '创建环境失败', displayError(reason)); } finally { setBusy(false); }
   }
-  return <Modal title="新建共享环境" description="适配标签 · 实际环境来自平台统一目录，每个分类选择一个实际值。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable onChange={setFacts} /><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || factDimensions.some((dimension) => platformOptionCategories.find((category) => category.id === dimension.id)?.environmentRequired && !facts[dimension.key])}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
+  return <Modal title="新建共享环境" description="环境标签来自平台统一目录，每个分类选择一个实际值。" onClose={onClose}><form onSubmit={(event) => void submit(event)}><div className="form-grid"><label><span>环境名称</span><input name="name" required placeholder="集群测试环境" /></label><label className="span-2"><span>说明</span><textarea name="description" rows={3} /></label></div><EnvironmentFactFields categories={platformOptionCategories} facts={facts} editable onChange={setFacts} /><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || factDimensions.some((dimension) => platformOptionCategories.find((category) => category.id === dimension.id)?.environmentRequired && !facts[dimension.key])}>{busy ? '创建中…' : '创建环境'}</button></footer></form></Modal>;
 }

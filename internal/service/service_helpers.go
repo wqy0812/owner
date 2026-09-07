@@ -102,7 +102,7 @@ func validateRelease(release domain.ComponentRelease) error {
 	}
 	seenDependencies := make(map[string]struct{}, len(release.Dependencies))
 	for _, dependency := range release.Dependencies {
-		if dependency.Kind != "" && dependency.Kind != domain.DependencyConfiguration {
+		if dependency.Kind != domain.DependencyExecution && dependency.Kind != domain.DependencyConfiguration {
 			return fmt.Errorf("%w: invalid dependency kind", domain.ErrInvalid)
 		}
 		if dependency.Kind == domain.DependencyConfiguration && len(dependency.ParameterMappings) == 0 {

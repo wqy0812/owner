@@ -29,7 +29,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Beaker, Boxes, CheckCircle2, Download, GitCommitHorizontal, LockKeyhole, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
+import { Beaker, Boxes, CheckCircle2, Download, GitCommitHorizontal, Inbox, LockKeyhole, Network, Plus, Rocket, Save, Settings2, Table2, Trash2, Undo2, Upload } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { actionableExplanation, api } from '../api/client';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice, StatusPill } from '../components/Primitives';
@@ -482,9 +482,15 @@ export function ScenariosPage() {
   }
 
   return <div className="page page--scenario">
-    <PageHeader eyebrow="Scenario composer" title="场景编排" description="集群 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' ? <button className="button button--primary" onClick={() => { setForkSource(''); setCreateOpen(true); }}><Plus size={16} /> 新建场景</button> : undefined} />
+    <PageHeader eyebrow="Scenario composer" title="场景编排" description="集群 Owner 将精确组件版本编译为可测试、可发布的集群搭建 DAG。" actions={user.role === 'scenario_owner' && Boolean(scenarios?.length) ? <button className="button button--primary" onClick={() => { setForkSource(''); setCreateOpen(true); }}><Plus size={16} /> 新建场景</button> : undefined} />
     <RefreshNotice loading={isRefreshing} error={scenarios ? error : undefined} onRetry={() => void reload()} />
-    {(loading && !scenarios) || (componentsLoading && components === undefined && !error) ? <LoadingBlock label="正在加载场景工作区…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : !scenarios?.length ? <section className="panel scenario-start"><EmptyState title="开始编排第一个场景" description="创建场景后再选择适配范围、添加组件和配置验收。" /><div className="scenario-inline-actions">{user.role === 'scenario_owner' && <button className="button button--primary" onClick={() => setCreateOpen(true)}>新建场景</button>}<a className="button button--quiet" href="/manual">查看参考资料</a></div></section> : <>
+    {(loading && !scenarios) || (componentsLoading && components === undefined && !error) ? <LoadingBlock label="正在加载场景工作区…" /> : error && !scenarios ? <ErrorBlock message={error} onRetry={() => void reload()} /> : !scenarios?.length ? user.role === 'scenario_owner' ? <button type="button" className="panel scenario-start scenario-start--action" aria-labelledby="scenario-start-title" aria-describedby="scenario-start-description" onClick={() => { setForkSource(''); setCreateOpen(true); }}>
+      <span className="empty-state">
+        <span className="empty-state__icon"><Inbox size={24} /></span>
+        <strong id="scenario-start-title">开始编排第一个场景</strong>
+        <span id="scenario-start-description" className="scenario-start__description">创建场景后再选择适配范围、添加组件和配置验收。</span>
+      </span>
+    </button> : <section className="panel scenario-start"><EmptyState title="开始编排第一个场景" description="创建场景后再选择适配范围、添加组件和配置验收。" /></section> : <>
       {contractsUnavailable && <section className="panel scenario-contract-status" aria-label="组件合同待就绪"><h3>{componentsError ? '组件合同加载失败' : '组件合同暂不可用'}</h3><p>已保存的连线和参数保持完整；合同齐备前暂停拓扑与参数编辑、测试和发布。</p><div className="scenario-contract-status__items">{(revision?.nodes ?? []).filter(node => !(components ?? []).some(component => component.releases?.some(release => release.id === node.data.releaseId))).map(node => <p key={node.id}>{node.data.label} · {node.data.contractAvailability === 'unshared' ? '组件尚未共享' : node.data.contractAvailability === 'missing' ? '组件版本不存在' : '未返回此版本合同'} · 负责人：{node.data.componentOwnerName || '待核对'}</p>)}</div><button className="button button--quiet" onClick={() => { void reloadComponents(); void reload(); }}>重新检查</button></section>}
       <div className="scenario-toolbar panel">
         <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSearchParams({ selected: event.target.value })}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>

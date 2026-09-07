@@ -19,13 +19,14 @@ def inspect(database, offline_snapshot=False):
     connection = sqlite3.connect(path.as_uri() + '?mode=ro' + ('&immutable=1' if offline_snapshot else ''), uri=True)
     connection.row_factory = sqlite3.Row
     connection.execute('BEGIN')
-    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-
-    def columns(table):
-        return {row[1] for row in connection.execute('PRAGMA table_info(' + table + ')')}
+    schema = Path(__file__).resolve().parents[1] / 'internal/store/schema.go'
+    expected = re.search(r'schemaContract = "([^"]+)"', schema.read_text()).group(1)
+    actual = connection.execute('SELECT version FROM schema_contract WHERE id=1').fetchone()
+    if actual is None or actual[0] != expected:
+        raise ValueError('Only the current schema contract is supported: ' + expected)
 
     def rows(table):
-        return [dict(row) for row in connection.execute('SELECT * FROM ' + table)] if table in tables else []
+        return [dict(row) for row in connection.execute('SELECT * FROM ' + table)]
 
     def scope(raw):
         value = json.loads(raw or '{}') or {}
@@ -33,27 +34,25 @@ def inspect(database, offline_snapshot=False):
 
     report = {'database': str(path), 'inspectedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'readOnly': True, 'offlineSnapshot': offline_snapshot, 'schema': rows('schema_contract'), 'branchConflicts': [],
-              'legacyComponentScopeDifferences': [], 'legacyComponentGroups': [],
               'unassignedBranches': [], 'categories': [], 'options': [], 'unlinkedOptions': [], 'directoryParameters': []}
     for parent, child, foreign_key in [('component_release_lines', 'component_releases', 'line_id'), ('scenarios', 'scenario_revisions', 'scenario_id')]:
         versions = rows(child)
         grouped = {}
         for row in versions:
-            branch_id = row.get(foreign_key) or row.get('component_id')
+            branch_id = row[foreign_key]
             grouped.setdefault(branch_id, []).append({'id': row['id'], 'version': row.get('version', row.get('revision')),
-                                                     'scope': scope(row.get('environment_constraints_json'))})
+                                                     'scope': scope(row['environment_constraints_json'])})
         branches = {row['id']: row for row in rows(parent)}
         for branch_id, members in grouped.items():
-            stored = branches.get(branch_id, {})
-            definition = scope(stored.get('environment_constraints_json')) if 'environment_constraints_json' in stored else None
-            known = branch_id in branches
-            entry = {'kind': parent if known else 'legacy_component_group', 'branchIdentityKnown': known,
-                     'branchId' if known else 'componentId': branch_id, 'branchScope': definition, 'versions': members}
-            variants = {json.dumps(member['scope'], sort_keys=True) for member in members}
-            if len(variants) > 1 or (definition is not None and any(member['scope'] != definition for member in members)):
-                report['branchConflicts' if known else 'legacyComponentScopeDifferences'].append(entry)
-            if definition is None:
-                report['unassignedBranches' if known else 'legacyComponentGroups'].append(entry)
+            stored = branches.get(branch_id)
+            if stored is None:
+                raise ValueError('Unknown branch identity: ' + str(branch_id))
+            definition = scope(stored['environment_constraints_json'])
+            entry = {'kind': parent, 'branchId': branch_id, 'branchScope': definition, 'versions': members}
+            if any(member['scope'] != definition for member in members):
+                report['branchConflicts'].append(entry)
+            if not definition:
+                report['unassignedBranches'].append(entry)
     categories = {row['id']: row for row in rows('platform_option_categories')}
     options = {row['id']: row for row in rows('platform_options')}
     for row in categories.values():

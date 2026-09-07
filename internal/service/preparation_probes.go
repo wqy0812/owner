@@ -142,7 +142,6 @@ func (s *EnvironmentService) probeForPreparation(ctx context.Context, environmen
 			}
 		}
 	}
-	report(PreparationCheck{ID: "resources", Category: "resource_contract", Label: "资源合同与安装基线", Status: "passed", StartedAt: time.Now().UTC(), Message: "已按主机比对资源声明和已有安装清单；现场运行条件与残留由组件 YAML 在执行时检查"})
 	if failed {
 		return fmt.Errorf("%w: 逐主机预检存在失败项目", domain.ErrConflict)
 	}

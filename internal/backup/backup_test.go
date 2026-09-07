@@ -95,7 +95,7 @@ func TestSnapshotAndBothRestorePaths(t *testing.T) {
 		{`INSERT INTO component_release_lines(id,component_id,name,created_at) VALUES(?,?,?,?)`, []any{"line-runtime-1", "component-runtime", "Runtime 1.0", now}},
 		{`INSERT INTO component_releases(id,component_id,line_id,version,status,release_notes,compatibility,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-host-1", "component-host", "line-host-1", "1.0.0", "released", "stable", "not_applicable", 0, 2, "low", `{}`, `[]`, now, now}},
 		{`INSERT INTO component_releases(id,component_id,line_id,version,status,release_notes,compatibility,candidate,publication_generation,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"release-runtime-1", "component-runtime", "line-runtime-1", "1.0.0", "released", "stable", "not_applicable", 0, 3, "low", `{}`, `[]`, workspaceTreeSHA, "managed/runtime/release-runtime-1/", now, now}},
-		{`INSERT INTO component_dependencies(id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES(?,?,?,?,?,?)`, []any{"dependency-runtime-host", "release-runtime-1", "component-host", "release-host-1", "prepared host", `[]`}},
+		{`INSERT INTO component_dependencies(kind,id,release_id,upstream_component_id,upstream_release_id,purpose,parameter_mappings_json) VALUES('execution',?,?,?,?,?,?)`, []any{"dependency-runtime-host", "release-runtime-1", "component-host", "release-host-1", "prepared host", `[]`}},
 		{`INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{"action-install", "release-runtime-1", "install", "install", "managed/runtime/release-runtime-1/tasks/install.yml", playbookSHA, `[]`, "runtime", `[]`, 1800, "low", 0, 1}},
 		{`INSERT INTO component_playbook_files(release_id,relative_path,sha256,size_bytes,media_type,updated_at) VALUES(?,?,?,?,?,?)`, []any{"release-runtime-1", "tasks/install.yml", playbookSHA, int64(len(playbook)), "application/yaml", now}},
 		{`INSERT INTO component_playbook_files(release_id,relative_path,sha256,size_bytes,media_type,updated_at) VALUES(?,?,?,?,?,?)`, []any{"release-runtime-1", "templates/runtime.conf.j2", templateSHA, int64(len(template)), "text/plain", now}},
@@ -742,7 +742,7 @@ func assertRestoredCatalog(t *testing.T, databasePath, playbookPath, expectedPla
 		t.Fatalf("restored workspace template=%q err=%v", contents, err)
 	}
 	var workspaceFiles int
-	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_playbook_files WHERE release_id='release-runtime-1'`).Scan(&workspaceFiles); err != nil || workspaceFiles != 7 {
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM component_playbook_files WHERE release_id='release-runtime-1'`).Scan(&workspaceFiles); err != nil || workspaceFiles != 6 {
 		t.Fatalf("restored workspace manifest count=%d err=%v", workspaceFiles, err)
 	}
 }

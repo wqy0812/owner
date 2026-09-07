@@ -286,15 +286,6 @@ function optionalObject(raw: LooseRecord, key: string): Record<string, unknown> 
   return optionalRecord(raw, key);
 }
 
-function normalizeResourceContract(raw: LooseRecord | undefined): ActionDefinition['resourceContract'] {
- if (!raw) return undefined;
- if (requireNumber(raw, 'version') !== 1) throw new Error('Unsupported resource contract version');
- return { version: 1, noManagedPaths: requireBoolean(raw, 'noManagedPaths'), claims: requireRecords(raw, 'claims').map(claim => ({
-  id: requireString(claim, 'id'), path: requireString(claim, 'path'), scope: requireEnum(claim, ['file', 'tree'] as const, 'scope'), access: requireEnum(claim, ['manage', 'read', 'verify'] as const, 'access'),
-  exclusive: optionalBoolean(claim, 'exclusive'), excludes: optionalStringArray(claim, 'excludes'), sharedPaths: optionalStringArray(claim, 'sharedPaths'),
-  sharedWith: claim.sharedWith ? { releaseId: requireString(requireRecord(claim.sharedWith, 'shared resource'), 'releaseId'), claimId: requireString(requireRecord(claim.sharedWith, 'shared resource'), 'claimId') } : undefined,
- })) };
-}
 function normalizeAction(raw: LooseRecord): ActionDefinition {
   const riskLevel = optionalEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel');
   const destructive = optionalBoolean(raw, 'destructive');
@@ -302,11 +293,9 @@ function normalizeAction(raw: LooseRecord): ActionDefinition {
     id: optionalString(raw, 'id'),
     name: optionalString(raw, 'name'),
     type: requireEnum(raw, ACTION_TYPES, 'kind'),
-    resourceContract: normalizeResourceContract(optionalRecord(raw, 'resourceContract')),
     preCheckActionId: optionalString(raw, 'preCheckActionId'),
     postCheckActionId: optionalString(raw, 'postCheckActionId'),
     become: optionalBoolean(raw, 'become'),
-    legacyYamlSettings: normalizeLegacyYaml(raw, optionalRecord(raw, 'resourceContract')?.checks),
     playbook: requireString(raw, 'playbook'),
     tags: optionalStringArray(raw, 'tags'),
     hostGroup: optionalString(raw, 'hostGroup'),
@@ -372,10 +361,9 @@ function normalizeImage(raw: LooseRecord): ComponentImage {
 }
 
 function normalizeDependency(raw: LooseRecord): ComponentDependency {
-  if (raw.kind !== undefined && raw.kind !== '' && raw.kind !== 'configuration') throw new Error('Invalid dependency kind');
   const mappings = optionalRecords(raw, 'parameterMappings') ?? [];
   return {
-    ...(raw.kind === 'configuration' ? { kind: 'configuration' as const } : {}),
+    kind: requireEnum(raw, ['execution', 'configuration'] as const, 'kind'),
     id: optionalString(raw, 'id'),
     componentId: requireString(raw, 'upstreamComponentId'),
     componentName: optionalString(raw, 'upstreamComponentName'),
@@ -556,6 +544,7 @@ function normalizeComponent(raw: LooseRecord): Component {
       parameterConsumers: requireRecords(context, 'parameterConsumers').map((item) => ({ componentName: requireString(item, 'componentName'), version: optionalString(item, 'version'), upstreamParameter: requireString(item, 'upstreamParameter'), targetParameter: requireString(item, 'targetParameter'), label: requireString(item, 'label') })),
     } : undefined,
     releaseCount: optionalNumber(raw, 'releaseCount'),
+    canDelete: optionalBoolean(raw, 'canDelete') ?? false,
     updatedAt: optionalString(raw, 'updatedAt'),
   };
 }
@@ -612,7 +601,7 @@ function normalizeScenarioEdge(raw: LooseRecord): ScenarioEdge {
 }
 
 function normalizeScenarioAcceptanceJob(raw: LooseRecord): ScenarioAcceptanceJob {
-  return {legacyYamlSettings: normalizeLegacyYaml(raw, raw.runtimeChecks), id: requireString(raw, 'id'), name: requireString(raw, 'name'), purpose: requireString(raw, 'purpose'),
+  return {id: requireString(raw, 'id'), name: requireString(raw, 'name'), purpose: requireString(raw, 'purpose'),
     hostGroup: requireString(raw, 'hostGroup'), timeoutSeconds: requireNumber(raw, 'timeoutSeconds'),
     riskLevel: requireEnum(raw, ['low', 'medium', 'high', 'destructive'] as const, 'riskLevel'),
     requiredCredentials: optionalStringArray(raw, 'requiredCredentials') ?? [], become: requireBoolean(raw, 'become'),
@@ -652,7 +641,7 @@ function normalizeRevision(raw: LooseRecord): ScenarioRevision {
     nodes: requireRecords(raw, 'nodes').map(normalizeScenarioNode),
     edges: requireRecords(raw, 'edges').map(normalizeScenarioEdge),
     sourceRevisionId: optionalString(raw, 'sourceRevisionId'), sourceRunId: optionalString(raw, 'sourceRunId'),
-    revisionDigest: optionalString(raw, 'revisionDigest'), digestVersion: optionalNumber(raw, 'digestVersion'),
+    revisionDigest: optionalString(raw, 'revisionDigest'),
     upgradeConstraints: optionalRecords(raw, 'upgradeConstraints')?.map(normalizeScenarioEdge) ?? [],
     acceptanceJobs: optionalRecords(raw, 'acceptanceJobs')?.map(normalizeScenarioAcceptanceJob) ?? [],
     acceptanceParameters: optionalRecords(raw, 'acceptanceParameters')?.map(normalizeParameter) ?? [],
@@ -982,7 +971,7 @@ function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
 function normalizeEnvironmentRollbackPlan(raw: LooseRecord): EnvironmentRollbackPlan {
   return {
     ...normalizeComponentTestPlan(raw),
-    nodes: optionalStringArray(raw, 'nodes') ?? [],
+    targetHosts: requireRecords(raw, 'targetHosts').map(normalizeHost),
     environmentName: requireString(raw, 'environmentName'),
     sources: requireRecords(raw, 'sources').map((source) => ({
       runId: requireString(source, 'runId'),
@@ -1139,7 +1128,6 @@ function serializeAction(action: ActionDefinition) {
     id: action.id,
     name: action.name,
     kind: action.type,
-    resourceContract: action.resourceContract,
     preCheckActionId: action.preCheckActionId ?? '',
     postCheckActionId: action.postCheckActionId ?? '',
     become: action.become ?? false,
@@ -1157,7 +1145,7 @@ function serializeAction(action: ActionDefinition) {
 
 function serializeDependency(dependency: ComponentDependency) {
   return {
-    ...(dependency.kind ? { kind: dependency.kind } : {}),
+    kind: dependency.kind,
     upstreamComponentId: dependency.componentId,
     upstreamReleaseId: dependency.releaseId,
     purpose: dependency.purpose,
@@ -1343,6 +1331,9 @@ export const api = {
   async updateComponent(id: string, input: Partial<Component>) {
     return normalizeComponent(requireRecord(normalizeOptionalData(await patch<unknown>(`/components/${id}`, input)), 'component'));
   },
+  async deleteComponent(id: string) {
+    await request<unknown>(`/components/${id}`, { method: 'DELETE' });
+  },
   async previewReleaseDraft(componentId: string, input: { mode: 'new_line' | 'evolution'; lineName?: string; parentReleaseId?: string; templateSourceReleaseId?: string; version: string; releaseNotes: string; compatibility?: ComponentRelease['compatibility']; riskLevel?: ComponentRelease['riskLevel']; environmentConstraints?: Record<string, unknown> }) {
     return unwrap(await post<unknown>(`/components/${componentId}/release-draft-plan`, input)) as { mode: 'new_line' | 'evolution'; lineId?: string; lineName: string; parentReleaseId?: string; parentVersion?: string; templateSourceReleaseId?: string; templateSourceVersion?: string; targetVersion: string; compatibility: ComponentRelease['compatibility']; planDigest: string; actions: string[]; removedActions: string[]; playbooks: string[]; artifactCount: number; imageCount: number };
   },
@@ -1397,14 +1388,13 @@ export const api = {
   async playbook(releaseId: string, actionId: string, signal?: AbortSignal) {
     return normalizePlaybook(requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/playbook?actionId=${encodeURIComponent(actionId)}`, signal)), 'Playbook'));
   },
-  async savePlaybook(releaseId: string, action: ActionDefinition, content: string, expectedSha256: string, expectedTreeSha256: string, confirmYamlMigration = false) {
-    return normalizePlaybook(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook`, { actionKind: action.type, action: serializeAction(action), content, expectedSha256, expectedTreeSha256, confirmYamlMigration })), 'Playbook'));
+  async savePlaybook(releaseId: string, action: ActionDefinition, content: string, expectedSha256: string, expectedTreeSha256: string) {
+    return normalizePlaybook(requireRecord(unwrap(await put<unknown>(`/component-releases/${releaseId}/playbook`, { actionKind: action.type, action: serializeAction(action), content, expectedSha256, expectedTreeSha256 })), 'Playbook'));
   },
-  async uploadPlaybook(releaseId: string, action: ActionDefinition, file: File, expectedSha256: string, expectedTreeSha256: string, confirmYamlMigration = false) {
+  async uploadPlaybook(releaseId: string, action: ActionDefinition, file: File, expectedSha256: string, expectedTreeSha256: string) {
     const form = new FormData();
     form.set('playbook', file, file.name);
     form.set('actionKind', action.type);
-    form.set('confirmYamlMigration', String(confirmYamlMigration));
     form.set('action', JSON.stringify(serializeAction(action)));
     form.set('expectedSha256', expectedSha256);
     form.set('expectedTreeSha256', expectedTreeSha256);
@@ -1436,6 +1426,9 @@ export const api = {
   async deleteWorkspaceFile(releaseId: string, path: string, expectedSha256: string, expectedTreeSha256?: string) {
     const tree = expectedTreeSha256 === undefined ? '' : `&expectedTreeSha256=${encodeURIComponent(expectedTreeSha256)}`;
     return normalizeWorkspace(requireRecord(unwrap(await request<unknown>(`/component-releases/${releaseId}/playbook-workspace/file?path=${encodeURIComponent(path)}&expectedSha256=${encodeURIComponent(expectedSha256)}${tree}`, { method: 'DELETE' })), 'Playbook workspace'));
+  },
+  async deleteWorkspaceDirectory(releaseId: string, path: string, expectedTreeSha256: string) {
+    return normalizeWorkspace(requireRecord(unwrap(await request<unknown>(`/component-releases/${releaseId}/playbook-workspace/directory?path=${encodeURIComponent(path)}&expectedTreeSha256=${encodeURIComponent(expectedTreeSha256)}`, { method: 'DELETE' })), 'Playbook workspace'));
   },
   workspaceFileDownloadURL(releaseId: string, path: string) {
     return `${API_ROOT}/component-releases/${releaseId}/playbook-workspace/file?path=${encodeURIComponent(path)}&download=1`;
@@ -1532,15 +1525,15 @@ export const api = {
     return normalizeScenarioAcceptance(requireRecord(unwrap(await get<unknown>(`/scenario-revisions/${revisionId}/acceptance`, signal)), 'scenario acceptance'));
   },
   async saveScenarioAcceptance(revisionId: string, input: Pick<ScenarioAcceptance, 'jobs' | 'parameters' | 'values' | 'bindings'> & { expectedRevisionDigest: string }) {
-    return normalizeScenarioAcceptance(requireRecord(unwrap(await put<unknown>(`/scenario-revisions/${revisionId}/acceptance`, { ...input, jobs: input.jobs.map(({ legacyYamlSettings: _legacy, ...job }) => job) })), 'scenario acceptance'));
+    return normalizeScenarioAcceptance(requireRecord(unwrap(await put<unknown>(`/scenario-revisions/${revisionId}/acceptance`, input)), 'scenario acceptance'));
   },
   async scenarioAcceptanceFile(revisionId: string, path: string) {
     return normalizeWorkspaceFile(requireRecord(unwrap(await get<unknown>(`/scenario-revisions/${revisionId}/acceptance/workspace/file?${new URLSearchParams({ path })}`)), 'acceptance file'));
   },
-  async saveScenarioAcceptanceFile(revisionId: string, input: { path: string; content: string; expectedSha256: string; expectedTreeSha256: string; expectedRevisionDigest: string; confirmYamlMigration?: boolean }) {
+  async saveScenarioAcceptanceFile(revisionId: string, input: { path: string; content: string; expectedSha256: string; expectedTreeSha256: string; expectedRevisionDigest: string }) {
     return normalizeWorkspaceFile(requireRecord(unwrap(await put<unknown>(`/scenario-revisions/${revisionId}/acceptance/workspace/file`, input)), 'acceptance file'));
   },
-  async uploadScenarioAcceptanceFile(revisionId: string, file: File, input: { path: string; expectedSha256: string; expectedTreeSha256: string; expectedRevisionDigest: string; confirmYamlMigration?: boolean }) {
+  async uploadScenarioAcceptanceFile(revisionId: string, file: File, input: { path: string; expectedSha256: string; expectedTreeSha256: string; expectedRevisionDigest: string }) {
     const form = new FormData(); form.set('file', file, file.name);
     for (const [key, value] of Object.entries(input)) form.set(key, String(value));
     return normalizeWorkspaceFile(requireRecord(unwrap(await postForm<unknown>(`/scenario-revisions/${revisionId}/acceptance/workspace/upload`, form)), 'acceptance file'));
@@ -1696,10 +1689,10 @@ export const api = {
   async checkEnvironmentConnectivity(environmentId: string) {
     return normalizeEnvironmentConnectivityCheck(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/connectivity-checks`)), 'environment connectivity check'));
   },
-  async previewEnvironmentRollback(environmentId: string, nodes?: string[]) {
-    return normalizeEnvironmentRollbackPlan(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-plan`, { nodes })), 'environment rollback plan'));
+  async previewEnvironmentRollback(environmentId: string) {
+    return normalizeEnvironmentRollbackPlan(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-plan`, {})), 'environment rollback plan'));
   },
-  async startEnvironmentRollback(environmentId: string, input: { expectedPlanDigest: string; confirmEnvironmentName: string; nodes?: string[] }) {
+  async startEnvironmentRollback(environmentId: string, input: { expectedPlanDigest: string; confirmEnvironmentName: string }) {
     return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/environments/${environmentId}/cluster-rollback-runs`, input)), 'run'));
   },
   async restoreEnvironmentRevision(environmentId: string, revisionId: string, changeReason: string) {
@@ -1784,13 +1777,4 @@ export const api = {
 
 export function eventsURL(): string {
   return `${API_ROOT}/events`;
-}
-
-function normalizeLegacyYaml(raw: LooseRecord, legacyChecks: unknown): ActionDefinition['legacyYamlSettings'] {
-  const gatherFacts = optionalBoolean(raw, 'gatherFacts') ?? false;
-  const checks = (Array.isArray(legacyChecks) ? legacyChecks : []).map(value => {
-    const check = requireRecord(value, 'legacy check');
-    return { id: requireString(check, 'id'), kind: requireEnum(check, ['command','image_command','path_present','path_absent','service_inactive','network_rules_absent','tcp'] as const, 'kind'), target: requireString(check, 'target'), providedByReleaseId: optionalString(check, 'providedByReleaseId') };
-  });
-  return gatherFacts || checks.length ? { gatherFacts, checks } : undefined;
 }

@@ -37,6 +37,7 @@ interface AppContextValue {
   scheduleRefresh: (targets: RefreshTarget | readonly RefreshTarget[]) => void;
   platformOptionCategories: PlatformOptionCategory[];
   platformOptionsLoading: boolean;
+  platformOptionsError?: string;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -58,6 +59,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [platformOptionCategories, setPlatformOptionCategories] = useState<PlatformOptionCategory[]>([]);
   const [platformOptionsLoading, setPlatformOptionsLoading] = useState(true);
+  const [platformOptionsError, setPlatformOptionsError] = useState<string>();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [refreshTokens, setRefreshTokens] = useState<RefreshTokens>({
     components: 0,
@@ -109,10 +111,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPlatformOptionsLoading(!platformOptionsLoaded.current);
     void api.platformOptionCategories(controller.signal)
       .then((categories) => {
+        if (controller.signal.aborted) return;
         platformOptionsLoaded.current = true;
         setPlatformOptionCategories(categories);
+        setPlatformOptionsError(undefined);
       })
-      .catch((error) => { if (!(error instanceof DOMException && error.name === 'AbortError')) notify('error', '加载平台选项失败', displayError(error)); })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setPlatformOptionsError(displayError(error));
+        notify('error', '加载平台选项失败', displayError(error));
+      })
       .finally(() => { if (!controller.signal.aborted) setPlatformOptionsLoading(false); });
     return () => controller.abort();
   }, [notify, refreshTokens['platform-options'], sessionReady, user.id]);
@@ -200,6 +208,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['component_release.deprecated', () => scheduleRefresh(['components', 'workbench'])],
       ['component_release.restored', () => scheduleRefresh(['components', 'workbench'])],
       ['component_release.deleted', () => scheduleRefresh(['components', 'workbench'])],
+      ['component.deleted', () => scheduleRefresh(['components', 'workbench'])],
       ['scenario.published', () => scheduleRefresh(['scenarios', 'workbench'])],
       ['catalog_backup.updated', () => scheduleRefresh(['catalog-repository', 'workbench'])],
       ['scenario.deleted', () => scheduleRefresh(['scenarios', 'workbench'])],
@@ -224,8 +233,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [runActivityEvents, scheduleRefresh, sessionReady, user.id]);
 
   const value = useMemo(
-    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh, scheduleRefresh, platformOptionCategories, platformOptionsLoading, runActivityEvents }),
-    [connected, notify, platformOptionCategories, platformOptionsLoading, refreshTokens, scheduleRefresh, signalRefresh, switchUser, switching, user, users, runActivityEvents],
+    () => ({ user, users, switching, connected, switchUser, notify, refreshTokens, signalRefresh, scheduleRefresh, platformOptionCategories, platformOptionsLoading, platformOptionsError, runActivityEvents }),
+    [connected, notify, platformOptionCategories, platformOptionsLoading, platformOptionsError, refreshTokens, scheduleRefresh, signalRefresh, switchUser, switching, user, users, runActivityEvents],
   );
 
   return (

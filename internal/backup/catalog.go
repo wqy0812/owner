@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 
+	"codex/platform-demo/internal/store"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -76,23 +78,6 @@ OR (c.category_type='host_group' AND (
   OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceJobs') job WHERE sr.status IN ('released','deprecated') AND json_extract(job.value,'$.hostGroup')=o.technical_value)
 ))
 ORDER BY c.sort_order,o.sort_order,o.id`},
-	{name: "environment_parameter_definitions", columns: []string{"id", "technical_key", "label", "description", "parameter_type", "enum_json", "min_length", "created_by", "created_at"}, query: `
-SELECT d.id,d.technical_key,d.label,d.description,d.parameter_type,d.enum_json,d.min_length,d.created_by,d.created_at
-FROM environment_parameter_definitions d
-WHERE EXISTS (
-  SELECT 1 FROM component_releases r,json_each(r.parameters_json) p
-  WHERE r.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.id
- ) OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceParameters') p WHERE sr.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.id)
- OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceBindings') b WHERE sr.status IN ('released','deprecated') AND json_extract(b.value,'$.source')='environment' AND json_extract(b.value,'$.sourceParameter')=d.technical_key)
- ORDER BY d.id`},
-	{name: "environment_parameter_defaults", columns: []string{"definition_id", "value_json"}, query: `
-SELECT d.definition_id,d.value_json FROM environment_parameter_defaults d
-WHERE EXISTS (
-  SELECT 1 FROM component_releases r,json_each(r.parameters_json) p
-  WHERE r.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.definition_id
- ) OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceParameters') p WHERE sr.status IN ('released','deprecated') AND json_extract(p.value,'$.environmentBinding.definitionId')=d.definition_id)
- OR EXISTS (SELECT 1 FROM scenario_revisions sr,json_each(sr.lifecycle_json,'$.acceptanceBindings') b JOIN environment_parameter_definitions def ON def.id=d.definition_id WHERE sr.status IN ('released','deprecated') AND json_extract(b.value,'$.source')='environment' AND json_extract(b.value,'$.sourceParameter')=def.technical_key)
- ORDER BY d.definition_id`},
 	{name: "components", columns: []string{"id", "slug", "name", "description", "owner_id", "created_at", "updated_at", "layer", "tags_json"}, query: `
 SELECT id,slug,name,description,owner_id,created_at,updated_at,layer,tags_json FROM components c
 WHERE EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND r.status IN ('released','deprecated')) ORDER BY slug,id`},
@@ -106,8 +91,8 @@ FROM component_releases WHERE status IN ('released','deprecated') ORDER BY compo
 SELECT d.id,d.release_id,d.upstream_component_id,d.upstream_release_id,d.purpose,d.parameter_mappings_json,d.kind FROM component_dependencies d
 JOIN component_releases r ON r.id=d.release_id JOIN component_releases u ON u.id=d.upstream_release_id
 WHERE r.status IN ('released','deprecated') AND u.status IN ('released','deprecated') ORDER BY d.release_id,d.upstream_component_id,d.id`},
-	{name: "action_definitions", columns: []string{"id", "release_id", "name", "kind", "playbook", "playbook_sha256", "tags_json", "host_group", "required_credentials_json", "timeout_seconds", "risk_level", "destructive", "idempotent", "from_release_id", "to_release_id", "pre_check_action_id", "post_check_action_id", "become", "gather_facts", "resource_contract_json"}, query: `
-SELECT a.id,a.release_id,a.name,a.kind,a.playbook,a.playbook_sha256,a.tags_json,a.host_group,a.required_credentials_json,a.timeout_seconds,a.risk_level,a.destructive,a.idempotent,a.from_release_id,a.to_release_id,a.pre_check_action_id,a.post_check_action_id,a.become,a.gather_facts,a.resource_contract_json
+	{name: "action_definitions", columns: []string{"id", "release_id", "name", "kind", "playbook", "playbook_sha256", "tags_json", "host_group", "required_credentials_json", "timeout_seconds", "risk_level", "destructive", "idempotent", "from_release_id", "to_release_id", "pre_check_action_id", "post_check_action_id", "become"}, query: `
+SELECT a.id,a.release_id,a.name,a.kind,a.playbook,a.playbook_sha256,a.tags_json,a.host_group,a.required_credentials_json,a.timeout_seconds,a.risk_level,a.destructive,a.idempotent,a.from_release_id,a.to_release_id,a.pre_check_action_id,a.post_check_action_id,a.become
 FROM action_definitions a JOIN component_releases r ON r.id=a.release_id WHERE r.status IN ('released','deprecated') ORDER BY a.release_id,a.kind,a.id`},
 	{name: "component_playbook_files", columns: []string{"release_id", "relative_path", "sha256", "size_bytes", "media_type", "updated_at"}, query: `
 SELECT f.release_id,f.relative_path,f.sha256,f.size_bytes,f.media_type,f.updated_at
@@ -137,6 +122,9 @@ func ExportCatalog(ctx context.Context, databasePath, playbookRoot, destination 
 	catalog := Catalog{FormatVersion: CatalogFormatVersion}
 	if err := database.QueryRowContext(ctx, `SELECT version FROM schema_contract WHERE id=1`).Scan(&catalog.SchemaContract); err != nil {
 		return Catalog{}, nil, fmt.Errorf("read schema contract: %w", err)
+	}
+	if catalog.SchemaContract != store.CurrentSchemaContract {
+		return Catalog{}, nil, fmt.Errorf("unsupported Catalog schema contract %q: expected %q", catalog.SchemaContract, store.CurrentSchemaContract)
 	}
 	if err := database.QueryRowContext(ctx, `SELECT generation FROM publication_state WHERE id=1`).Scan(&catalog.PublicationGeneration); err != nil {
 		return Catalog{}, nil, fmt.Errorf("read publication generation: %w", err)
@@ -388,6 +376,9 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 }
 
 func validateCatalog(catalog Catalog) error {
+	if catalog.SchemaContract != store.CurrentSchemaContract {
+		return fmt.Errorf("unsupported Catalog schema contract %q: expected %q", catalog.SchemaContract, store.CurrentSchemaContract)
+	}
 	allowed := map[string]tableSpec{}
 	for _, spec := range catalogTables {
 		allowed[spec.name] = spec

@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// Fixtures were serialized using the pre-extraction lockedPlan and media types.
+// Current locked plans round-trip all media identities and decisions.
 // Test direct serialization too: map normalization can hide field-order drift.
-func TestMediaTypeExtractionPreservesLockedJSON(t *testing.T) {
+func TestLockedMediaPlanJSONRoundTrip(t *testing.T) {
 	for _, name := range []string{"nil", "empty", "mixed"} {
 		t.Run(name, func(t *testing.T) {
-			data, err := os.ReadFile("testdata/media-plan-before-" + name + ".json")
+			data, err := os.ReadFile("testdata/media-plan-current-" + name + ".json")
 			if err != nil {
 				t.Fatal(err)
 			}

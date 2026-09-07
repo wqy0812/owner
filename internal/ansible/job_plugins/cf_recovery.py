@@ -20,7 +20,12 @@ def continuation(plan, start):
     # existed. Later rollback steps can remove those providers (e.g. the API
     # server), so replaying these checks cannot establish a current baseline.
     # Keep their receipts and only run checks for incomplete teardown actions.
-    teardown = set((instance(s), s.get('actionId')) for s in steps[:start]
+    # Parent actions survive continuation slicing in platform metadata and in
+    # the native job's original graph. A postcheck-only attempt still belongs
+    # to its teardown action even after the body left the remaining steps.
+    parents = (steps + (plan.get('recovery') or []) +
+               ((plan.get('metadata') or {}).get('parentSteps') or []))
+    teardown = set((s.get('componentId', '') + '/' + s.get('sourceNodeId', s.get('nodeId', '')), s.get('actionId')) for s in parents
                    if s['phase'] == 'execute' and s.get('action') in ('rollback', 'uninstall'))
     latest = {}
     for index, step in enumerate(steps[:start]):
@@ -54,7 +59,7 @@ def retry(plan, results):
                    instance(plan['steps'][start - 1]) == instance(step))
         if has_pre:
             start -= 1
-        elif step.get('action') != 'rollback' or step.get('preCheckRequired'):
+        elif step.get('action') != 'rollback':
             raise ValueError('retry action has no precheck')
     return continuation(plan, start)
 

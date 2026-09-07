@@ -69,13 +69,10 @@ func (p *CatalogService) readReleasePlaybookFile(release domain.ComponentRelease
 // one catalog mutation. Filesystem publication is compensated on transaction
 // failure and protected across process exit by a durable recovery marker;
 // the SQLite manifest, Action row, and marker removal share one transaction.
-func (p *CatalogService) SaveActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string, confirmYAMLMigration ...bool) (PlaybookFile, error) {
-	release, _, authorizeErr := p.authorizePlaybook(ctx, user, releaseID, true)
+func (p *CatalogService) SaveActionAtomic(ctx context.Context, user domain.User, releaseID string, action domain.ActionDefinition, contents []byte, expectedSHA256, expectedTreeSHA256 *string) (PlaybookFile, error) {
+	_, _, authorizeErr := p.authorizePlaybook(ctx, user, releaseID, true)
 	if authorizeErr != nil {
 		return PlaybookFile{}, authorizeErr
-	}
-	if err := domain.ValidateResourceContract(action.ResourceContract, release.Parameters, false); err != nil {
-		return PlaybookFile{}, err
 	}
 	if len(contents) == 0 || len(contents) > MaxPlaybookBytes {
 		return PlaybookFile{}, fmt.Errorf("%w: playbook must contain 1 byte to 1 MiB", domain.ErrInvalid)
@@ -86,7 +83,7 @@ func (p *CatalogService) SaveActionAtomic(ctx context.Context, user domain.User,
 	if err := ansiblerunner.ValidateRoleTasks(contents, action.Kind == domain.ActionCheck); err != nil {
 		return PlaybookFile{}, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
 	}
-	file, persistedAction, err := p.saveReleaseWorkspaceActionAtomic(ctx, user, releaseID, action, contents, expectedSHA256, expectedTreeSHA256, len(confirmYAMLMigration) > 0 && confirmYAMLMigration[0])
+	file, persistedAction, err := p.saveReleaseWorkspaceActionAtomic(ctx, user, releaseID, action, contents, expectedSHA256, expectedTreeSHA256)
 	if err != nil {
 		return PlaybookFile{}, err
 	}

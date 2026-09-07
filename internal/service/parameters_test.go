@@ -26,8 +26,8 @@ func TestValidateReleaseParametersRejectsInvalidContract(t *testing.T) {
 		}},
 		"sensitive public":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "registryPassword", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterPublic, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}},
 		"unknown type":           {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: "blob", Visibility: domain.ParameterInternal, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}},
-		"missing mapping target": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}, Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
-		"duplicate dependency":   {Version: "1", ComponentID: "down", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "up", UpstreamReleaseID: "up-1"}, {UpstreamComponentID: "up", UpstreamReleaseID: "up-2"}}},
+		"missing mapping target": {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, FixedValue: "x", ValueProvider: domain.ParameterProviderComponentOwner}}, Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "up", UpstreamReleaseID: "up-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "a", TargetParameter: "missing"}}}}},
+		"duplicate dependency":   {Version: "1", ComponentID: "down", Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "up", UpstreamReleaseID: "up-1"}, {Kind: "execution", UpstreamComponentID: "up", UpstreamReleaseID: "up-2"}}},
 		"invalid provider":       {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderComponentOwner}}},
 		"scenario raw object":    {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "options", Description: "x", Type: domain.ParameterTypeObject, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderScenarioOwner}}},
 		"environment raw array":  {Version: "1", Parameters: []domain.ParameterDefinition{{Name: "peers", Description: "x", Type: domain.ParameterTypeArray, Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}}}},
@@ -81,7 +81,7 @@ func TestValidateReleaseRejectsRollbackSelfVerificationTagOnOtherActions(t *test
 func TestMappedParameterCannotBeLocallyOverridden(t *testing.T) {
 	release := domain.ComponentRelease{
 		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}},
-		Dependencies: []domain.ComponentDependency{{ID: "dep-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
+		Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: "dep-1", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
 	}
 	node := domain.ScenarioNode{ID: "proxy", ParameterValues: map[string]any{"kubeRoot": "/tmp"}}
 	if conflicts := nodeOverridesMappedParameter(node, release); len(conflicts) != 1 || conflicts[0] != "kubeRoot" {
@@ -103,7 +103,7 @@ func TestSelectDependencySourceUniqueAndAmbiguous(t *testing.T) {
 		"kubelet-worker": {ID: "rel-kubelet"},
 		"proxy-master":   {ID: "rel-proxy"},
 	}
-	dep := domain.ComponentDependency{ID: "dep-1", UpstreamReleaseID: "rel-kubelet"}
+	dep := domain.ComponentDependency{Kind: "execution", ID: "dep-1", UpstreamReleaseID: "rel-kubelet"}
 	selected, err := selectDependencySource(graph.Nodes[2], dep, graph, releaseByNode)
 	if err != nil || selected != "kubelet-master" {
 		t.Fatalf("explicit source=%s err=%v", selected, err)
@@ -136,7 +136,7 @@ func TestPlannerPassesUpstreamFinalValueAndIgnoresEnvironmentData(t *testing.T) 
 		Parameters: []domain.ParameterDefinition{{
 			Name: "kubeRoot", Description: "imported", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping,
 		}},
-		Dependencies: []domain.ComponentDependency{{
+		Dependencies: []domain.ComponentDependency{{Kind: "execution",
 			ID: "dep-1", UpstreamReleaseID: "rel-kubelet",
 			ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}},
 		}},
@@ -186,8 +186,8 @@ func TestPlannerReadsOnlyDeclaredEnvironmentParameters(t *testing.T) {
 
 func TestPlannerSupportsChainedPublicParameters(t *testing.T) {
 	a := domain.ComponentRelease{ID: "a", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, FixedValue: "/a", Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderComponentOwner}}}
-	b := domain.ComponentRelease{ID: "b", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "b-a", UpstreamReleaseID: "a", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
-	c := domain.ComponentRelease{ID: "c", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{ID: "c-b", UpstreamReleaseID: "b", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
+	b := domain.ComponentRelease{ID: "b", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: "b-a", UpstreamReleaseID: "a", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
+	c := domain.ComponentRelease{ID: "c", Parameters: []domain.ParameterDefinition{{Name: "root", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping}}, Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: "c-b", UpstreamReleaseID: "b", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "root"}}}}}
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{{ID: "a", ReleaseID: "a"}, {ID: "b", ReleaseID: "b", DependencySources: map[string]string{"b-a": "a"}}, {ID: "c", ReleaseID: "c", DependencySources: map[string]string{"c-b": "b"}}},
 		Edges: []domain.ScenarioEdge{{Source: "a", Target: "b", Kind: domain.ScenarioEdgeDependency, DependencyID: "b-a"}, {Source: "b", Target: "c", Kind: domain.ScenarioEdgeDependency, DependencyID: "c-b"}},
@@ -218,7 +218,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 			{Name: "requiredTarget", Description: "x", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping},
 			{Name: "optionalTarget", Description: "x", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping},
 		},
-		Dependencies: []domain.ComponentDependency{{
+		Dependencies: []domain.ComponentDependency{{Kind: "execution",
 			ID: "dep", UpstreamReleaseID: "up",
 			ParameterMappings: []domain.ParameterMapping{
 				{UpstreamParameter: "optional", TargetParameter: "requiredTarget"},
@@ -254,7 +254,7 @@ func TestMissingRequiredMappedValueFailsAndOptionalIsSkipped(t *testing.T) {
 func TestComponentTestUsesMappedParameterTestValue(t *testing.T) {
 	release := domain.ComponentRelease{
 		Parameters:   []domain.ParameterDefinition{{Name: "kubeRoot", Description: "root", Type: domain.ParameterTypeString, Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping, TestValue: "/approot1/paas/kube"}},
-		Dependencies: []domain.ComponentDependency{{ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
+		Dependencies: []domain.ComponentDependency{{Kind: "execution", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}},
 	}
 	vars, prov, err := resolveOwnParameters(release, domain.ScenarioNode{}, domain.EnvironmentRevision{}, true)
 	if err != nil {
@@ -266,8 +266,8 @@ func TestComponentTestUsesMappedParameterTestValue(t *testing.T) {
 }
 
 func TestMappingContractsEqualForUpgrade(t *testing.T) {
-	left := []domain.ComponentDependency{{UpstreamComponentID: "kubelet", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}}
-	right := []domain.ComponentDependency{{UpstreamComponentID: "kubelet", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}}
+	left := []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "kubelet", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}}
+	right := []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "kubelet", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}}}}
 	if !mappingContractsEqual(left, right) {
 		t.Fatal("identical contracts compared unequal")
 	}

@@ -195,16 +195,14 @@ func (h *Handler) checkEnvironmentConnectivity(w http.ResponseWriter, r *http.Re
 }
 
 func (h *Handler) previewEnvironmentRollback(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Nodes []string `json:"nodes"`
-	}
+	var input struct{}
 	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &input); err != nil {
 			writeError(w, err)
 			return
 		}
 	}
-	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"), input.Nodes...)
+	plan, err := h.platform.Execution().PreviewRollback(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return

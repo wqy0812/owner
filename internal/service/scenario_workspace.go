@@ -146,7 +146,6 @@ func (p *ScenarioService) ReadAcceptanceFile(ctx context.Context, user domain.Us
 }
 
 type ScenarioWorkspaceExpectation struct {
-	ConfirmYAMLMigration   bool    `json:"confirmYamlMigration,omitempty"`
 	ExpectedRevisionDigest string  `json:"expectedRevisionDigest"`
 	ExpectedSHA256         *string `json:"expectedSha256"`
 	ExpectedTreeSHA256     *string `json:"expectedTreeSha256"`
@@ -216,19 +215,6 @@ func (p *ScenarioService) SaveAcceptanceFile(ctx context.Context, user domain.Us
 	}
 	if err := replaceWorkspaceFileAtomically(target, contents); err != nil {
 		return WorkspaceFile{}, err
-	}
-	if expected.ConfirmYAMLMigration {
-		job, ok := acceptanceFileJob(revision, clean)
-		if !ok {
-			_ = restoreWorkspaceFile(target, existed, previous)
-			return WorkspaceFile{}, fmt.Errorf("%w: 只能在验收入口 YAML 保存时确认迁入", domain.ErrInvalid)
-		}
-		for i := range revision.AcceptanceJobs {
-			if revision.AcceptanceJobs[i].ID == job.ID {
-				revision.AcceptanceJobs[i].GatherFacts = false
-				revision.AcceptanceJobs[i].RuntimeChecks = nil
-			}
-		}
 	}
 	if err := p.persistScenarioAcceptanceWorkspace(ctx, revision, expected.ExpectedRevisionDigest); err != nil {
 		if restoreErr := restoreWorkspaceFile(target, existed, previous); restoreErr != nil {
@@ -396,9 +382,6 @@ func (p *ScenarioService) validateScenarioAcceptanceWorkspace(revision domain.Sc
 		return err
 	}
 	for _, job := range revision.AcceptanceJobs {
-		if job.NeedsYAMLMigration() {
-			return domain.YAMLMigrationRequired(job.Name)
-		}
 		relative := "tasks/acceptance/" + job.ID + ".yml"
 		if job.Playbook != workspace.Root+relative || job.PlaybookSHA256 == "" {
 			return fmt.Errorf("%w: acceptance job %s has no valid source", domain.ErrInvalid, job.Name)
@@ -447,7 +430,7 @@ func (p *WorkspaceVerifier) verifyScenarioAcceptanceStep(ctx context.Context, st
 	}
 	for _, job := range revision.AcceptanceJobs {
 		if job.ID == step.AcceptanceJobID {
-			if step.Playbook != job.Playbook || step.Action != "acceptance" || step.ActionID != job.ID || step.Limit != job.HostGroup || step.TimeoutSeconds != job.TimeoutSeconds || step.Become != job.Become || step.GatherFacts != job.GatherFacts || step.MayMutate != job.MayMutate || !reflect.DeepEqual(step.RequiredCredentials, job.RequiredCredentials) || step.NeedsApproval != (job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive) {
+			if step.Playbook != job.Playbook || step.Action != "acceptance" || step.ActionID != job.ID || step.Limit != job.HostGroup || step.TimeoutSeconds != job.TimeoutSeconds || step.Become != job.Become || step.MayMutate != job.MayMutate || !reflect.DeepEqual(step.RequiredCredentials, job.RequiredCredentials) || step.NeedsApproval != (job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive) {
 				return fmt.Errorf("%w: scenario acceptance job changed after planning", domain.ErrConflict)
 			}
 			digester := p.inspector

@@ -43,7 +43,7 @@ describe('scenario lifecycle editor', () => {
     expect(moveAcceptanceJob(jobs, 0, -1)).toBe(jobs);
   });
   it('identifies old and target dependency mappings for explicit migration review', () => {
-    const dependency = { componentId: 'upstream', releaseId: 'upstream-r1', parameterMappings: [{ upstreamParameter: 'address', targetParameter: 'endpoint' }] };
+    const dependency = { kind: 'execution' as const, componentId: 'upstream', releaseId: 'upstream-r1', parameterMappings: [{ upstreamParameter: 'address', targetParameter: 'endpoint' }] };
     expect(changedReleaseDependencyIssues({ ...targetRelease, dependencies: [dependency] }, { ...targetRelease, dependencies: [{ ...dependency, releaseId: 'upstream-r2' }] })).toEqual([
       '原依赖需迁移：upstream · upstream-r1；映射 address → endpoint', '目标依赖：upstream · upstream-r2；映射 address → endpoint',
     ]);

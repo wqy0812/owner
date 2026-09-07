@@ -41,7 +41,7 @@ func TestComponentListBatchesPreserveCompleteContracts(t *testing.T) {
 	for i := 0; i < releaseReadBatchSize+1; i++ {
 		r := releaseFixture(fmt.Sprintf("subject-%03d", i), "subject", fmt.Sprintf("%d.0.0", i), domain.ReleaseDraft)
 		r.CreatedAt = testNow.Add(time.Duration(i) * time.Second)
-		r.Dependencies = []domain.ComponentDependency{{ID: r.ID + "-dep", ReleaseID: r.ID, UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "runtime", ParameterMappings: []domain.ParameterMapping{}}}
+		r.Dependencies = []domain.ComponentDependency{{Kind: "execution", ID: r.ID + "-dep", ReleaseID: r.ID, UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "runtime", ParameterMappings: []domain.ParameterMapping{}}}
 		// Reverse insertion order detects child ordering changes in batch reads.
 		for _, name := range []string{"z", "a"} {
 			r.Artifacts = append(r.Artifacts, domain.ComponentArtifact{ID: r.ID + "-artifact-" + name, ReleaseID: r.ID, Alias: name, Filename: name + ".tgz", SHA256: "content-digest", SourceURL: "https://files.example.test/" + name, CreatedBy: owner.ID, SourceUpdatedBy: owner.ID, CreatedAt: testNow, SourceUpdatedAt: testNow})

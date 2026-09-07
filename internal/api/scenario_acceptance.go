@@ -106,6 +106,10 @@ func (h *Handler) uploadScenarioAcceptanceFile(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
+	if err := validateWorkspaceUploadFields(r, "file", "path", "expectedRevisionDigest", "expectedSha256", "expectedTreeSha256"); err != nil {
+		writeError(w, err)
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, fmt.Errorf("%w: file is required", domain.ErrInvalid))
@@ -117,7 +121,7 @@ func (h *Handler) uploadScenarioAcceptanceFile(w http.ResponseWriter, r *http.Re
 		writeError(w, err)
 		return
 	}
-	expectation := service.ScenarioWorkspaceExpectation{ConfirmYAMLMigration: r.FormValue("confirmYamlMigration") == "true", ExpectedRevisionDigest: r.FormValue("expectedRevisionDigest"), ExpectedSHA256: optionalFormValue(r, "expectedSha256"), ExpectedTreeSHA256: optionalFormValue(r, "expectedTreeSha256")}
+	expectation := service.ScenarioWorkspaceExpectation{ExpectedRevisionDigest: r.FormValue("expectedRevisionDigest"), ExpectedSHA256: optionalFormValue(r, "expectedSha256"), ExpectedTreeSHA256: optionalFormValue(r, "expectedTreeSha256")}
 	result, err := h.platform.Scenarios().SaveAcceptanceFile(r.Context(), currentUser(r), r.PathValue("id"), r.FormValue("path"), contents, expectation)
 	if err != nil {
 		writeError(w, err)

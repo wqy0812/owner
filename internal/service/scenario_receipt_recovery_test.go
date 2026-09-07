@@ -182,7 +182,7 @@ func TestScenarioBaselineCannotRecoverUnverifiedNewNodeByCheckingOnlyOldNodes(t 
 	added := scenarioPlannerRelease(t, p, "introduced-service", "introduced-component", "", domain.ActionInstall)
 	now := time.Now().UTC()
 	failed := domain.Run{ID: "failed-added-component", Kind: domain.RunScenarioTest, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.Revision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &now}
-	if err := db.CreateRun(ctx, failed, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, db.DB(), failed); err != nil {
 		t.Fatal(err)
 	}
 	receipt := store.ActionExecutionReceipt{RunID: failed.ID, StepID: "introduced-install", EnvironmentID: env.ID, ComponentID: added.ComponentID, ReleaseID: added.ID, ActionID: added.ID + "-install", SourceNodeID: "introduced", Status: "started", BackupRef: "/backups/introduced", StartedAt: now, UpdatedAt: now}

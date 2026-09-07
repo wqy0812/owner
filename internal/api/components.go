@@ -17,6 +17,7 @@ type componentDTO struct {
 	ReleaseCount int                           `json:"releaseCount"`
 	ReleaseLines []domain.ComponentReleaseLine `json:"releaseLines"`
 	ReadContext  *service.ComponentReadContext `json:"readContext,omitempty"`
+	CanDelete    bool                          `json:"canDelete"`
 }
 
 // A Release contract is serialized once. Lines only carry its identity.
@@ -50,7 +51,7 @@ type releaseInput struct {
 }
 
 type componentDependencyInput struct {
-	Kind                string                    `json:"kind,omitempty"`
+	Kind                string                    `json:"kind"`
 	UpstreamComponentID string                    `json:"upstreamComponentId"`
 	UpstreamReleaseID   string                    `json:"upstreamReleaseId"`
 	Purpose             string                    `json:"purpose"`
@@ -58,22 +59,21 @@ type componentDependencyInput struct {
 }
 
 type componentActionInput struct {
-	ResourceContract    *domain.ResourceContract `json:"resourceContract,omitempty"`
-	PreCheckActionID    string                   `json:"preCheckActionId"`
-	PostCheckActionID   string                   `json:"postCheckActionId"`
-	Become              bool                     `json:"become"`
-	ID                  string                   `json:"id"`
-	Name                string                   `json:"name"`
-	Kind                domain.ActionKind        `json:"kind"`
-	Tags                []string                 `json:"tags"`
-	HostGroup           string                   `json:"hostGroup"`
-	RequiredCredentials *[]string                `json:"requiredCredentials"`
-	TimeoutSeconds      int                      `json:"timeoutSeconds"`
-	RiskLevel           domain.RiskLevel         `json:"riskLevel"`
-	Destructive         bool                     `json:"destructive"`
-	Idempotent          bool                     `json:"idempotent"`
-	FromReleaseID       string                   `json:"fromReleaseId"`
-	ToReleaseID         string                   `json:"toReleaseId"`
+	PreCheckActionID    string            `json:"preCheckActionId"`
+	PostCheckActionID   string            `json:"postCheckActionId"`
+	Become              bool              `json:"become"`
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	Kind                domain.ActionKind `json:"kind"`
+	Tags                []string          `json:"tags"`
+	HostGroup           string            `json:"hostGroup"`
+	RequiredCredentials *[]string         `json:"requiredCredentials"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
+	Destructive         bool              `json:"destructive"`
+	Idempotent          bool              `json:"idempotent"`
+	FromReleaseID       string            `json:"fromReleaseId"`
+	ToReleaseID         string            `json:"toReleaseId"`
 }
 
 type releaseContractInput struct {
@@ -134,8 +134,7 @@ func (input releaseInput) domain(existing *domain.ComponentRelease) domain.Compo
 			empty := []string{}
 			requiredCredentials = &empty
 		}
-		release.Actions = append(release.Actions, domain.ActionDefinition{ResourceContract: inputAction.ResourceContract,
-			PreCheckActionID: inputAction.PreCheckActionID, PostCheckActionID: inputAction.PostCheckActionID, Become: inputAction.Become, ID: inputAction.ID, Name: inputAction.Name, Kind: inputAction.Kind, Tags: inputAction.Tags,
+		release.Actions = append(release.Actions, domain.ActionDefinition{PreCheckActionID: inputAction.PreCheckActionID, PostCheckActionID: inputAction.PostCheckActionID, Become: inputAction.Become, ID: inputAction.ID, Name: inputAction.Name, Kind: inputAction.Kind, Tags: inputAction.Tags,
 			HostGroup:           inputAction.HostGroup,
 			RequiredCredentials: append([]string(nil), (*requiredCredentials)...),
 			TimeoutSeconds:      inputAction.TimeoutSeconds, RiskLevel: risk,
@@ -190,6 +189,11 @@ func (h *Handler) getComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := h.componentDTO(r, component)
 	dto.ReadContext = &readContext
+	dto.CanDelete, err = h.platform.Catalog().CanDeleteComponent(r.Context(), currentUser(r), component)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	writeData(w, http.StatusOK, dto)
 }
 
@@ -219,6 +223,14 @@ func (h *Handler) updateComponent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, h.componentDTO(r, component))
+}
+
+func (h *Handler) deleteComponent(w http.ResponseWriter, r *http.Request) {
+	if err := h.platform.Catalog().DeleteComponent(r.Context(), currentUser(r), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 func (h *Handler) updateRelease(w http.ResponseWriter, r *http.Request) {
@@ -540,9 +552,6 @@ func (h *Handler) impactDTO(r *http.Request, report domain.ImpactReport) map[str
 }
 
 func (a *componentActionInput) UnmarshalJSON(data []byte) error {
-	if err := rejectLegacyAuthoringJSON(data); err != nil {
-		return err
-	}
 	type plain componentActionInput
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

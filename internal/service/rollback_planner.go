@@ -184,10 +184,7 @@ func releaseDependencySnapshot(release domain.ComponentRelease) map[string]any {
 		entry := map[string]any{
 			"component_id":       dependency.UpstreamComponentID,
 			"release_id":         dependency.UpstreamReleaseID,
-			"parameter_mappings": dependency.ParameterMappings,
-		}
-		if dependency.Kind != "" {
-			entry["kind"] = dependency.Kind
+			"parameter_mappings": dependency.ParameterMappings, "kind": dependency.Kind,
 		}
 		dependencies = append(dependencies, entry)
 	}
@@ -358,7 +355,10 @@ func (p *RollbackPlanner) recoveryBaselines(ctx context.Context, environmentID s
 		if err != nil {
 			return nil, err
 		}
-		byNode[receipt.ComponentID+"/"+receipt.SourceNodeID] = domain.EnvironmentComponentInstallation{EnvironmentID: environmentID, ComponentID: receipt.ComponentID, ReleaseID: receipt.Backup.ReleaseID, NodeID: receipt.SourceNodeID, InstallRunID: receipt.Backup.InstallRunID, BackupRef: receipt.BackupRef, Backup: receipt.Backup, TestOnly: source.Kind != domain.RunScenario, InstalledAt: receipt.StartedAt}
+		// Recovery steps have their own execution identity. Keep the original
+		// installation identity frozen in the backup metadata.
+		nodeID := receipt.Backup.NodeID
+		byNode[receipt.ComponentID+"/"+nodeID] = domain.EnvironmentComponentInstallation{EnvironmentID: environmentID, ComponentID: receipt.ComponentID, ReleaseID: receipt.Backup.ReleaseID, NodeID: nodeID, InstallRunID: receipt.Backup.InstallRunID, BackupRef: receipt.BackupRef, Backup: receipt.Backup, TestOnly: source.Kind != domain.RunScenario, InstalledAt: receipt.StartedAt}
 	}
 	out := make([]domain.EnvironmentComponentInstallation, 0, len(byNode))
 	for _, item := range byNode {

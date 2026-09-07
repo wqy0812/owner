@@ -22,7 +22,7 @@ func TestSaveScenarioGraphPersistsGeneratedDependencyAndRejectsReverseSequence(t
 		Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow,
 		EnvironmentConstraints: map[string]any{}, Actions: action("action-upstream"), CreatedAt: now, ReleasedAt: &now,
 	}
-	dependency := domain.ComponentDependency{ID: "dep-upstream", ReleaseID: "release-auto-downstream", UpstreamComponentID: "component-1", UpstreamReleaseID: upstream.ID}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-upstream", ReleaseID: "release-auto-downstream", UpstreamComponentID: "component-1", UpstreamReleaseID: upstream.ID}
 	downstream := domain.ComponentRelease{
 		ID: "release-auto-downstream", ComponentID: "component-1", LineID: "line-downstream", LineName: "Downstream", Version: "2.0.0",
 		Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow,
@@ -139,7 +139,7 @@ func hasValidationIssue(issues []domain.ValidationIssue, code string) bool {
 }
 
 func TestNormalizeScenarioGraphGeneratesDependenciesAndKeepsSequences(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{
 			{ID: "runtime", ReleaseID: "runtime-r1", Action: domain.ActionInstall},
@@ -177,7 +177,7 @@ func TestNormalizeScenarioGraphGeneratesDependenciesAndKeepsSequences(t *testing
 }
 
 func TestNormalizeScenarioGraphReversesRollbackDependencies(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{
 		{ID: "runtime", ReleaseID: "runtime-r1", Action: domain.ActionRollback},
 		{ID: "control", ReleaseID: "control-r1", Action: domain.ActionRollback},
@@ -198,7 +198,7 @@ func TestNormalizeScenarioGraphReversesRollbackDependencies(t *testing.T) {
 }
 
 func TestNormalizeScenarioGraphRejectsMixedLifecycleDirections(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{
 		{ID: "runtime", ReleaseID: "runtime-r1", Action: domain.ActionInstall},
 		{ID: "control", ReleaseID: "control-r1", Action: domain.ActionRollback},
@@ -235,7 +235,7 @@ func TestNormalizeScenarioGraphRejectsUntypedEdges(t *testing.T) {
 }
 
 func TestNormalizeScenarioGraphRequiresAChoiceForDuplicateUpstreams(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{
 		{ID: "runtime-a", ReleaseID: "runtime-r1", Action: domain.ActionInstall},
 		{ID: "runtime-b", ReleaseID: "runtime-r1", Action: domain.ActionInstall},
@@ -262,7 +262,7 @@ func TestNormalizeScenarioGraphRequiresAChoiceForDuplicateUpstreams(t *testing.T
 }
 
 func TestNormalizeScenarioGraphDoesNotInferAmbiguousDependencyFromSequence(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{
 			{ID: "runtime-a", ReleaseID: "runtime-r1", Action: domain.ActionInstall},
@@ -284,7 +284,7 @@ func TestNormalizeScenarioGraphDoesNotInferAmbiguousDependencyFromSequence(t *te
 }
 
 func TestNormalizeScenarioGraphSkipsVerifyInstallDependenciesWithoutMappings(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "verify", ReleaseID: "control-r1", Action: domain.ActionVerify}}}
 	normalized, issues := normalizeScenarioGraph(graph, map[string]domain.ComponentRelease{
 		"verify": {ID: "control-r1", Dependencies: []domain.ComponentDependency{dependency}},
@@ -295,7 +295,7 @@ func TestNormalizeScenarioGraphSkipsVerifyInstallDependenciesWithoutMappings(t *
 }
 
 func TestTypedSequenceEdgeCannotSupplyMappedDependency(t *testing.T) {
-	dependency := domain.ComponentDependency{ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
+	dependency := domain.ComponentDependency{Kind: "execution", ID: "dep-runtime", UpstreamReleaseID: "runtime-r1"}
 	graph := domain.ScenarioGraph{
 		Nodes: []domain.ScenarioNode{
 			{ID: "runtime", ReleaseID: "runtime-r1"},

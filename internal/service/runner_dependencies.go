@@ -14,6 +14,7 @@ type WorkspaceInspector interface {
 	Digest(string) (string, string, error)
 	DigestPlan([]string) (map[string]string, string, error)
 	ValidatePlaybooks([]string) map[string]error
+	ValidateTaskTargets([]string, ansiblerunner.TaskTargetScope) error
 }
 
 type RuntimeInspector interface {

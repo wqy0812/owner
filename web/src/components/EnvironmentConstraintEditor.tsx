@@ -1,5 +1,5 @@
 import { useApp } from '../context/AppContext';
-import { activeEnvironmentConstraintDimensions, childOptionsForSelection, environmentConstraintDimensions, toggleHierarchicalConstraintValue, type ConstraintSelection } from '../types/environmentConstraints';
+import { activeEnvironmentConstraintDimensions, childOptionsForSelection, environmentConstraintDimensions, toggleHierarchicalConstraintValue, type ConstraintSelection, type EnvironmentConstraintOption } from '../types/environmentConstraints';
 
 export function EnvironmentConstraintEditor({
   value,
@@ -10,42 +10,46 @@ export function EnvironmentConstraintEditor({
   title?: string;
   onChange: (next: ConstraintSelection) => void;
 }) {
-  const { platformOptionCategories, platformOptionsLoading } = useApp();
+  const { platformOptionCategories, platformOptionsLoading, platformOptionsError, signalRefresh } = useApp();
   const allDimensions = environmentConstraintDimensions(platformOptionCategories);
   const dimensions = activeEnvironmentConstraintDimensions(platformOptionCategories);
   const retainedRetired = allDimensions.filter((dimension) => dimension.retiredAt && (value[dimension.key]?.length ?? 0) > 0);
 
-  function toggle(dimensionKey: string, optionValue: string) {
+  function toggle(dimensionKey: string, optionValue?: string) {
     onChange(toggleHierarchicalConstraintValue(value, dimensions, dimensionKey, optionValue));
   }
   return (
     <fieldset className="constraint-editor">
       <legend>适配标签 · {title}</legend>
-      <p>{title === "场景支持范围" ? "选择场景支持的环境范围；组件有限制的分类必须补选，草稿可暂存缺项。" : "选择该版本可安装的环境。某个维度不选，表示不限制该维度。"}</p>
+      <p>请为每个维度选择具体标签或“不限制”；未选择时不能确认创建。</p>
+      {platformOptionsError && <div role="alert"><p>环境维度加载失败，暂时不能确认适配范围。{platformOptionsError}</p><button type="button" className="button button--quiet" disabled={platformOptionsLoading} onClick={() => signalRefresh('platform-options')}>重新加载环境维度</button></div>}
       <div className="constraint-editor__grid">
         {platformOptionsLoading && !allDimensions.length ? <span>正在加载环境维度…</span> : dimensions.map((dimension) => {
           const selected = value[dimension.key] ?? [];
+          const unrestricted = value[dimension.key]?.length === 0;
           const parent = dimension.parentCategoryId ? dimensions.find((item) => item.id === dimension.parentCategoryId) : undefined;
+          const requiresChild = Boolean(parent && value[parent.key]?.length);
           const options = childOptionsForSelection(dimension, parent, parent ? value[parent.key] ?? [] : []);
-          const groups = parent ? parent.options.filter((option) => (value[parent.key] ?? []).includes(option.value)).map((parentOption) => ({ label: parentOption.label, options: options.filter((option) => option.parentOptionId === parentOption.id) })) : [{ label: '', options }];
+          const groups = parent ? parent.options.filter((option) => (value[parent.key] ?? []).includes(option.value)).map((parentOption) => ({ label: parentOption.label, options: options.filter((option) => option.parentOptionId === parentOption.id) })) : [];
+          const renderOption = (option: EnvironmentConstraintOption) => (
+            <label key={option.value} className={selected.includes(option.value) ? 'active' : ''}>
+              <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(dimension.key, option.value)} />
+              {option.label}
+            </label>
+          );
           return (
-            <div className="constraint-dimension" key={dimension.key}>
-              <strong>{dimension.label}</strong><small>{selected.length ? `已选择 ${selected.length} 项` : '不限制'}</small>
-              {parent && options.length === 0 ? <small>请先选择{parent.label}</small> : null}
-              {groups.map((group) => <div key={group.label || dimension.key}>{group.label ? <small>{group.label}</small> : null}<div className="constraint-options" role="group" aria-label={group.label ? `${dimension.label} ${group.label}` : dimension.label}>
-                {group.options.map((option) => {
-                  const checked = selected.includes(option.value);
-                  return (
-                    <label key={option.value} className={checked ? 'active' : ''}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggle(dimension.key, option.value)}
-                      />
-                      {option.label}
-                    </label>
-                  );
-                })}
+            <div className="constraint-dimension" key={dimension.key} role="group" aria-label={dimension.label}>
+              <strong>{dimension.label}</strong><small>{selected.length ? `已选择 ${selected.length} 项` : unrestricted ? '已选择不限制' : '未选择'}</small>
+              <div className="constraint-options">
+                <label className={unrestricted ? 'active' : ''}>
+                  <input type="checkbox" checked={unrestricted} disabled={requiresChild} onChange={() => toggle(dimension.key)} />
+                  不限制
+                </label>
+                {!parent && options.map(renderOption)}
+              </div>
+              {parent ? <small>{requiresChild ? `已选择${parent.label}，请为每项选择对应的${dimension.label}。` : `如需指定${dimension.label}，请先选择${parent.label}。`}</small> : null}
+              {groups.map((group) => <div key={group.label || dimension.key}>{group.label ? <small>{group.label}</small> : null}<div className="constraint-options">
+                {group.options.map(renderOption)}
               </div></div>)}
             </div>
           );

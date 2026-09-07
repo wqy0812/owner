@@ -44,20 +44,14 @@ clusterforge_assert_schema_policy() {
   local actual="$1"
   local expected="$2"
   local rebuild_v1_db="$3"
-  local migrate_user_experience="${4:-0}"
   if [[ "$actual" == "$expected" ]]; then
     return 0
   fi
   if [[ "$rebuild_v1_db" -eq 1 ]]; then
     return 0
   fi
-  if [[ "$migrate_user_experience" -eq 1 && "$expected" == clusterforge-v1-20260906-user-experience ]]; then
-    case "$actual" in
-      clusterforge-v1-20260905-scenario-lifecycle|clusterforge-v1-20260905-role-jobs) return 0 ;;
-    esac
-  fi
   echo "unsupported schema contract: $actual" >&2
-  echo "this build accepts only $expected; preserve the source and review an explicit conversion plan; a destructive rebuild requires separate authorization" >&2
+  echo "this build accepts only $expected; back up the source before an explicitly authorized test database rebuild" >&2
   return 1
 }
 
@@ -99,4 +93,17 @@ clusterforge_snapshot_if_configured() {
 
 clusterforge_backup_sqlite() {
   "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database snapshot --db "$1" --target "$2"
+}
+
+# A reset recovery image belongs to the old binary and its exact contract.
+# The replacement foundation belongs to the new binary. Verify each with its
+# own tool; this does not make the new runtime accept historical databases.
+clusterforge_verify_reset_databases() {
+  local source_tool="$1" source_contract="$2" source_database="$3"
+  local target_contract="$4" target_database="$5"
+  [[ -x "$source_tool" ]] || return 1
+  "${CLUSTERFORGE_DEPLOY_DB_TOOL:?deployment database tool is required}" database verify --db "$source_database" --expected-contract "$source_contract" || return
+  "$source_tool" database verify-business --db "$source_database" --expected-contract "$source_contract" || return
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$target_database" --expected-contract "$target_contract" || return
+  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-foundation --db "$target_database"
 }

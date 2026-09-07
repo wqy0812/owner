@@ -60,12 +60,19 @@ func TestNativeRollbackResumeAfterProviderRemoval(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	appendRole("alpha", "tasks/checks/pre.yml", "- stat:\n    path: '{{ cf.inputs.target }}/allow'\n  register: cf_local_allow\n- assert:\n    that: cf.context.nodeId != 'alpha-two' or cf_local_allow.stat.exists\n")
-	appendRole("alpha", "tasks/checks/post.yml", "- stat:\n    path: '{{ cf.inputs.target }}/api'\n  register: cf_local_api\n- assert:\n    that: cf.context.nodeId != 'alpha-one' or cf_local_api.stat.exists\n")
+	appendRole("beta", "tasks/checks/post.yml", "- stat:\n    path: '{{ cf.inputs.target }}/allow'\n  register: cf_local_allow\n- assert:\n    that: cf_local_allow.stat.exists\n")
+	appendRole("alpha", "tasks/checks/post.yml", "- stat:\n    path: '{{ cf.inputs.target }}/allow-first'\n  register: cf_local_first\n- stat:\n    path: '{{ cf.inputs.target }}/api'\n  register: cf_local_api\n- assert:\n    that: cf.context.nodeId != 'alpha-one' or (cf_local_api.stat.exists and cf_local_first.stat.exists)\n")
 	appendRole("beta", "tasks/install.yml", "- file:\n    path: '{{ cf.inputs.target }}/api'\n    state: absent\n")
 	if err := os.WriteFile(filepath.Join(target, "api"), []byte("available"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	filtered := []JobStep{}
+	for _, step := range plan.Steps {
+		if step.Phase != "pre" {
+			filtered = append(filtered, step)
+		}
+	}
+	plan.Steps = filtered
 	for i := range plan.Steps {
 		step := &plan.Steps[i]
 		step.ParentActionID = "install.yml"
@@ -82,7 +89,13 @@ func TestNativeRollbackResumeAfterProviderRemoval(t *testing.T) {
 	defer bundle.Close()
 	results := filepath.Join(t.TempDir(), "results")
 	if output, err := nativeCommand(t, binary, bundle, "install", results, nil); err == nil {
-		t.Fatalf("expected final component precheck to stop: %s", output)
+		t.Fatalf("expected first rollback postcheck to stop: %s", output)
+	}
+	if err := os.WriteFile(filepath.Join(target, "allow-first"), []byte("ready"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := nativeCommand(t, binary, bundle, "resume", results, nil); err == nil {
+		t.Fatalf("expected provider postcheck to stop: %s", output)
 	}
 	if _, err := os.Stat(filepath.Join(target, "api")); !os.IsNotExist(err) {
 		t.Fatal("provider was not removed before interruption")
@@ -106,7 +119,7 @@ func TestNativeRollbackResumeAfterProviderRemoval(t *testing.T) {
 	if err := json.Unmarshal(data, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if len(receipt.Attempts) != 2 || receipt.Attempts[1].Status != "succeeded" || len(receipt.Attempts[1].Steps) != 3 || receipt.Attempts[1].Steps[0].NodeID != "alpha-two" {
+	if len(receipt.Attempts) != 3 || receipt.Attempts[2].Status != "succeeded" || len(receipt.Attempts[1].Steps) != 5 || len(receipt.Attempts[2].Steps) != 3 || receipt.Attempts[2].Steps[0].NodeID != "beta-one" || receipt.Attempts[2].Steps[0].Phase != "post" {
 		t.Fatalf("completed teardown replayed or history lost: %+v", receipt)
 	}
 	if err := bundle.Validate(); err != nil {

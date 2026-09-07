@@ -52,6 +52,14 @@ func scenarioInstallationsTx(ctx context.Context, q queryer, environmentID strin
 	}
 	return items, rows.Err()
 }
+
+type scenarioTargetNode struct {
+	NodeID      string         `json:"nodeId"`
+	ComponentID string         `json:"componentId"`
+	ReleaseID   string         `json:"releaseId"`
+	Variables   map[string]any `json:"variables"`
+}
+
 func scenarioSnapshotNumber(snapshot map[string]any, key string) int64 {
 	switch v := snapshot[key].(type) {
 	case float64:
@@ -67,7 +75,7 @@ func scenarioSnapshotNumber(snapshot map[string]any, key string) int64 {
 	return 0
 }
 func isScenarioLifecycleRun(run domain.Run) bool {
-	return run.ScenarioRevisionID != "" && scenarioSnapshotNumber(run.InputSnapshot, "scenarioContractVersion") == 2
+	return run.ScenarioRevisionID != ""
 }
 func (s *Store) GetScenarioSubmission(ctx context.Context, userID, key, digest string) (domain.Run, error) {
 	var id, current string
@@ -89,6 +97,9 @@ func (s *Store) ScenarioEnvironmentStateCount(ctx context.Context, id string) (i
 func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run domain.Run) error {
 	if !isScenarioLifecycleRun(run) {
 		return nil
+	}
+	if scenarioSnapshotNumber(run.InputSnapshot, "scenarioContractVersion") != 2 {
+		return fmt.Errorf("%w: unsupported scenario execution contract", domain.ErrConflict)
 	}
 	revision, err := getScenarioRevision(ctx, q, run.ScenarioRevisionID)
 	if err != nil {
@@ -171,11 +182,7 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 		if err := validateScenarioRecoveryReceipts(ctx, q, run); err != nil {
 			return err
 		}
-		if historicalID, _ := run.InputSnapshot["historicalBaselineRunId"].(string); historicalID != "" {
-			if _, err := validateHistoricalBaselineSnapshot(ctx, q, run, revision); err != nil {
-				return err
-			}
-		} else if baseline.RunID == "" || baseline.RevisionID != revision.ID {
+		if baseline.RunID == "" || baseline.RevisionID != revision.ID {
 			return fmt.Errorf("%w: 没有可恢复的完整历史基线", domain.ErrConflict)
 		}
 	default:
@@ -184,29 +191,6 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 	return nil
 }
 
-func validateHistoricalBaselineSnapshot(ctx context.Context, q queryer, run domain.Run, revision domain.ScenarioRevision) (ScenarioHistoricalBaseline, error) {
-	candidate, err := findScenarioHistoricalBaseline(ctx, q, run.EnvironmentID, revision.ScenarioID, revision.ID)
-	if err != nil {
-		return candidate, err
-	}
-	if candidate.Run.ID != run.InputSnapshot["historicalBaselineRunId"] || candidate.TestOnly != run.InputSnapshot["historicalBaselineTestOnly"] {
-		return candidate, fmt.Errorf("%w: 历史基线候选发生变化，请重新预览", domain.ErrConflict)
-	}
-	var locked []ScenarioHistoricalNode
-	raw, err := json.Marshal(run.InputSnapshot["targetNodes"])
-	if err != nil {
-		return candidate, err
-	}
-	if err = json.Unmarshal(raw, &locked); err != nil {
-		return candidate, err
-	}
-	left, _ := json.Marshal(locked)
-	right, _ := json.Marshal(candidate.Nodes)
-	if string(left) != string(right) {
-		return candidate, fmt.Errorf("%w: 历史冻结参数不匹配", domain.ErrConflict)
-	}
-	return candidate, nil
-}
 func (s *Store) ValidateScenarioExecutionBaseline(ctx context.Context, run domain.Run) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -292,7 +276,7 @@ func (s *Store) MarkScenarioMutation(ctx context.Context, run domain.Run) error 
 }
 
 func validateScenarioAcceptanceEvidence(ctx context.Context, q queryer, run domain.Run, revision domain.ScenarioRevision) error {
-	if (len(revision.AcceptanceJobs) == 0 && run.InputSnapshot["executionMode"] != "baseline_verify") || !isScenarioLifecycleRun(run) {
+	if (len(revision.AcceptanceJobs) == 0 && run.InputSnapshot["executionMode"] != "baseline_verify") || !isScenarioLifecycleRun(run) || scenarioSnapshotNumber(run.InputSnapshot, "scenarioContractVersion") != 2 {
 		return fmt.Errorf("%w: 缺少场景业务验收证据", domain.ErrConflict)
 	}
 	if run.InputSnapshot["scenarioRevisionSpecDigest"] != domain.ScenarioRevisionSpecDigest(revision) {
@@ -396,13 +380,6 @@ func finishScenarioLifecycleTx(ctx context.Context, tx *sql.Tx, run domain.Run, 
 		}
 		testOnly = baseline.TestOnly
 		baseRunID = baseline.RunID
-		if historicalID, _ := run.InputSnapshot["historicalBaselineRunId"].(string); historicalID != "" {
-			candidate, err := validateHistoricalBaselineSnapshot(ctx, tx, run, revision)
-			if err != nil {
-				return err
-			}
-			testOnly, baseRunID = candidate.TestOnly, candidate.Run.ID
-		}
 	}
 	if testOnly {
 		state = "test"
@@ -457,7 +434,7 @@ func validateScenarioRecoveryReceipts(ctx context.Context, q queryer, run domain
 	if string(a) != string(b) {
 		return fmt.Errorf("%w: 待恢复操作已变化，请重新预览基线复核", domain.ErrConflict)
 	}
-	var targets []ScenarioHistoricalNode
+	var targets []scenarioTargetNode
 	raw, err = json.Marshal(run.InputSnapshot["targetNodes"])
 	if err != nil {
 		return err

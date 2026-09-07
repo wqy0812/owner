@@ -8,6 +8,23 @@ import (
 	"codex/platform-demo/internal/seed"
 )
 
+func TestEnvironmentResetRejectsCallerSuppliedNodes(t *testing.T) {
+	f := newAPIFixture(t)
+	owner := f.session(seed.EnvironmentOwnerID)
+	for _, nodes := range []any{[]string{"component/control"}, []string{}, nil} {
+		for _, suffix := range []string{"cluster-rollback-plan", "cluster-rollback-runs"} {
+			body := map[string]any{"nodes": nodes}
+			if suffix == "cluster-rollback-runs" {
+				body["expectedPlanDigest"], body["confirmEnvironmentName"] = "old-preview", "Test Environment"
+			}
+			response := f.request(http.MethodPost, "/api/v1/environments/environment-test/"+suffix, body, owner)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "nodes") {
+				t.Fatalf("caller scope accepted: %s %v status=%d body=%s", suffix, nodes, response.Code, response.Body.String())
+			}
+		}
+	}
+}
+
 func TestEnvironmentRollbackEmptyPreviewDoesNotCreateRun(t *testing.T) {
 	f := newAPIFixture(t)
 	owner := f.session(seed.EnvironmentOwnerID)
@@ -31,7 +48,7 @@ func TestEnvironmentRollbackEmptyPreviewDoesNotCreateRun(t *testing.T) {
 	if plan["environmentId"] != environment["id"] || plan["environmentName"] != environment["name"] || plan["environmentRevisionId"] != environment["currentRevisionId"] {
 		t.Fatalf("empty preview lost environment identity: %#v", plan)
 	}
-	for _, key := range []string{"nodes", "sources", "steps", "deliveryRequirements"} {
+	for _, key := range []string{"targetHosts", "sources", "steps", "deliveryRequirements"} {
 		if values, ok := plan[key].([]any); !ok || len(values) != 0 {
 			t.Fatalf("empty preview %s must be an empty array, got %#v", key, plan[key])
 		}
@@ -45,7 +62,7 @@ func TestEnvironmentRollbackEmptyPreviewDoesNotCreateRun(t *testing.T) {
 		submitted := f.request(http.MethodPost, baseURL+"/cluster-rollback-runs", map[string]any{
 			"expectedPlanDigest": digest, "confirmEnvironmentName": environment["name"],
 		}, owner)
-		if submitted.Code != http.StatusConflict || !strings.Contains(submitted.Body.String(), "暂无可回滚组件") {
+		if submitted.Code != http.StatusConflict || !strings.Contains(submitted.Body.String(), "暂无需要重置的集群组件") {
 			t.Fatalf("empty rollback submission status=%d body=%s", submitted.Code, submitted.Body.String())
 		}
 	}

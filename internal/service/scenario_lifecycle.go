@@ -96,7 +96,6 @@ func (p *ScenarioService) Fork(ctx context.Context, user domain.User, input Scen
 	revision.ID, revision.ScenarioID, revision.Revision, revision.Status = newID("scenario-revision"), scenario.ID, 1, domain.RevisionDraft
 	revision.SourceRevisionID, revision.SourceRunID = "", ""
 	revision.UpgradeConstraints = nil
-	revision.DigestVersion = domain.ScenarioDigestVersion
 	revision.PublicationGeneration = 0
 	revision.CreatedAt, revision.TestPassedAt, revision.ReleasedAt, revision.DeprecatedAt, revision.AbandonedAt = now, nil, nil, nil, nil
 	cleanup, err := p.CloneScenarioAcceptanceWorkspace(ctx, source, &revision)

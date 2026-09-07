@@ -341,20 +341,6 @@ type EnvironmentParameterBinding struct {
 	Kind EnvironmentBindingKind `json:"kind"`
 }
 
-type EnvironmentParameterDefinition struct {
-	ID           string        `json:"id"`
-	Key          string        `json:"key"`
-	Label        string        `json:"label"`
-	Description  string        `json:"description"`
-	Type         ParameterType `json:"type"`
-	Enum         []any         `json:"enum,omitempty"`
-	MinLength    int           `json:"minLength,omitempty"`
-	DefaultValue any           `json:"defaultValue,omitempty"`
-	CreatedBy    string        `json:"createdBy"`
-	CreatedAt    time.Time     `json:"createdAt"`
-	Usage        int           `json:"usage"`
-}
-
 type EnvironmentVariableDefinition struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -441,11 +427,14 @@ type ParameterMapping struct {
 	TargetParameter   string `json:"targetParameter"`
 }
 
-const DependencyConfiguration = "configuration"
+const (
+	DependencyExecution     = "execution"
+	DependencyConfiguration = "configuration"
+)
 
-// Empty kind retains the historical execution dependency and its digest.
+// Kind explicitly distinguishes execution dependencies from configuration references.
 type ComponentDependency struct {
-	Kind                  string             `json:"kind,omitempty"`
+	Kind                  string             `json:"kind"`
 	ID                    string             `json:"id"`
 	ReleaseID             string             `json:"releaseId"`
 	UpstreamComponentID   string             `json:"upstreamComponentId"`
@@ -471,26 +460,24 @@ const (
 )
 
 type ActionDefinition struct {
-	ResourceContract    *ResourceContract `json:"resourceContract,omitempty"`
-	ID                  string            `json:"id"`
-	ReleaseID           string            `json:"releaseId"`
-	Name                string            `json:"name"`
-	Kind                ActionKind        `json:"kind"`
-	Playbook            string            `json:"playbook"`
-	PlaybookSHA256      string            `json:"-"`
-	PreCheckActionID    string            `json:"preCheckActionId"`
-	PostCheckActionID   string            `json:"postCheckActionId"`
-	Become              bool              `json:"become"`
-	GatherFacts         bool              `json:"gatherFacts"`
-	Tags                []string          `json:"tags"`
-	HostGroup           string            `json:"hostGroup"`
-	RequiredCredentials []string          `json:"requiredCredentials"`
-	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	RiskLevel           RiskLevel         `json:"riskLevel"`
-	Destructive         bool              `json:"destructive"`
-	Idempotent          bool              `json:"idempotent"`
-	FromReleaseID       string            `json:"fromReleaseId,omitempty"`
-	ToReleaseID         string            `json:"toReleaseId,omitempty"`
+	ID                  string     `json:"id"`
+	ReleaseID           string     `json:"releaseId"`
+	Name                string     `json:"name"`
+	Kind                ActionKind `json:"kind"`
+	Playbook            string     `json:"playbook"`
+	PlaybookSHA256      string     `json:"-"`
+	PreCheckActionID    string     `json:"preCheckActionId"`
+	PostCheckActionID   string     `json:"postCheckActionId"`
+	Become              bool       `json:"become"`
+	Tags                []string   `json:"tags"`
+	HostGroup           string     `json:"hostGroup"`
+	RequiredCredentials []string   `json:"requiredCredentials"`
+	TimeoutSeconds      int        `json:"timeoutSeconds"`
+	RiskLevel           RiskLevel  `json:"riskLevel"`
+	Destructive         bool       `json:"destructive"`
+	Idempotent          bool       `json:"idempotent"`
+	FromReleaseID       string     `json:"fromReleaseId,omitempty"`
+	ToReleaseID         string     `json:"toReleaseId,omitempty"`
 }
 
 // ComponentPlaybookFile is one file in a Release-scoped Ansible workspace.
@@ -554,7 +541,6 @@ type ScenarioRevision struct {
 	AcceptanceBindings      []ScenarioParameterBinding `json:"acceptanceBindings,omitempty"`
 	AcceptanceWorkspaceRoot string                     `json:"acceptanceWorkspaceRoot,omitempty"`
 	AcceptanceTreeSHA256    string                     `json:"acceptanceTreeSha256,omitempty"`
-	DigestVersion           int                        `json:"digestVersion,omitempty"`
 	ID                      string                     `json:"id"`
 	ScenarioID              string                     `json:"scenarioId"`
 	Revision                int                        `json:"revision"`

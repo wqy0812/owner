@@ -58,7 +58,6 @@ type scenarioExecution struct {
 	target             []scenarioTargetNode
 	baseline           domain.ScenarioInstallation
 	installationDigest string
-	historical         *store.ScenarioHistoricalBaseline
 	recoveredReceipts  []store.ActionExecutionReceipt
 }
 
@@ -199,25 +198,7 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 			x.preview.Operations = append(x.preview.Operations, ScenarioOperation{NodeID: node.ID, Name: node.Name, Change: "install", ToReleaseID: node.ReleaseID})
 		}
 	} else {
-		if mode == domain.ScenarioExecutionBaselineVerify {
-			needsHistorical := baseline.RunID == "" || baseline.RevisionID == ""
-			if !needsHistorical {
-				prior, e := p.store.GetRun(ctx, baseline.RunID)
-				if e != nil {
-					return x, e
-				}
-				_, e = scenarioSnapshotNodes(prior.InputSnapshot)
-				needsHistorical = e != nil
-			}
-			if needsHistorical {
-				candidate, e := p.store.FindScenarioHistoricalBaseline(ctx, input.EnvironmentID, revision.ScenarioID, revision.ID)
-				if e != nil {
-					return x, e
-				}
-				x.historical = &candidate
-			}
-		}
-		if x.historical == nil && (baseline.RunID == "" || baseline.RevisionID == "") {
+		if baseline.RunID == "" || baseline.RevisionID == "" {
 			return x, fmt.Errorf("%w: 环境没有可核实的场景基线", domain.ErrConflict)
 		}
 		sourceID := revision.SourceRevisionID
@@ -226,7 +207,7 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		} else if sourceID == "" {
 			return x, fmt.Errorf("%w: 首版或分支首版没有升级来源", domain.ErrConflict)
 		}
-		if x.historical == nil && baseline.RevisionID != sourceID {
+		if baseline.RevisionID != sourceID {
 			return x, fmt.Errorf("%w: 环境实际版本与直接来源版本不匹配", domain.ErrConflict)
 		}
 		if mode == domain.ScenarioExecutionUpgrade && (baseline.State != "complete" || baseline.TestOnly) {
@@ -247,14 +228,9 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 				return x, e
 			}
 		}
-		var baseRun domain.Run
-		if x.historical != nil {
-			baseRun = x.historical.Run
-		} else {
-			baseRun, err = p.store.GetRun(ctx, baseline.RunID)
-			if err != nil {
-				return x, err
-			}
+		baseRun, err := p.store.GetRun(ctx, baseline.RunID)
+		if err != nil {
+			return x, err
 		}
 		if baseRun.Status != domain.RunSucceeded || baseRun.ScenarioRevisionID != source.ID || baseRun.EnvironmentID != input.EnvironmentID {
 			return x, fmt.Errorf("%w: 基线正式运行身份不匹配", domain.ErrConflict)
@@ -275,16 +251,9 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		if mode == domain.ScenarioExecutionBaselineVerify {
 			acceptanceEnvironment = baseEnvironment
 		}
-		var old []scenarioTargetNode
-		if x.historical != nil {
-			for _, node := range x.historical.Nodes {
-				old = append(old, scenarioTargetNode{NodeID: node.NodeID, ComponentID: node.ComponentID, ReleaseID: node.ReleaseID, Variables: cloneMap(node.Variables)})
-			}
-		} else {
-			old, err = scenarioSnapshotNodes(baseRun.InputSnapshot)
-			if err != nil {
-				return x, err
-			}
+		old, err := scenarioSnapshotNodes(baseRun.InputSnapshot)
+		if err != nil {
+			return x, err
 		}
 		if err := matchScenarioInstallations(old, installed); err != nil {
 			return x, err
@@ -366,21 +335,14 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 	x.preview.Steps = plan.Steps
 	x.preview.NeedsApproval = approval
 	x.preview.PlanDigest = digestValue(struct {
-		Contract                                     int
-		Mode                                         domain.ScenarioExecutionMode
-		Revision, Plan, Installations, HistoricalRun string
-		Baseline                                     domain.ScenarioInstallation
-		RecoveredReceipts                            []store.ActionExecutionReceipt
-	}{2, mode, scenarioRevisionSpecDigest(revision), componentTestPlanDigest(prepared.environment.CurrentRevisionID, plan), x.installationDigest, scenarioHistoricalRunID(x.historical), baseline, x.recoveredReceipts})
+		Contract                      int
+		Mode                          domain.ScenarioExecutionMode
+		Revision, Plan, Installations string
+		Baseline                      domain.ScenarioInstallation
+		RecoveredReceipts             []store.ActionExecutionReceipt
+	}{2, mode, scenarioRevisionSpecDigest(revision), componentTestPlanDigest(prepared.environment.CurrentRevisionID, plan), x.installationDigest, baseline, x.recoveredReceipts})
 	x.preview.Ready = true
 	return x, nil
-}
-
-func scenarioHistoricalRunID(baseline *store.ScenarioHistoricalBaseline) string {
-	if baseline == nil {
-		return ""
-	}
-	return baseline.Run.ID
 }
 
 func sameScenarioHostInventory(left, right json.RawMessage) bool {

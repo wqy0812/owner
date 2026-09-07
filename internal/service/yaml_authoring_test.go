@@ -2,9 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,7 +25,7 @@ func yamlActionFixture(t *testing.T) (*Platform, *store.Store, domain.User, doma
 		t.Fatal(err)
 	}
 	for _, name := range []string{"before", "after"} {
-		_, err := p.catalog.SaveActionAtomic(ctx, owner, r.ID, domain.ActionDefinition{ID: "", Name: name, Kind: domain.ActionCheck, HostGroup: "all", ResourceContract: &domain.ResourceContract{Version: 1, NoManagedPaths: true}}, []byte("- assert:\n    that: true\n"), nil, nil)
+		_, err := p.catalog.SaveActionAtomic(ctx, owner, r.ID, domain.ActionDefinition{ID: "", Name: name, Kind: domain.ActionCheck, HostGroup: "all"}, []byte("- assert:\n    that: true\n"), nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +36,7 @@ func yamlActionFixture(t *testing.T) (*Platform, *store.Store, domain.User, doma
 		checks[action.Name] = action.ID
 	}
 	for _, kind := range []domain.ActionKind{domain.ActionInstall, domain.ActionRollback} {
-		action := domain.ActionDefinition{Name: string(kind), Kind: kind, HostGroup: "all", ResourceContract: &domain.ResourceContract{Version: 1, NoManagedPaths: true}}
+		action := domain.ActionDefinition{Name: string(kind), Kind: kind, HostGroup: "all"}
 		if kind == domain.ActionInstall {
 			action.PreCheckActionID, action.PostCheckActionID = checks["before"], checks["after"]
 		}
@@ -49,53 +46,6 @@ func yamlActionFixture(t *testing.T) (*Platform, *store.Store, domain.User, doma
 	}
 	r, _ = db.GetComponentRelease(ctx, r.ID)
 	return p, db, owner, r, root
-}
-
-func TestActionYAMLMigrationRequiresAtomicSourceConfirmation(t *testing.T) {
-	p, db, owner, r, root := yamlActionFixture(t)
-	ctx := context.Background()
-	action, _ := findAction(r, domain.ActionInstall)
-	oldContract := *action.ResourceContract
-	oldContract.Checks = []domain.RuntimeCheck{{ID: "tool", Kind: "command", Target: "sh"}}
-	encoded, _ := json.Marshal(oldContract)
-	if _, err := db.DB().Exec(`UPDATE action_definitions SET gather_facts=1,resource_contract_json=? WHERE id=?`, string(encoded), action.ID); err != nil {
-		t.Fatal(err)
-	}
-	r, _ = db.GetComponentRelease(ctx, r.ID)
-	oldDigest := domain.ComponentReleaseSpecDigest(r)
-	if err := domain.ValidateReleaseYAMLAuthoring(r); err == nil {
-		t.Fatal("legacy authoring accepted")
-	}
-	content := []byte("- setup:\n- assert:\n    that: ansible_facts.system is defined\n")
-	saved, err := p.catalog.SaveActionAtomic(ctx, owner, r.ID, action, content, nil, nil)
-	if err != nil || !saved.Action.NeedsYAMLMigration() {
-		t.Fatalf("ordinary save lost legacy fields: %+v %v", saved, err)
-	}
-	r, _ = db.GetComponentRelease(ctx, r.ID)
-	sha, tree := saved.SHA256, r.PlaybookTreeSHA256
-	if _, err := db.DB().Exec(`CREATE TRIGGER fail_yaml_migration BEFORE UPDATE ON action_definitions BEGIN SELECT RAISE(ABORT, 'migration failure'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.catalog.SaveActionAtomic(ctx, owner, r.ID, action, []byte("- setup:\n"), &sha, &tree, true); err == nil {
-		t.Fatal("failed transaction accepted")
-	}
-	r, _ = db.GetComponentRelease(ctx, r.ID)
-	preserved, _ := r.ActionByID(action.ID)
-	bytes, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(preserved.Playbook)))
-	if err != nil || string(bytes) != string(content) || !preserved.NeedsYAMLMigration() {
-		t.Fatalf("failed save lost old source/settings: %v", err)
-	}
-	if _, err := db.DB().Exec(`DROP TRIGGER fail_yaml_migration`); err != nil {
-		t.Fatal(err)
-	}
-	saved, err = p.catalog.SaveActionAtomic(ctx, owner, r.ID, action, content, &sha, &tree, true)
-	if err != nil || saved.Action.NeedsYAMLMigration() {
-		t.Fatalf("confirmed migration failed: %v", err)
-	}
-	r, _ = db.GetComponentRelease(ctx, r.ID)
-	if domain.ComponentReleaseSpecDigest(r) == oldDigest {
-		t.Fatal("migration reused evidence identity")
-	}
 }
 
 func TestRollbackDefaultChecksUseTheSourceAndAcceptTwoStepEvidence(t *testing.T) {
@@ -134,6 +84,23 @@ func TestRollbackDefaultChecksUseTheSourceAndAcceptTwoStepEvidence(t *testing.T)
 	}
 }
 
+func TestRollbackCheckSourceKeepsRepeatedComponentNodesSeparate(t *testing.T) {
+	p, _, _, release, _ := yamlActionFixture(t)
+	install, _ := findAction(release, domain.ActionInstall)
+	rollback, _ := findAction(release, domain.ActionRollback)
+	steps := []lockedStep{
+		{NodeID: "first", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: install.ID, Action: domain.ActionInstall, Variables: map[string]any{"value": "first-input"}},
+		{NodeID: "second", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: install.ID, Action: domain.ActionInstall, Variables: map[string]any{"value": "second-input"}},
+		{NodeID: "first-rollback", SourceNodeID: "first", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: rollback.ID, Action: domain.ActionRollback},
+	}
+	if err := p.rollback.bindRollbackCheckSources(context.Background(), "unused", steps); err != nil {
+		t.Fatal(err)
+	}
+	if got := steps[2]; got.RollbackSourceActionID != install.ID || got.RollbackSourceVariables["value"] != "first-input" {
+		t.Fatalf("rollback borrowed another node's source: %+v", got)
+	}
+}
+
 func TestFrozenRecoveryChecksKeepSourceInputsAndRestoreContext(t *testing.T) {
 	p, db, _, release, root := yamlActionFixture(t)
 	setTestRunner(t, p, &scenarioProtocolRunner{root: root})
@@ -159,36 +126,5 @@ func TestFrozenRecoveryChecksKeepSourceInputsAndRestoreContext(t *testing.T) {
 	}
 	if job.Recovery[1].Variables["source"] != "original" || job.Recovery[1].Variables["clusterforge_backup_operation"] != "restore" {
 		t.Fatalf("lost source or restore context: %+v", job.Recovery[1].Variables)
-	}
-}
-
-func TestAcceptanceYAMLMigrationPreservesLegacyUntilSourceSave(t *testing.T) {
-	p, db, owner, r, _ := scenarioAcceptanceFixture(t)
-	ctx, path := context.Background(), "tasks/acceptance/business.yml"
-	if _, err := p.scenarios.SaveAcceptanceFile(ctx, owner, r.ID, path, []byte("- assert:\n    that: true\n"), acceptanceExpectation(t, p, owner, r.ID, path)); err != nil {
-		t.Fatal(err)
-	}
-	r, _ = db.GetScenarioRevision(ctx, r.ID)
-	digest := domain.ScenarioRevisionSpecDigest(r)
-	r.AcceptanceJobs[0].GatherFacts = true
-	r.AcceptanceJobs[0].RuntimeChecks = []domain.RuntimeCheck{{ID: "tool", Kind: "command", Target: "sh"}}
-	if err := db.SaveScenarioRevisionDefinition(ctx, r, digest); err != nil {
-		t.Fatal(err)
-	}
-	definition, _ := p.scenarios.ReadAcceptance(ctx, owner, r.ID)
-	job := definition.Jobs[0]
-	job.GatherFacts, job.RuntimeChecks = false, nil
-	definition, err := p.scenarios.SaveAcceptance(ctx, owner, r.ID, ScenarioAcceptanceInput{ExpectedRevisionDigest: definition.RevisionDigest, Jobs: []domain.ScenarioAcceptanceJob{job}})
-	if err != nil || !definition.Jobs[0].NeedsYAMLMigration() {
-		t.Fatalf("ordinary save erased migration: %v", err)
-	}
-	expected := acceptanceExpectation(t, p, owner, r.ID, path)
-	expected.ConfirmYAMLMigration = true
-	if _, err := p.scenarios.SaveAcceptanceFile(ctx, owner, r.ID, path, []byte("- setup:\n- assert:\n    that: ansible_facts.system is defined\n"), expected); err != nil {
-		t.Fatal(err)
-	}
-	definition, _ = p.scenarios.ReadAcceptance(ctx, owner, r.ID)
-	if definition.Jobs[0].NeedsYAMLMigration() {
-		t.Fatal("source confirmation did not clear settings")
 	}
 }

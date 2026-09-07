@@ -28,12 +28,11 @@ func (h *Handler) getReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) saveReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		ActionKind           domain.ActionKind  `json:"actionKind"`
-		Content              string             `json:"content"`
-		ExpectedSHA256       *string            `json:"expectedSha256"`
-		ExpectedTreeSHA256   *string            `json:"expectedTreeSha256"`
-		Action               *actionSourceInput `json:"action"`
-		ConfirmYAMLMigration bool               `json:"confirmYamlMigration,omitempty"`
+		ActionKind         domain.ActionKind  `json:"actionKind"`
+		Content            string             `json:"content"`
+		ExpectedSHA256     *string            `json:"expectedSha256"`
+		ExpectedTreeSHA256 *string            `json:"expectedTreeSha256"`
+		Action             *actionSourceInput `json:"action"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
@@ -47,7 +46,7 @@ func (h *Handler) saveReleasePlaybook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("%w: expectedSha256 and expectedTreeSha256 are required", domain.ErrInvalid))
 		return
 	}
-	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(*input.Action), []byte(input.Content), input.ExpectedSHA256, input.ExpectedTreeSHA256, input.ConfirmYAMLMigration)
+	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(*input.Action), []byte(input.Content), input.ExpectedSHA256, input.ExpectedTreeSHA256)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -59,6 +58,11 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 	r.Body = http.MaxBytesReader(w, r.Body, service.MaxPlaybookBytes+(256<<10))
 	if err := r.ParseMultipartForm(service.MaxPlaybookBytes); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid Playbook upload: %v", domain.ErrInvalid, err))
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	if err := validateWorkspaceUploadFields(r, "playbook", "actionKind", "action", "expectedSha256", "expectedTreeSha256"); err != nil {
+		writeError(w, err)
 		return
 	}
 	file, _, err := r.FormFile("playbook")
@@ -93,7 +97,7 @@ func (h *Handler) uploadReleasePlaybook(w http.ResponseWriter, r *http.Request) 
 		writeError(w, fmt.Errorf("%w: action metadata is malformed or does not match actionKind", domain.ErrInvalid))
 		return
 	}
-	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(action), contents, expectedSHA256, expectedTreeSHA256, r.FormValue("confirmYamlMigration") == "true")
+	playbook, err := h.platform.Catalog().SaveActionAtomic(r.Context(), currentUser(r), r.PathValue("id"), domain.ActionDefinition(action), contents, expectedSHA256, expectedTreeSHA256)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -175,6 +179,11 @@ func (h *Handler) uploadReleasePlaybookWorkspaceFile(w http.ResponseWriter, r *h
 		writeError(w, fmt.Errorf("%w: malformed workspace upload: %v", domain.ErrInvalid, err))
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
+	if err := validateWorkspaceUploadFields(r, "file", "path", "expectedSha256", "expectedTreeSha256"); err != nil {
+		writeError(w, err)
+		return
+	}
 	input, header, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, fmt.Errorf("%w: workspace file is required", domain.ErrInvalid))
@@ -253,6 +262,15 @@ func optionalFormValue(r *http.Request, name string) *string {
 	}
 	value := strings.TrimSpace(values[0])
 	return &value
+}
+
+func (h *Handler) deleteReleasePlaybookWorkspaceDirectory(w http.ResponseWriter, r *http.Request) {
+	workspace, err := h.platform.Catalog().DeletePlaybookWorkspaceDirectory(r.Context(), currentUser(r), r.PathValue("id"), r.URL.Query().Get("path"), r.URL.Query().Get("expectedTreeSha256"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, workspace)
 }
 
 func optionalQueryValue(r *http.Request, name string) *string {

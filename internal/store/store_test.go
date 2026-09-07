@@ -128,7 +128,7 @@ func publicationEpoch(t *testing.T, s *Store) int64 {
 	return epoch
 }
 
-func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domain.ScenarioRevision, releases ...domain.ComponentRelease) string {
+func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision *domain.ScenarioRevision, releases ...domain.ComponentRelease) string {
 	t.Helper()
 	ctx := context.Background()
 	environmentID := "environment-" + revision.ID
@@ -141,25 +141,43 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision domai
 	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
-	steps := make([]any, 0, len(releases))
+	revision.AcceptanceJobs = []domain.ScenarioAcceptanceJob{{ID: "business", Name: "Business acceptance", Playbook: "tasks/acceptance/business.yml", PlaybookSHA256: "acceptance-sha"}}
+	if _, err := s.db.Exec(`UPDATE scenario_revisions SET lifecycle_json=? WHERE id=?`, scenarioLifecycleJSON(*revision), revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	steps := make([]any, 0, len(releases)+1)
 	for _, release := range releases {
 		steps = append(steps, map[string]any{
 			"id": release.ID + "-step", "nodeId": release.ID, "releaseId": release.ID,
-			"releaseSpecDigest": domain.ComponentReleaseSpecDigest(release),
+			"releaseSpecDigest": domain.ComponentReleaseSpecDigest(release), "componentId": release.ComponentID,
 		})
 	}
+	for _, node := range revision.Graph.Nodes {
+		for _, release := range releases {
+			if node.ReleaseID == release.ID {
+				steps = append(steps, map[string]any{"nodeId": "target:" + node.ID, "sourceNodeId": node.ID, "sourceType": "component_action", "stage": "target_verify", "releaseId": release.ID, "componentId": release.ComponentID, "releaseSpecDigest": domain.ComponentReleaseSpecDigest(release)})
+			}
+		}
+	}
+	steps = append(steps, map[string]any{"nodeId": "acceptance:business", "sourceType": "scenario_acceptance", "scenarioRevisionId": revision.ID, "acceptanceJobId": "business", "stage": "acceptance"})
 	runID := "run-" + revision.ID
 	run := domain.Run{
 		ID: runID, Kind: domain.RunScenarioTest, Status: domain.RunSucceeded,
 		RequestedBy: "scenario-owner-a", EnvironmentID: environmentID, EnvironmentRevisionID: environmentRevision.ID,
 		ScenarioRevisionID: revision.ID, CreatedAt: testNow,
 		InputSnapshot: map[string]any{
-			"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision),
-			"steps":                      steps,
+			"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(*revision),
+			"steps":                      steps, "scenarioContractVersion": 2, "executionMode": "install", "acceptanceJobIds": []string{"business"},
 		},
 	}
-	if err := s.CreateRun(ctx, run, nil); err != nil {
+	if err := insertStoredRunForTest(ctx, s, run); err != nil {
 		t.Fatal(err)
+	}
+	for _, value := range steps {
+		step := value.(map[string]any)
+		if _, err := s.db.Exec(`INSERT INTO run_steps(id,run_id,node_id,name,status,exit_code) VALUES(?,?,?,?,'succeeded',0)`, runID+":"+step["nodeId"].(string), runID, step["nodeId"], step["nodeId"]); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return runID
 }
@@ -197,7 +215,7 @@ func TestListRunsForComponentReleaseUsesImmutableRunEvidence(t *testing.T) {
 
 	create := func(run domain.Run) {
 		t.Helper()
-		if err := s.CreateRun(ctx, run, nil); err != nil {
+		if err := insertStoredRunForTest(ctx, s, run); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -326,7 +344,7 @@ func TestCandidateReleaseVisibilityAndAtomicScenarioPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision, _ = s.GetScenarioRevision(ctx, revision.ID)
-	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, revision, release)
+	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, &revision, release)
 	if err := s.PublishCandidateReleaseSet(ctx, scenarioPublicationGuard(revision), []string{release.ID}, []ReleasePublicationGuard{releasePublicationGuard(release)}, evidenceRunID, publicationEpoch(t, s), testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +379,7 @@ func TestCandidateReleaseSetPublishRollsBackOnStaleMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision, _ = s.GetScenarioRevision(ctx, revision.ID)
-	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, revision, releaseA, releaseB)
+	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, &revision, releaseA, releaseB)
 	guards := []ReleasePublicationGuard{releasePublicationGuard(releaseA), releasePublicationGuard(releaseB)}
 	epoch := publicationEpoch(t, s)
 	if err := setCandidateForTest(ctx, s, releaseB.ID, false); err != nil {
@@ -551,7 +569,7 @@ func TestScenarioTestEvidenceRejectsChangedReleaseDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision, _ = s.GetScenarioRevision(ctx, revision.ID)
-	runID := createSuccessfulScenarioTestEvidence(t, s, revision, release)
+	runID := createSuccessfulScenarioTestEvidence(t, s, &revision, release)
 	release.ReleaseNotes = "definition changed while the scenario test was running"
 	if err := s.UpdateDraftRelease(ctx, release); err != nil {
 		t.Fatal(err)
@@ -588,7 +606,7 @@ func TestScenarioPublishRejectsReleaseChangedAfterSuccessfulTest(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision, _ = s.GetScenarioRevision(ctx, revision.ID)
-	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, revision, release)
+	evidenceRunID := createSuccessfulScenarioTestEvidence(t, s, &revision, release)
 	release.ReleaseNotes = "changed after the complete scenario test"
 	if err := s.UpdateDraftRelease(ctx, release); err != nil {
 		t.Fatal(err)
@@ -719,7 +737,7 @@ func TestReleaseParametersAndMappingsRoundTripAndClone(t *testing.T) {
 		Name: "kubeRoot", Description: "imported kubelet root", Type: domain.ParameterTypeString,
 		Required: true, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderUpstreamMapping,
 	}}
-	downstream.Dependencies = []domain.ComponentDependency{{
+	downstream.Dependencies = []domain.ComponentDependency{{Kind: "execution",
 		ID: "dependency-kube-proxy-kubelet", ReleaseID: downstream.ID,
 		UpstreamComponentID: "kubelet", UpstreamReleaseID: upstream.ID, Purpose: "reuse install root",
 		ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "kubeInstallRoot", TargetParameter: "kubeRoot"}},
@@ -842,7 +860,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 
 	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
-	run1 := domain.Run{ID: "run-1", Kind: domain.RunScenarioTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ScenarioRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
+	run1 := domain.Run{ID: "run-1", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ComponentReleaseID: "runtime-1", Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run1, &approval); err != nil {
 		t.Fatal(err)
 	}
@@ -917,6 +935,9 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	gotApproval, err := s.GetApproval(ctx, cancelledApproval.ID)
 	if err != nil || gotApproval.Status != "pending" {
 		t.Fatalf("cancelled approval mutated despite rollback: %+v err=%v", gotApproval, err)
+	}
+	if err := s.UpdateRunStatus(ctx, run2.ID, []domain.RunStatus{domain.RunRunning}, domain.RunSucceeded, "", testNow.Add(19*time.Minute)); err != nil {
+		t.Fatal(err)
 	}
 	componentTest := domain.Run{
 		ID: "component-test-active", Kind: domain.RunComponentTest, Status: domain.RunQueued,
@@ -1011,7 +1032,7 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}, CreatedAt: testNow}
-	if err := s.CreateRun(ctx, run, nil); err != nil {
+	if err := insertStoredRunForTest(ctx, s, run); err != nil {
 		t.Fatal(err)
 	}
 	started := testNow.Add(30 * time.Second)
@@ -1271,4 +1292,10 @@ func TestResetClearsPendingActionFileMutations(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM playbook_action_mutations`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("journal remains: count=%d err=%v", count, err)
 	}
+}
+
+// Arrange persisted rows for read and restart tests; this is not a Run submission.
+func insertStoredRunForTest(ctx context.Context, s *Store, r domain.Run) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
+	return err
 }

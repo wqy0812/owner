@@ -135,7 +135,7 @@ func (s Seeder) seedKubernetes1175Catalog(ctx context.Context, now time.Time) er
 		}}
 		dependencies := make([]domain.ComponentDependency, 0, len(spec.dependencies))
 		for i, dependency := range spec.dependencies {
-			item := domain.ComponentDependency{
+			item := domain.ComponentDependency{Kind: "execution",
 				ID: fmt.Sprintf("dependency-%s-%d", contractKey, i+1), ReleaseID: spec.releaseID,
 				UpstreamComponentID: dependency.componentID, UpstreamReleaseID: dependency.releaseID, Purpose: dependency.purpose,
 			}

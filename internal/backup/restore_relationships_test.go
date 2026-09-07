@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/store"
 )
 
 func relationshipTestCatalog() Catalog {
-	catalog := Catalog{FormatVersion: CatalogFormatVersion, SchemaContract: "test", PublicationGeneration: 1}
+	catalog := Catalog{FormatVersion: CatalogFormatVersion, SchemaContract: store.CurrentSchemaContract, PublicationGeneration: 1}
 	for _, spec := range catalogTables {
 		catalog.Tables = append(catalog.Tables, TableDump{Name: spec.name, Columns: append([]string(nil), spec.columns...), Rows: [][]DBCell{}})
 	}
@@ -69,6 +70,9 @@ func relationshipTestCatalog() Catalog {
 		}
 		for _, kind := range kinds {
 			values := map[string]DBCell{"id": text(kind + "-" + item.suffix), "release_id": text(item.id), "kind": text(kind), "host_group": text("all"), "playbook": text("managed/" + item.id + "/tasks/" + kind + ".yml"), "pre_check_action_id": text(checkID), "post_check_action_id": text(checkID)}
+			if kind == "rollback" {
+				values["pre_check_action_id"] = text("")
+			}
 			if item.suffix == "child" && kind == "upgrade" {
 				values["from_release_id"], values["to_release_id"] = text("release-root"), text("release-child")
 			}

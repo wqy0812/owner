@@ -131,8 +131,8 @@ func TestParameterContractHelpers(t *testing.T) {
 
 func TestMappingContractIsStableAndMappedTargetsUseLastDefinition(t *testing.T) {
 	dependencies := []ComponentDependency{
-		{UpstreamComponentID: "database", ParameterMappings: []ParameterMapping{{UpstreamParameter: "host", TargetParameter: "db_host"}}},
-		{UpstreamComponentID: "cache", ParameterMappings: []ParameterMapping{{UpstreamParameter: "endpoint", TargetParameter: "cache_url"}, {UpstreamParameter: "override", TargetParameter: "db_host"}}},
+		{Kind: "execution", UpstreamComponentID: "database", ParameterMappings: []ParameterMapping{{UpstreamParameter: "host", TargetParameter: "db_host"}}},
+		{Kind: "execution", UpstreamComponentID: "cache", ParameterMappings: []ParameterMapping{{UpstreamParameter: "endpoint", TargetParameter: "cache_url"}, {UpstreamParameter: "override", TargetParameter: "db_host"}}},
 	}
 	targets := MappedTargets(dependencies)
 	if len(targets) != 2 || targets["db_host"].UpstreamParameter != "override" {

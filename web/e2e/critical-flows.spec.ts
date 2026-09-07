@@ -100,7 +100,7 @@ test('scenario dependencies are generated and an ambiguous exact Release source 
   const controlRelease = {
     id: 'control-r1', componentId: 'control-component', lineId: 'control-line', lineName: 'Control', compatibility: 'not_applicable', version: '1.0.0', status: 'released',
     review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], artifacts: [], images: [],
-    dependencies: [{ id: 'dep-runtime', upstreamComponentId: 'runtime-component', upstreamComponentName: 'Runtime', upstreamReleaseId: runtimeRelease.id, upstreamVersion: runtimeRelease.version, purpose: 'CRI', parameterMappings: [] }],
+    dependencies: [{ kind: 'execution', id: 'dep-runtime', upstreamComponentId: 'runtime-component', upstreamComponentName: 'Runtime', upstreamReleaseId: runtimeRelease.id, upstreamVersion: runtimeRelease.version, purpose: 'CRI', parameterMappings: [] }],
     actions: [{ kind: 'install', playbook: 'control.yml', hostGroup: 'control_plane' }],
   };
   const revision = {

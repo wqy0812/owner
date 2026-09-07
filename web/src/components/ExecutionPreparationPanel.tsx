@@ -8,7 +8,7 @@ import { StatusExplanationPanel } from './StatusExplanationPanel';
 import { CheckCircle2, ClipboardCheck, CircleDashed, LoaderCircle, XCircle } from 'lucide-react';
 import { StatusPill } from './Primitives';
 
-const CATEGORIES: Record<string, string> = { runtime: '执行器', connectivity: '连通性', prerequisite: 'Ansible 运行基础', residual: '历史残留探测', component_check: '组件 YAML 检查', resource_contract: '资源合同', media: '介质核验' };
+const CATEGORIES: Record<string, string> = { runtime: '执行器', connectivity: '连通性', prerequisite: 'Ansible 运行基础', residual: '历史残留探测', component_check: '组件 YAML 检查', media: '介质核验' };
 const STATES: Record<string, string> = { queued: '等待准备', running: '正在检查', pending: '待检查', scheduled: '执行时检查', passed: '通过', failed: '失败', skipped: '不适用', not_applicable: '不适用', provided: '由前置步骤提供', succeeded: '计划已生成', cancelled: '已取消', interrupted: '服务重启，需重新准备', timed_out: '准备超时' };
 export function ExecutionPreparationPanel({ request, disabled, onPlan }: { request: PreparationRequest; disabled?: boolean; onPlan: (plan: ComponentTestPlan | ScenarioExecutionPreview | undefined) => void }) {
  const { user } = useApp();

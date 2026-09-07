@@ -28,14 +28,14 @@ func TestYAMLJobHasNoImplicitFactsOrProbeTasks(t *testing.T) {
 			t.Fatal("automatic facts enabled")
 		}
 	}
-	// Old sealed native bundles retain their original contract and checksum.
-	bundle.Manifest.Contract = PreviousNativeJobContract
-	bundle.Manifest.Plan.Contract = PreviousNativeJobContract
+	// A correctly sealed bundle must still match the current job contract.
+	bundle.Manifest.Contract = "clusterforge-native-job-v2"
+	bundle.Manifest.Plan.Contract = "clusterforge-native-job-v2"
 	bundle.Manifest.FullPlanDigest = jsonDigest(bundle.Manifest.Plan)
 	bundle.Manifest.Digest = ""
 	bundle.Manifest.Digest = jsonDigest(bundle.Manifest)
-	if err := bundle.Validate(); err != nil {
-		t.Fatalf("historical native bundle rejected: %v", err)
+	if err := bundle.Validate(); err == nil {
+		t.Fatal("historical native bundle accepted")
 	}
 }
 
@@ -170,15 +170,15 @@ func TestJobRejectsWorkspaceAliasBetweenComponents(t *testing.T) {
 	}
 }
 
-func TestTwoStepRollbackRetryRespectsOptionalPrecheck(t *testing.T) {
+func TestTwoStepRollbackRetryRequiresSafeBody(t *testing.T) {
 	plan := JobPlan{Steps: []JobStep{{ID: "body", ActionID: "rollback", Action: "rollback", Phase: "execute", RetrySafe: true}, {ID: "post", ParentActionID: "rollback", Action: "check", Phase: "post", RetrySafe: true}}}
 	steps, err := RetryStages(plan, nil)
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("two-step rollback cannot retry: %v %+v", err, steps)
 	}
-	plan.Steps[0].PreCheckRequired = true
+	plan.Steps[0].RetrySafe = false
 	if _, err := RetryStages(plan, nil); err == nil {
-		t.Fatal("required precheck bypassed")
+		t.Fatal("unsafe rollback body retried")
 	}
 }
 

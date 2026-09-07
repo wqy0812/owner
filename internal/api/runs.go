@@ -205,6 +205,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	if run.Kind == domain.RunEnvironmentRollback {
 		name, _ := output["environmentName"].(string)
 		output["name"] = name + " · 按备份恢复组件"
+		if digest, _ := run.InputSnapshot["resetBoundaryDigest"].(string); digest != "" {
+			output["name"] = name + " · 重置环境"
+		}
 	}
 	locked := lockedStepMetadata(run.InputSnapshot)
 	steps := make([]map[string]any, 0, len(run.Steps))
@@ -265,6 +268,9 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		deliveryRequirements, _ := run.InputSnapshot["deliveryRequirements"].([]any)
 		if run.Kind == domain.RunEnvironmentRollback {
 			riskReason = "按依赖逆序回滚所选组件，恢复后检查通过才确认完成；原始备份与恢复记录保留。"
+			if digest, _ := run.InputSnapshot["resetBoundaryDigest"].(string); digest != "" {
+				riskReason = "根据来源 Run 恢复全部待恢复的集群组件，保留 File Station 和镜像仓库；恢复检查通过且无剩余待恢复项后才确认完成。"
+			}
 		} else if len(deliveryRequirements) > 0 {
 			riskReason = fmt.Sprintf("有 %d 项内容未命中环境目标；请逐项选择直接使用来源或平移到环境目标。", len(deliveryRequirements))
 		} else if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {

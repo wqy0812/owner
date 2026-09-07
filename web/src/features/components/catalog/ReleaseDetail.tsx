@@ -15,13 +15,14 @@ import { CompatibilityBadge, DraftReadiness, EnvironmentConstraints } from './Re
 
 import type { ReactNode } from 'react';
 export type ReleaseAction = 'edit' | 'image' | 'artifact' | 'test' | 'evidence' | 'inspect' | 'review' | 'publish' | 'deprecate' | 'candidate' | 'review-submit' | 'restore' | 'delete';
-export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, showDefaultHint, contractEditor, selectContractRelease, onReleaseAction, onEditContract, onEditComponent, onNewVersion, onNewBranch }: {
+export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, showDefaultHint, contractEditor, selectContractRelease, onReleaseAction, onEditContract, onEditComponent, onNewVersion, onNewBranch, deletingComponent, onDeleteComponent }: {
   selected: Component; contractRelease?: ComponentRelease; mine: boolean; canTest: boolean; busy: boolean;
   showDefaultHint: boolean; contractEditor?: ReactNode;
   selectContractRelease: (id: string) => void;
   onReleaseAction: (action: ReleaseAction, release: ComponentRelease) => void;
   onEditContract: (section: ContractSection, release?: ComponentRelease) => void;
   onEditComponent: () => void; onNewVersion: () => void; onNewBranch: () => void;
+  deletingComponent: boolean; onDeleteComponent?: () => void;
 }) {
   const { user } = useApp();
   const releases = selected.releases?.length ? selected.releases : selected.latestRelease ? [selected.latestRelease] : [];
@@ -41,7 +42,7 @@ export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, 
         {contractRelease && <><strong>{contractRelease.lineName} · {contractRelease.version}</strong><StatusPill status={contractRelease.state} /></>}
       </div>
       <BranchScope scope={contractRelease?.environmentConstraints} />
-      {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => onEditComponent()}><PencilLine size={16} /> 编辑组件</button><button className="button button--secondary" disabled={!selected.releaseLines?.some(line => line.id === contractRelease?.lineId && line.evolutionEligible)} title={selected.releaseLines?.find(line => line.id === contractRelease?.lineId)?.evolutionBlockedReason ?? '请先发布当前分支首版'} onClick={() => onNewVersion()}><Plus size={16} /> 新增版本</button><button className="button button--quiet" onClick={() => onNewBranch()}><GitBranch size={16} /> 新增分支</button>{activeDraft ? <button className="button button--quiet" onClick={() => onReleaseAction('edit', activeDraft)}><FileCode2 size={16} /> 编辑版本与 Playbook</button> : null}</div>}
+      {mine && <div className="row-actions"><button className="button button--quiet" onClick={() => onEditComponent()}><PencilLine size={16} /> 编辑组件</button>{selected.canDelete && onDeleteComponent && <button className="button button--quiet icon-text--danger" disabled={deletingComponent} onClick={onDeleteComponent}><Trash2 size={16} /> {deletingComponent ? '删除中…' : '删除组件'}</button>}<button className="button button--secondary" disabled={!selected.releaseLines?.some(line => line.id === contractRelease?.lineId && line.evolutionEligible)} title={selected.releaseLines?.find(line => line.id === contractRelease?.lineId)?.evolutionBlockedReason ?? '请先发布当前分支首版'} onClick={() => onNewVersion()}><Plus size={16} /> 新增版本</button><button className="button button--quiet" onClick={() => onNewBranch()}><GitBranch size={16} /> 新增分支</button>{activeDraft ? <button className="button button--quiet" onClick={() => onReleaseAction('edit', activeDraft)}><FileCode2 size={16} /> 编辑版本与 Playbook</button> : null}</div>}
     </article>
 
     <StatusExplanationPanel item={releaseWorkItem} />

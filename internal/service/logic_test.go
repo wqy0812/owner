@@ -178,7 +178,7 @@ func TestComponentReleaseSpecDigestChangesOnMutableDefinition(t *testing.T) {
 		t.Fatal("release definition digest did not include parameters")
 	}
 	before = componentReleaseSpecDigest(release)
-	release.Dependencies = []domain.ComponentDependency{{
+	release.Dependencies = []domain.ComponentDependency{{Kind: "execution",
 		UpstreamComponentID: "upstream", UpstreamReleaseID: "upstream-1",
 		ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "region"}},
 	}}
@@ -319,10 +319,10 @@ func TestBuildImpactReportTraversesAndProtectsCycles(t *testing.T) {
 	}
 	releases := []domain.ComponentRelease{
 		{ID: "runtime-1", ComponentID: "runtime"},
-		{ID: "k8s-1", ComponentID: "k8s", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "runtime"}}},
-		{ID: "bundle-1", ComponentID: "bundle", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "k8s"}}},
+		{ID: "k8s-1", ComponentID: "k8s", Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "runtime"}}},
+		{ID: "bundle-1", ComponentID: "bundle", Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "k8s"}}},
 		// Malformed historical data must not loop forever.
-		{ID: "runtime-2", ComponentID: "runtime", Dependencies: []domain.ComponentDependency{{UpstreamComponentID: "bundle"}}},
+		{ID: "runtime-2", ComponentID: "runtime", Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "bundle"}}},
 	}
 	scenarios := []domain.Scenario{{
 		ID: "cluster", OwnerID: "scenario-owner",

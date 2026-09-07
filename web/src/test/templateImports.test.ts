@@ -25,6 +25,27 @@ function componentTemplate(overrides: Record<string, unknown> = {}) {
 }
 
 describe('component template import', () => {
+  it('rejects rollback prechecks and keeps the current examples valid', () => {
+    const current = parseComponentImportTemplate(JSON.stringify(sample));
+    const rollback = current[0].release.actions!.find(action => action.type === 'rollback')!;
+    expect(rollback.preCheckActionId).toBeUndefined();
+    rollback.preCheckActionId = current[0].release.actions!.find(action => action.type === 'check')!.id;
+    expect(() => parseComponentImportTemplate(JSON.stringify(current))).toThrow(/回滚动作不能绑定前置检查/);
+  });
+
+  it('requires an explicit current dependency kind', () => {
+    const upstream = componentTemplate()[0];
+    const downstream = structuredClone(upstream);
+    downstream.component.slug = 'worker';
+    downstream.component.name = 'Worker';
+    for (const kind of [undefined, '', 'legacy']) {
+      const candidate = { ...downstream, release: { ...downstream.release, dependencies: [{ componentSlug: 'runtime', kind }] } };
+      expect(() => parseComponentImportTemplate(JSON.stringify([upstream, candidate]))).toThrow(/引用方式无效/);
+    }
+    const candidate = { ...downstream, release: { ...downstream.release, dependencies: [{ componentSlug: 'runtime', kind: 'execution' }] } };
+    expect(parseComponentImportTemplate(JSON.stringify([upstream, candidate]))[1].release.dependencies?.[0].kind).toBe('execution');
+  });
+
   it('rejects missing, duplicate, and invalid role paths before execution', () => {
     const base = componentTemplate()[0];
     const cases = [
@@ -37,6 +58,8 @@ describe('component template import', () => {
 
   it('rejects unsupported component-template fields instead of silently dropping them', () => {
     const base = componentTemplate()[0];
+    const actionWithRemovedScope = { ...base.release.actions[0], resourceContract: { version: 1, noManagedPaths: true, claims: [] } };
+    expect(() => parseComponentImportTemplate(JSON.stringify([{ ...base, release: { ...base.release, actions: [actionWithRemovedScope, base.release.actions[1]] } }]))).toThrow(/不支持字段 resourceContract/);
     expect(() => parseComponentImportTemplate(JSON.stringify([{ ...base, release: { ...base.release, status: 'released' } }]))).toThrow(/不支持字段 status/);
     expect(() => parseComponentImportTemplate(JSON.stringify([{ ...base, playbooks: [{ ...base.playbooks[0], path: 'managed/forged.yml' }, base.playbooks[1]] }]))).toThrow(/不支持字段 path/);
   });
@@ -46,8 +69,8 @@ describe('component template import', () => {
     const second = structuredClone(first);
     second.component.slug = 'network';
     second.component.name = 'Network';
-    first.release.dependencies = [{ componentSlug: 'network', parameterMappings: [] }];
-    second.release.dependencies = [{ componentSlug: 'runtime', parameterMappings: [] }];
+    first.release.dependencies = [{ kind: 'execution', componentSlug: 'network', parameterMappings: [] }];
+    second.release.dependencies = [{ kind: 'execution', componentSlug: 'runtime', parameterMappings: [] }];
     expect(() => parseComponentImportTemplate(JSON.stringify([first, second]))).toThrow(/存在环/);
   });
 
@@ -73,7 +96,7 @@ describe('component template import', () => {
     downstream.component.slug = 'worker';
     downstream.component.name = 'Worker';
     downstream.release.parameters = [{ name: 'endpoint', description: 'endpoint', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }];
-    downstream.release.dependencies = [{ componentSlug: 'runtime', parameterMappings: [{ upstreamParameter: 'port', targetParameter: 'endpoint' }] }];
+    downstream.release.dependencies = [{ kind: 'execution', componentSlug: 'runtime', parameterMappings: [{ upstreamParameter: 'port', targetParameter: 'endpoint' }] }];
     expect(() => parseComponentImportTemplate(JSON.stringify([upstream, downstream]))).toThrow(/类型不一致/);
     downstream.release.parameters[0].type = 'integer';
     expect(parseComponentImportTemplate(JSON.stringify([upstream, downstream]))).toHaveLength(2);
@@ -147,5 +170,5 @@ describe('scenario template import', () => {
 it('validates the shared directory sample with an explicit dependency and public mapping', () => {
   const entries = parseComponentImportTemplate(JSON.stringify(sample));
   expect(entries).toHaveLength(2);
-  expect(entries[1].release.dependencies?.[0]).toMatchObject({componentSlug:'host-foundation-example',parameterMappings:[{upstreamParameter:'shared_root',targetParameter:'prepared_root'}]});
+  expect(entries[1].release.dependencies?.[0]).toMatchObject({ kind: 'execution',componentSlug:'host-foundation-example',parameterMappings:[{upstreamParameter:'shared_root',targetParameter:'prepared_root'}]});
 });

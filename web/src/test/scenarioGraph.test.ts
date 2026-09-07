@@ -3,7 +3,7 @@ import { scenarioExecutionOrderNodes, reconcileScenarioGraph, scenarioDependency
 import type { ComponentRelease, ScenarioNode } from '../types/domain';
 
 const upstream = { id: 'release-runtime', dependencies: [] } as unknown as ComponentRelease;
-const dependency = { id: 'dep-runtime', componentId: 'component-runtime', releaseId: upstream.id, parameterMappings: [] };
+const dependency = { kind: 'execution', id: 'dep-runtime', componentId: 'component-runtime', releaseId: upstream.id, parameterMappings: [] };
 const downstream = { id: 'release-control', dependencies: [dependency] } as unknown as ComponentRelease;
 const releases = new Map([[upstream.id, upstream], [downstream.id, downstream]]);
 
@@ -28,7 +28,7 @@ describe('scenario dependency graph reconciliation', () => {
 
   it('locks mutual configuration sources without adding an execution cycle', () => {
     const api = { id: 'api', dependencies: [{ id: 'data', componentId: 'kubelet', releaseId: 'kubelet', kind: 'configuration', parameterMappings: [{ sourceParameter: 'dir', targetParameter: 'dir' }] }] } as unknown as ComponentRelease;
-    const kubelet = { id: 'kubelet', dependencies: [{ id: 'install-api', componentId: 'api', releaseId: 'api', parameterMappings: [{ sourceParameter: 'endpoint', targetParameter: 'endpoint' }] }] } as unknown as ComponentRelease;
+    const kubelet = { id: 'kubelet', dependencies: [{ kind: 'execution', id: 'install-api', componentId: 'api', releaseId: 'api', parameterMappings: [{ sourceParameter: 'endpoint', targetParameter: 'endpoint' }] }] } as unknown as ComponentRelease;
     const result = reconcileScenarioGraph([node('api-node', 'api'), node('kubelet-node', 'kubelet')], [], new Map([[api.id, api], [kubelet.id, kubelet]]));
     expect(result.issues).toEqual([]);
     expect(result.edges).toHaveLength(1);

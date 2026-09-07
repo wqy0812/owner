@@ -42,7 +42,7 @@ const proxyRelease: ComponentRelease = {
   state: 'released',
   readiness, review,
   parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }],
-  dependencies: [{
+  dependencies: [{ kind: 'execution',
     componentId: 'component-kubelet',
     componentName: 'kubelet',
     releaseId: 'release-kubelet',
@@ -75,25 +75,25 @@ describe('parameter contract editor', () => {
       { name: 'kubeRoot', description: 'imported root', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' },
       { name: 'count', description: 'replicas', type: 'integer', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' },
     ];
-    expect(parameterContractErrors([parameters[1]], [{
+    expect(parameterContractErrors([parameters[1]], [{ kind: 'execution',
       componentId: 'component-kubelet', releaseId: 'release-kubelet',
       parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'count' }],
     }], [kubeletRelease]).join(' ')).toContain('类型不一致');
-    expect(parameterContractErrors([parameters[0]], [{
+    expect(parameterContractErrors([parameters[0]], [{ kind: 'execution',
       componentId: 'component-kubelet', releaseId: 'release-kubelet',
       parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
     }], [kubeletRelease])).toEqual([]);
-    expect(parameterContractErrors([], [{
+    expect(parameterContractErrors([], [{ kind: 'execution',
       componentId: '', releaseId: '',
       parameterMappings: [],
     }], [kubeletRelease])).toContain('每项依赖必须锁定一个可用的上游版本');
-    expect(parameterContractErrors([], [{
+    expect(parameterContractErrors([], [{ kind: 'execution',
       componentId: 'component-kubelet', releaseId: 'draft-kubelet',
       parameterMappings: [],
     }], [{ ...kubeletRelease, id: 'draft-kubelet', state: 'draft' }])).toEqual([]);
-    expect(parameterContractErrors([], [{
+    expect(parameterContractErrors([], [{ kind: 'execution',
       componentId: 'component-kubelet', releaseId: 'release-kubelet', parameterMappings: [],
-    }, {
+    }, { kind: 'execution',
       componentId: 'component-kubelet', releaseId: 'release-kubelet-alt', parameterMappings: [],
     }], [kubeletRelease, { ...kubeletRelease, id: 'release-kubelet-alt' }])).toContain('组件 component-kubelet 只能添加一项直接依赖');
   });
@@ -148,14 +148,14 @@ describe('parameter contract editor', () => {
         onChange={(next) => seen.push(next)}
       />
     );
-    const { rerender } = render(view([{ componentId: '', releaseId: '', purpose: '', parameterMappings: [] }]));
+    const { rerender } = render(view([{ kind: 'execution', componentId: '', releaseId: '', purpose: '', parameterMappings: [] }]));
     expect(screen.getByLabelText('已发布版本')).toBeDisabled();
     expect(screen.getByLabelText('上游组件')).toContainHTML('kubelet');
     expect(screen.getByLabelText('上游组件')).toContainHTML('containerd');
     expect(screen.getByLabelText('已发布版本')).not.toContainHTML('1.17.5');
     await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
     expect(seen.at(-1)?.[0]).toMatchObject({ componentId: 'component-kubelet', releaseId: '' });
-    rerender(view([{ componentId: 'component-kubelet', releaseId: '', purpose: '', parameterMappings: [] }]));
+    rerender(view([{ kind: 'execution', componentId: 'component-kubelet', releaseId: '', purpose: '', parameterMappings: [] }]));
     const versionSelect = screen.getByLabelText('已发布版本');
     expect(versionSelect).toBeEnabled();
     expect(versionSelect).toContainHTML('1.17.5');
@@ -168,7 +168,7 @@ describe('parameter contract editor', () => {
   it('only offers upstream public parameters when mapping a dependency', async () => {
     const seen: ComponentRelease['dependencies'][] = [];
     render(<DependencyEditor
-      dependencies={[{ componentId: 'component-kubelet', releaseId: 'release-kubelet', purpose: '', parameterMappings: [{ upstreamParameter: '', targetParameter: '' }] }]}
+      dependencies={[{ kind: 'execution', componentId: 'component-kubelet', releaseId: 'release-kubelet', purpose: '', parameterMappings: [{ upstreamParameter: '', targetParameter: '' }] }]}
       components={[kubelet]}
       currentParameters={[{ name: 'kubeRoot', description: 'imported', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }]}
       currentComponentId="component-kube-proxy"

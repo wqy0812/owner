@@ -4,31 +4,33 @@ import { displayError, useApp } from '../context/AppContext';
 import { Modal } from './Primitives';
 import { BranchScope } from './BranchScope';
 import { EnvironmentConstraintEditor } from './EnvironmentConstraintEditor';
-import { environmentConstraintDimensions, parseConstraintSelection, serializeConstraintSelection } from '../types/environmentConstraints';
+import { environmentConstraintDimensions, parseConstraintSelection, serializeConstraintSelection, unselectedConstraintDimensions, type ConstraintSelection } from '../types/environmentConstraints';
 import type { Scenario, ScenarioForkPlan } from '../types/domain';
 
 export function ScenarioCreateModal({ scenarios, initialSourceRevisionId = '', onClose, onDone }: {
   scenarios: Scenario[]; initialSourceRevisionId?: string; onClose: () => void; onDone: (scenario: Scenario) => void;
 }) {
-  const { notify, platformOptionCategories, platformOptionsLoading } = useApp();
+  const { notify, platformOptionCategories, platformOptionsLoading, platformOptionsError } = useApp();
   const mode = initialSourceRevisionId ? 'fork' : 'blank';
   const sources = scenarios.flatMap(scenario => scenario.revisions?.filter(revision => revision.state === 'released').map(revision => ({ scenario, revision })) ?? []);
   const [sourceRevisionId, setSourceRevisionId] = useState(initialSourceRevisionId);
-  const [scope, setScope] = useState<Record<string, unknown>>(() => sources.find(item => item.revision.id === initialSourceRevisionId)?.revision.environmentConstraints ?? {});
+  const [scope, setScope] = useState<Record<string, unknown> | undefined>(() => initialSourceRevisionId ? sources.find(item => item.revision.id === initialSourceRevisionId)?.revision.environmentConstraints ?? {} : undefined);
   const [scopeDirty, setScopeDirty] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [name, setName] = useState(''); const [slug, setSlug] = useState(''); const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false); const [plan, setPlan] = useState<ScenarioForkPlan>();
   const dimensions = environmentConstraintDimensions(platformOptionCategories);
-  const constraints = parseConstraintSelection(scope, dimensions);
+  const constraints = scopeDirty ? scope as ConstraintSelection : parseConstraintSelection(scope, dimensions);
   const environmentConstraints = serializeConstraintSelection(constraints, dimensions);
+  const unselected = unselectedConstraintDimensions(constraints, dimensions);
+  const scopeReady = !platformOptionsLoading && !platformOptionsError && unselected.length === 0;
   function invalidate() { setPlan(undefined); }
   function changeSource(id: string) {
     if (scopeDirty && !window.confirm('切换来源会用来源标签替换当前选择，确认继续？')) return;
-    setSourceRevisionId(id); setScope(sources.find(item => item.revision.id === id)?.revision.environmentConstraints ?? {}); setScopeDirty(false); setConfirmed(false); invalidate();
+    setSourceRevisionId(id); setScope(id ? sources.find(item => item.revision.id === id)?.revision.environmentConstraints ?? {} : undefined); setScopeDirty(false); setConfirmed(false); invalidate();
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!confirmed || platformOptionsLoading) return; setBusy(true);
+    event.preventDefault(); if (busy || !confirmed || !scopeReady) return; setBusy(true);
     try {
       const input = {sourceRevisionId,name,slug,description,environmentConstraints};
       if (mode === 'fork' && !plan) { setPlan(await api.previewScenarioFork(input)); return; }
@@ -41,7 +43,7 @@ export function ScenarioCreateModal({ scenarios, initialSourceRevisionId = '', o
     <label><span>场景名称</span><input name="name" required value={name} onChange={event => {setName(event.target.value);invalidate();}} placeholder="例如 Kylin Kubernetes 集群"/></label>
     <label><span>标识</span><input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={slug} onChange={event => {setSlug(event.target.value);invalidate();}} placeholder="kylin-k8s-cluster"/></label>
     <label className="span-2"><span>说明</span><textarea name="description" rows={3} value={description} onChange={event => {setDescription(event.target.value);invalidate();}}/></label>
-    <div className="span-2"><EnvironmentConstraintEditor value={constraints} title="分支支持范围" onChange={next => {setScope(next);setScopeDirty(true);setConfirmed(false);invalidate();}}/><div className="scope-confirmation"><BranchScope scope={environmentConstraints} full/><label className="checkbox-field"><input type="checkbox" required checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/><span>确认以上适配范围，创建后固定；未选择的维度为不限制。</span></label></div></div>
+    <div className="span-2"><EnvironmentConstraintEditor value={constraints} title="分支支持范围" onChange={next => {setScope(next);setScopeDirty(true);setConfirmed(false);invalidate();}}/><div className="scope-confirmation"><BranchScope scope={environmentConstraints} selection={constraints} full/>{unselected.length > 0 && <small>请先选择：{unselected.map(dimension => dimension.label).join('、')}。</small>}<label className="checkbox-field"><input type="checkbox" required checked={confirmed} disabled={!scopeReady} onChange={event => setConfirmed(event.target.checked)}/><span>确认以上适配范围，创建后固定。</span></label></div></div>
     {plan && <div className="span-2 scenario-fork-preview"><strong>分支预览 · 来源 r{plan.sourceRevision}</strong><p>{plan.nodeCount} 个组件节点 · {plan.acceptanceJobCount} 项业务验收；工作区独立复制。</p><span>来源范围</span><BranchScope scope={plan.sourceEnvironmentConstraints}/><span>新分支范围</span><BranchScope scope={plan.environmentConstraints}/><p>从 r1 草稿开始，不继承测试证据、发布状态或环境安装基线。适配冲突须在草稿中调整组件。</p></div>}
-  </div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || !confirmed || platformOptionsLoading}>{busy ? '处理中…' : mode === 'fork' ? plan ? '确认创建分支' : '预览分支' : '创建场景'}</button></footer></form></Modal>;
+  </div><footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || !confirmed || !scopeReady}>{busy ? '处理中…' : mode === 'fork' ? plan ? '确认创建分支' : '预览分支' : '创建场景'}</button></footer></form></Modal>;
 }

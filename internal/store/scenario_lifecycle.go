@@ -19,8 +19,7 @@ func (s *Store) HasActiveScenarioRevisionRun(ctx context.Context, revisionID str
 	return active, err
 }
 
-// Keep the legacy revision columns unchanged so historic digests and records
-// survive conversion. The versioned lifecycle definition lives alongside them.
+// Persist lifecycle fields alongside the indexed revision identity and graph.
 func scenarioLifecycleJSON(revision domain.ScenarioRevision) string {
 	raw, _ := json.Marshal(revision)
 	values := map[string]any{}
@@ -83,7 +82,6 @@ func (s *Store) SaveScenarioRevisionDefinition(ctx context.Context, revision dom
 	if err = validateScenarioCatalogTx(ctx, tx, revision.Graph, prior.Graph); err != nil {
 		return err
 	}
-	revision.DigestVersion = domain.ScenarioDigestVersion
 	_, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET graph_json=?,environment_constraints_json=?,lifecycle_json=?,status='draft',test_passed_at=NULL,publication_generation=publication_generation+1 WHERE id=?`, jsonText(revision.Graph), jsonText(domain.NormalizeEnvironmentConstraints(revision.EnvironmentConstraints)), scenarioLifecycleJSON(revision), revision.ID)
 	if err != nil {
 		return mapSQLError(err)
@@ -95,7 +93,7 @@ func (s *Store) SuccessfulScenarioSourceRun(ctx context.Context, revision domain
 	return successfulScenarioSourceRun(ctx, s.db, revision, runID)
 }
 func successfulScenarioSourceRun(ctx context.Context, q queryer, revision domain.ScenarioRevision, runID string) (domain.Run, error) {
-	if revision.Status != domain.RevisionReleased || len(revision.Graph.Nodes) == 0 || len(revision.AcceptanceJobs) == 0 || revision.DigestVersion < domain.ScenarioDigestVersion {
+	if revision.Status != domain.RevisionReleased || len(revision.Graph.Nodes) == 0 || len(revision.AcceptanceJobs) == 0 {
 		return domain.Run{}, fmt.Errorf("%w: source needs a released version with business acceptance", domain.ErrConflict)
 	}
 	query := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE scenario_revision_id=? AND kind='scenario_run' AND status='succeeded' AND json_extract(input_snapshot_json,'$.executionMode') IN ('install','upgrade') AND json_extract(input_snapshot_json,'$.scenarioRevisionSpecDigest')=? AND json_array_length(input_snapshot_json,'$.acceptanceJobIds')=?`

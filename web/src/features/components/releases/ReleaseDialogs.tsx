@@ -4,7 +4,6 @@ import { api } from '../../../api/client';
 import { BranchScope } from '../../../components/BranchScope';
 import { EnvironmentConstraintEditor } from '../../../components/EnvironmentConstraintEditor';
 import { HostGroupName } from '../../../components/HostGroupName';
-import { LegacyYamlNotice } from '../../../components/LegacyYamlNotice';
 import { DependencyContractList, ParameterContractList } from '../../../components/ParameterEditors';
 import { LoadingBlock, Modal, StatusPill } from '../../../components/Primitives';
 import { displayError, useApp } from '../../../context/AppContext';
@@ -12,7 +11,7 @@ import {
   COMPONENT_LAYERS
 } from '../../../types/componentClassification';
 import type { ActionDefinition, Component, ComponentLayer, ComponentRelease, PlaybookFile } from '../../../types/domain';
-import { environmentConstraintDimensions, parseConstraintSelection, serializeConstraintSelection } from '../../../types/environmentConstraints';
+import { environmentConstraintDimensions, parseConstraintSelection, serializeConstraintSelection, unselectedConstraintDimensions } from '../../../types/environmentConstraints';
 import { EnvironmentConstraints, ReleaseReviewDetails } from '../catalog/ReleasePresentation';
 import { PlaybookActionEditor } from '../contract/PlaybookActionEditor';
 import { ACTION_OPTIONS, componentInput, type ContractEditIntent } from '../model';
@@ -51,7 +50,7 @@ function ClassificationFields({ component }: { component?: Component }) {
 }
 
 export function NewVersionModal({ component, baseRelease, blank = false, onClose, onDone }: { component: Component; baseRelease?: ComponentRelease; blank?: boolean; contractIntent?: ContractEditIntent; onClose: () => void; onDone: (release?: ComponentRelease) => void }) {
-  const { notify, platformOptionCategories } = useApp();
+  const { notify, platformOptionCategories, platformOptionsLoading, platformOptionsError } = useApp();
   const dimensions = environmentConstraintDimensions(platformOptionCategories);
   const [busy, setBusy] = useState(false);
   const lines = component.releaseLines ?? [];
@@ -71,6 +70,8 @@ export function NewVersionModal({ component, baseRelease, blank = false, onClose
   const [constraints, setConstraints] = useState(() => parseConstraintSelection(initialMode === 'evolution' ? suggestedParent?.environmentConstraints : undefined, dimensions));
   const [constraintsCatalogReady, setConstraintsCatalogReady] = useState(dimensions.length > 0);
   const [constraintsDirty, setConstraintsDirty] = useState(false);
+  const unselected = unselectedConstraintDimensions(constraints, dimensions);
+  const scopeReady = !platformOptionsLoading && !platformOptionsError && unselected.length === 0;
   useEffect(() => {
     if (constraintsCatalogReady || !dimensions.length) return;
     setConstraints(parseConstraintSelection(initialMode === 'evolution' ? suggestedParent?.environmentConstraints : undefined, dimensions));
@@ -78,9 +79,9 @@ export function NewVersionModal({ component, baseRelease, blank = false, onClose
   }, [constraintsCatalogReady, dimensions, initialMode, suggestedParent?.environmentConstraints]);
   const blockedEvolutionReasons = lines.filter((line) => !line.evolutionEligible && line.evolutionBlockedReason);
   function changeConstraintSource(nextSource: ComponentRelease | undefined, commit: () => void) {
-    const nextConstraints = parseConstraintSelection(nextSource?.environmentConstraints, dimensions);
-    const currentSerialized = JSON.stringify(serializeConstraintSelection(constraints, dimensions));
-    const nextSerialized = JSON.stringify(serializeConstraintSelection(nextConstraints, dimensions));
+    const nextConstraints = parseConstraintSelection(nextSource ? nextSource.environmentConstraints ?? {} : undefined, dimensions);
+    const currentSerialized = JSON.stringify(constraints);
+    const nextSerialized = JSON.stringify(nextConstraints);
     if (constraintsDirty && currentSerialized !== nextSerialized && !window.confirm('切换创建来源会用新来源的环境约束覆盖当前手工编辑，是否继续？')) return;
     commit();
     setConstraints(nextConstraints);
@@ -96,6 +97,7 @@ export function NewVersionModal({ component, baseRelease, blank = false, onClose
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy || (mode === 'new_line' && (!scopeConfirmed || !scopeReady))) return;
     setBusy(true);
     const form = new FormData(event.currentTarget);
     const environmentConstraints = serializeConstraintSelection(constraints, dimensions);
@@ -147,9 +149,9 @@ export function NewVersionModal({ component, baseRelease, blank = false, onClose
         <label><span>新版本</span><input name="version" required placeholder="v1.1.0" /></label>
         <label><span>风险级别</span><select name="riskLevel" defaultValue={source?.riskLevel ?? 'low'}><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="destructive">破坏性（需审批）</option></select></label>
         <label className="span-2"><span>发布说明</span><textarea name="notes" required rows={4} placeholder="说明变化和下游注意事项" /></label>
-        <div className="span-2">{mode === 'new_line' ? <><EnvironmentConstraintEditor value={constraints} onChange={next => { setConstraints(next); setConstraintsDirty(true); setScopeConfirmed(false); }} /><div className="scope-confirmation"><BranchScope scope={serializeConstraintSelection(constraints, dimensions)} full /><label className="checkbox-field"><input type="checkbox" checked={scopeConfirmed} onChange={event => setScopeConfirmed(event.target.checked)} required /><span>确认以上适配范围，创建后固定；未选择的维度为不限制。</span></label></div></> : <BranchScope scope={source?.environmentConstraints} full />}</div>
+        <div className="span-2">{mode === 'new_line' ? <><EnvironmentConstraintEditor value={constraints} onChange={next => { setConstraints(next); setConstraintsDirty(true); setScopeConfirmed(false); }} /><div className="scope-confirmation"><BranchScope scope={serializeConstraintSelection(constraints, dimensions)} selection={constraints} full />{unselected.length > 0 && <small>请先选择：{unselected.map(dimension => dimension.label).join('、')}。</small>}<label className="checkbox-field"><input type="checkbox" checked={scopeConfirmed} disabled={!scopeReady} onChange={event => setScopeConfirmed(event.target.checked)} required /><span>确认以上适配范围，创建后固定。</span></label></div></> : <BranchScope scope={source?.environmentConstraints} full />}</div>
       </div>
-      <footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || (mode === 'new_line' ? !scopeConfirmed : !parentReleaseId)}>{busy ? '创建中…' : mode === 'new_line' ? '创建分支' : '创建版本'}</button></footer>
+      <footer className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={busy || (mode === 'new_line' ? !scopeConfirmed || !scopeReady : !parentReleaseId)}>{busy ? '创建中…' : mode === 'new_line' ? '创建分支' : '创建版本'}</button></footer>
     </form>
   </Modal>;
 }
@@ -246,7 +248,7 @@ export function InspectReleaseModal({ release, components, onClose }: { release:
         <h3>生命周期动作与 Playbook</h3>
         {release.actions?.length ? <>
           <label><span>生命周期动作</span><select aria-label="查看生命周期动作" value={selectedAction} onChange={(event) => setSelectedAction(Number(event.target.value))}>{release.actions.map((item, index) => <option key={item.id ?? `${item.type}-${index}`} value={index}>{ACTION_OPTIONS.find((option) => option.value === item.type)?.label ?? item.type} · {item.name || item.type}</option>)}</select></label>
-          {action && <LegacyYamlNotice value={action.legacyYamlSettings} checksInPrecheck={action.type !== 'check'} />}
+
           {action && <div className="release-action-facts">
             <div><span>动作类型</span><strong>{actionLabel}</strong></div>
             <div><span>Playbook 路径</span><code>{action.playbook || '—'}</code></div>

@@ -3,11 +3,34 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"codex/platform-demo/internal/domain"
 )
+
+func TestCreateScenarioRunRejectsMissingAndHistoricalExecutionContracts(t *testing.T) {
+	for _, version := range []any{nil, 0, 1, 3} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			db, _, revision := scenarioLifecycleFixture(t)
+			ctx := context.Background()
+			snapshot := map[string]any{}
+			if version != nil {
+				snapshot["scenarioContractVersion"] = version
+			}
+			run := domain.Run{ID: "unsupported-contract", Kind: domain.RunScenarioTest, Status: domain.RunQueued, RequestedBy: "owner", EnvironmentID: "env", EnvironmentRevisionID: "env-rev", ScenarioRevisionID: revision.ID, InputSnapshot: snapshot, CreatedAt: time.Now().UTC()}
+			err := db.CreateRun(ctx, run, nil)
+			if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "unsupported scenario execution contract") {
+				t.Fatalf("unsupported execution contract accepted: %v", err)
+			}
+			if _, err := db.GetRun(ctx, run.ID); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("rejected request persisted a Run: %v", err)
+			}
+		})
+	}
+}
 
 func scenarioLifecycleFixture(t *testing.T) (*Store, domain.Scenario, domain.ScenarioRevision) {
 	t.Helper()
@@ -22,7 +45,7 @@ func scenarioLifecycleFixture(t *testing.T) (*Store, domain.Scenario, domain.Sce
 	if err = db.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	revision := domain.ScenarioRevision{ID: "revision", ScenarioID: "scenario", Revision: 1, Status: domain.RevisionDraft, DigestVersion: domain.ScenarioDigestVersion, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, AcceptanceJobs: []domain.ScenarioAcceptanceJob{{ID: "business", Name: "Business", HostGroup: "workers", Playbook: "acceptance.yml", PlaybookSHA256: "source-sha"}}, CreatedAt: now}
+	revision := domain.ScenarioRevision{ID: "revision", ScenarioID: "scenario", Revision: 1, Status: domain.RevisionDraft, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, AcceptanceJobs: []domain.ScenarioAcceptanceJob{{ID: "business", Name: "Business", HostGroup: "workers", Playbook: "acceptance.yml", PlaybookSHA256: "source-sha"}}, CreatedAt: now}
 	scenario := domain.Scenario{ID: "scenario", Slug: "scenario", Name: "Scenario", OwnerID: owner.ID, CurrentRevisionID: revision.ID, CreatedAt: now, UpdatedAt: now}
 	if err = db.CreateScenario(ctx, scenario, revision); err != nil {
 		t.Fatal(err)
@@ -64,7 +87,7 @@ func scenarioSourceEvidenceFixture(t *testing.T) (*Store, domain.ScenarioRevisio
 	release.Actions[0].PostCheckActionID = "check"
 	release.Actions = append(release.Actions,
 		domain.ActionDefinition{ID: "check", Name: "Installed state", Kind: domain.ActionCheck, Playbook: "tasks/check.yml", HostGroup: "workers", TimeoutSeconds: 30, RiskLevel: domain.RiskLow},
-		domain.ActionDefinition{ID: "rollback", Name: "Remove installation", Kind: domain.ActionRollback, Playbook: "tasks/rollback.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskDestructive, PreCheckActionID: "check", PostCheckActionID: "check"},
+		domain.ActionDefinition{ID: "rollback", Name: "Remove installation", Kind: domain.ActionRollback, Playbook: "tasks/rollback.yml", HostGroup: "workers", TimeoutSeconds: 60, RiskLevel: domain.RiskDestructive, PostCheckActionID: "check"},
 	)
 	if err := db.CreateComponentRelease(ctx, release); err != nil {
 		t.Fatal(err)
@@ -115,7 +138,7 @@ func TestScenarioDefinitionCASAndActiveRunGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.AcceptanceJobs[0].Purpose != revision.AcceptanceJobs[0].Purpose || saved.DigestVersion != 2 {
+	if saved.AcceptanceJobs[0].Purpose != revision.AcceptanceJobs[0].Purpose {
 		t.Fatalf("lifecycle lost: %+v", saved)
 	}
 	if err = db.SaveScenarioRevisionDefinition(ctx, revision, digest); !errors.Is(err, domain.ErrConflict) {

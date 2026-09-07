@@ -56,7 +56,7 @@ func TestScenarioInstallationDigestTracksBackupMetadataAndRecoveryChain(t *testi
 
 func TestScenarioInstallationTransactionDigestMatchesPublicRead(t *testing.T) {
 	ctx := context.Background()
-	db, _ := historicalBaselineFixture(t, false)
+	db, _ := componentInstallationFixture(t, false)
 	readDigest := func() string {
 		t.Helper()
 		public, err := db.ListEnvironmentComponentInstallations(ctx, "env")

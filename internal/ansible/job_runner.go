@@ -483,25 +483,21 @@ func (r *Runner) RunBundle(parent context.Context, bundle *JobBundle, request Jo
 		if phase.kind == PhaseListHosts {
 			events, _ := logs.Snapshot()
 			stages := len(bundle.Manifest.Plan.Steps)
-			if IsNativeJobContract(bundle.Manifest.Contract) {
-				stages += len(bundle.Manifest.Plan.Recovery)
-			}
-			if IsNativeJobContract(bundle.Manifest.Contract) {
-				// Initialization and completion are additional controller plays.
-				trimmed := make([]LogEvent, 0, len(events))
-				hostLine := regexp.MustCompile(`^\s*hosts \(([0-9]+)\):`)
-				seen := 0
-				for _, event := range events {
-					if event.Phase == PhaseListHosts && hostLine.MatchString(event.Line) {
-						seen++
-						if seen == 1 || seen == stages*3+2 {
-							continue
-						}
+			stages += len(bundle.Manifest.Plan.Recovery)
+			// Initialization and completion are additional controller plays.
+			trimmed := make([]LogEvent, 0, len(events))
+			hostLine := regexp.MustCompile(`^\s*hosts \(([0-9]+)\):`)
+			seen := 0
+			for _, event := range events {
+				if event.Phase == PhaseListHosts && hostLine.MatchString(event.Line) {
+					seen++
+					if seen == 1 || seen == stages*3+2 {
+						continue
 					}
-					trimmed = append(trimmed, event)
 				}
-				events = trimmed
+				trimmed = append(trimmed, event)
 			}
+			events = trimmed
 			if err := validateJobHostPreview(events, stages); err != nil {
 				return result, err
 			}

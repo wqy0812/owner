@@ -74,16 +74,10 @@ func (s *Store) IsActionReceiptRecovered(ctx context.Context, receipt ActionExec
 			continue
 		}
 		baselineRunID, _ := run.InputSnapshot["baselineRunId"].(string)
-		if historicalID, _ := run.InputSnapshot["historicalBaselineRunId"].(string); historicalID != "" {
-			baselineRunID = historicalID
-		}
 		if baselineRunID == "" || baseline.RunID != baselineRunID {
 			continue
 		}
 		testOnly, _ := run.InputSnapshot["baselineTestOnly"].(bool)
-		if _, historical := run.InputSnapshot["historicalBaselineRunId"]; historical {
-			testOnly, _ = run.InputSnapshot["historicalBaselineTestOnly"].(bool)
-		}
 		if baseline.TestOnly != testOnly || (baseline.State == "test") != testOnly {
 			continue
 		}

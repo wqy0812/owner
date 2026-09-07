@@ -20,6 +20,11 @@ func TestRoleTaskControlPolicy(t *testing.T) {
 		{"ignore", "- command: false\n  ignore_errors: true", false, true},
 		{"swallow", "- block:\n  - command: false\n  rescue:\n  - debug: msg=hidden", false, true},
 		{"reserved variable", "- set_fact:\n    cf: {}", false, true},
+		{"apply reserved connection", "- include_tasks:\n    file: nested.yml\n    apply:\n      vars:\n        ansible_connection: local\n", false, true},
+		{"args apply reserved host", "- ansible.builtin.include_tasks: nested.yml\n  args:\n    apply:\n      vars:\n        ansible_host: other\n", false, true},
+		{"apply reserved context", "- include_tasks:\n    file: nested.yml\n    apply:\n      vars:\n        cf: {}\n", false, true},
+		{"apply swallows failure", "- include_tasks:\n    file: nested.yml\n    apply:\n      ignore_errors: true\n", false, true},
+		{"apply ordinary variables", "- include_tasks:\n    file: nested.yml\n    apply:\n      vars:\n        cf_local_example: yes\n", false, false},
 		{"cross role", "- include_role:\n    name: upstream", false, true},
 		{"check mutates", "- copy:\n    content: x\n    dest: /tmp/x", true, true},
 		{"check probe", "- command: test -f /tmp/x\n  changed_when: false", true, false},
@@ -109,6 +114,30 @@ func TestRoleJobCompileAndSeal(t *testing.T) {
 		t.Fatal("accepted tampered job")
 	}
 }
+func TestJobBundleRejectsHistoricalContractsEvenWithValidDigests(t *testing.T) {
+	bundle := compileUnitJob(t)
+	original := bundle.Manifest
+	for _, contract := range []string{"", "clusterforge-role-job-v1", "clusterforge-native-job-v2"} {
+		for _, field := range []string{"manifest", "plan"} {
+			t.Run(field+"/"+contract, func(t *testing.T) {
+				manifest := original
+				if field == "manifest" {
+					manifest.Contract = contract
+				} else {
+					manifest.Plan.Contract = contract
+					manifest.FullPlanDigest = PlanDigest(manifest.Plan)
+				}
+				manifest.Digest = ""
+				manifest.Digest = jsonDigest(manifest)
+				candidate := JobBundle{Path: bundle.Path, Manifest: manifest}
+				if err := candidate.Validate(); err == nil {
+					t.Fatal("historical contract accepted with recomputed digests")
+				}
+			})
+		}
+	}
+}
+
 func TestControllerPersistsBeforeAdvance(t *testing.T) {
 	for _, kind := range []string{"begin", "end", "event-loss", "failure", "no-observation"} {
 		t.Run(kind, func(t *testing.T) {

@@ -3,6 +3,7 @@ import type { PlatformOptionCategory } from './domain';
 export interface EnvironmentConstraintGroup { key: string; label: string; values: string[] }
 export interface EnvironmentConstraintOption { id: string; value: string; label: string; parentOptionId?: string; retiredAt?: string }
 export interface EnvironmentConstraintDimension { id: string; key: string; label: string; parentCategoryId?: string; retiredAt?: string; options: EnvironmentConstraintOption[] }
+// Missing keys are undecided; an empty array is an explicit unrestricted choice.
 export type ConstraintSelection = Record<string, string[]>;
 
 export function environmentConstraintDimensions(categories: PlatformOptionCategory[]): EnvironmentConstraintDimension[] {
@@ -44,17 +45,18 @@ export function environmentConstraintGroups(constraints: Record<string, unknown>
   });
 }
 
-export function emptyConstraintSelection(dimensions: EnvironmentConstraintDimension[]): ConstraintSelection {
-  return Object.fromEntries(dimensions.map((dimension) => [dimension.key, []]));
-}
-
 export function parseConstraintSelection(constraints: Record<string, unknown> | null | undefined, dimensions: EnvironmentConstraintDimension[]): ConstraintSelection {
-  const selection = emptyConstraintSelection(dimensions);
+  const selection: ConstraintSelection = {};
+  if (constraints == null) return selection;
   for (const dimension of dimensions) {
     const allowed = new Set(dimension.options.map((option) => option.value));
     selection[dimension.key] = unique(asValues(constraints?.[dimension.key]).filter((value) => allowed.has(value)));
   }
   return selection;
+}
+
+export function unselectedConstraintDimensions(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[]): EnvironmentConstraintDimension[] {
+  return dimensions.filter((dimension) => !dimension.retiredAt && selection[dimension.key] === undefined);
 }
 
 export function serializeConstraintSelection(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[]): Record<string, unknown> {
@@ -63,16 +65,25 @@ export function serializeConstraintSelection(selection: ConstraintSelection, dim
 
 export function toggleConstraintValue(selection: ConstraintSelection, key: string, value: string): ConstraintSelection {
   const current = selection[key] ?? [];
-  return { ...selection, [key]: current.includes(value) ? current.filter((item) => item !== value) : [...current, value] };
+  const values = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+  const next = { ...selection };
+  if (values.length) next[key] = values;
+  else delete next[key];
+  return next;
 }
 
-export function toggleHierarchicalConstraintValue(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[], key: string, value: string): ConstraintSelection {
-  let next = toggleConstraintValue(selection, key, value);
+export function toggleHierarchicalConstraintValue(selection: ConstraintSelection, dimensions: EnvironmentConstraintDimension[], key: string, value?: string): ConstraintSelection {
+  const next = value === undefined ? { ...selection, [key]: [] } : toggleConstraintValue(selection, key, value);
+  if (value === undefined && selection[key]?.length === 0) delete next[key];
   const dimension = dimensions.find((item) => item.key === key);
   if (!dimension || dimension.parentCategoryId) return next;
   for (const child of dimensions.filter((item) => item.parentCategoryId === dimension.id)) {
-	const allowed = new Set(childOptionsForSelection(child, dimension, next[key]).map((option) => option.value));
-    next = { ...next, [child.key]: (next[child.key] ?? []).filter((item) => allowed.has(item)) };
+    const selected = next[child.key];
+    if (selected === undefined) continue;
+    const allowed = new Set(childOptionsForSelection(child, dimension, next[key] ?? []).map((option) => option.value));
+    const retained = selected.filter((item) => allowed.has(item));
+    if (retained.length) next[child.key] = retained;
+    else if (selected.length || next[key]?.length) delete next[child.key];
   }
   return next;
 }

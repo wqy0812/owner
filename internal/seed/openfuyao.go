@@ -167,17 +167,17 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 			parameters: []string{"cluster_id", "target_host_group", "SERVICE_IP_RANGE_IPV4", "KUBERNETES_CLUSTER_IP", "certOutputPath", "certOutputFile", "cert_config", "CERT_EXPIRY_TIME"}, credentials: openFuyaoSSHCredentials, tags: []string{"ins"}},
 		{id: "component-bke-bootstrap", slug: "bke-bootstrap", name: "BKE Bootstrap", owner: ComponentOwnerRuntimeID, group: "bootstrap_host",
 			parameters: []string{"cluster_id", "target_host_group", "BKE_ADMIN", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS", "ENV_CHART_REPO_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_IP", "ENV_DOCKER_HARBOR_PORT", "ENV_DOCKER_HARBOR_PORJECT", "ENV_FILESTATION_URL", "BOOTSTRAP_IMAGE", "ENV_AMC_USABLITY_ADDR", "ENV_AMC_USABLITY_PORT", "openFuyao_version"}, credentials: openFuyaoSSHCredentials, tags: []string{"rcv", "ins"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-cert", UpstreamReleaseID: "release-bke-cert-25.12", Purpose: "management cluster certificate bootstrap"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-cert", UpstreamReleaseID: "release-bke-cert-25.12", Purpose: "management cluster certificate bootstrap"}}},
 		{id: "component-bke-common", slug: "bke-common", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_PORT"}, credentials: openFuyaoRegistryCredentials, tags: []string{"image_plugin", "ins"}},
 		{id: "component-bke-common", slug: "bke-common", variant: "work", name: "BKE Common", owner: ComponentOwnerRuntimeID, group: "work_cluster_k8smaster",
 			parameters: []string{"target_host_group", "ENV_DOCKER_HARBOR_DOMAIN", "ENV_DOCKER_HARBOR_PORT"}, credentials: openFuyaoRegistryCredentials, tags: []string{"image_plugin", "ins"}},
 		{id: "component-bke-addon", slug: "bke-addon", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{"target_host_group", "strategy", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "chart_museum_url", "helm_repo_name", "addon_params"}, credentials: openFuyaoRepositoryCredentials, tags: []string{"init"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-25.12", Purpose: "image credential provider and cluster logging"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-25.12", Purpose: "image credential provider and cluster logging"}}},
 		{id: "component-bke-addon", slug: "bke-addon", variant: "work", name: "BKE Addons", owner: ComponentOwnerK8sID, group: "work_cluster_k8smaster",
 			parameters: []string{"target_host_group", "strategy", "ENV_FILESTATION_IP", "ENV_FILESTATION_PORT", "ENV_DOCKER_HARBOR_DOMAIN", "chart_museum_url", "helm_repo_name", "addon_params"}, credentials: openFuyaoRepositoryCredentials, tags: []string{"init"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-work-25.12", Purpose: "work-cluster image credential provider and cluster logging"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-common", UpstreamReleaseID: "release-bke-common-work-25.12", Purpose: "work-cluster image credential provider and cluster logging"}}},
 		{id: "component-bke-master", slug: "bke-master", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "management_cluster_k8smaster",
 			parameters: []string{
 				"cluster_id", "cluster_role", "target_host_group", "strategy", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS",
@@ -189,7 +189,7 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 				"redis_operator_version", "harbor_secret_version", "pause_tag", "cluster_api_version", "bkeagent_deployer_version",
 				"bkeagent_deployer_tag", "IP_MOD_VERSION", "certOutputPath", "certOutputFile", "addon_params",
 			}, credentials: openFuyaoRegistryCredentials, tags: []string{"rcv", "ins"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-25.12", Purpose: "cluster manifests and chart repository preparation"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-25.12", Purpose: "cluster manifests and chart repository preparation"}}},
 		{id: "component-bke-master", slug: "bke-master", variant: "work", name: "BKE Cluster Control Plane", owner: ComponentOwnerK8sID, group: "work_cluster_k8smaster",
 			parameters: []string{
 				"cluster_id", "cluster_role", "target_host_group", "strategy", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS",
@@ -201,10 +201,10 @@ func openFuyaoComponents(now time.Time, constraints map[string]any) []seededComp
 				"redis_operator_version", "harbor_secret_version", "pause_tag", "cluster_api_version", "bkeagent_deployer_version",
 				"bkeagent_deployer_tag", "IP_MOD_VERSION", "certOutputPath", "certOutputFile", "addon_params",
 			}, credentials: openFuyaoRegistryCredentials, tags: []string{"rcv", "ins"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-work-25.12", Purpose: "work-cluster manifests and chart repository preparation"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-addon", UpstreamReleaseID: "release-bke-addon-work-25.12", Purpose: "work-cluster manifests and chart repository preparation"}}},
 		{id: "component-bke-nodes", slug: "bke-nodes", name: "BKE Work Nodes", owner: ComponentOwnerK8sID, group: "work_cluster_k8snode",
 			parameters: []string{"cluster_id", "cluster_role", "target_host_group", "BKE_ADMIN", "JQ_MEDPATH", "SSH_KEY_PUB", "SSH_KNOWN_HOSTS", "ENV_FILESTATION_URL", "NET_IPV4_IP_LOCAL_PORT_RANGE"}, credentials: openFuyaoSSHCredentials, tags: []string{"image_plugin", "rcv", "ins"},
-			dependencies: []domain.ComponentDependency{{UpstreamComponentID: "component-bke-master", UpstreamReleaseID: "release-bke-master-work-25.12", Purpose: "ready work-cluster control plane"}}},
+			dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: "component-bke-master", UpstreamReleaseID: "release-bke-master-work-25.12", Purpose: "ready work-cluster control plane"}}},
 	}
 
 	items := make([]seededComponent, 0, len(specs))

@@ -7,7 +7,7 @@ import (
 func boundRelease() ComponentRelease {
 	return ComponentRelease{ID: "release", Actions: []ActionDefinition{
 		{ID: "install", ReleaseID: "release", Kind: ActionInstall, PreCheckActionID: "pre", PostCheckActionID: "post"},
-		{ID: "rollback", ReleaseID: "release", Kind: ActionRollback, PreCheckActionID: "pre", PostCheckActionID: "restored"},
+		{ID: "rollback", ReleaseID: "release", Kind: ActionRollback, PostCheckActionID: "restored"},
 		{ID: "pre", ReleaseID: "release", Kind: ActionCheck}, {ID: "post", ReleaseID: "release", Kind: ActionCheck}, {ID: "restored", ReleaseID: "release", Kind: ActionCheck},
 	}}
 }
@@ -25,6 +25,7 @@ func TestActionBindings(t *testing.T) {
 			r.Actions[0].PostCheckActionID = ""
 		}, false, false},
 		{"missing rollback", func(r *ComponentRelease) { r.Actions = append(r.Actions[:1], r.Actions[2:]...) }, true, true},
+		{"rollback precheck", func(r *ComponentRelease) { r.Actions[1].PreCheckActionID = "pre" }, false, true},
 		{"missing precheck", func(r *ComponentRelease) { r.Actions[0].PreCheckActionID = "" }, true, true},
 		{"missing postcheck", func(r *ComponentRelease) { r.Actions[0].PostCheckActionID = "" }, true, true},
 		{"foreign check", func(r *ComponentRelease) { r.Actions[2].ReleaseID = "other" }, true, true},

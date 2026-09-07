@@ -542,7 +542,7 @@ describe('platform shell and RBAC UI', () => {
       environmentConstraints: { architecture: ['amd64'], operatingSystem: ['Ubuntu'] },
       review: { status: 'pending', contractDigest: 'contract-digest', submittedAt: '2026-09-02T08:00:00Z' },
       parameters: [{ name: 'join_ttl', description: '加入令牌有效期', type: 'string', required: true, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '2h' }],
-      dependencies: [{ id: 'dependency-review', upstreamReleaseId: 'release-runtime', upstreamComponentId: 'component-runtime', upstreamComponentName: 'Runtime', upstreamVersion: '2.0.0-p1', purpose: '容器运行时', parameterMappings: [{ upstreamParameter: 'socket', targetParameter: 'runtime_socket' }] }],
+      dependencies: [{ kind: 'execution', id: 'dependency-review', upstreamReleaseId: 'release-runtime', upstreamComponentId: 'component-runtime', upstreamComponentName: 'Runtime', upstreamVersion: '2.0.0-p1', purpose: '容器运行时', parameterMappings: [{ upstreamParameter: 'socket', targetParameter: 'runtime_socket' }] }],
       artifacts: [{ id: 'artifact-review', releaseId: 'release-review-ui', alias: 'package', filename: 'package.tgz', sha256: 'a'.repeat(64), sizeBytes: 128, sourceUrl: 'https://files.example.test/package.tgz', sourceUpdatedBy: alice.id, sourceUpdatedAt: '2026-09-02T07:00:00Z', createdBy: alice.id, createdAt: '2026-09-02T07:00:00Z' }],
       images: [{ id: 'image-review', releaseId: 'release-review-ui', logicalName: 'control-plane', digest: `sha256:${'b'.repeat(64)}`, sourceRef: 'registry.example.test/control-plane:1.0', sourceUpdatedBy: alice.id, sourceUpdatedAt: '2026-09-02T07:00:00Z', createdBy: alice.id, createdAt: '2026-09-02T07:00:00Z' }],
       actions: [{ id: 'action-install-review', releaseId: 'release-review-ui', name: 'Install', kind: 'install', playbook: 'managed/review/install.yml', hostGroup: 'control_plane', requiredCredentials: ['ansible_ssh_pass'], timeoutSeconds: 1800, riskLevel: 'medium', idempotent: true }],
@@ -1300,12 +1300,12 @@ describe('platform shell and RBAC UI', () => {
         latestRelease: {
           id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
           parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-          dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+          dependencies: [{ kind: 'execution', upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
         },
         releases: [{
           id: 'release-kube-proxy', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
           parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-          dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+          dependencies: [{ kind: 'execution', upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
         }],
       }]);
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -1414,7 +1414,7 @@ describe('platform shell and RBAC UI', () => {
           {
             id: 'release-kube-proxy-old', componentId: 'component-kube-proxy', version: '1.17.5', status: 'released',
             parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal' }],
-            dependencies: [{ upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
+            dependencies: [{ kind: 'execution', upstreamComponentId: 'component-kubelet', upstreamComponentName: 'kubelet', upstreamReleaseId: 'release-kubelet', upstreamVersion: '1.17.5', purpose: '复用 kubelet 安装目录', parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }] }],
           },
         ],
       }, {
@@ -1488,7 +1488,7 @@ describe('platform shell and RBAC UI', () => {
       expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty('parameters');
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
         section: 'dependencies', expectedDefinitionGeneration: 0, newParameters: [], removeParameters: [],
-        dependencies: [{
+        dependencies: [{ kind: 'execution',
           upstreamComponentId: 'component-kubelet',
           upstreamReleaseId: 'release-kubelet',
           parameterMappings: [{ upstreamParameter: 'kubeInstallRoot', targetParameter: 'kubeRoot' }],
@@ -1579,6 +1579,11 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.2.0');
     await userEvent.selectOptions(screen.getByLabelText('风险级别'), 'destructive');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '全新合同');
+    expect(screen.getByRole('checkbox', { name: /确认以上适配范围/ })).toBeDisabled();
+    for (const option of screen.getAllByRole('checkbox', { name: '不限制' })) {
+      expect(option).not.toBeChecked();
+      await userEvent.click(option);
+    }
     await userEvent.click(screen.getByRole('checkbox', { name: /确认以上适配范围/ }));
     await userEvent.click(screen.getByRole('button', { name: '创建分支' }));
 
@@ -1687,6 +1692,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.type(screen.getByRole('textbox', { name: '分支名称' }), 'duplicate');
     await userEvent.type(screen.getByPlaceholderText('v1.1.0'), 'v2.1.1');
     await userEvent.type(screen.getByPlaceholderText('说明变化和下游注意事项'), '重复版本');
+    for (const option of screen.getAllByRole('checkbox', { name: '不限制' })) await userEvent.click(option);
     await userEvent.click(screen.getByRole('checkbox', { name: /确认以上适配范围/ }));
     await userEvent.click(screen.getByRole('button', { name: '创建分支' }));
     expect(await screen.findByText('版本 v2.1.1 已存在')).toBeInTheDocument();
@@ -2340,7 +2346,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/environments');
     const environmentActions = await screen.findByRole('group', { name: '环境操作' });
     expect(within(environmentActions).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
-      '安全导出', '导出含引用', '移除环境', '手动回滚组件',
+      '安全导出', '导出含凭据', '移除环境', '重置环境',
     ]);
     await userEvent.click(await screen.findByRole('tab', { name: '环境变量' }));
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
@@ -2481,25 +2487,25 @@ describe('platform shell and RBAC UI', () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith('/environments/environment-test/cluster-rollback-plan')) return json({
         environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
-        nodes: [], sources: [], componentCount: 0, nodeCount: 0,
+        targetHosts: [], sources: [], componentCount: 0, nodeCount: 0,
         destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
       });
       return baseFetch(input, init);
     });
     renderApp('/environments');
-    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
-    const dialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
-    expect(await within(dialog).findByText('暂无可回滚组件')).toBeInTheDocument();
-    expect(dialog).toHaveTextContent('平台当前没有该环境的组件安装基线或待恢复操作，无需创建回滚 Run。');
-    for (const message of ['暂时无法读取数据', '回滚操作被阻断', '回滚会修改目标环境', '指定版本']) {
+    await userEvent.click(await screen.findByRole('button', { name: '重置环境' }));
+    const dialog = await screen.findByRole('dialog', { name: '重置环境' });
+    expect(await within(dialog).findByText('暂无需要重置的集群组件')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('平台没有记录需要恢复的集群安装基线或未完成操作，无需创建重置 Run。');
+    for (const message of ['暂时无法读取数据', '重置操作被阻断', '重置会修改集群节点', '指定版本']) {
       expect(dialog).not.toHaveTextContent(message);
     }
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: '创建回滚 Run（待审批）' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('textbox', { name: '确认回滚环境名称' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '创建重置 Run（待审批）' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('textbox', { name: '确认重置环境名称' })).not.toBeInTheDocument();
     await userEvent.click(within(dialog.querySelector('footer')!).getByRole('button', { name: '关闭' }));
-    expect(screen.queryByRole('dialog', { name: '手动回滚组件' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '重置环境' })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/cluster-rollback-runs'))).toBe(false);
   });
 
@@ -2513,19 +2519,19 @@ describe('platform shell and RBAC UI', () => {
         if (previewCount === 1) return json({ error: { code: 'INTERNAL', message: '读取安装基线失败' } }, 500);
         return json({
           environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
-          nodes: [], sources: [], componentCount: 0, nodeCount: 0,
+          targetHosts: [], sources: [], componentCount: 0, nodeCount: 0,
           destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
         });
       }
       return baseFetch(input, init);
     });
     renderApp('/environments');
-    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
-    const dialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
+    await userEvent.click(await screen.findByRole('button', { name: '重置环境' }));
+    const dialog = await screen.findByRole('dialog', { name: '重置环境' });
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('读取安装基线失败');
-    expect(within(dialog).queryByText('暂无可回滚组件')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('暂无需要重置的集群组件')).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: '重试' }));
-    expect(await within(dialog).findByText('暂无可回滚组件')).toBeInTheDocument();
+    expect(await within(dialog).findByText('暂无需要重置的集群组件')).toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     expect(previewCount).toBe(2);
   });
@@ -2538,6 +2544,7 @@ describe('platform shell and RBAC UI', () => {
     };
     const plan = {
       environmentId: environment.id, environmentName: environment.name, environmentRevisionId: 'environment-test-r6',
+      targetHosts: [{ name: 'master-1', address: '192.0.2.10', groups: ['control_plane'] }, { name: 'node-1', address: '192.0.2.11', groups: ['workers'] }],
       sources: [{ runId: 'run-source-install', kind: 'scenario_test', scenarioRevisionId: 'scenario-clean-r1', componentCount: 15 }], componentCount: 15, nodeCount: 21,
       destructive: true, requiresApproval: true, planDigest: 'rollback-plan-digest',
       deliveryRequirements: [],
@@ -2563,19 +2570,26 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     renderApp('/environments');
-    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
-    const rollbackDialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
+    await userEvent.click(await screen.findByRole('button', { name: '重置环境' }));
+    const rollbackDialog = await screen.findByRole('dialog', { name: '重置环境' });
     expect(rollbackDialog).toHaveClass('modal--wide');
+    expect(rollbackDialog).toHaveTextContent('恢复全部集群节点，保留 File Station 和镜像仓库');
+    expect(within(rollbackDialog).queryByRole('combobox')).not.toBeInTheDocument();
+    expect(within(rollbackDialog).queryByRole('button', { name: '预览所选范围' })).not.toBeInTheDocument();
+    const targetHosts = within(rollbackDialog).getByRole('region', { name: '重置目标主机' });
+    expect(within(targetHosts).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(targetHosts).getByText('master-1')).toBeInTheDocument();
+    expect(within(targetHosts).getByText('192.0.2.10')).toBeInTheDocument();
     expect(await within(rollbackDialog).findByRole('region', { name: '完整执行计划' })).toHaveTextContent('CoreDNS · 执行动作');
-    const confirm = screen.getByRole('textbox', { name: '确认回滚环境名称' });
-    const submit = screen.getByRole('button', { name: '创建回滚 Run（待审批）' });
+    const confirm = screen.getByRole('textbox', { name: '确认重置环境名称' });
+    const submit = screen.getByRole('button', { name: '创建重置 Run（待审批）' });
     expect(submit).toBeDisabled();
     await userEvent.type(confirm, environment.name);
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
 
-    await waitFor(() => expect(submitted).toEqual({ expectedPlanDigest: plan.planDigest, confirmEnvironmentName: environment.name, nodes: [] }));
-    expect(await screen.findByText('整集群回滚 Run 已创建')).toBeInTheDocument();
+    await waitFor(() => expect(submitted).toEqual({ expectedPlanDigest: plan.planDigest, confirmEnvironmentName: environment.name }));
+    expect(await screen.findByText('集群重置 Run 已创建')).toBeInTheDocument();
   });
 
   it('loads completed image build logs when opening the new log disclosure', async () => {
@@ -2761,7 +2775,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/components?selected=component-docker');
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
     expect(screen.getAllByText(/install.yml/)).not.toHaveLength(0);
-    await userEvent.click(screen.getByRole('checkbox', { name: /可安全重试/ }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '可安全重试' }), 'true');
 
     await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
     expect(await screen.findByDisplayValue(/Install Docker/)).toBeInTheDocument();
@@ -2890,7 +2904,7 @@ describe('platform shell and RBAC UI', () => {
     };
     const controlRelease = {
       id: 'release-control-auto', componentId: 'component-control-auto', version: '1.0.0', status: 'released',
-      dependencies: [{ id: 'dep-runtime-auto', upstreamComponentId: 'component-runtime-auto', upstreamComponentName: 'Runtime', upstreamReleaseId: runtimeRelease.id, upstreamVersion: runtimeRelease.version, purpose: 'CRI', parameterMappings: [] }],
+      dependencies: [{ kind: 'execution', id: 'dep-runtime-auto', upstreamComponentId: 'component-runtime-auto', upstreamComponentName: 'Runtime', upstreamReleaseId: runtimeRelease.id, upstreamVersion: runtimeRelease.version, purpose: 'CRI', parameterMappings: [] }],
       actions: [{ kind: 'install', playbook: 'control.yml', hostGroup: 'control_plane' }],
     };
     const revision = {

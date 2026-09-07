@@ -11,6 +11,7 @@ import (
 
 type PendingActionFileMutation struct {
 	ID             string
+	Kind           string
 	ReleaseID      string
 	WorkspaceRoot  string
 	RelativePath   string
@@ -20,11 +21,14 @@ type PendingActionFileMutation struct {
 }
 
 func (s *Store) CreatePendingActionFileMutation(ctx context.Context, mutation PendingActionFileMutation) error {
+	if mutation.Kind == "" {
+		mutation.Kind = "file"
+	}
 	contents := mutation.BeforeContents
 	if contents == nil {
 		contents = []byte{}
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO playbook_action_mutations(id,release_id,workspace_root,relative_path,before_exists,before_content,created_at) VALUES(?,?,?,?,?,?,?)`, mutation.ID, mutation.ReleaseID, mutation.WorkspaceRoot, mutation.RelativePath, mutation.BeforeExists, contents, timeText(mutation.CreatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO playbook_action_mutations(id,release_id,workspace_root,relative_path,kind,before_exists,before_content,created_at) VALUES(?,?,?,?,?,?,?,?)`, mutation.ID, mutation.ReleaseID, mutation.WorkspaceRoot, mutation.RelativePath, mutation.Kind, mutation.BeforeExists, contents, timeText(mutation.CreatedAt))
 	return mapSQLError(err)
 }
 
@@ -40,7 +44,7 @@ func (s *Store) DeletePendingActionFileMutation(ctx context.Context, id string) 
 }
 
 func (s *Store) ListPendingActionFileMutations(ctx context.Context) ([]PendingActionFileMutation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,workspace_root,relative_path,before_exists,before_content,created_at FROM playbook_action_mutations ORDER BY created_at,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,release_id,workspace_root,relative_path,kind,before_exists,before_content,created_at FROM playbook_action_mutations ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +54,7 @@ func (s *Store) ListPendingActionFileMutations(ctx context.Context) ([]PendingAc
 		var mutation PendingActionFileMutation
 		var beforeExists int
 		var createdAt string
-		if err := rows.Scan(&mutation.ID, &mutation.ReleaseID, &mutation.WorkspaceRoot, &mutation.RelativePath, &beforeExists, &mutation.BeforeContents, &createdAt); err != nil {
+		if err := rows.Scan(&mutation.ID, &mutation.ReleaseID, &mutation.WorkspaceRoot, &mutation.RelativePath, &mutation.Kind, &beforeExists, &mutation.BeforeContents, &createdAt); err != nil {
 			return nil, err
 		}
 		mutation.BeforeExists = beforeExists != 0
@@ -89,6 +93,11 @@ func (s *Store) ListComponentPlaybookFiles(ctx context.Context, releaseID string
 // an interruption therefore leaves digest mismatch and fails closed.
 func (s *Store) ReplaceDraftPlaybookFilesAndInvalidate(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string) error {
 	return s.replaceDraftPlaybookFilesAndAction(ctx, releaseID, workspaceRoot, treeSHA, files, actionDigests, nil, nil, "")
+}
+
+// Directory deletion commits its recovery marker with the manifest change.
+func (s *Store) ReplaceDraftPlaybookFilesAndDeleteMutation(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, mutationID string) error {
+	return s.replaceDraftPlaybookFilesAndAction(ctx, releaseID, workspaceRoot, treeSHA, files, actionDigests, nil, nil, mutationID)
 }
 
 // ReplaceDraftPlaybookFilesAndUpsertAction commits the workspace manifest and
@@ -147,13 +156,13 @@ func (s *Store) replaceDraftPlaybookFilesAndAction(ctx context.Context, releaseI
 		if err != sql.ErrNoRows {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE action_definitions SET name=?,playbook=?,playbook_sha256=?,tags_json=?,host_group=?,required_credentials_json=?,timeout_seconds=?,risk_level=?,destructive=?,idempotent=?,from_release_id=?,to_release_id=?,pre_check_action_id=?,post_check_action_id=?,become=?,gather_facts=?,resource_contract_json=? WHERE id=? AND release_id=? AND kind=?`, upsert.Name, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become, upsert.GatherFacts, resourceContractJSON(upsert.ResourceContract), upsert.ID, releaseID, upsert.Kind)
+		result, err := tx.ExecContext(ctx, `UPDATE action_definitions SET name=?,playbook=?,playbook_sha256=?,tags_json=?,host_group=?,required_credentials_json=?,timeout_seconds=?,risk_level=?,destructive=?,idempotent=?,from_release_id=?,to_release_id=?,pre_check_action_id=?,post_check_action_id=?,become=? WHERE id=? AND release_id=? AND kind=?`, upsert.Name, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become, upsert.ID, releaseID, upsert.Kind)
 		if err != nil {
 			return mapSQLError(err)
 		}
 		updated, _ := result.RowsAffected()
 		if updated == 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, upsert.ID, releaseID, upsert.Name, upsert.Kind, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become, upsert.GatherFacts, resourceContractJSON(upsert.ResourceContract)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, upsert.ID, releaseID, upsert.Name, upsert.Kind, upsert.Playbook, upsert.PlaybookSHA256, jsonText(nonNilStrings(upsert.Tags)), upsert.HostGroup, jsonText(nonNilStrings(upsert.RequiredCredentials)), upsert.TimeoutSeconds, upsert.RiskLevel, upsert.Destructive, upsert.Idempotent, nullString(upsert.FromReleaseID), nullString(upsert.ToReleaseID), upsert.PreCheckActionID, upsert.PostCheckActionID, upsert.Become); err != nil {
 				return mapSQLError(err)
 			}
 		}

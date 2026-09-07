@@ -21,7 +21,7 @@ export const REQUIRED_LIFECYCLE_ACTIONS: Array<{ type: ActionDefinition['type'];
 export function lifecycleSummary(actions: ActionDefinition[] = []) {
   const required = REQUIRED_LIFECYCLE_ACTIONS;
   const checks = new Set(actions.filter(action => action.type === 'check').map(action => action.id));
-  const completed = required.filter((requiredAction) => actions.some(action => action.type === requiredAction.type && (action.type === 'rollback' ? (!action.preCheckActionId || checks.has(action.preCheckActionId)) && (!action.postCheckActionId || checks.has(action.postCheckActionId)) : checks.has(action.preCheckActionId ?? '') && checks.has(action.postCheckActionId ?? ''))));
+  const completed = required.filter((requiredAction) => actions.some(action => action.type === requiredAction.type && (action.type === 'rollback' ? !action.preCheckActionId && (!action.postCheckActionId || checks.has(action.postCheckActionId)) : checks.has(action.preCheckActionId ?? '') && checks.has(action.postCheckActionId ?? ''))));
   return {
     completed: completed.length,
     total: required.length,

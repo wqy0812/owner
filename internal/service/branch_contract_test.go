@@ -36,7 +36,7 @@ func TestScopedContractPatchKeepsOtherSectionAndRejectsStaleSave(t *testing.T) {
 	if saved.ReleaseNotes != r.ReleaseNotes || len(saved.Dependencies) != 0 {
 		t.Fatalf("unrelated content changed: %+v", saved)
 	}
-	deps := []domain.ComponentDependency{{UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "Requires prepared root", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "prepared_root"}}}}
+	deps := []domain.ComponentDependency{{Kind: "execution", UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "Requires prepared root", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "root", TargetParameter: "prepared_root"}}}}
 	mapped := param
 	mapped.Name = "prepared_root"
 	mapped.ValueProvider = domain.ParameterProviderUpstreamMapping

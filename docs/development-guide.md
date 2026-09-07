@@ -60,7 +60,7 @@ pnpm --dir web dev --host 127.0.0.1 --port 15173 --strictPort
 2. 沿 Domain → Store → Service → API → Client/前端类型 → 页面查找读写链；业务规则在 Service，事务一致性在 Store，前端隐藏不是权限控制。
 3. 新增字段同步请求、响应、持久化、摘要、导入导出、Catalog 与测试夹具；影响执行的字段必须检查旧审核、测试证据和计划失效。
 4. 保持已发布 Release、场景 Revision、环境历史 Revision 和 Run 快照不可变。依赖锁定精确 Release，手工顺序边不能代替依赖，Secret 只走 CredentialRef。
-5. 变更数据库时同步完整 `schema.sql` 和唯一 `schemaContract`。V1 运行时不提供历史迁移或旧字段兼容；普通启动应拒绝不匹配合同。重建有数据的测试库另需明确授权和备份；限定的 `foundation-snapshot` 只向新库转换账号和基础目录，不恢复旧业务或 Run。
+5. 变更数据库时同步完整 `schema.sql` 和唯一 `schemaContract`。V1 运行时不提供历史迁移或旧字段兼容；普通启动应拒绝不匹配合同。重建有数据的测试库另需明确授权和备份；`foundation-snapshot` 只把当前精确合同的账号和基础目录复制到新库，不恢复旧业务或 Run。
 6. 根据实际改动范围选择验证，再更新下表文档。提交、推送、部署和真实验收分别说明，不能从本地绿灯推断环境已更新。
 
 ## 验证怎么选
@@ -99,5 +99,5 @@ pnpm --dir web dev --host 127.0.0.1 --port 15173 --strictPort
 
 组件模块和交付边界回归应同时检查导入方向与行为：功能模块不导入 pages，API/types 不导入 UI；
 `go list -deps ./cmd/clusterforge-job` 不得出现 internal/service、internal/store、internal/api 或 SQLite 驱动。
-`internal/service/testdata/media-plan-before-*.json` 和 `internal/ansible/testdata/media-job-before.*`
-保存提取前的 JSON/摘要基线，修改介质字段或摘要算法时不能仅重写期望值让测试通过。
+`internal/service/testdata/media-plan-current-*.json` 和 `internal/ansible/testdata/media-job-current.json`
+覆盖当前介质字段的序列化与摘要绑定。首版不保留旧摘要算法；字段改变后统一更新当前合同，并验证介质身份和完整计划仍被摘要覆盖。

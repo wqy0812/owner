@@ -179,7 +179,7 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 	executor.rootCtx = ctx
 	executor.jobs = runners.Jobs
 	executor.store = database
-	executor.resourceVerifier = planner
+	executor.environmentVerifier = planner
 	executor.workspaceVerifier = workspaceVerifier
 	scheduler.executor = executor
 	scheduler.hub = hub

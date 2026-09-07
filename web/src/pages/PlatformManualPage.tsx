@@ -149,7 +149,7 @@ const COMPONENT_BUTTON_GROUPS: ButtonGuideGroup[] = [
     ],
   },
   {
-    page: '组件测试与镜像构建', path: '/components', description: '预览成功前不能提交测试；回滚默认执行回滚与回滚后检查，复用来源动作前置检查；可选前检查或专用后检查。', entries: [
+    page: '组件测试与镜像构建', path: '/components', description: '预览成功前不能提交测试；回滚只执行主体与回滚后检查，后检查复用来源动作前置检查或选择专用检查。', entries: [
       { label: '环境验证', purpose: '为新基线执行安装或清理回退验证，为演进版本执行完整升级回退闭环。', availability: '具备可执行动作的 Release', result: '只打开表单，不创建 Run。' },
       { label: '验证模式 / 回退验证策略 / 目标环境', purpose: '明确运行类型和环境；演进闭环自动锁定父版本与目标版本。', availability: '组件环境验证弹窗', result: '任一选择变化都会使旧执行计划失效。' },
       { label: '预览执行计划 / 刷新执行计划', purpose: '由服务端校验并返回完整步骤和 planDigest。', availability: '必填项完整', result: '不创建 Run、Approval 或审计执行记录。' },

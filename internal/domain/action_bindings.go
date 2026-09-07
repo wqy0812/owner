@@ -51,8 +51,11 @@ func ValidateActionBindings(release ComponentRelease, complete bool) error {
 			}
 			continue
 		}
+		if a.Kind == ActionRollback && a.PreCheckActionID != "" {
+			return fmt.Errorf("%w: rollback action %s cannot bind a pre-check", ErrInvalid, a.ID)
+		}
 		for _, binding := range []struct{ name, id string }{{"pre", a.PreCheckActionID}, {"post", a.PostCheckActionID}} {
-			// Rollback may omit its precheck. An omitted postcheck is resolved
+			// Rollback has no precheck. An omitted postcheck is resolved
 			// from the actual source action when the recovery plan is locked.
 			if a.Kind == ActionRollback && binding.id == "" {
 				continue

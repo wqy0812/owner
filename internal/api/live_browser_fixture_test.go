@@ -51,7 +51,7 @@ func TestLiveAPIComponentFixture(t *testing.T) {
 	}
 	consumer := domain.ComponentRelease{ID: "browser-consumer-r1", ComponentID: "browser-consumer", Version: "1.0.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now,
 		Parameters:   []domain.ParameterDefinition{{Name: "required_runtime", Type: domain.ParameterTypeString, Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderComponentOwner}},
-		Dependencies: []domain.ComponentDependency{{ID: "browser-runtime-dependency", ReleaseID: "browser-consumer-r1", UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "Browser parameter lineage", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "runtime_version", TargetParameter: "required_runtime"}}}},
+		Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: "browser-runtime-dependency", ReleaseID: "browser-consumer-r1", UpstreamComponentID: upstream.ComponentID, UpstreamReleaseID: upstream.ID, Purpose: "Browser parameter lineage", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "runtime_version", TargetParameter: "required_runtime"}}}},
 	}
 	if err := db.CreateComponentRelease(ctx, consumer); err != nil {
 		t.Fatal(err)

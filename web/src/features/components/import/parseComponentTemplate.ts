@@ -98,23 +98,6 @@ function findSensitivePath(value: unknown, prefix = ''): string | undefined {
   return undefined;
 }
 
-function parseResourceContract(value: unknown): ActionDefinition['resourceContract'] {
-  if (value === undefined || value === null) return undefined;
-  if (!isRecord(value) || value.version !== 1 || typeof value.noManagedPaths !== 'boolean' || !Array.isArray(value.claims)) throw new Error('资源声明必须包含 version: 1、noManagedPaths 和 claims。');
-  assertOnlyKeys(value, ['version', 'noManagedPaths', 'claims'], '资源声明');
-  const claims = value.claims.map((claim, i) => {
-    if (!isRecord(claim)) throw new Error(`资源声明 ${i + 1} 必须是对象。`);
-    assertOnlyKeys(claim, ['id', 'path', 'scope', 'access', 'exclusive', 'excludes', 'sharedPaths', 'sharedWith'], '资源路径');
-    if (claim.scope !== 'file' && claim.scope !== 'tree') throw new Error('资源范围必须为 file 或 tree。');
-    if (claim.access !== 'manage' && claim.access !== 'read' && claim.access !== 'verify') throw new Error('资源用途无效。');
-    let sharedWith;
-    if (claim.sharedWith !== undefined) { if (!isRecord(claim.sharedWith)) throw new Error('共享来源必须明确版本及资源。'); sharedWith = { releaseId: nonEmptyString(claim.sharedWith.releaseId, '共享版本'), claimId: nonEmptyString(claim.sharedWith.claimId, '共享资源') }; }
-    return { id: nonEmptyString(claim.id, '资源 ID'), path: nonEmptyString(claim.path, '资源路径'), scope: claim.scope, access: claim.access, exclusive: optionalBoolean(claim.exclusive, '独占范围'), excludes: stringArray(claim.excludes, '排除路径'), sharedPaths: stringArray(claim.sharedPaths, '共享子路径'), sharedWith };
-  });
-  if (value.noManagedPaths === Boolean(claims.length)) throw new Error('请填写资源声明，或明确确认无受管路径。');
-  return { version: 1, noManagedPaths: value.noManagedPaths, claims: claims as NonNullable<ActionDefinition['resourceContract']>['claims'] };
-}
-
 function parseEntry(value: unknown, index: number): ComponentImportEntry {
   if (!isRecord(value) || !isRecord(value.component) || !isRecord(value.release)) {
     throw new Error(`第 ${index + 1} 项必须包含 component 和 release 对象。`);
@@ -203,17 +186,18 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
       return { upstreamParameter, targetParameter };
     });
     const purpose = optionalString(raw.purpose, `${slug}.${componentSlug}.purpose`) ?? '';
-    if (raw.kind !== undefined && raw.kind !== '' && raw.kind !== 'configuration') throw new Error(`${slug} 的引用方式无效。`);
+    if (raw.kind !== 'execution' && raw.kind !== 'configuration') throw new Error(`${slug} 的引用方式无效。`);
     if (raw.kind === 'configuration' && !parameterMappings.length) throw new Error(`${slug} 的配置引用必须指定参数。`);
-    return { componentSlug, purpose, parameterMappings, ...(raw.kind === 'configuration' ? { kind: 'configuration' as const } : {}) };
+    return { componentSlug, purpose, parameterMappings, kind: raw.kind as 'execution' | 'configuration' };
   });
   if (new Set(dependencies.map((item) => item.componentSlug)).size !== dependencies.length) throw new Error(`${slug} 包含重复组件依赖。`);
 
   const actions = optionalArray(release.actions, `${slug}.release.actions`).map((raw, actionIndex) => {
     if (!isRecord(raw)) throw new Error(`${slug} 的第 ${actionIndex + 1} 个 Action 必须是对象。`);
-    assertOnlyKeys(raw, ['resourceContract', 'id', 'preCheckActionId', 'postCheckActionId', 'become', 'name', 'type', 'playbook', 'tags', 'hostGroup', 'timeoutSeconds', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
+    assertOnlyKeys(raw, ['id', 'preCheckActionId', 'postCheckActionId', 'become', 'name', 'type', 'playbook', 'tags', 'hostGroup', 'timeoutSeconds', 'requiredCredentials', 'riskLevel', 'destructive', 'idempotent', 'fromReleaseId', 'toReleaseId'], `${slug}.actions[${actionIndex}]`);
     const type = nonEmptyString(raw.type, `${slug}.actions[${actionIndex}].type`) as ActionDefinition['type'];
     if (!ACTION_TYPES.has(type)) throw new Error(`${slug} 的 Action 类型 ${type} 无效。`);
+    if (type === 'rollback' && optionalString(raw.preCheckActionId, 'preCheckActionId')) throw new Error(`${slug} 回滚动作不能绑定前置检查。`);
     if (type === 'upgrade') throw new Error(`${slug} 的导入模板不能声明显式 upgrade；请使用幂等 install，或创建后在前台绑定既有 Release ID。`);
     const playbook = nonEmptyString(raw.playbook, `${slug}.actions[${actionIndex}].playbook`);
     if ((!ROLE_PATH.test(playbook) || playbook.split('/').some(part => part === '..' || part === '.'))) throw new Error(`${slug} 的 Action Playbook 必须填写模板内的文件名。`);
@@ -236,7 +220,6 @@ function parseEntry(value: unknown, index: number): ComponentImportEntry {
       hostGroup: optionalString(raw.hostGroup, `${slug}.${type}.hostGroup`) ?? '',
       timeoutSeconds, requiredCredentials,
       riskLevel: actionRisk, destructive, idempotent,
-      resourceContract: parseResourceContract(raw.resourceContract),
       ...(fromReleaseId ? { fromReleaseId } : {}),
       ...(toReleaseId ? { toReleaseId } : {}),
     };

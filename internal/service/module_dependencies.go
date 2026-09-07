@@ -74,6 +74,7 @@ type CatalogService struct {
 }
 
 type catalogStore interface {
+	ReplaceDraftPlaybookFilesAndDeleteMutation(context.Context, string, string, string, []domain.ComponentPlaybookFile, map[string]string, string) error
 	AppendComponentImageBuildLog(ctx context.Context, log domain.ImageBuildLog) error
 	CompleteComponentImageBuild(ctx context.Context, buildID, pushedDigest string, image domain.ComponentImage, at time.Time) error
 	ComponentEvidenceReads(ctx context.Context, user domain.User, componentID string) ([]domain.Run, map[string]string, error)
@@ -88,6 +89,8 @@ type catalogStore interface {
 	CreatePendingActionFileMutation(ctx context.Context, mutation store.PendingActionFileMutation) error
 	DecideComponentReleaseReview(ctx context.Context, id string, status domain.ReleaseReviewStatus, reviewer, comment, digest string, reviewedAt time.Time) error
 	DeleteComponentRelease(ctx context.Context, id string, audit domain.AuditEvent) error
+	CanDeleteComponent(ctx context.Context, id, ownerID string) (bool, error)
+	DeleteEmptyComponent(ctx context.Context, id, ownerID string, audit domain.AuditEvent) error
 	DeleteDraftComponentArtifactAndInvalidate(ctx context.Context, releaseID, alias string) error
 	DeleteDraftComponentImage(ctx context.Context, releaseID, logicalName string) error
 	DeletePendingActionFileMutation(ctx context.Context, id string) error
@@ -278,7 +281,6 @@ type PlanBuilder struct {
 }
 
 type plannerStore interface {
-	FindScenarioHistoricalBaseline(ctx context.Context, environmentID, scenarioID, revisionID string) (store.ScenarioHistoricalBaseline, error)
 	GetComponent(ctx context.Context, id string, includeReleases bool) (domain.Component, error)
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 	GetEnvironment(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error)
@@ -397,6 +399,7 @@ type RollbackPlanner struct {
 }
 
 type rollbackStore interface {
+	GetEnvironmentRevision(ctx context.Context, id string) (domain.EnvironmentRevision, error)
 	GetComponent(ctx context.Context, id string, includeReleases bool) (domain.Component, error)
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 	GetEnvironmentComponentInstallationForNode(ctx context.Context, environmentID, componentID, nodeID string) (domain.EnvironmentComponentInstallation, error)
@@ -451,21 +454,21 @@ type creatorStore interface {
 	SetScenarioRevisionStatus(ctx context.Context, id string, from []domain.RevisionStatus, to domain.RevisionStatus, at time.Time) error
 }
 
-type resourcePlanVerifierPort interface {
-	verifyRunResources(context.Context, domain.Run, lockedPlan) error
+type runEnvironmentVerifierPort interface {
+	verifyRunEnvironment(context.Context, domain.Run, lockedPlan) error
 }
 
 type RunExecutor struct {
-	resourceVerifier  resourcePlanVerifierPort
-	control           *executionControl
-	delivery          deliveryPort
-	hub               *EventHub
-	recorder          recorderPort
-	rollback          rollbackPort
-	rootCtx           context.Context
-	store             executorStore
-	workspaceVerifier workspaceVerifierPort
-	jobs              JobBackend
+	environmentVerifier runEnvironmentVerifierPort
+	control             *executionControl
+	delivery            deliveryPort
+	hub                 *EventHub
+	recorder            recorderPort
+	rollback            rollbackPort
+	rootCtx             context.Context
+	store               executorStore
+	workspaceVerifier   workspaceVerifierPort
+	jobs                JobBackend
 }
 
 type executorStore interface {
@@ -599,7 +602,7 @@ type plannerPort interface {
 	componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan lockedPlan, digest string, destructive bool) ComponentTestPlan
 	environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan lockedPlan, digest string, destructive bool) EnvironmentRollbackPlan
 	prepareComponentTest(ctx context.Context, user domain.User, releaseID string, input ComponentTestRequest) (preparedComponentTest, error)
-	prepareEnvironmentRollback(ctx context.Context, user domain.User, environmentID string, nodes ...string) (preparedEnvironmentRollback, error)
+	prepareEnvironmentRollback(ctx context.Context, user domain.User, environmentID string) (preparedEnvironmentRollback, error)
 	prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []lockedStep) (lockedPlan, string, bool, error)
 	prepareScenarioLifecycle(ctx context.Context, user domain.User, id string, input ScenarioExecutionRequest, kind domain.RunKind, runID string, at time.Time) (scenarioExecution, error)
 }
@@ -613,6 +616,8 @@ type releasesPort interface {
 }
 
 type rollbackPort interface {
+	environmentResetState(ctx context.Context, revision domain.EnvironmentRevision) (environmentResetState, error)
+	validateEnvironmentReset(ctx context.Context, revision domain.EnvironmentRevision, plan lockedPlan, complete bool) error
 	bindRollbackCheckSources(ctx context.Context, environmentID string, steps []lockedStep) error
 	addRecoverySteps(ctx context.Context, job *ansiblerunner.JobPlan, plan lockedPlan) error
 	bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error

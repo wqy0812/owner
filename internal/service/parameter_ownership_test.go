@@ -123,8 +123,6 @@ func TestScenarioParameterOverviewGroupsRepeatedNodesAndGraphSaveIsAtomic(t *tes
 func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing.T) {
 	ctx := context.Background()
 	platform, database := readinessTestPlatform(t)
-	admin := domain.User{ID: seed.PlatformAdminID, Name: "Platform Admin", Role: domain.RolePlatformAdmin}
-	definition := domain.EnvironmentParameterDefinition{ID: "legacy-region", CreatedBy: admin.ID, Key: "legacy_region", Label: "Deployment region", Description: "target deployment region", Type: domain.ParameterTypeString, Enum: []any{"cn", "us"}, CreatedAt: time.Now().UTC()}
 
 	now := time.Now().UTC()
 	release := domain.ComponentRelease{
@@ -132,9 +130,9 @@ func TestEnvironmentOwnerWritesOnlyGovernedEnvironmentParameterFields(t *testing
 		Version: "1.0.0", Status: domain.ReleaseReleased, Compatibility: domain.CompatibilityNotApplicable,
 		RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, CreatedAt: now, ReleasedAt: &now,
 		Parameters: []domain.ParameterDefinition{{
-			Name: "region", Description: definition.Description, Type: definition.Type, Required: true,
+			Name: "region", Description: "target deployment region", Type: domain.ParameterTypeString, Required: true,
 			Visibility: domain.ParameterInternal, Modifiable: true, ValueProvider: domain.ParameterProviderEnvironmentOwner,
-			EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}, Enum: definition.Enum,
+			EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}, Enum: []any{"cn", "us"},
 		}},
 	}
 	if err := database.CreateComponentRelease(ctx, release); err != nil {

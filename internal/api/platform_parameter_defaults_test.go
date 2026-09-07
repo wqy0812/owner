@@ -76,7 +76,7 @@ func TestConfigurationReferenceKindSurvivesImportAndContractAPI(t *testing.T) {
 	source.Dependencies[0].Kind = ""
 	source.Dependencies[0].ParameterMappings = append(source.Dependencies[0].ParameterMappings, domain.ParameterMapping{UpstreamParameter: "reference", TargetParameter: "own"})
 	d := source.Dependencies[0]
-	invalid := f.request(http.MethodPut, "/api/v1/component-releases/"+source.ID+"/contract", map[string]any{"expectedDefinitionGeneration": f.releaseGeneration(source.ID), "parameters": source.Parameters, "dependencies": []any{map[string]any{"upstreamComponentId": d.UpstreamComponentID, "upstreamReleaseId": d.UpstreamReleaseID, "parameterMappings": d.ParameterMappings}}}, owner)
+	invalid := f.request(http.MethodPut, "/api/v1/component-releases/"+source.ID+"/contract", map[string]any{"expectedDefinitionGeneration": f.releaseGeneration(source.ID), "parameters": source.Parameters, "dependencies": []any{map[string]any{"kind": "execution", "upstreamComponentId": d.UpstreamComponentID, "upstreamReleaseId": d.UpstreamReleaseID, "parameterMappings": d.ParameterMappings}}}, owner)
 	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "cycle") {
 		t.Fatalf("indirect field cycle accepted: %d %s", invalid.Code, invalid.Body.String())
 	}

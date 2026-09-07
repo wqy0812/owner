@@ -53,9 +53,7 @@ func (e *readinessEvaluation) releaseReadinessWithin(ctx context.Context, releas
 		add("playbook_workspace_invalid", err.Error(), "lifecycle")
 	}
 
-	if err := domain.ValidateReleaseYAMLAuthoring(release); err != nil {
-		add("yaml_migration_required", err.Error(), "lifecycle")
-	} else if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
+	if err := p.validateReleaseContractWithCatalog(ctx, release, true, e.catalogDefinitions); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")
 	} else if err := p.validateReleaseTransitionContractsWithPlaybooks(ctx, release, e.validatePlaybook); err != nil {
 		add("release_contract_invalid", err.Error(), "contract")

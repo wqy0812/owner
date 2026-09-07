@@ -26,7 +26,7 @@ func TestYAMLBrowserFixture(t *testing.T) {
 	}
 	runScenarioProtocol(t, p, owner, revision.ID, env.ID, domain.ScenarioExecutionInstall, domain.RunScenarioTest)
 	componentOwner := domain.User{ID: "component-owner", Role: domain.RoleComponentOwner}
-	input := ReleaseDraftRequest{Mode: ReleaseDraftNewLine, LineName: "YAML", TemplateSourceReleaseID: "scenario-release", Version: "2.0", ReleaseNotes: "独立 YAML 迁入验证"}
+	input := ReleaseDraftRequest{Mode: ReleaseDraftNewLine, LineName: "YAML", TemplateSourceReleaseID: "scenario-release", Version: "2.0", ReleaseNotes: "独立 YAML 编辑验证"}
 	preview, err := p.catalog.PreviewReleaseDraft(ctx, componentOwner, "component-1", input)
 	if err != nil {
 		t.Fatal(err)
@@ -37,22 +37,6 @@ func TestYAMLBrowserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	install, _ := findAction(draft, domain.ActionInstall)
-	contract := *install.ResourceContract
-	contract.Checks = []domain.RuntimeCheck{{ID: "legacy-sh", Kind: "command", Target: "sh"}}
-	encoded, _ := json.Marshal(contract)
-	if _, err := db.DB().Exec(`UPDATE action_definitions SET gather_facts=1,resource_contract_json=? WHERE id=?`, string(encoded), install.ID); err != nil {
-		t.Fatal(err)
-	}
-	revision, err = db.GetScenarioRevision(ctx, revision.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := domain.ScenarioRevisionSpecDigest(revision)
-	revision.AcceptanceJobs[0].GatherFacts = true
-	revision.AcceptanceJobs[0].RuntimeChecks = []domain.RuntimeCheck{{ID: "legacy-sh", Kind: "command", Target: "sh"}}
-	if err := db.SaveScenarioRevisionDefinition(ctx, revision, digest); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.CopyFS(filepath.Join(destination, "playbooks"), os.DirFS(runner.root)); err != nil {
 		t.Fatal(err)
 	}

@@ -192,7 +192,7 @@ func restoreTables(ctx context.Context, database *sql.DB, catalog Catalog) error
 	for _, table := range catalog.Tables {
 		tables[table.Name] = table
 	}
-	order := []string{"users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
+	order := []string{"users", "platform_option_categories", "platform_options", "components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "component_release_artifacts", "component_release_images"}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -238,9 +238,6 @@ func validateCatalogReferences(catalog Catalog) error {
 		return err
 	}
 	if err := validateScenarioCatalogAcceptance(catalog); err != nil {
-		return err
-	}
-	if err := validateCatalogParameterDefaults(catalog); err != nil {
 		return err
 	}
 	tables := map[string]TableDump{}

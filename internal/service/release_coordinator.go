@@ -108,13 +108,11 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 		base := fmt.Errorf("%w: only the current scenario revision can be published", domain.ErrConflict)
 		return revision, actionableExistingError(base, "scenario.not_current", "历史版本保持不可变，只有当前版本可以发布", "查看当前版本", "/scenarios?selected="+scenario.ID)
 	}
-	if revision.DigestVersion >= domain.ScenarioDigestVersion {
-		if len(revision.AcceptanceJobs) == 0 {
-			return revision, fmt.Errorf("%w: 场景业务验收作业必填", domain.ErrConflict)
-		}
-		if err := c.scenarios.validateScenarioAcceptanceWorkspace(revision); err != nil {
-			return revision, err
-		}
+	if len(revision.AcceptanceJobs) == 0 {
+		return revision, fmt.Errorf("%w: 场景业务验收作业必填", domain.ErrConflict)
+	}
+	if err := c.scenarios.validateScenarioAcceptanceWorkspace(revision); err != nil {
+		return revision, err
 	}
 	if revision.Status != domain.RevisionTestPassed || revision.TestPassedAt == nil {
 		base := fmt.Errorf("%w: the current scenario revision must pass a complete test before publishing", domain.ErrConflict)
@@ -164,23 +162,21 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 		base := fmt.Errorf("%w: successful scenario test evidence is stale for the current release definitions", domain.ErrConflict)
 		return revision, actionableExistingError(base, "scenario.test_evidence_stale", "完整测试证据对应的组件 Release 定义已变化", "重新运行场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
 	}
-	if revision.DigestVersion >= domain.ScenarioDigestVersion {
-		evidenceIDs, err := c.store.ScenarioTestEvidence(ctx, revision.ID)
+	evidenceIDs, err := c.store.ScenarioTestEvidence(ctx, revision.ID)
+	if err != nil {
+		return revision, err
+	}
+	for _, id := range evidenceIDs {
+		tested, err := c.store.GetRun(ctx, id)
 		if err != nil {
 			return revision, err
 		}
-		for _, id := range evidenceIDs {
-			tested, err := c.store.GetRun(ctx, id)
-			if err != nil {
-				return revision, err
-			}
-			locked, err := mapToPlan(tested.InputSnapshot)
-			if err != nil {
-				return revision, err
-			}
-			if err := c.workspaceVerifier.verifyLockedWorkspaceDigests(ctx, locked.Steps); err != nil {
-				return revision, err
-			}
+		locked, err := mapToPlan(tested.InputSnapshot)
+		if err != nil {
+			return revision, err
+		}
+		if err := c.workspaceVerifier.verifyLockedWorkspaceDigests(ctx, locked.Steps); err != nil {
+			return revision, err
 		}
 	}
 	now := time.Now().UTC()

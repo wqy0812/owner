@@ -279,7 +279,7 @@ export function DependencyEditor({
             <option value="">{dependency.componentId ? '选择可用版本' : '先选择上游组件'}</option>
             {selectedComponent?.releases.map((release) => <option key={release.id} value={release.id}>{release.version} · {release.state === 'draft' ? 'Draft' : 'Released'}</option>)}
           </select></label>
-          <label><span>引用方式</span><select aria-label="引用方式" disabled={disabled} value={dependency.kind ?? ''} onChange={(event) => update(index, { kind: event.target.value === 'configuration' ? 'configuration' : undefined })}><option value="">执行依赖及参数引用</option><option value="configuration">仅引用配置，不约束执行顺序</option></select></label>
+          <label><span>引用方式</span><select aria-label="引用方式" disabled={disabled} value={dependency.kind} onChange={(event) => update(index, { kind: event.target.value === 'configuration' ? 'configuration' : 'execution' })}><option value="execution">执行依赖及参数引用</option><option value="configuration">仅引用配置，不约束执行顺序</option></select></label>
           <label><span>依赖用途</span><input aria-label="依赖用途" placeholder="例如复用 kubelet 安装目录" disabled={disabled} value={dependency.purpose ?? ''} onChange={(event) => update(index, { purpose: event.target.value })} /></label>
         </div>
         <div className="mapping-block">
@@ -313,7 +313,7 @@ export function DependencyEditor({
         {!disabled && <button type="button" className="button button--danger-soft" onClick={() => onChange(dependencies.filter((_, current) => current !== index))}>删除依赖</button>}
       </article>;
     })}
-    {!disabled && <button type="button" className="button button--secondary" onClick={() => onChange([...dependencies, { componentId: '', releaseId: '', purpose: '', parameterMappings: [] }])}>新增依赖</button>}
+    {!disabled && <button type="button" className="button button--secondary" onClick={() => onChange([...dependencies, { kind: 'execution', componentId: '', releaseId: '', purpose: '', parameterMappings: [] }])}>新增依赖</button>}
   </div>;
 }
 

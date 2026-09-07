@@ -19,52 +19,30 @@ import (
 )
 
 type ComponentImportDependency struct {
-	Kind              string                    `json:"kind,omitempty"`
+	Kind              string                    `json:"kind"`
 	ComponentSlug     string                    `json:"componentSlug"`
 	Purpose           string                    `json:"purpose"`
 	ParameterMappings []domain.ParameterMapping `json:"parameterMappings"`
 }
 
 type ComponentImportAction struct {
-	ResourceContract    *domain.ResourceContract `json:"resourceContract,omitempty"`
-	ID                  string                   `json:"id"`
-	PreCheckActionID    string                   `json:"preCheckActionId"`
-	PostCheckActionID   string                   `json:"postCheckActionId"`
-	Become              bool                     `json:"become"`
-	Name                string                   `json:"name"`
-	Type                domain.ActionKind        `json:"type"`
-	Playbook            string                   `json:"playbook"`
-	Tags                []string                 `json:"tags"`
-	HostGroup           string                   `json:"hostGroup"`
-	TimeoutSeconds      int                      `json:"timeoutSeconds"`
-	RequiredCredentials []string                 `json:"requiredCredentials"`
-	RiskLevel           domain.RiskLevel         `json:"riskLevel"`
-	Destructive         bool                     `json:"destructive"`
-	Idempotent          bool                     `json:"idempotent"`
+	ID                  string            `json:"id"`
+	PreCheckActionID    string            `json:"preCheckActionId"`
+	PostCheckActionID   string            `json:"postCheckActionId"`
+	Become              bool              `json:"become"`
+	Name                string            `json:"name"`
+	Type                domain.ActionKind `json:"type"`
+	Playbook            string            `json:"playbook"`
+	Tags                []string          `json:"tags"`
+	HostGroup           string            `json:"hostGroup"`
+	TimeoutSeconds      int               `json:"timeoutSeconds"`
+	RequiredCredentials []string          `json:"requiredCredentials"`
+	RiskLevel           domain.RiskLevel  `json:"riskLevel"`
+	Destructive         bool              `json:"destructive"`
+	Idempotent          bool              `json:"idempotent"`
 }
 
 func (a *ComponentImportAction) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	for key, value := range raw {
-		if strings.EqualFold(key, "gatherFacts") || strings.EqualFold(key, "runtimeChecks") {
-			return fmt.Errorf("%w: %s 已移除，请在 YAML 中编写采集与检查", domain.ErrInvalid, key)
-		}
-		if !strings.EqualFold(key, "resourceContract") {
-			continue
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(value, &fields); err != nil {
-			return err
-		}
-		for field := range fields {
-			if strings.EqualFold(field, "checks") {
-				return fmt.Errorf("%w: resourceContract.checks 已移除，请使用前置检查 YAML", domain.ErrInvalid)
-			}
-		}
-	}
 	type plain ComponentImportAction
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -241,9 +219,6 @@ func (p *CatalogService) PreviewImport(ctx context.Context, user domain.User, in
 		actions := make([]domain.ActionDefinition, 0, len(entry.Release.Actions))
 		usedPlaybooks, actionKinds := map[string]bool{}, map[domain.ActionKind]bool{}
 		for _, action := range entry.Release.Actions {
-			if action.ResourceContract != nil && len(action.ResourceContract.Checks) > 0 {
-				return ComponentImportPlan{}, domain.YAMLMigrationRequired(action.Name)
-			}
 			if action.Type == domain.ActionUpgrade {
 				return ComponentImportPlan{}, fmt.Errorf("%w: imported upgrade actions require existing release IDs", domain.ErrInvalid)
 			}
@@ -265,7 +240,7 @@ func (p *CatalogService) PreviewImport(ctx context.Context, user domain.User, in
 			if risk == "" {
 				risk = domain.RiskLow
 			}
-			actions = append(actions, domain.ActionDefinition{ResourceContract: action.ResourceContract, ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
+			actions = append(actions, domain.ActionDefinition{ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, Name: action.Name, Kind: action.Type, Playbook: action.Playbook, Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent})
 		}
 		for _, action := range actions {
 			expected, err := domain.ActionTaskPath(action)
@@ -505,7 +480,7 @@ func (p *CatalogService) prepareComponentImport(ctx context.Context, user domain
 			if risk == "" {
 				risk = domain.RiskLow
 			}
-			definition := domain.ActionDefinition{ResourceContract: action.ResourceContract, ID: ids[action.ID], ReleaseID: release.ID, Name: action.Name, Kind: action.Type,
+			definition := domain.ActionDefinition{ID: ids[action.ID], ReleaseID: release.ID, Name: action.Name, Kind: action.Type,
 				PreCheckActionID: ids[action.PreCheckActionID], PostCheckActionID: ids[action.PostCheckActionID], Become: action.Become,
 				Tags: action.Tags, HostGroup: action.HostGroup, TimeoutSeconds: timeout, RequiredCredentials: action.RequiredCredentials, RiskLevel: risk, Destructive: action.Destructive, Idempotent: action.Idempotent}
 			path, err := domain.ActionTaskPath(definition)

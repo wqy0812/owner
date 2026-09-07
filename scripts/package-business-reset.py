@@ -36,7 +36,7 @@ for line in Path('/etc/clusterforge/platform.env').read_text().splitlines():
         private.add(Path(line.split('=', 1)[1].strip()))
 missing = []
 for revision in data['environment_revisions']:
-    for ref in revision.get('credential_refs_json', []):
+    for ref in revision.get('credential_refs_json') or []:
         if ref.get('kind') == 'sshKeyPath':
             p = Path(ref.get('reference', ''))
             if p.is_absolute() and p.is_file():
@@ -60,7 +60,7 @@ components = {r['id']: r for r in data['components']}
 releases = {r['id']: r for r in data['component_releases']}
 users = {r['id']: r for r in data['users']}
 lines = ['# 手工重新录入资料', '', '本资料不包含历史 Run、日志、审批、安装记录或测试证据。旧版本和发布状态仅供参考，重新录入后必须重新测试。', '',
-'## 文件说明', '', '- `business.json`：全部业务定义与历史版本，JSON 字段已展开。', '- `platform.db`：不含 Run 历史的业务恢复库，仅用于故障恢复，不自动导入新平台。', '- `foundation.db`：按当前 schema 新建，仅转换账号、分类/选项和环境变量字段；不含旧业务、Run 或全局默认参数。', '- `playbooks.tar.gz`：完整 Playbook 文件，路径相对于原 `/opt/clusterforge/jobs`。', '- `playbook-sha256.json`：每个 Playbook 文件的摘要。', '- `sensitive-files.tar.gz`、`platform.env`：受限运维配置和凭据文件，不要公开分享。', '- `SHA256SUMS`：全部交付文件的校验清单。', '',
+'## 文件说明', '', '- `business.json`：全部业务定义与历史版本，JSON 字段已展开。', '- `platform.db`：不含 Run 历史的业务恢复库，仅用于故障恢复，不自动导入新平台。', '- `foundation.db`：按当前 schema 新建，只复制当前精确合同的账号、分类/选项和环境变量字段；不含业务或 Run。', '- `playbooks.tar.gz`：完整 Playbook 文件，路径相对于原 `/opt/clusterforge/jobs`。', '- `playbook-sha256.json`：每个 Playbook 文件的摘要。', '- `sensitive-files.tar.gz`、`platform.env`：受限运维配置和凭据文件，不要公开分享。', '- `SHA256SUMS`：全部交付文件的校验清单。', '',
 '## 录入顺序', '', '1. 核对保留的账号、平台选项和参数目录。', '2. 按依赖顺序建立组件，填写参数、Action、环境约束，上传 Playbook 并登记介质和镜像。', '3. 按环境资料录入主机、主机组、Facts、参数、变量与凭据引用。', '4. 建立场景，重新选择新录入的组件版本，连接依赖和参数映射。', '5. 重新检查和测试；真实主机原有软件未被卸载，不要将平台空库当作主机空环境。', '',
 '## 数据数量', '', '| 类别 | 数量 |', '|---|---:|']
 for key, count in counts.items(): lines.append('| {} | {} |'.format(key, count))

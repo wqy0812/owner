@@ -76,7 +76,7 @@ func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string 
 		if i+1 >= len(steps) || steps[i+1].Phase != "post" || steps[i+1].ParentActionID != step.ActionID || steps[i+1].SourceNodeID != step.SourceNodeID {
 			return "incomplete"
 		}
-		if (step.Action != domain.ActionRollback || step.PreCheckRequired) && (i == 0 || steps[i-1].Phase != "pre" || steps[i-1].ParentActionID != step.ActionID || steps[i-1].SourceNodeID != step.SourceNodeID) {
+		if step.Action != domain.ActionRollback && (i == 0 || steps[i-1].Phase != "pre" || steps[i-1].ParentActionID != step.ActionID || steps[i-1].SourceNodeID != step.SourceNodeID) {
 			return "incomplete"
 		}
 		complete[step.Action] = true

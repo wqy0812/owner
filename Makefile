@@ -47,7 +47,7 @@ test-fixture-boundary:
 test-role-job:
 	@test -n "$(ANSIBLE_PLAYBOOK)" || { echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable"; exit 1; }
 	$(GO) build -o $(JOB_APP) ./cmd/clusterforge-job
-	CLUSTERFORGE_JOB_CLI="$(CURDIR)/$(JOB_APP)" CLUSTERFORGE_JOB_TEST_ANSIBLE="$(ANSIBLE_PLAYBOOK)" $(GO) test ./internal/ansible ./internal/service ./internal/jobcli -run 'TestNativeJobReal|TestRoleJobRealAnsible|TestRoleJobAcceptance|TestScenarioBusinessAcceptanceRealAnsible|TestScenarioAcceptanceCredentialIsolationRealAnsible|TestScenarioRoleJobContinuationRealAnsible|TestStandaloneReal|TestYAMLTwoStepRollbackRealAnsible|TestNativeRollbackResumeAfterProviderRemoval|TestExecutorHealthRealRuntimePlugins' -count=1 -v
+	CLUSTERFORGE_JOB_CLI="$(CURDIR)/$(JOB_APP)" CLUSTERFORGE_JOB_TEST_ANSIBLE="$(ANSIBLE_PLAYBOOK)" $(GO) test ./internal/ansible ./internal/service ./internal/jobcli -run 'TestNativeJobReal|TestRoleJobRealAnsible|TestRoleJobAcceptance|TestScenarioBusinessAcceptanceRealAnsible|TestScenarioAcceptanceCredentialIsolationRealAnsible|TestScenarioRoleJobContinuationRealAnsible|TestStandaloneReal|TestYAMLTwoStepRollbackRealAnsible|TestNativeRollbackResumeAfterProviderRemoval|TestResetTaskTargetsRealAnsible|TestExecutorHealthRealRuntimePlugins' -count=1 -v
 
 test-ansible: test-role-job
 

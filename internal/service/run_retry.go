@@ -146,6 +146,13 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 	if err != nil {
 		return RunRetryPlan{}, err
 	}
+	if source.Kind == domain.RunEnvironmentRollback {
+		continuation := locked
+		continuation.Steps = remaining
+		if err := p.rollback.validateEnvironmentReset(ctx, *environment.Revision, continuation, false); err != nil {
+			return RunRetryPlan{}, err
+		}
+	}
 	for index, step := range remaining {
 		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval})
 		result.RequiresApproval = result.RequiresApproval || step.NeedsApproval
@@ -186,7 +193,7 @@ func (p *ExecutionService) Retry(ctx context.Context, user domain.User, sourceRu
 		return domain.Run{}, err
 	}
 	if source.Kind == domain.RunEnvironmentRollback {
-		locked.InstallationBaseline = installationBaselineFromSteps(locked.Steps)
+		locked.InstallationBaseline = installationBaselineFromSteps(resetRecoverySteps(locked))
 		locked.InstallationBaselineDigest = installationBaselineDigest(locked.InstallationBaseline)
 	}
 	now := time.Now().UTC()

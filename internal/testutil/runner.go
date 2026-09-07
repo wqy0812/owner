@@ -18,6 +18,7 @@ type Runner struct {
 	DigestFunc   func(string) (string, string, error)
 	PlanFunc     func([]string) (map[string]string, string, error)
 	ValidateFunc func([]string) map[string]error
+	TargetFunc   func([]string, ansible.TaskTargetScope) error
 	RuntimeFunc  func(context.Context) (ansible.JobRuntime, error)
 	BuildFunc    func(context.Context, ansible.JobPlan) (*ansible.JobBundle, error)
 	RunFunc      func(context.Context, *ansible.JobBundle, ansible.JobRequest) (ansible.JobResult, error)
@@ -62,6 +63,12 @@ func (r *Runner) RuntimeIdentity(ctx context.Context) (ansible.JobRuntime, error
 	}
 	return ansible.JobRuntime{}, nil
 }
+func (r *Runner) ValidateTaskTargets(paths []string, scope ansible.TaskTargetScope) error {
+	if r.TargetFunc != nil {
+		return r.TargetFunc(paths, scope)
+	}
+	return nil
+}
 func (r *Runner) BuildJob(ctx context.Context, plan ansible.JobPlan) (*ansible.JobBundle, error) {
 	if r.BuildFunc != nil {
 		return r.BuildFunc(ctx, plan)
@@ -102,6 +109,11 @@ func (r *Runner) RunBundle(ctx context.Context, bundle *ansible.JobBundle, reque
 // adaptation lives exclusively in test support, never in production execution.
 func AdaptRunner(value any) *Runner {
 	r := &Runner{}
+	if v, ok := value.(interface {
+		ValidateTaskTargets([]string, ansible.TaskTargetScope) error
+	}); ok {
+		r.TargetFunc = v.ValidateTaskTargets
+	}
 	if v, ok := value.(interface {
 		Digest(string) (string, string, error)
 	}); ok {

@@ -634,13 +634,8 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		}
 		issues, validateErr := platform.Scenarios().Validate(ctx, owner, expectation.id)
 		platform.Close()
-		var orderIssues []domain.ValidationIssue
-		for _, issue := range issues {
-			if issue.Code != "resource.contract_missing" {
-				orderIssues = append(orderIssues, issue)
-			}
-		}
-		if validateErr != nil || len(orderIssues) != 2 || len(issues) == len(orderIssues) {
+		orderIssues := issues
+		if validateErr != nil || len(orderIssues) != 2 {
 			t.Fatalf("scenario %s must ask Owner to order bootstrap nodes: issues=%+v err=%v", expectation.id, issues, validateErr)
 		}
 		for _, issue := range orderIssues {

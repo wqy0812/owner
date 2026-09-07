@@ -23,7 +23,7 @@ import uuid
 from cf_recovery import retry, rollback, action_transition
 
 
-CONTRACT = 'clusterforge-native-job-v3'
+CONTRACT = 'clusterforge-native-job-v4'
 
 
 def utcnow():
@@ -239,8 +239,6 @@ class NativeController:
         if not isinstance(options, dict) or set(options) - {'operation', 'results', 'expectedPlanDigest', 'nodes'}:
             raise ValueError('invalid cf_job options; locked inputs cannot be overridden')
         operation = options.get('operation', 'install')
-        from cf_resources import validate as validate_resources
-        validate_resources(self.manifest['plan'])
         if operation not in ('install', 'resume', 'rollback-preview', 'rollback'):
             raise ValueError('unknown job operation')
         results = options.get('results', '')
@@ -286,7 +284,8 @@ class NativeController:
             last = self.receipt['attempts'][-1]
             run_operation = last['operation']
             if operation == 'resume':
-                stages = retry(dict(steps=last['steps']), last['results'])
+                stages = retry(dict(steps=last['steps'], metadata=plan.get('metadata'),
+                                    recovery=plan['steps'] + (plan.get('recovery') or [])), last['results'])
             else:
                 if last['operation'] == 'rollback' and last['status'] != 'succeeded':
                     raise ValueError('rollback already started; resume its saved attempt')

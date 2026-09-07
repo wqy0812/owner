@@ -74,7 +74,6 @@
           "name": "回收本次创建的空目录",
           "type": "rollback",
           "playbook": "tasks/rollback.yml",
-          "preCheckActionId": "rollback-pre",
           "postCheckActionId": "rollback-post",
           "hostGroup": "all",
           "timeoutSeconds": 120,
@@ -82,17 +81,6 @@
           "destructive": false,
           "idempotent": true,
           "become": false
-        },
-        {
-          "id": "rollback-pre",
-          "name": "rollback-pre",
-          "type": "check",
-          "playbook": "tasks/checks/rollback-pre.yml",
-          "hostGroup": "all",
-          "timeoutSeconds": 60,
-          "riskLevel": "low",
-          "become": false,
-          "destructive": false
         },
         {
           "id": "rollback-post",
@@ -123,10 +111,6 @@
       {
         "filename": "tasks/checks/install-post.yml",
         "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if current is None or data['identity'] != [current.st_dev,current.st_ino] or\\\n      \\ stat.S_IMODE(current.st_mode)!=0o700:\\n    raise SystemExit('prepared directory\\\n      \\ failed independent verification')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
-      },
-      {
-        "filename": "tasks/checks/rollback-pre.yml",
-        "content": "- name: Validate and manage only the declared isolated directory\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, stat, sys\\nfrom pathlib import Path\\npath, marker, metadata\\\n      \\ = sys.argv[1:4]\\nmetadata = json.loads(metadata)\\nif not path.startswith('/tmp/clusterforge-foundation-example-')\\\n      \\ or Path(path).parent != Path('/tmp') or not Path(path).name[len('clusterforge-foundation-example-'):].replace('-',\\\n      \\ '').replace('_','').isalnum():\\n    raise SystemExit('target must be one isolated\\\n      \\ example directory directly under /tmp')\\ndef inspect():\\n    try:\\n      \\\n      \\  s = os.lstat(path)\\n    except FileNotFoundError:\\n        return None\\n\\\n      \\    if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode):\\n        raise\\\n      \\ SystemExit('target is not a real directory')\\n    return s\\ndef baseline():\\n\\\n      \\    data = json.loads(Path(marker).read_text())\\n    if data['metadata'] !=\\\n      \\ metadata or data['path'] != path:\\n        raise SystemExit('recovery identity\\\n      \\ does not match this operation')\\n    return data\\ncurrent=inspect()\\ndata=baseline()\\n\\\n      if current is not None and data['identity'] != [current.st_dev,current.st_ino]:\\n\\\n      \\    raise SystemExit('directory replaced; refuse rollback')\\nif not data['existed']\\\n      \\ and current is not None and os.listdir(path):\\n    raise SystemExit('directory\\\n      \\ has consumers or data; roll back downstream first')\\nif data['existed'] and\\\n      \\ current is None:\\n    raise SystemExit('preexisting directory disappeared')\\n\"\n    - '{{ cf.inputs.shared_root }}'\n    - '{{ cf.inputs.clusterforge_backup_marker }}'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n  changed_when: false\n"
       },
       {
         "filename": "tasks/checks/rollback-post.yml",
@@ -171,7 +155,8 @@
               "upstreamParameter": "shared_root",
               "targetParameter": "prepared_root"
             }
-          ]
+          ],
+          "kind": "execution"
         }
       ],
       "actions": [
@@ -216,7 +201,6 @@
           "name": "回收本次创建的空目录",
           "type": "rollback",
           "playbook": "tasks/rollback.yml",
-          "preCheckActionId": "rollback-pre",
           "postCheckActionId": "rollback-post",
           "hostGroup": "all",
           "timeoutSeconds": 120,
@@ -224,17 +208,6 @@
           "destructive": false,
           "idempotent": true,
           "become": false
-        },
-        {
-          "id": "rollback-pre",
-          "name": "rollback-pre",
-          "type": "check",
-          "playbook": "tasks/checks/rollback-pre.yml",
-          "hostGroup": "all",
-          "timeoutSeconds": 60,
-          "riskLevel": "low",
-          "become": false,
-          "destructive": false
         },
         {
           "id": "rollback-post",
@@ -265,10 +238,6 @@
       {
         "filename": "tasks/rollback.yml",
         "content": "- name: Release only matching consumer marker\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - rollback\n"
-      },
-      {
-        "filename": "tasks/checks/rollback-pre.yml",
-        "content": "- name: Verify consumer identity\n  ansible.builtin.command:\n    argv:\n    - python3\n    - -c\n    - \"import json, os, sys\\nfrom pathlib import Path\\npath, identity, mode = sys.argv[1:4]\\n\\\n      if not str(Path(path).parent).startswith('/tmp/clusterforge-foundation-example-'):\\n\\\n      \\    raise SystemExit('unexpected root')\\nif mode == 'install':\\n    with open(path,\\\n      \\ 'x') as out: out.write(identity)\\nelse:\\n    if Path(path).is_symlink() or\\\n      \\ json.loads(Path(path).read_text()) != json.loads(identity):\\n        raise\\\n      \\ SystemExit('consumer marker identity differs')\\n    if mode == 'rollback':\\\n      \\ os.unlink(path)\\n\"\n    - '{{ cf.inputs.prepared_root }}/.clusterforge-consumer-example'\n    - '{{ cf.inputs.clusterforge_backup_metadata | to_json }}'\n    - verify\n  changed_when: false\n"
       },
       {
         "filename": "tasks/checks/rollback-post.yml",

@@ -11,7 +11,7 @@ import (
 
 // JSON references are explicit identity fields, not substring matches against
 // messages, parameters or backup paths. The same predicate fences all writers.
-const runReferenceKeySQL = `('installRunId','backupInstallRunId','sourceRunId','baselineRunId','historicalBaselineRunId','retryOfRunId','retryRootRunId','install_run_id','runId')`
+const runReferenceKeySQL = `('installRunId','backupInstallRunId','sourceRunId','baselineRunId','retryOfRunId','retryRootRunId','install_run_id','runId')`
 
 // Locked step variables and resolved parameter values are user data. Even a
 // nested field named runId in those values is not a platform history reference.

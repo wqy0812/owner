@@ -197,7 +197,7 @@ func replaceReleaseChildren(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 		}
 	}
 	for _, a := range r.Actions {
-		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.HostGroup, jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID), a.PreCheckActionID, a.PostCheckActionID, a.Become, a.GatherFacts, resourceContractJSON(a.ResourceContract))
+		_, err := tx.ExecContext(ctx, `INSERT INTO action_definitions(id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, r.ID, a.Name, a.Kind, a.Playbook, a.PlaybookSHA256, jsonText(nonNilStrings(a.Tags)), a.HostGroup, jsonText(nonNilStrings(a.RequiredCredentials)), a.TimeoutSeconds, a.RiskLevel, a.Destructive, a.Idempotent, nullString(a.FromReleaseID), nullString(a.ToReleaseID), a.PreCheckActionID, a.PostCheckActionID, a.Become)
 		if err != nil {
 			return mapSQLError(err)
 		}
@@ -325,7 +325,7 @@ func listDependencies(ctx context.Context, q queryer, releaseIDs ...string) ([]d
 
 func listActions(ctx context.Context, q queryer, releaseIDs ...string) ([]domain.ActionDefinition, error) {
 	placeholders, args := releaseIDPlaceholders(releaseIDs)
-	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become,gather_facts,resource_contract_json FROM action_definitions WHERE release_id IN (`+placeholders+`) ORDER BY kind,name`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT id,release_id,name,kind,playbook,playbook_sha256,tags_json,host_group,required_credentials_json,timeout_seconds,risk_level,destructive,idempotent,from_release_id,to_release_id,pre_check_action_id,post_check_action_id,become FROM action_definitions WHERE release_id IN (`+placeholders+`) ORDER BY kind,name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -334,14 +334,10 @@ func listActions(ctx context.Context, q queryer, releaseIDs ...string) ([]domain
 	for rows.Next() {
 		var a domain.ActionDefinition
 		var tags, requiredCredentials string
-		var resourceJSON sql.NullString
 		var destructive, idempotent int
 		var from, to sql.NullString
-		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.HostGroup, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to, &a.PreCheckActionID, &a.PostCheckActionID, &a.Become, &a.GatherFacts, &resourceJSON); err != nil {
+		if err := rows.Scan(&a.ID, &a.ReleaseID, &a.Name, &a.Kind, &a.Playbook, &a.PlaybookSHA256, &tags, &a.HostGroup, &requiredCredentials, &a.TimeoutSeconds, &a.RiskLevel, &destructive, &idempotent, &from, &to, &a.PreCheckActionID, &a.PostCheckActionID, &a.Become); err != nil {
 			return nil, err
-		}
-		if resourceJSON.Valid {
-			a.ResourceContract = decodeJSON(resourceJSON.String, (*domain.ResourceContract)(nil))
 		}
 		a.Tags = nonNilStrings(decodeJSON(tags, []string{}))
 		a.RequiredCredentials = nonNilStrings(decodeJSON(requiredCredentials, []string{}))

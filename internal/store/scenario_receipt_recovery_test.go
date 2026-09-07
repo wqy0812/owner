@@ -18,7 +18,7 @@ func TestScenarioReceiptRecoveryRequiresCurrentExactVerifiedBaseline(t *testing.
 		{name: "mutating acceptance generation", want: true, mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET generation=3`)
 		}},
-		{name: "historical baseline", want: true, mutate: func(_ *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "removed historical baseline is rejected", want: false, mutate: func(_ *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
 			s["historicalBaselineRunId"] = "baseline"
 			s["baselineRunId"] = ""
 			s["historicalBaselineTestOnly"] = false

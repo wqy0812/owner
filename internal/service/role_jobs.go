@@ -3,9 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
@@ -14,9 +13,15 @@ import (
 
 func jobPlanFromLocked(environmentID string, plan lockedPlan, inventory []byte) ansiblerunner.JobPlan {
 	job := ansiblerunner.JobPlan{Contract: ansiblerunner.JobContract, EnvironmentID: environmentID, Runtime: plan.Runtime, Inventory: string(inventory), Metadata: structToMap(plan)}
+	if plan.ResetBoundaryDigest != "" {
+		scope := resetTaskTargetScope(plan.ResetTargets)
+		// The typed scope is reconstructed below by the executor from the same
+		// immutable Environment Revision used to render inventory.ini.
+		job.TaskTargetScope = &scope
+	}
 	credentials := map[string]bool{}
 	for _, s := range plan.Steps {
-		job.Steps = append(job.Steps, ansiblerunner.JobStep{GatherFacts: s.GatherFacts, RuntimeChecks: s.RuntimeChecks, PreCheckRequired: s.PreCheckRequired, ResourceContract: s.ResourceContract, Resources: s.Resources, Media: s.Media, Stage: s.Stage, SourceType: s.SourceType, ScenarioRevisionID: s.ScenarioRevisionID, ID: s.ID, NodeID: s.SourceNodeID, Name: s.Name, ReleaseID: s.ReleaseID, ComponentID: s.ComponentID, ParentActionID: s.ParentActionID, ActionID: s.ActionID, Action: string(s.Action), Phase: s.Phase, Playbook: s.Playbook, PlaybookDigest: s.PlaybookDigest, WorkspaceDigest: s.WorkspaceDigest, Limit: s.Limit, Variables: s.Variables, TimeoutSeconds: s.TimeoutSeconds, Become: s.Become, RetrySafe: s.RetrySafe})
+		job.Steps = append(job.Steps, ansiblerunner.JobStep{Media: s.Media, Stage: s.Stage, SourceType: s.SourceType, ScenarioRevisionID: s.ScenarioRevisionID, ID: s.ID, NodeID: s.SourceNodeID, Name: s.Name, ReleaseID: s.ReleaseID, ComponentID: s.ComponentID, ParentActionID: s.ParentActionID, ActionID: s.ActionID, Action: string(s.Action), Phase: s.Phase, Playbook: s.Playbook, PlaybookDigest: s.PlaybookDigest, WorkspaceDigest: s.WorkspaceDigest, Limit: s.Limit, Variables: s.Variables, TimeoutSeconds: s.TimeoutSeconds, Become: s.Become, RetrySafe: s.RetrySafe})
 		for _, name := range s.RequiredCredentials {
 			if !credentials[name] {
 				job.RequiredCredentials = append(job.RequiredCredentials, name)
@@ -54,6 +59,19 @@ func parentExecutionStep(steps []lockedStep, check lockedStep) *lockedStep {
 
 func (p *RunExecutor) executeLockedJob(ctx context.Context, run domain.Run, request ansiblerunner.JobRequest) (ansiblerunner.JobResult, error) {
 	builder := p.jobs
+	if request.Plan.TaskTargetScope != nil {
+		revision, err := p.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
+		if err != nil {
+			return ansiblerunner.JobResult{}, err
+		}
+		var inventory InventoryDocument
+		if err := json.Unmarshal(revision.Inventory, &inventory); err != nil {
+			return ansiblerunner.JobResult{}, err
+		}
+		plan := lockedPlanFromMetadata(request.Plan.Metadata)
+		scope := resetTaskTargetScopeWithInventory(plan.ResetTargets, inventory)
+		request.Plan.TaskTargetScope = &scope
+	}
 	if err := p.rollback.addRecoverySteps(ctx, &request.Plan, lockedPlanFromMetadata(request.Plan.Metadata)); err != nil {
 		return ansiblerunner.JobResult{}, err
 	}
@@ -79,24 +97,10 @@ func (p *RunExecutor) executeLockedJob(ctx context.Context, run domain.Run, requ
 	return result, err
 }
 func attachJobCompanions(bundle *ansiblerunner.JobBundle) error {
-	if ansiblerunner.IsNativeJobContract(bundle.Manifest.Contract) {
-		return bundle.AddFile("README.md", []byte(nativeJobReadme), false)
+	if !ansiblerunner.IsNativeJobContract(bundle.Manifest.Contract) {
+		return fmt.Errorf("unsupported job contract %q", bundle.Manifest.Contract)
 	}
-
-	executable := os.Getenv("CLUSTERFORGE_JOB_CLI")
-	if executable == "" {
-		if self, err := os.Executable(); err == nil {
-			executable = filepath.Join(filepath.Dir(self), "clusterforge-job")
-		}
-	}
-	data, err := os.ReadFile(executable)
-	if err != nil {
-		return fmt.Errorf("standalone executable is unavailable; build clusterforge-job or configure CLUSTERFORGE_JOB_CLI: %w", err)
-	}
-	if err := bundle.AddFile("clusterforge-job", data, true); err != nil {
-		return err
-	}
-	return bundle.AddFile("README.md", []byte("# ClusterForge role job\n\nRun `./clusterforge-job run . --credentials /private/credentials.json --results /private/results`.\nThe controller requires the exact Ansible and Python versions recorded in manifest.json.\nThe package contains no credentials. All phases run in one formal ansible-playbook invocation.\nUse `resume` with the original results to continue safely; use `rollback-preview` before `rollback`.\nInstallation media and images are verified against the locked plan and must remain accessible.\nIndependent execution records results locally and never writes platform approvals or evidence.\n"), false)
+	return bundle.AddFile("README.md", []byte(nativeJobReadme), false)
 }
 
 func lockedPlanFromMetadata(metadata map[string]any) lockedPlan {

@@ -15,6 +15,7 @@ import { type ContractEditIntent, type ContractSection } from '../features/compo
 import { CreateComponentModal, EditComponentModal, EditReleaseModal, InspectReleaseModal, NewVersionModal } from '../features/components/releases/ReleaseDialogs';
 import { useReleaseLifecycleActions } from '../features/components/releases/ReleaseLifecycleActions';
 import { useComponentSelection } from '../features/components/useComponentSelection';
+import { useComponentDeletion } from '../features/components/useComponentDeletion';
 import { ReleaseRunEvidenceModal, TestReleaseModal } from '../features/components/verification/ReleaseVerification';
 import { activeWorkbench } from '../hooks/activeWork';
 import { useApiData } from '../hooks/useApiData';
@@ -24,7 +25,10 @@ export function ComponentsPage() {
   const { user, notify, signalRefresh } = useApp();
   const selection = useComponentSelection();
   const { searchParams, setSearchParams, selectedId, selectedReleaseId } = selection;
-  const { data: components, loading, error, isRefreshing, reload } = useApiData((signal) => api.componentSummaries(signal), [user.id], 'components');
+  const { data: catalog, loading, error, isRefreshing, reload, setData: setCatalog } = useApiData((signal) => api.componentSummaries(signal), [user.id], 'components');
+  const [deletedComponentIds, setDeletedComponentIds] = useState<ReadonlySet<string>>(() => new Set());
+  // A catalog read already in flight must not resurrect a confirmed deletion.
+  const components = catalog?.filter(component => !deletedComponentIds.has(component.id));
   const [createOpen, setCreateOpen] = useState(false);
   const [componentImportOpen, setComponentImportOpen] = useState(false);
   const [versionBase, setVersionBase] = useState<Component>();
@@ -61,6 +65,16 @@ export function ComponentsPage() {
   const detailId = selectedId ?? components?.[0]?.id;
   const detailQuery = useApiData((signal) => detailId ? api.component(detailId, signal) : Promise.resolve(undefined), [user.id, detailId], ['components', 'runs', 'workbench'], component => activeWorkbench({ items: component?.readContext?.workItems ?? [] }));
   const selected = detailQuery.data;
+  const deletion = useComponentDeletion({
+    scopeKey: `${user.id}:${detailId ?? ''}`,
+    onDeleted: (id) => {
+      setDeletedComponentIds(current => new Set([...current, id]));
+      setCatalog(undefined);
+      detailQuery.setData(undefined);
+      setSearchParams({}, { replace: true });
+    },
+    onRejected: () => detailQuery.setData(current => current ? { ...current, canDelete: false } : current),
+  });
   const { data: editorComponents, error: editorComponentsError, loading: editorComponentsLoading, reload: reloadEditorComponents } = useApiData((signal) => editingContract ? api.components(signal) : Promise.resolve(undefined), [user.id, editingContract], 'components');
   const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
   const reviewRelease = releases.find((release) => release.id === reviewReleaseId && release.review.status === 'rejected');
@@ -201,6 +215,7 @@ export function ComponentsPage() {
                   showDefaultHint={!contractReleaseId && !selectedReleaseId && Boolean(selected.latestRelease && contractRelease && selected.latestRelease.id !== contractRelease.id)}
                   selectContractRelease={selectContractRelease} onReleaseAction={handleReleaseAction}
                   onEditComponent={() => setEditComponent(selected)} onNewVersion={() => setVersionBase(selected)} onNewBranch={() => setBlankVersionBase(selected)}
+                  deletingComponent={deletion.deleting} onDeleteComponent={detailQuery.error ? undefined : () => void deletion.deleteComponent(selected)}
                   onEditContract={(section, release) => { if (release) { selectContractRelease(release.id); setContractFocus(section); setEditingContract(true); } else startEditingContract(section); }}
                   contractEditor={showContractEditor && contractRelease ? (
                     editorComponentsError ? <ErrorBlock message={editorComponentsError} onRetry={() => void reloadEditorComponents()} /> : editorComponentsLoading || !editorComponents ? <LoadingBlock label="正在读取可引用的组件合同…" /> : <ReleaseContractEditor key={`${contractRelease.id}:${contractFocus}`} onDirtyChange={setContractDirty} release={contractRelease} components={editorComponents} focusSection={contractFocus} onCancel={() => { setContractDirty(false); setEditingContract(false); setContractFocus(undefined); }} onSaved={() => { setContractDirty(false); setEditingContract(false); setContractFocus(undefined); signalRefresh('components'); }} />

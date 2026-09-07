@@ -47,10 +47,6 @@ func (p *RunCreator) createScenarioRun(ctx context.Context, user domain.User, id
 	if mode == domain.ScenarioExecutionBaselineVerify {
 		snapshot["recoveredReceipts"] = x.recoveredReceipts
 	}
-	if x.historical != nil {
-		snapshot["historicalBaselineRunId"] = x.historical.Run.ID
-		snapshot["historicalBaselineTestOnly"] = x.historical.TestOnly
-	}
 	snapshot["environmentRevisionId"] = x.prepared.environment.CurrentRevisionID
 	snapshot["planDigest"] = x.preview.PlanDigest
 	snapshot["submissionKey"] = input.IdempotencyKey
@@ -102,7 +98,7 @@ func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, sourc
 		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: now}
 		run.Approval = approval
 	}
-	if source.InputSnapshot["scenarioContractVersion"] != nil {
+	if source.ScenarioRevisionID != "" {
 		baseline, err := p.store.GetScenarioInstallation(ctx, source.EnvironmentID, fmt.Sprint(source.InputSnapshot["scenarioId"]))
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return run, err
@@ -111,15 +107,8 @@ func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, sourc
 		run.InputSnapshot["retryBaselineMutatingRunId"] = baseline.MutatingRunID
 		run.InputSnapshot["submissionKey"] = "retry-" + run.ID
 		run.InputSnapshot["submissionDigest"] = preview.PlanDigest
-	} else if source.Kind == domain.RunScenarioTest {
-		if err := p.store.SetScenarioRevisionStatus(ctx, source.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionDraft}, domain.RevisionTesting, now); err != nil {
-			return run, err
-		}
 	}
 	if err := p.store.CreateRun(ctx, run, approval); err != nil {
-		if source.Kind == domain.RunScenarioTest && source.InputSnapshot["scenarioContractVersion"] == nil {
-			_ = p.store.SetScenarioRevisionStatus(ctx, source.ScenarioRevisionID, []domain.RevisionStatus{domain.RevisionTesting}, domain.RevisionDraft, now)
-		}
 		return run, err
 	}
 	p.audit.Record(ctx, user, "run.retry_created", "run", run.ID, map[string]any{"sourceRunId": source.ID, "retryRootRunId": run.RetryRootRunID, "retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep, "planDigest": preview.PlanDigest})

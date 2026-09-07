@@ -105,7 +105,7 @@ internal/service
 
 环境连通性检查直接使用 Go SSH 客户端：严格读取 `NEWPLATFORM_SSH_KNOWN_HOSTS` 指向的主机指纹文件，并使用 Environment Revision 中显式声明的 SSH CredentialRef 完成认证和 `true` 执行。该检查不调用 Ansible；用户 Catalog Playbook 仍只由 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 管理。
 
-`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 Catalog `snapshot`。独立的 `database` 子命令由 `internal/deploydb` 提供，负责受保护部署的数据库合同读取、活动 Run 检查、一致性文件备份和完整性校验，以及 `history-snapshot` / `history-verify` / `history-restore` 完整运行历史备份恢复，不初始化或迁移源数据库。`business-snapshot` 输出不含 Run 的原合同业务恢复库；`foundation-snapshot` 用当前 schema 新建基础库，只转换旧 V1 账号、分类/选项及环境变量字段定义。环境 Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
+`cmd/backup` 构建独立的 `clusterforge-backup` 自动化与恢复 CLI。它与服务端发布后调度器共用 `internal/backup`，负责 systemd/受保护部署的固定来源快照、校验、续传和只写新路径的恢复；不提供人工 Catalog `snapshot`。独立的 `database` 子命令由 `internal/deploydb` 提供，负责受保护部署的数据库合同读取、活动 Run 检查、一致性文件备份和完整性校验，以及 `history-snapshot` / `history-verify` / `history-restore` 完整运行历史备份恢复，不初始化或迁移源数据库。`business-snapshot` 和 `foundation-snapshot` 只接受当前精确合同；前者输出不含 Run 的业务恢复库，后者只复制账号、分类/选项及环境变量字段定义。环境 Owner 的人工恢复点通过灾备页面调用受权限保护的 HTTP API 创建。
 
 ### 3.2 `cmd/fss` 与 `internal/fss`
 
@@ -154,6 +154,7 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `scenarios.go` | 场景、Revision、DAG 校验、测试和运行 |
 | `scenario_lifecycle.go` | 场景分支、新建版本、安装与升级执行预览、基线复核 |
 | `scenario_acceptance.go` | 场景验收合同、工作区文件和上传 |
+| `yaml_authoring.go` | YAML 源码请求的当前契约严格解码 |
 | `job_exports.go` | 场景作业预览与独立作业包下载 |
 | `environments.go` | Inventory、Facts、变量和 CredentialRef |
 | `platform_parameters.go` | 环境变量字段与目录写入审计 |
@@ -163,7 +164,6 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `runs.go` | Run 查询、审批、取消和日志 |
 | `run_logs.go` | Run 诊断、轻量 activity 和日志包下载 |
 | `preparation.go` | 执行器健康与执行准备任务 |
-| `yaml_authoring.go` | YAML 编写检查与迁入预览 |
 | `events.go` | SSE 事件通道 |
 | `notifications.go` | 站内通知和审计查询 |
 
@@ -224,7 +224,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260906-workbench-run-observations`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260907-no-resource-contract`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
 
 分支范围由 `branch_scope.go` 统一规范化，在发布线及场景父对象创建时固定；Store 对版本写入复核范围，SQLite 触发器保护父对象范围。`contract_patch.go` 按编辑分区提交，`environment_credential_sources.go` 聚合有权限的凭据声明来源。`scripts/inspect-branch-scopes.py` 只读盘点旧数据；`examples/components/host-foundation-example.json` 与 `scripts/test-host-foundation-example.py` 提供目录归属样板及隔离验证。
 

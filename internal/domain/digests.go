@@ -23,32 +23,30 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		Digest      string `json:"digest"`
 	}
 	type dependencySpec struct {
-		Kind                string             `json:"kind,omitempty"`
+		Kind                string             `json:"kind"`
 		UpstreamComponentID string             `json:"upstreamComponentId"`
 		UpstreamReleaseID   string             `json:"upstreamReleaseId"`
 		Purpose             string             `json:"purpose"`
 		ParameterMappings   []ParameterMapping `json:"parameterMappings"`
 	}
 	type actionSpec struct {
-		ResourceContract    *ResourceContract `json:"resourceContract,omitempty"`
-		ID                  string            `json:"id"`
-		PreCheckActionID    string            `json:"preCheckActionId"`
-		PostCheckActionID   string            `json:"postCheckActionId"`
-		Become              bool              `json:"become"`
-		GatherFacts         bool              `json:"gatherFacts"`
-		Name                string            `json:"name"`
-		Kind                ActionKind        `json:"kind"`
-		Playbook            string            `json:"playbook"`
-		PlaybookSHA256      string            `json:"playbookSha256"`
-		Tags                []string          `json:"tags"`
-		HostGroup           string            `json:"hostGroup"`
-		RequiredCredentials []string          `json:"requiredCredentials"`
-		TimeoutSeconds      int               `json:"timeoutSeconds"`
-		RiskLevel           RiskLevel         `json:"riskLevel"`
-		Destructive         bool              `json:"destructive"`
-		Idempotent          bool              `json:"idempotent"`
-		FromReleaseID       string            `json:"fromReleaseId"`
-		ToReleaseID         string            `json:"toReleaseId"`
+		ID                  string     `json:"id"`
+		PreCheckActionID    string     `json:"preCheckActionId"`
+		PostCheckActionID   string     `json:"postCheckActionId"`
+		Become              bool       `json:"become"`
+		Name                string     `json:"name"`
+		Kind                ActionKind `json:"kind"`
+		Playbook            string     `json:"playbook"`
+		PlaybookSHA256      string     `json:"playbookSha256"`
+		Tags                []string   `json:"tags"`
+		HostGroup           string     `json:"hostGroup"`
+		RequiredCredentials []string   `json:"requiredCredentials"`
+		TimeoutSeconds      int        `json:"timeoutSeconds"`
+		RiskLevel           RiskLevel  `json:"riskLevel"`
+		Destructive         bool       `json:"destructive"`
+		Idempotent          bool       `json:"idempotent"`
+		FromReleaseID       string     `json:"fromReleaseId"`
+		ToReleaseID         string     `json:"toReleaseId"`
 	}
 	type playbookFileSpec struct {
 		Path      string `json:"path"`
@@ -96,8 +94,7 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 		})
 	}
 	for _, action := range release.Actions {
-		spec.Actions = append(spec.Actions, actionSpec{ResourceContract: action.ResourceContract,
-			ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, GatherFacts: action.GatherFacts, Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
+		spec.Actions = append(spec.Actions, actionSpec{ID: action.ID, PreCheckActionID: action.PreCheckActionID, PostCheckActionID: action.PostCheckActionID, Become: action.Become, Name: action.Name, Kind: action.Kind, Playbook: action.Playbook, PlaybookSHA256: action.PlaybookSHA256, Tags: action.Tags,
 			HostGroup:           action.HostGroup,
 			RequiredCredentials: action.RequiredCredentials,
 			TimeoutSeconds:      action.TimeoutSeconds, RiskLevel: action.RiskLevel, Destructive: action.Destructive,
@@ -116,34 +113,17 @@ func ComponentReleaseSpecDigest(release ComponentRelease) string {
 }
 
 func ScenarioRevisionSpecDigest(revision ScenarioRevision) string {
-	if revision.DigestVersion >= ScenarioDigestVersion {
-		// Identity and publication state are excluded, while every editable execution
-		// contract and immutable upgrade source is included. Version zero retains
-		// the exact historic algorithm for immutable Run evidence.
-		spec := revision
-		spec.ID, spec.ScenarioID, spec.Status = "", "", ""
-		spec.Revision, spec.PublicationGeneration = 0, 0
-		spec.CreatedAt = time.Time{}
-		spec.TestPassedAt, spec.ReleasedAt, spec.DeprecatedAt, spec.AbandonedAt = nil, nil, nil, nil
-		if len(spec.EnvironmentConstraints) == 0 {
-			spec.EnvironmentConstraints = map[string]any{}
-		}
-		encoded, _ := json.Marshal(spec)
-		digest := sha256.Sum256(encoded)
-		return fmt.Sprintf("%x", digest[:])
+	// Exclude record identity and publication state; include every execution
+	// setting, acceptance definition and immutable upgrade source.
+	spec := revision
+	spec.ID, spec.ScenarioID, spec.Status = "", "", ""
+	spec.Revision, spec.PublicationGeneration = 0, 0
+	spec.CreatedAt = time.Time{}
+	spec.TestPassedAt, spec.ReleasedAt, spec.DeprecatedAt, spec.AbandonedAt = nil, nil, nil, nil
+	if len(spec.EnvironmentConstraints) == 0 {
+		spec.EnvironmentConstraints = map[string]any{}
 	}
-	return LegacyScenarioRevisionSpecDigest(revision)
-}
-
-func LegacyScenarioRevisionSpecDigest(revision ScenarioRevision) string {
-	constraints := revision.EnvironmentConstraints
-	if len(constraints) == 0 {
-		constraints = map[string]any{}
-	}
-	encoded, _ := json.Marshal(struct {
-		Graph                  ScenarioGraph
-		EnvironmentConstraints map[string]any
-	}{revision.Graph, constraints})
+	encoded, _ := json.Marshal(spec)
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }

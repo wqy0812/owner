@@ -31,7 +31,7 @@ func TestCaptureReleasePublicationStateLocksDependencyAndTransitionClosure(t *te
 	releases := map[string]domain.ComponentRelease{
 		"current": {
 			ID: "current", ComponentID: "component", Version: "2.0.0", Status: domain.ReleaseDraft, Candidate: true, PublicationGeneration: 7,
-			Dependencies: []domain.ComponentDependency{{UpstreamReleaseID: "dependency"}, {UpstreamReleaseID: "removed-dependency"}},
+			Dependencies: []domain.ComponentDependency{{Kind: "execution", UpstreamReleaseID: "dependency"}, {Kind: "execution", UpstreamReleaseID: "removed-dependency"}},
 			Actions:      []domain.ActionDefinition{{Kind: domain.ActionUpgrade, FromReleaseID: "previous", ToReleaseID: "current"}},
 		},
 		"dependency": {ID: "dependency", ComponentID: "dependency-component", Version: "1.0.0", Status: domain.ReleaseReleased, PublicationGeneration: 2},

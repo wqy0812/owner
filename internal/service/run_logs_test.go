@@ -86,7 +86,7 @@ func TestRunDiagnosticsFindsDurableFailuresBeforeTail(t *testing.T) {
 }
 func TestRunDiagnosticTextFallbackAndProtectedOutput(t *testing.T) {
 	tests := []struct{ name, line, stream, want string }{
-		{"legacy fatal", `fatal: [host]: FAILED! => {"msg":"DNS resolution failed"}`, "stdout", "DNS resolution failed"},
+		{"text fatal", `fatal: [host]: FAILED! => {"msg":"DNS resolution failed"}`, "stdout", "DNS resolution failed"},
 		{"unreachable", `fatal: [host]: UNREACHABLE! => {"msg":"SSH connection timed out"}`, "stdout", "timed out"},
 		{"startup", "ERROR! syntax error at role/tasks/main.yml", "stderr", "syntax error"},
 		{"timeout", "task timed out after 300s", "system", "timed out"},
@@ -119,7 +119,7 @@ func TestRunDiagnosticTextFallbackAndProtectedOutput(t *testing.T) {
 	}
 }
 
-func TestRunDiagnosticMultilineLegacyAndLaterTasks(t *testing.T) {
+func TestRunDiagnosticMultilineTextAndLaterTasks(t *testing.T) {
 	var c diagnosticCollector
 	lines := []string{
 		"TASK [Check Kubernetes API] ****************",
@@ -136,7 +136,7 @@ func TestRunDiagnosticMultilineLegacyAndLaterTasks(t *testing.T) {
 	}
 	items := c.finish(domain.Run{Status: domain.RunFailed})
 	if len(items) != 1 || items[0].LogID != 2 || items[0].Task != "Check Kubernetes API" || !strings.Contains(items[0].Message, "6443 was refused") || items[0].ExitCode == nil || *items[0].ExitCode != 1 {
-		t.Fatalf("multiline legacy diagnostic: %+v", items)
+		t.Fatalf("multiline text diagnostic: %+v", items)
 	}
 	var events diagnosticCollector
 	for i, task := range []string{"Check API", "Check DNS"} {

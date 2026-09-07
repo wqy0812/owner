@@ -41,7 +41,7 @@ func TestScenarioAcceptanceCatalogRoundTripAndTamper(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	revision := domain.ScenarioRevision{ID: "source-r1", ScenarioID: "source", Revision: 1, Status: domain.RevisionReleased, DigestVersion: domain.ScenarioDigestVersion, CreatedAt: now, ReleasedAt: &now, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, AcceptanceWorkspaceRoot: "managed-scenarios/source/source-r1/"}
+	revision := domain.ScenarioRevision{ID: "source-r1", ScenarioID: "source", Revision: 1, Status: domain.RevisionReleased, CreatedAt: now, ReleasedAt: &now, Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, AcceptanceWorkspaceRoot: "managed-scenarios/source/source-r1/"}
 	files := []Playbook{}
 	for relative, data := range map[string]string{"tasks/acceptance/business.yml": "- name: Assert business\n  ansible.builtin.assert:\n    that: true\n", "templates/check.j2": "business {{ endpoint }}"} {
 		path := filepath.Join(playbooks, filepath.FromSlash(revision.AcceptanceWorkspaceRoot+relative))

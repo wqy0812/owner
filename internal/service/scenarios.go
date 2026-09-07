@@ -43,7 +43,7 @@ func (p *ScenarioService) Create(ctx context.Context, user domain.User, scenario
 	scenario.ID, scenario.OwnerID, scenario.CreatedAt, scenario.UpdatedAt = newID("scenario"), user.ID, now, now
 	scenario.ForkedFromScenarioID, scenario.ForkedFromRevisionID, scenario.ForkedFromDigest = "", "", ""
 	revision := domain.ScenarioRevision{
-		ID: newID("scenario-revision"), ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft, DigestVersion: domain.ScenarioDigestVersion,
+		ID: newID("scenario-revision"), ScenarioID: scenario.ID, Revision: 1, Status: domain.RevisionDraft,
 		Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{}, Edges: []domain.ScenarioEdge{}}, CreatedAt: now, EnvironmentConstraints: scenario.EnvironmentConstraints,
 	}
 	scenario.CurrentRevisionID = revision.ID
@@ -101,7 +101,6 @@ func (p *ScenarioService) CloneRevision(ctx context.Context, user domain.User, s
 	next := plan.NextRevision
 	source.SourceRevisionID, source.SourceRunID = input.SourceRevisionID, plan.SourceRunID
 	source.UpgradeConstraints = nil
-	source.DigestVersion = domain.ScenarioDigestVersion
 	source.PublicationGeneration = 0
 	source.ID, source.Revision, source.Status = newID("scenario-revision"), next, domain.RevisionDraft
 	source.CreatedAt, source.TestPassedAt, source.ReleasedAt, source.DeprecatedAt, source.AbandonedAt = time.Now().UTC(), nil, nil, nil, nil
@@ -328,11 +327,6 @@ func (p *ScenarioService) Validate(ctx context.Context, user domain.User, revisi
 			issues = append(issues, domain.ScenarioAdaptationIssues(revision.EnvironmentConstraints, release.EnvironmentConstraints, node.ID, node.Name, true)...)
 		}
 	}
-	resourceReleases := map[string]domain.ComponentRelease{}
-	for _, release := range releaseByNode {
-		resourceReleases[release.ID] = release
-	}
-	issues = append(issues, scenarioResourceIssues(revision.Graph, resourceReleases)...)
 	normalizedGraph, dependencyIssues := normalizeScenarioGraph(revision.Graph, releaseByNode)
 	issues = append(issues, domain.ValidateGraph(normalizedGraph)...)
 	issues = append(issues, scenarioSequenceDependencyIssues(normalizedGraph)...)

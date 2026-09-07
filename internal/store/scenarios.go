@@ -345,7 +345,6 @@ func (s *Store) SaveScenarioGraph(ctx context.Context, id string, g domain.Scena
 		return err
 	}
 	next := prior
-	next.DigestVersion = domain.ScenarioDigestVersion
 	next.Graph = g
 	if len(constraints) > 0 {
 		next.EnvironmentConstraints = constraints[0]

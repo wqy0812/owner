@@ -108,17 +108,6 @@ func (p *ScenarioService) SaveAcceptance(ctx context.Context, user domain.User, 
 	if input.ExpectedRevisionDigest == "" || input.ExpectedRevisionDigest != domain.ScenarioRevisionSpecDigest(revision) {
 		return ScenarioAcceptanceDefinition{}, fmt.Errorf("%w: scenario revision changed; reload before saving", domain.ErrConflict)
 	}
-	for i := range input.Jobs {
-		job := &input.Jobs[i]
-		if job.NeedsYAMLMigration() {
-			return ScenarioAcceptanceDefinition{}, fmt.Errorf("%w: 旧 facts 与工具探测不可写入，请直接编写 YAML", domain.ErrInvalid)
-		}
-		for _, previous := range revision.AcceptanceJobs {
-			if previous.ID == job.ID {
-				job.GatherFacts, job.RuntimeChecks = previous.GatherFacts, previous.RuntimeChecks
-			}
-		}
-	}
 	revision.AcceptanceJobs, revision.AcceptanceParameters, revision.AcceptanceValues, revision.AcceptanceBindings = input.Jobs, input.Parameters, input.Values, input.Bindings
 	if err := p.normalizeScenarioAcceptance(ctx, &revision); err != nil {
 		return ScenarioAcceptanceDefinition{}, err
@@ -383,9 +372,6 @@ func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision 
 			if !found {
 				return nil, fmt.Errorf("%w: acceptance job %s requires CredentialRef %s", domain.ErrInvalid, job.Name, name)
 			}
-		}
-		if job.NeedsYAMLMigration() {
-			return nil, domain.YAMLMigrationRequired(job.Name)
 		}
 		steps = append(steps, lockedStep{ID: "acceptance-" + job.ID, NodeID: "acceptance:" + job.ID, Name: job.Name, SourceType: "scenario_acceptance", ScenarioRevisionID: revision.ID, AcceptanceJobID: job.ID, Stage: "acceptance", Phase: "acceptance", Action: domain.ActionKind("acceptance"), ActionID: job.ID, Playbook: job.Playbook, PlaybookDigest: job.PlaybookSHA256, WorkspaceDigest: revision.AcceptanceTreeSHA256, Variables: variables, RequiredCredentials: job.RequiredCredentials, Limit: job.HostGroup, TimeoutSeconds: job.TimeoutSeconds, Become: job.Become, MayMutate: job.MayMutate, NeedsApproval: job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive, RetrySafe: !job.MayMutate})
 	}

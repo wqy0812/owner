@@ -891,6 +891,19 @@ func TestCreateRunRejectsWithdrawnScenarioDraftAtFinalStoreBoundary(t *testing.T
 }
 
 func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testing.T) {
+	testEnvironmentOwnerWholeClusterReset(t, false)
+}
+
+func TestEnvironmentResetRetryCompletesRemainingWorkAfterFailedCheck(t *testing.T) {
+	testEnvironmentOwnerWholeClusterReset(t, true)
+}
+
+func TestEnvironmentResetExecutesCurrentGroupMembers(t *testing.T) {
+	testEnvironmentOwnerWholeClusterReset(t, false, true)
+}
+
+func testEnvironmentOwnerWholeClusterReset(t *testing.T, failPostcheck bool, changedMembers ...bool) {
+	t.Helper()
 	f := newAPIFixture(t)
 	ctx := context.Background()
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
@@ -960,7 +973,7 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		},
 	}
 	for _, sourceRun := range sourceRuns {
-		if err := f.database.CreateRun(ctx, sourceRun, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, f.database.DB(), sourceRun); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -984,6 +997,27 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		}
 	}
 
+	sharedRecords := addSharedResetRecords(t, f)
+	currentRevisionID := "environment-test-r2-shared"
+	if len(changedMembers) > 0 && changedMembers[0] {
+		revision, err := f.database.GetEnvironmentRevision(ctx, currentRevisionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var inventory service.InventoryDocument
+		if err := json.Unmarshal(revision.Inventory, &inventory); err != nil {
+			t.Fatal(err)
+		}
+		inventory.Hosts[0] = service.InventoryHost{Name: "replacement", Address: "192.0.2.99", Port: 2222, User: "testops", Groups: []string{"test_nodes"}}
+		inventory.Hosts = append(inventory.Hosts, service.InventoryHost{Name: "added", Address: "192.0.2.98", User: "testops", Groups: []string{"test_nodes"}})
+		revision.Inventory, _ = json.Marshal(inventory)
+		revision.ID, revision.Revision = "environment-test-r3-members", 3
+		if err := f.database.CreateEnvironmentRevision(ctx, revision); err != nil {
+			t.Fatal(err)
+		}
+		currentRevisionID = revision.ID
+	}
+
 	if denied := f.request(http.MethodPost, "/api/v1/environments/environment-test/cluster-rollback-plan", nil, alice); denied.Code != http.StatusForbidden {
 		t.Fatalf("non-owner preview status=%d body=%s", denied.Code, denied.Body.String())
 	}
@@ -995,17 +1029,25 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 	if plan["componentCount"] != float64(2) || plan["nodeCount"] != float64(3) || plan["requiresApproval"] != true {
 		t.Fatalf("rollback plan summary=%#v", plan)
 	}
+	hosts := plan["targetHosts"].([]any)
+	if currentRevisionID == "environment-test-r3-members" {
+		if len(hosts) != 2 || hosts[0].(map[string]any)["name"] != "added" || hosts[1].(map[string]any)["name"] != "replacement" {
+			t.Fatalf("current group targets=%#v", hosts)
+		}
+	} else if len(hosts) != 1 || hosts[0].(map[string]any)["name"] != "localhost" {
+		t.Fatalf("current group targets=%#v", hosts)
+	}
 	sources := plan["sources"].([]any)
 	if len(sources) != 2 || sources[0].(map[string]any)["runId"] != sourceRunIDs[1] {
 		t.Fatalf("rollback sources=%#v", plan["sources"])
 	}
 	steps := plan["steps"].([]any)
-	if len(steps) != 9 {
-		t.Fatalf("rollback needs pre/main/post for all three nodes: %#v", steps)
+	if len(steps) != 6 {
+		t.Fatalf("rollback needs main/post for all three nodes: %#v", steps)
 	}
 	for i, raw := range steps {
 		step := raw.(map[string]any)
-		wantPhase := []string{"pre", "execute", "post"}[i%3]
+		wantPhase := []string{"execute", "post"}[i%2]
 		wantAction := "check"
 		if wantPhase == "execute" {
 			wantAction = "rollback"
@@ -1014,7 +1056,7 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 			t.Fatalf("rollback boundary %d=%#v", i, step)
 		}
 	}
-	if steps[1].(map[string]any)["componentId"] != fixtures[1].id || steps[4].(map[string]any)["componentId"] != fixtures[0].id || steps[7].(map[string]any)["componentId"] != fixtures[0].id {
+	if steps[0].(map[string]any)["componentId"] != fixtures[1].id || steps[2].(map[string]any)["componentId"] != fixtures[0].id || steps[4].(map[string]any)["componentId"] != fixtures[0].id {
 		t.Fatalf("rollback steps are not reverse ordered: %#v", steps)
 	}
 	if requirements, ok := plan["deliveryRequirements"].([]any); !ok || len(requirements) != 0 {
@@ -1047,10 +1089,53 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		t.Fatalf("rollback fence allowed another active Run status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
 	approvalID := run["approval"].(map[string]any)["id"].(string)
+	if failPostcheck {
+		f.runner.failPlaybook = steps[1].(map[string]any)["playbook"].(string)
+	}
 	if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", map[string]any{"reason": "approved whole-cluster clean rollback"}, owner); approved.Code != http.StatusOK {
 		t.Fatalf("approve rollback status=%d body=%s", approved.Code, approved.Body.String())
 	}
+	if failPostcheck {
+		sourceID := run["id"].(string)
+		waitForRun(t, f.database, sourceID, domain.RunFailed)
+		if _, err := f.database.GetEnvironmentComponentInstallation(ctx, "environment-test", fixtures[1].id); err != nil {
+			t.Fatalf("failed restoration check lost its baseline: %v", err)
+		}
+		f.runner.mu.Lock()
+		f.runner.failPlaybook = ""
+		f.runner.mu.Unlock()
+		retryPreview := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-plan", nil, owner)
+		if retryPreview.Code != http.StatusOK {
+			t.Fatalf("reset retry preview status=%d body=%s", retryPreview.Code, retryPreview.Body.String())
+		}
+		retryPlan := decodeEnvelope(t, retryPreview)["data"].(map[string]any)
+		retried := f.request(http.MethodPost, "/api/v1/runs/"+sourceID+"/retry-runs", map[string]any{"expectedPlanDigest": retryPlan["planDigest"]}, owner)
+		if retried.Code != http.StatusAccepted {
+			t.Fatalf("reset retry status=%d body=%s", retried.Code, retried.Body.String())
+		}
+		run = decodeEnvelope(t, retried)["data"].(map[string]any)
+		if run["status"] != string(domain.RunAwaitingApproval) {
+			t.Fatalf("reset retry bypassed approval: %#v", run)
+		}
+		approvalID = run["approval"].(map[string]any)["id"].(string)
+		if approved := f.request(http.MethodPost, "/api/v1/approvals/"+approvalID+"/approve", map[string]any{"reason": "complete remaining cluster restoration"}, owner); approved.Code != http.StatusOK {
+			t.Fatalf("approve reset retry status=%d body=%s", approved.Code, approved.Body.String())
+		}
+	}
 	waitForRun(t, f.database, run["id"].(string), domain.RunSucceeded)
+	for _, preserved := range sharedRecords {
+		actual, err := f.database.GetEnvironmentComponentInstallationForNode(ctx, preserved.EnvironmentID, preserved.ComponentID, preserved.NodeID)
+		before, _ := json.Marshal(preserved)
+		after, _ := json.Marshal(actual)
+		if err != nil || string(before) != string(after) {
+			t.Fatalf("shared service baseline changed: %s %v", preserved.NodeID, err)
+		}
+	}
+	current, err := f.database.GetEnvironment(ctx, "environment-test", false)
+	if err != nil || current.CurrentRevisionID != currentRevisionID || current.Revision.Variables["FILE_STATION"] != "192.0.2.50:8080" || current.Revision.Variables["IMAGE_REGISTRY"] != "192.0.2.51:5000" {
+		t.Fatalf("environment configuration changed: %+v %v", current, err)
+	}
+
 	for _, item := range fixtures {
 		if _, err := f.database.GetEnvironmentComponentInstallation(ctx, "environment-test", item.id); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("installation %s remained after rollback: %v", item.id, err)
@@ -1068,6 +1153,9 @@ func TestEnvironmentOwnerWholeClusterRollbackPreviewApprovalAndCleanup(t *testin
 		t.Fatalf("rollback action request count=%d, want three", len(rollbackRequests))
 	}
 	for _, request := range rollbackRequests {
+		if currentRevisionID == "environment-test-r3-members" && (request.Limit != "test_nodes" || strings.Contains(string(request.Inventory), "localhost") || !strings.Contains(string(request.Inventory), "replacement ansible_host=192.0.2.99 ansible_user=testops ansible_port=2222") || !strings.Contains(string(request.Inventory), "added ansible_host=192.0.2.98")) {
+			t.Fatalf("execution did not use current members: %s %s", request.Limit, request.Inventory)
+		}
 		if request.Variables["clusterforge_backup_cleanup_on_success"] != false {
 			t.Fatalf("rollback cleaned recovery material before its postcondition was verified: %#v", request.Variables)
 		}
@@ -1133,7 +1221,7 @@ func TestEnvironmentRollbackFailsClosedWhenInstallationSetChanges(t *testing.T) 
 	}
 	waitForRun(t, f.database, run["id"].(string), domain.RunFailed)
 	failed, err := f.database.GetRun(ctx, run["id"].(string))
-	if err != nil || !strings.Contains(failed.Error, "recovery state changed") {
+	if err != nil || !strings.Contains(failed.Error, "恢复基线与锁定计划不一致") {
 		t.Fatalf("stale rollback failure=%q err=%v", failed.Error, err)
 	}
 	f.runner.mu.Lock()
@@ -1738,7 +1826,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 		ID: "release-test-consumer-1.0.0", ComponentID: consumer.ID, Version: "v1.0.0",
 		Status: domain.ReleaseReleased, RiskLevel: domain.RiskLow, CreatedAt: now, ReleasedAt: &now,
 		EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{},
-		Dependencies: []domain.ComponentDependency{{ID: "dependency-test-consumer-runtime", ReleaseID: "release-test-consumer-1.0.0", UpstreamComponentID: "component-test-runtime", UpstreamReleaseID: oldRelease.ID, Purpose: "runtime"}},
+		Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: "dependency-test-consumer-runtime", ReleaseID: "release-test-consumer-1.0.0", UpstreamComponentID: "component-test-runtime", UpstreamReleaseID: oldRelease.ID, Purpose: "runtime"}},
 	}
 	if err := database.CreateComponentRelease(ctx, consumerRelease); err != nil {
 		t.Fatal(err)
@@ -1772,7 +1860,7 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	installedRun := domain.Run{
 		ID: "run-installed-runtime-1.1", Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID,
-		ComponentReleaseID: newRelease.ID, Action: domain.ActionUpgrade, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "fixture-install", "nodeId": "fixture-install", "phase": "execute", "releaseId": newRelease.ID, "componentId": newRelease.ComponentID, "limit": "test_nodes", "resourceContract": map[string]any{"version": 1, "noManagedPaths": true, "claims": []any{}}}}},
+		ComponentReleaseID: newRelease.ID, Action: domain.ActionUpgrade, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "fixture-install", "nodeId": "fixture-install", "phase": "execute", "releaseId": newRelease.ID, "componentId": newRelease.ComponentID, "limit": "test_nodes"}}},
 		ArtifactDigest: "fixed-tree-digest", CreatedAt: now, StartedAt: &now, FinishedAt: &now,
 	}
 	if err := database.CreateRun(ctx, installedRun, nil); err != nil {
@@ -1835,7 +1923,6 @@ func (f *apiFixture) createNewLineDraft(componentID string, definition map[strin
 		treeSHA, _ := decodeEnvelope(f.t, workspace)["data"].(map[string]any)["treeSha256"].(string)
 		for _, rawAction := range rawActions {
 			action := rawAction.(map[string]any)
-			action["resourceContract"] = map[string]any{"version": 1, "noManagedPaths": true, "claims": []any{}}
 			kind, _ := action["kind"].(string)
 			saved := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/playbook", map[string]any{
 				"actionKind": kind, "action": action, "content": "---\n- ansible.builtin.assert:\n    that: true\n", "expectedSha256": "", "expectedTreeSha256": treeSHA,
@@ -2833,7 +2920,7 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 			t.Fatalf("targeted rollback plan status=%d body=%s", response.Code, response.Body.String())
 		}
 		steps := decodeEnvelope(t, response)["data"].(map[string]any)["steps"].([]any)
-		if len(steps) != 3 || steps[0].(map[string]any)["phase"] != "pre" || steps[1].(map[string]any)["action"] != "rollback" || steps[2].(map[string]any)["phase"] != "post" || steps[2].(map[string]any)["action"] != "check" {
+		if len(steps) != 2 || steps[0].(map[string]any)["action"] != "rollback" || steps[1].(map[string]any)["phase"] != "post" || steps[1].(map[string]any)["action"] != "check" {
 			t.Fatalf("target rollback omitted bound validation: %#v", steps)
 		}
 		candidate := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/candidate", map[string]any{"candidate": true}, alice)
@@ -3174,7 +3261,7 @@ func TestUpdatingReleaseContractPreservesActionsAndScopesDraftUpstream(t *testin
 			"name": "runtimeRoot", "description": "runtime install root", "type": "string", "visibility": "public",
 			"modifiable": true, "valueProvider": "scenario_owner", "suggestedValue": "/opt/runtime", "testValue": "/opt/runtime",
 		}},
-		"dependencies": []any{map[string]any{
+		"dependencies": []any{map[string]any{"kind": "execution",
 			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.0.0", "purpose": "runtime",
 		}},
 	}, alice)
@@ -3195,7 +3282,7 @@ func TestUpdatingReleaseContractPreservesActionsAndScopesDraftUpstream(t *testin
 	sameOwnerDraft := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
 		"expectedDefinitionGeneration": f.releaseGeneration(releaseID),
 		"parameters":                   []any{},
-		"dependencies": []any{map[string]any{
+		"dependencies": []any{map[string]any{"kind": "execution",
 			"upstreamComponentId": "component-test-runtime", "upstreamReleaseId": "release-test-runtime-1.1.0", "purpose": "same-owner import chain",
 		}},
 	}, alice)
@@ -3213,7 +3300,7 @@ func TestUpdatingReleaseContractPreservesActionsAndScopesDraftUpstream(t *testin
 	rejected := f.request(http.MethodPut, "/api/v1/component-releases/"+releaseID+"/contract", map[string]any{
 		"expectedDefinitionGeneration": f.releaseGeneration(releaseID),
 		"parameters":                   []any{},
-		"dependencies": []any{map[string]any{
+		"dependencies": []any{map[string]any{"kind": "execution",
 			"upstreamComponentId": "component-test-consumer", "upstreamReleaseId": privateUpstream.ID, "purpose": "cross-owner private draft",
 		}},
 	}, alice)
@@ -3349,7 +3436,6 @@ func TestPublishRejectsCrossReleaseTransitionMismatch(t *testing.T) {
 	treeSHA := decodeEnvelope(t, newResponse)["data"].(map[string]any)["playbookTreeSha256"].(string)
 	for _, raw := range actionInputs {
 		action := raw.(map[string]any)
-		action["resourceContract"] = map[string]any{"version": 1, "noManagedPaths": true, "claims": []any{}}
 		kind := action["kind"].(string)
 		expectedSHA := ""
 		for _, savedAction := range persistedActions {
@@ -3498,11 +3584,11 @@ func TestScenarioDeletionRetainsPublishedAndRunHistory(t *testing.T) {
 
 	runLockedID, runLockedRevisionID := create("Run Locked Scenario", "run-locked-scenario")
 	finished := now.Add(time.Minute)
-	if err := f.database.CreateRun(ctx, domain.Run{
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{
 		ID: "run-locks-draft-scenario", Kind: domain.RunScenarioTest, Status: domain.RunFailed,
 		RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
 		ScenarioRevisionID: runLockedRevisionID, InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &finished,
-	}, nil); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	blocked := f.request(http.MethodDelete, "/api/v1/scenarios/"+runLockedID, nil, carol)
@@ -3534,7 +3620,7 @@ func TestScenarioRunHistoryBlocksComponentReleaseDeprecation(t *testing.T) {
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	// Historical Run references must survive current execution-contract changes.
 	now := time.Now().UTC()
-	if err := f.database.CreateRun(context.Background(), domain.Run{ID: "historical-scenario-runtime", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1", InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "release-test-runtime-1.0.0", "componentId": "component-test-runtime"}}}, CreatedAt: now, FinishedAt: &now}, nil); err != nil {
+	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), domain.Run{ID: "historical-scenario-runtime", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1", InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "release-test-runtime-1.0.0", "componentId": "component-test-runtime"}}}, CreatedAt: now, FinishedAt: &now}); err != nil {
 		t.Fatal(err)
 	}
 	impact := f.request(http.MethodGet, "/api/v1/component-releases/release-test-runtime-1.0.0/impact", nil, alice)
@@ -3580,10 +3666,10 @@ func TestRollbackUsesBoundPostCheckAndDeclaredInputs(t *testing.T) {
 	f.runner.mu.Lock()
 	requests := append([]ansiblerunner.Request(nil), f.runner.requests...)
 	f.runner.mu.Unlock()
-	if len(requests) != 3 {
+	if len(requests) != 2 {
 		t.Fatalf("rollback stages=%+v", requests)
 	}
-	expected := []string{"checks/action-test-runtime-rollback-1.0-pre.yml", "tasks/rollback.yml", "checks/action-test-runtime-rollback-1.0-post.yml"}
+	expected := []string{"tasks/rollback.yml", "checks/action-test-runtime-rollback-1.0-post.yml"}
 	for index, request := range requests {
 		if !strings.HasSuffix(request.Playbook, expected[index]) || request.Variables["expected_version"] != "1.1.0" {
 			t.Fatalf("bound rollback stage %d=%+v", index, request)
@@ -3619,16 +3705,16 @@ func TestDraftComponentRollbackTestLocksRollbackAndTargetVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	steps := lockedRun.InputSnapshot["steps"].([]any)
-	if len(steps) != 3 {
+	if len(steps) != 2 {
 		t.Fatalf("draft rollback locked steps=%#v", steps)
 	}
-	for index, phase := range []string{"pre", "execute", "post"} {
+	for index, phase := range []string{"execute", "post"} {
 		step := steps[index].(map[string]any)
 		if step["phase"] != phase || step["releaseId"] != "release-test-runtime-1.1.0" {
 			t.Fatalf("rollback stage %d=%#v", index, step)
 		}
 	}
-	main := steps[1].(map[string]any)
+	main := steps[0].(map[string]any)
 	if main["fromReleaseId"] != "release-test-runtime-1.1.0" || main["toReleaseId"] != "release-test-runtime-1.0.0" || !strings.HasSuffix(main["playbook"].(string), "tasks/rollback.yml") {
 		t.Fatalf("rollback transition=%#v", main)
 	}
@@ -3668,10 +3754,10 @@ func TestDraftRollbackPlanPreviewStrategiesAndDigest(t *testing.T) {
 	}
 	data := decodeEnvelope(t, preview)["data"].(map[string]any)
 	steps := data["steps"].([]any)
-	if len(steps) != 3 {
+	if len(steps) != 2 {
 		t.Fatalf("preview stages=%#v", steps)
 	}
-	for index, phase := range []string{"pre", "execute", "post"} {
+	for index, phase := range []string{"execute", "post"} {
 		if steps[index].(map[string]any)["phase"] != phase {
 			t.Fatalf("stage %d=%#v", index, steps[index])
 		}
@@ -4091,7 +4177,7 @@ func (f *fakeRunner) RunJob(ctx context.Context, request ansiblerunner.JobReques
 				return result, err
 			}
 		}
-		old, err := f.Run(ctx, ansiblerunner.Request{Playbook: stage.Playbook, Variables: stage.Variables, Limit: stage.Limit, LogSink: request.LogSink})
+		old, err := f.Run(ctx, ansiblerunner.Request{Playbook: stage.Playbook, Inventory: []byte(request.Plan.Inventory), Variables: stage.Variables, Limit: stage.Limit, LogSink: request.LogSink})
 		phase.FinishedAt = time.Now().UTC()
 		phase.Hosts = old.Recap
 		if err != nil {
@@ -4144,8 +4230,5 @@ func actionAuthoringPayload(t *testing.T, action any) map[string]any {
 		t.Fatal(err)
 	}
 	delete(result, "gatherFacts")
-	if contract, ok := result["resourceContract"].(map[string]any); ok {
-		delete(contract, "checks")
-	}
 	return result
 }

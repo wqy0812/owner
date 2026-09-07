@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260906-workbench-run-observations');
+VALUES(1, 'clusterforge-v1-20260907-no-resource-contract');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -54,24 +54,6 @@ CREATE TABLE IF NOT EXISTS platform_options (
 
 CREATE INDEX IF NOT EXISTS idx_platform_options_category
   ON platform_options(category_id, sort_order, created_at);
-
-CREATE TABLE IF NOT EXISTS environment_parameter_definitions (
-  id TEXT PRIMARY KEY,
-  technical_key TEXT NOT NULL UNIQUE,
-  label TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  description TEXT NOT NULL DEFAULT '',
-  parameter_type TEXT NOT NULL CHECK (parameter_type IN ('string','boolean','integer','number','object','array')),
-  enum_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(enum_json)),
-  min_length INTEGER NOT NULL DEFAULT 0 CHECK (min_length >= 0),
-  created_by TEXT NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL
-);
-
--- Platform defaults are separate from immutable component contracts and revisions.
-CREATE TABLE IF NOT EXISTS environment_parameter_defaults (
-  definition_id TEXT PRIMARY KEY REFERENCES environment_parameter_definitions(id) ON DELETE CASCADE,
-  value_json TEXT NOT NULL CHECK (json_valid(value_json) AND json_type(value_json) != 'null')
-);
 
 CREATE TABLE IF NOT EXISTS environment_variable_definitions (
   id TEXT PRIMARY KEY,
@@ -147,7 +129,7 @@ CREATE TABLE IF NOT EXISTS component_dependencies (
   upstream_release_id TEXT NOT NULL REFERENCES component_releases(id),
   purpose TEXT NOT NULL DEFAULT '',
   parameter_mappings_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parameter_mappings_json)),
-  kind TEXT NOT NULL DEFAULT '' CHECK (kind IN ('', 'configuration')),
+  kind TEXT NOT NULL CHECK (kind IN ('execution', 'configuration')),
   UNIQUE(release_id, upstream_component_id)
 );
 
@@ -161,8 +143,6 @@ CREATE TABLE IF NOT EXISTS action_definitions (
   pre_check_action_id TEXT NOT NULL DEFAULT '',
   post_check_action_id TEXT NOT NULL DEFAULT '',
   become INTEGER NOT NULL DEFAULT 0 CHECK (become IN (0,1)),
-  gather_facts INTEGER NOT NULL DEFAULT 0 CHECK (gather_facts IN (0,1)),
-  resource_contract_json TEXT CHECK(resource_contract_json IS NULL OR json_valid(resource_contract_json)),
   tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
   host_group TEXT NOT NULL DEFAULT '',
   required_credentials_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(required_credentials_json)),
@@ -189,6 +169,7 @@ CREATE TABLE IF NOT EXISTS playbook_action_mutations (
   release_id TEXT NOT NULL REFERENCES component_releases(id),
   workspace_root TEXT NOT NULL,
   relative_path TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'file' CHECK (kind IN ('file','directory')),
   before_exists INTEGER NOT NULL CHECK (before_exists IN (0,1)),
   before_content BLOB NOT NULL,
   created_at TEXT NOT NULL,

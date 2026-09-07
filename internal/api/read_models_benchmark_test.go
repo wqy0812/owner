@@ -59,7 +59,7 @@ func readModelScaleFixture(t *testing.T) *Handler {
 			if i == 1 {
 				r.Parameters[0].ValueProvider = domain.ParameterProviderUpstreamMapping
 				r.Parameters[0].FixedValue = nil
-				r.Dependencies = []domain.ComponentDependency{{ID: r.ID + "-dependency", ReleaseID: r.ID, UpstreamComponentID: "perf-component-00", UpstreamReleaseID: "perf-component-00-r0", Purpose: "参数来源", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "parameter_00", TargetParameter: "parameter_00"}}}}
+				r.Dependencies = []domain.ComponentDependency{{Kind: "execution", ID: r.ID + "-dependency", ReleaseID: r.ID, UpstreamComponentID: "perf-component-00", UpstreamReleaseID: "perf-component-00-r0", Purpose: "参数来源", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: "parameter_00", TargetParameter: "parameter_00"}}}}
 			}
 			for _, kind := range []domain.ActionKind{domain.ActionInstall, domain.ActionVerify, domain.ActionRollback} {
 				r.Actions = append(r.Actions, domain.ActionDefinition{ID: r.ID + "-" + string(kind), Name: string(kind), Kind: kind, Playbook: "fixtures/" + string(kind) + ".yml", HostGroup: "all", TimeoutSeconds: 60, RiskLevel: domain.RiskLow})

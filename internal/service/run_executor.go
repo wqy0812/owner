@@ -41,15 +41,13 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	if plan.ResourcePolicyVersion > 0 {
-		if e.resourceVerifier == nil {
-			e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("resource verifier is required"))
-			return
-		}
-		if err := e.resourceVerifier.verifyRunResources(ctx, run, plan); err != nil {
-			e.recorder.finishRun(run, domain.RunFailed, err)
-			return
-		}
+	if e.environmentVerifier == nil {
+		e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("environment verifier is required"))
+		return
+	}
+	if err := e.environmentVerifier.verifyRunEnvironment(ctx, run, plan); err != nil {
+		e.recorder.finishRun(run, domain.RunFailed, err)
+		return
 	}
 	// Rejoin the queued evidence with the current database contract and source
 	// workspace before any delivery or target-side mutation begins.
@@ -57,7 +55,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	lifecycle := run.ScenarioRevisionID != "" && fmt.Sprint(run.InputSnapshot["scenarioContractVersion"]) == "2"
+	lifecycle := run.ScenarioRevisionID != ""
 	upgradeDelivery := lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionUpgrade)
 	pendingDelivery := len(plan.ImageTransfers) > 0 || len(plan.ArtifactTransfers) > 0
 	if lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionBaselineVerify) && (pendingDelivery || len(plan.DeliveryRequirements) > 0) {
@@ -183,6 +181,12 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 	if runErr != nil {
 		e.recorder.finishRun(run, domain.RunFailed, runErr)
 		return
+	}
+	if run.Kind == domain.RunEnvironmentRollback {
+		if err := e.rollback.validateEnvironmentReset(ctx, environmentRevision, plan, true); err != nil {
+			e.recorder.finishRun(run, domain.RunFailed, err)
+			return
+		}
 	}
 	e.recorder.finishRun(run, domain.RunSucceeded, nil)
 }

@@ -207,12 +207,6 @@ func (p *CatalogService) updateRelease(ctx context.Context, user domain.User, id
 		if patch.Actions[index].ID == "" {
 			return release, fmt.Errorf("%w: save new actions with their Playbook before saving the Draft", domain.ErrConflict)
 		}
-		if patch.Actions[index].NeedsYAMLMigration() {
-			return release, fmt.Errorf("%w: 旧 facts 与固定探测不可写入，请直接编写 YAML", domain.ErrInvalid)
-		}
-		if previous, ok := release.ActionByID(patch.Actions[index].ID); ok {
-			preserveActionLegacy(&patch.Actions[index], previous)
-		}
 		kind, exists := existingActions[patch.Actions[index].ID]
 		if !exists {
 			return release, fmt.Errorf("%w: action %s no longer exists", domain.ErrConflict, patch.Actions[index].ID)
@@ -488,16 +482,6 @@ func (p *ReleaseRules) validateReleaseContract(ctx context.Context, release doma
 }
 
 func (p *ReleaseRules) validateReleaseContractWithCatalog(ctx context.Context, release domain.ComponentRelease, publishing bool, loadCatalog func(context.Context) (store.CatalogValidationSnapshot, error)) error {
-	if publishing {
-		if err := domain.ValidateReleaseYAMLAuthoring(release); err != nil {
-			return err
-		}
-	}
-	for _, action := range release.Actions {
-		if err := domain.ValidateResourceContract(action.ResourceContract, release.Parameters, publishing); err != nil {
-			return err
-		}
-	}
 	if err := domain.ValidateActionBindings(release, publishing); err != nil {
 		return err
 	}

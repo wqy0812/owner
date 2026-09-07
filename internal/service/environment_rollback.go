@@ -9,19 +9,17 @@ import (
 	"sort"
 	"strings"
 
-	"codex/platform-demo/internal/ansible"
 	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
 type EnvironmentRollbackRequest struct {
-	Nodes                  []string `json:"nodes,omitempty"`
-	ExpectedPlanDigest     string   `json:"expectedPlanDigest"`
-	ConfirmEnvironmentName string   `json:"confirmEnvironmentName"`
+	ExpectedPlanDigest     string `json:"expectedPlanDigest"`
+	ConfirmEnvironmentName string `json:"confirmEnvironmentName"`
 }
 
 type EnvironmentRollbackPlan struct {
-	Nodes                 []string                    `json:"nodes"`
+	TargetHosts           []InventoryHost             `json:"targetHosts"`
 	EnvironmentID         string                      `json:"environmentId"`
 	EnvironmentName       string                      `json:"environmentName"`
 	EnvironmentRevisionID string                      `json:"environmentRevisionId"`
@@ -47,25 +45,22 @@ type preparedEnvironmentRollback struct {
 	sourceRuns         []domain.Run
 	installationsByRun map[string][]domain.EnvironmentComponentInstallation
 	steps              []lockedStep
+	targetHosts        []InventoryHost
 }
 
-func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User, environmentID string, nodes ...string) (EnvironmentRollbackPlan, error) {
-	prepared, err := p.planner.prepareEnvironmentRollback(ctx, user, environmentID, nodes...)
+func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User, environmentID string) (EnvironmentRollbackPlan, error) {
+	prepared, err := p.planner.prepareEnvironmentRollback(ctx, user, environmentID)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			err = actionableExistingError(err, "rollback.baseline_invalid", "当前安装清单、来源 Run 或备份基线无法生成安全回滚计划", "检查环境与来源 Run", "/environments?selected="+environmentID)
 		}
-		nodes := []string{}
-		for _, step := range prepared.steps {
-			nodes = append(nodes, step.ComponentID+"/"+step.SourceNodeID)
-		}
-		return EnvironmentRollbackPlan{Nodes: nodes}, err
+		return EnvironmentRollbackPlan{}, err
 	}
 	if len(prepared.steps) == 0 {
 		return EnvironmentRollbackPlan{
 			EnvironmentID: prepared.environment.ID, EnvironmentName: prepared.environment.Name,
 			EnvironmentRevisionID: prepared.environment.Revision.ID,
-			Nodes:                 []string{}, Sources: []EnvironmentRollbackSource{},
+			TargetHosts:           []InventoryHost{}, Sources: []EnvironmentRollbackSource{},
 			Steps: []ComponentTestPlanStep{}, DeliveryRequirements: []mediadelivery.Requirement{},
 		}, nil
 	}
@@ -77,7 +72,7 @@ func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User
 }
 
 func (p *ExecutionService) StartRollback(ctx context.Context, user domain.User, environmentID string, input EnvironmentRollbackRequest) (domain.Run, error) {
-	prepared, err := p.planner.prepareEnvironmentRollback(ctx, user, environmentID, input.Nodes...)
+	prepared, err := p.planner.prepareEnvironmentRollback(ctx, user, environmentID)
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			err = actionableExistingError(err, "rollback.baseline_invalid", "当前安装清单、来源 Run 或备份基线无法生成安全回滚计划", "检查环境与来源 Run", "/environments?selected="+environmentID)
@@ -85,7 +80,7 @@ func (p *ExecutionService) StartRollback(ctx context.Context, user domain.User, 
 		return domain.Run{}, err
 	}
 	if len(prepared.steps) == 0 {
-		return domain.Run{}, fmt.Errorf("%w: 当前环境暂无可回滚组件，无需创建回滚 Run", domain.ErrConflict)
+		return domain.Run{}, fmt.Errorf("%w: 暂无需要重置的集群组件，无需创建重置 Run", domain.ErrConflict)
 	}
 	if strings.TrimSpace(input.ExpectedPlanDigest) == "" {
 		return domain.Run{}, fmt.Errorf("%w: preview the cluster rollback plan before submitting", domain.ErrInvalid)
@@ -112,7 +107,7 @@ func (p *ExecutionService) StartRollback(ctx context.Context, user domain.User, 
 	return run, nil
 }
 
-func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domain.User, environmentID string, nodes ...string) (preparedEnvironmentRollback, error) {
+func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domain.User, environmentID string) (preparedEnvironmentRollback, error) {
 	environment, err := p.store.GetEnvironment(ctx, environmentID, false)
 	if err != nil {
 		return preparedEnvironmentRollback{}, err
@@ -133,10 +128,11 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 	if active {
 		return preparedEnvironmentRollback{}, fmt.Errorf("%w: environment has an active run; finish or reject it before planning a cluster rollback", domain.ErrConflict)
 	}
-	installations, err := p.rollback.recoveryBaselines(ctx, environmentID)
+	state, err := p.rollback.environmentResetState(ctx, *environment.Revision)
 	if err != nil {
 		return preparedEnvironmentRollback{}, err
 	}
+	installations := state.installations
 	if len(installations) == 0 {
 		// No recorded installation or pending recovery is a normal preview state.
 		// StartRollback still rejects creating a Run without executable steps.
@@ -145,6 +141,9 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 	installationsByRun := map[string][]domain.EnvironmentComponentInstallation{}
 	installedByComponent := make(map[string]domain.EnvironmentComponentInstallation, len(installations))
 	for _, installation := range installations {
+		if installation.Backup.Previous != nil {
+			return preparedEnvironmentRollback{}, fmt.Errorf("%w: 组件 %s 存在多层恢复基线，无法直接重置到安装前状态", domain.ErrConflict, installation.ComponentID)
+		}
 		if err := validateInstallationBackup(installation, environmentID, installation.ComponentID, installation.ReleaseID); err != nil {
 			return preparedEnvironmentRollback{}, err
 		}
@@ -223,6 +222,9 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 			if !ok {
 				return preparedEnvironmentRollback{}, fmt.Errorf("%w: release %s has no rollback action for clean-state recovery", domain.ErrConflict, release.Version)
 			}
+			if rollback.FromReleaseID != "" || rollback.ToReleaseID != "" {
+				return preparedEnvironmentRollback{}, fmt.Errorf("%w: release %s 的版本回退不能用于集群干净状态重置", domain.ErrConflict, release.Version)
+			}
 
 			component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 			if err != nil {
@@ -254,15 +256,7 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 	if len(steps) == 0 {
 		return preparedEnvironmentRollback{}, fmt.Errorf("%w: no rollback steps could be generated", domain.ErrConflict)
 	}
-	if len(nodes) > 0 {
-		jobSteps := jobPlanFromLocked(environmentID, lockedPlan{Steps: steps}, nil).Steps
-		selected, err := ansible.SelectRollbackStages(jobSteps, nodes)
-		if err != nil {
-			return preparedEnvironmentRollback{}, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
-		}
-		steps = steps[:len(selected)]
-	}
-	return preparedEnvironmentRollback{environment: environment, sourceRuns: sourceRuns, installationsByRun: installationsByRun, steps: steps}, nil
+	return preparedEnvironmentRollback{environment: environment, sourceRuns: sourceRuns, installationsByRun: installationsByRun, steps: steps, targetHosts: state.targetHosts}, nil
 }
 
 func rollbackVariablesFromInstall(values map[string]any, sourceRevision, currentRevision domain.EnvironmentRevision, release domain.ComponentRelease) map[string]any {
@@ -296,6 +290,7 @@ func rollbackVariablesFromInstall(values map[string]any, sourceRevision, current
 func (p *PlanBuilder) environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan lockedPlan, digest string, destructive bool) EnvironmentRollbackPlan {
 	base := p.componentTestPlanDTO(ctx, prepared.environment, plan, digest, destructive)
 	return EnvironmentRollbackPlan{
+		TargetHosts:   prepared.targetHosts,
 		EnvironmentID: prepared.environment.ID, EnvironmentName: prepared.environment.Name,
 		EnvironmentRevisionID: prepared.environment.CurrentRevisionID,
 		Sources:               environmentRollbackSources(prepared),
@@ -363,51 +358,25 @@ func isFinalCleanupStep(steps []lockedStep, index int) bool {
 }
 
 func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error {
-	if run.Kind == domain.RunEnvironmentRollback && run.RetryOfRunID == "" {
-		expected := installationBaselineFromSteps(plan.Steps)
-		if plan.InstallationBaselineDigest == "" || plan.InstallationBaselineDigest != installationBaselineDigest(expected) || len(plan.InstallationBaseline) != len(expected) {
-			return fmt.Errorf("%w: locked environment rollback baseline is incomplete or inconsistent", domain.ErrConflict)
-		}
-		for index := range expected {
-			if plan.InstallationBaseline[index] != expected[index] {
-				return fmt.Errorf("%w: locked environment rollback baseline changed; preview again", domain.ErrConflict)
-			}
-		}
-		current, err := r.recoveryBaselines(ctx, run.EnvironmentID)
+	if run.Kind == domain.RunEnvironmentRollback {
+		revision, err := r.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
 		if err != nil {
 			return err
 		}
-		if plan.RecoveryEnvironmentDigest == "" || digestValue(current) != plan.RecoveryEnvironmentDigest {
-			return fmt.Errorf("%w: recovery state changed after preview; preview again", domain.ErrConflict)
+		if err := r.validateEnvironmentReset(ctx, revision, plan, false); err != nil {
+			return err
 		}
-		selected := map[string]bool{}
-		for _, entry := range expected {
-			selected[entry.ComponentID+"/"+entry.NodeID] = true
+		expected := installationBaselineFromSteps(resetRecoverySteps(plan))
+		if plan.InstallationBaselineDigest != installationBaselineDigest(expected) || digestValue(plan.InstallationBaseline) != digestValue(expected) {
+			return fmt.Errorf("%w: locked environment reset baseline is incomplete or inconsistent", domain.ErrConflict)
 		}
-		selectedCurrent := current[:0]
-		for _, entry := range current {
-			if selected[entry.ComponentID+"/"+entry.NodeID] {
-				selectedCurrent = append(selectedCurrent, entry)
+		if run.RetryOfRunID == "" {
+			state, err := r.environmentResetState(ctx, revision)
+			if err != nil {
+				return err
 			}
-		}
-		current = selectedCurrent
-		if len(current) != len(expected) {
-			return fmt.Errorf("%w: installed-component set changed after approval; preview again", domain.ErrConflict)
-		}
-		actual := make([]lockedInstallationBaseline, 0, len(current))
-		for _, installation := range current {
-			actual = append(actual, lockedInstallationBaseline{
-				NodeID: installation.NodeID, ComponentID: installation.ComponentID, ReleaseID: installation.ReleaseID,
-				InstallRunID: installation.InstallRunID, BackupRef: installation.BackupRef,
-				PlaybookSHA256: installation.Backup.PlaybookSHA256,
-			})
-		}
-		sort.Slice(actual, func(i, j int) bool {
-			return actual[i].ComponentID+"/"+actual[i].NodeID < actual[j].ComponentID+"/"+actual[j].NodeID
-		})
-		for index := range actual {
-			if actual[index] != expected[index] {
-				return fmt.Errorf("%w: installed-component baseline changed after approval; preview again", domain.ErrConflict)
+			if plan.RecoveryEnvironmentDigest == "" || digestValue(state.installations) != plan.RecoveryEnvironmentDigest {
+				return fmt.Errorf("%w: recovery state changed after preview; preview again", domain.ErrConflict)
 			}
 		}
 	}

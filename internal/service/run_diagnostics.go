@@ -102,8 +102,8 @@ func diagnosticReason(result map[string]any) string {
 type diagnosticCollector struct {
 	structured, text []RunDiagnostic
 	omitted          int
-	legacyPending    map[string]domain.RunLog
-	legacyTasks      map[string]string
+	textPending      map[string]domain.RunLog
+	textTasks        map[string]string
 }
 
 func (c *diagnosticCollector) add(log domain.RunLog) {
@@ -112,39 +112,39 @@ func (c *diagnosticCollector) add(log domain.RunLog) {
 	if log.Stream != "event" {
 		// Older Ansible stdout callbacks can emit a failure JSON object over
 		// several persisted rows. Keep its first log ID as the source location.
-		if previous, ok := c.legacyPending[key]; ok {
+		if previous, ok := c.textPending[key]; ok {
 			if diagnosticTask.MatchString(line) || strings.HasPrefix(line, "PLAY ") || diagnosticFatal.MatchString(line) {
-				c.addComplete(previous, c.legacyTasks[key])
-				delete(c.legacyPending, key)
+				c.addComplete(previous, c.textTasks[key])
+				delete(c.textPending, key)
 			} else {
 				previous.Message += "\n" + line
 				match := diagnosticFatal.FindStringSubmatch(previous.Message)
 				if (match != nil && json.Valid([]byte(match[2]))) || len(previous.Message) > 1024*1024 {
-					c.addComplete(previous, c.legacyTasks[key])
-					delete(c.legacyPending, key)
+					c.addComplete(previous, c.textTasks[key])
+					delete(c.textPending, key)
 				} else {
-					c.legacyPending[key] = previous
+					c.textPending[key] = previous
 				}
 				return
 			}
 		}
 		if match := diagnosticTask.FindStringSubmatch(line); match != nil {
-			if c.legacyTasks == nil {
-				c.legacyTasks = map[string]string{}
+			if c.textTasks == nil {
+				c.textTasks = map[string]string{}
 			}
-			c.legacyTasks[key] = match[1]
+			c.textTasks[key] = match[1]
 			return
 		}
 		if match := diagnosticFatal.FindStringSubmatch(line); match != nil && strings.HasPrefix(match[2], "{") && !json.Valid([]byte(match[2])) && len(line) <= 1024*1024 {
-			if c.legacyPending == nil {
-				c.legacyPending = map[string]domain.RunLog{}
+			if c.textPending == nil {
+				c.textPending = map[string]domain.RunLog{}
 			}
 			log.Message = line
-			c.legacyPending[key] = log
+			c.textPending[key] = log
 			return
 		}
 	}
-	c.addComplete(log, c.legacyTasks[key])
+	c.addComplete(log, c.textTasks[key])
 }
 
 func (c *diagnosticCollector) addComplete(log domain.RunLog, task string) {
@@ -213,9 +213,9 @@ func (c *diagnosticCollector) addComplete(log domain.RunLog, task string) {
 	*target = append(*target, d)
 }
 func (c *diagnosticCollector) finish(run domain.Run) []RunDiagnostic {
-	for key, log := range c.legacyPending {
-		c.addComplete(log, c.legacyTasks[key])
-		delete(c.legacyPending, key)
+	for key, log := range c.textPending {
+		c.addComplete(log, c.textTasks[key])
+		delete(c.textPending, key)
 	}
 	items := []RunDiagnostic{}
 	seen := map[string]bool{}

@@ -15,7 +15,7 @@ import (
 
 // Explicit lists make new schema tables fail closed instead of silently losing
 // business data or accidentally retaining execution history.
-var foundationTables = []string{"run_retention_policy", "schema_contract", "publication_state", "users", "platform_option_categories", "platform_options", "environment_parameter_definitions", "environment_parameter_defaults", "environment_variable_definitions"}
+var foundationTables = []string{"run_retention_policy", "schema_contract", "publication_state", "users", "platform_option_categories", "platform_options", "environment_variable_definitions"}
 var businessTables = []string{"components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "environments", "environment_revisions", "component_release_artifacts", "component_release_images", "component_artifact_mirrors", "component_image_mirrors"}
 var historyTables = []string{"workflow_sessions", "scenario_installations", "scenario_execution_submissions", "action_execution_receipts", "run_jobs", "run_archive_tasks", "run_archive_files", "run_cleanup_history", "run_retention_cursors", "sessions", "playbook_action_mutations", "runs", "run_steps", "run_logs", "run_waiting_observations", "approvals", "notifications", "audit_events", "component_image_builds", "component_image_build_logs", "environment_component_installations", "environment_health_checks", "environment_ssh_checks"}
 
@@ -28,7 +28,7 @@ func BusinessSnapshot(ctx context.Context, source, target string, foundationOnly
 	if foundationOnly {
 		return currentFoundationSnapshot(ctx, source, target)
 	}
-	if err = Verify(ctx, source, ""); err != nil {
+	if err = Verify(ctx, source, store.CurrentSchemaContract); err != nil {
 		return err
 	}
 	sourceAbs, err := filepath.Abs(source)
@@ -143,7 +143,7 @@ func BusinessSnapshot(ctx context.Context, source, target string, foundationOnly
 	if err = db.Close(); err != nil {
 		return err
 	}
-	if err = Verify(ctx, target, ""); err != nil {
+	if err = Verify(ctx, target, store.CurrentSchemaContract); err != nil {
 		return err
 	}
 	f, err = os.Open(target)
@@ -166,14 +166,6 @@ func ExportBusiness(ctx context.Context, source, target string) (err error) {
 	defer db.Close()
 	tables := map[string]any{}
 	for _, t := range append(append([]string{}, foundationTables...), businessTables...) {
-		var exists int
-		if err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", t).Scan(&exists); err != nil {
-			return err
-		}
-		if exists == 0 {
-			tables[t] = []map[string]any{}
-			continue
-		}
 		rows, e := db.QueryContext(ctx, "SELECT * FROM "+quoteIdentifier(t))
 		if e != nil {
 			return e
@@ -238,11 +230,7 @@ func ExportBusiness(ctx context.Context, source, target string) (err error) {
 // VerifyBusiness checks that a rollback image cannot reintroduce execution
 // history; foundation images additionally cannot contain business objects.
 func VerifyBusiness(ctx context.Context, path string, foundationOnly bool) error {
-	expected := ""
-	if foundationOnly {
-		expected = store.CurrentSchemaContract
-	}
-	if err := Verify(ctx, path, expected); err != nil {
+	if err := Verify(ctx, path, store.CurrentSchemaContract); err != nil {
 		return err
 	}
 	db, err := openReadOnly(path)
@@ -253,7 +241,6 @@ func VerifyBusiness(ctx context.Context, path string, foundationOnly bool) error
 	excluded := append([]string{}, historyTables...)
 	if foundationOnly {
 		excluded = append(excluded, businessTables...)
-		excluded = append(excluded, "environment_parameter_definitions", "environment_parameter_defaults")
 	}
 	known := map[string]bool{}
 	for _, list := range [][]string{foundationTables, businessTables, historyTables} {
@@ -283,10 +270,12 @@ func VerifyBusiness(ctx context.Context, path string, foundationOnly bool) error
 	if err != nil {
 		return err
 	}
-	for _, table := range excluded {
+	for table := range known {
 		if !present[table] {
-			continue
+			return fmt.Errorf("required table %q is missing", table)
 		}
+	}
+	for _, table := range excluded {
 		query := "SELECT count(*) FROM " + quoteIdentifier(table)
 		if table == "audit_events" {
 			query += ` WHERE id <> 'audit-platform-catalog-bootstrapped' OR action <> 'platform_option_catalog.bootstrapped' OR metadata_json <> '{"mode":"business-reset-preserved"}'`

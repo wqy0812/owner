@@ -41,6 +41,7 @@ func (p *ActionPlanner) expandActionSteps(ctx context.Context, steps []lockedSte
 		}
 		preID, postID := action.PreCheckActionID, action.PostCheckActionID
 		if action.Kind == domain.ActionRollback {
+			preID = ""
 			sourceID := main.RollbackSourceActionID
 			if sourceID == "" && main.Backup != nil {
 				sourceID = main.Backup.ActionID
@@ -52,7 +53,6 @@ func (p *ActionPlanner) expandActionSteps(ctx context.Context, steps []lockedSte
 			postID = check.ID
 			main.RollbackSourceActionID = sourceID
 		}
-		main.PreCheckRequired = preID != ""
 		for i, id := range []string{preID, postID} {
 			if i == 1 {
 				main.Phase = "execute"
@@ -136,11 +136,7 @@ func refreshParentSteps(plan *lockedPlan) {
 }
 
 func (b *ActionPlanner) lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (lockedStep, error) {
-	if err := domain.ValidateReleaseYAMLAuthoring(release); err != nil {
-		return lockedStep{}, err
-	}
-	step := lockedStep{ResourceContract: action.ResourceContract,
-		ID: "locked-" + digestValue([]string{nodeID, release.ID, action.ID})[:24], NodeID: nodeID, Name: component.Name + " · " + actionDisplayName(action),
+	step := lockedStep{ID: "locked-" + digestValue([]string{nodeID, release.ID, action.ID})[:24], NodeID: nodeID, Name: component.Name + " · " + actionDisplayName(action),
 		ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, ReleaseVersion: release.Version,
 		ReleaseSpecDigest: componentReleaseSpecDigest(release), ActionID: action.ID,
 		Action: action.Kind, FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,

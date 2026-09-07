@@ -80,23 +80,12 @@
             "name": "恢复原始文件",
             "type": "rollback",
             "playbook": "tasks/rollback.yml",
-            "preCheckActionId": "rollback-pre",
             "postCheckActionId": "rollback-post",
             "hostGroup": "all",
             "timeoutSeconds": 120,
             "riskLevel": "destructive",
             "destructive": true,
             "idempotent": true,
-            "become": true
-          },
-          {
-            "id": "rollback-pre",
-            "name": "rollback-pre",
-            "type": "check",
-            "playbook": "tasks/checks/rollback-pre.yml",
-            "hostGroup": "all",
-            "timeoutSeconds": 60,
-            "riskLevel": "low",
             "become": true
           },
           {
@@ -127,10 +116,6 @@
         {
           "filename": "tasks/checks/install-post.yml",
           "content": "- name: Read installed example\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.target_path }}\"\n  register: cf_local_installed\n- name: Confirm installed content\n  ansible.builtin.assert:\n    that: (cf_local_installed.content | b64decode) == cf.inputs.content\n"
-        },
-        {
-          "filename": "tasks/checks/rollback-pre.yml",
-          "content": "- name: Read recovery baseline independently\n  ansible.builtin.slurp:\n    src: \"{{ cf.inputs.clusterforge_backup_marker }}\"\n  register: cf_local_baseline\n- name: Confirm baseline is usable\n  ansible.builtin.assert:\n    that:\n      - (cf_local_baseline.content | b64decode | from_json).existed is boolean\n      - (cf_local_baseline.content | b64decode | from_json).metadata == cf.inputs.clusterforge_backup_metadata\n"
         },
         {
           "filename": "tasks/checks/rollback-post.yml",

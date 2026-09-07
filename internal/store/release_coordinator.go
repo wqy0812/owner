@@ -168,14 +168,12 @@ func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run
 	if run.Kind != domain.RunScenarioTest || run.Status != domain.RunSucceeded || run.ScenarioRevisionID != revision.ID {
 		return nil, fmt.Errorf("%w: Run is not successful evidence for this scenario revision", domain.ErrConflict)
 	}
-	if revision.DigestVersion >= domain.ScenarioDigestVersion {
-		mode, _ := run.InputSnapshot["executionMode"].(string)
-		if mode != "install" && mode != "upgrade" {
-			return nil, domain.ErrConflict
-		}
-		if err := validateScenarioAcceptanceEvidence(ctx, tx, run, revision); err != nil {
-			return nil, err
-		}
+	mode, _ := run.InputSnapshot["executionMode"].(string)
+	if mode != "install" && mode != "upgrade" {
+		return nil, domain.ErrConflict
+	}
+	if err := validateScenarioAcceptanceEvidence(ctx, tx, run, revision); err != nil {
+		return nil, err
 	}
 	if err := validateScenarioAdaptationRead(ctx, tx, revision); err != nil {
 		return nil, err
@@ -272,10 +270,8 @@ func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionGuard Sc
 	if err != nil {
 		return err
 	}
-	if revision.DigestVersion >= domain.ScenarioDigestVersion {
-		if _, err := scenarioRequiredEvidenceTx(ctx, tx, revision); err != nil {
-			return err
-		}
+	if _, err := scenarioRequiredEvidenceTx(ctx, tx, revision); err != nil {
+		return err
 	}
 	evidenceReleases, err := scenarioTestEvidenceMatches(ctx, tx, evidence, revision)
 	if err != nil {

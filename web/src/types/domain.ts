@@ -83,7 +83,7 @@ export interface ParameterMapping {
 }
 
 export interface ComponentDependency {
-  kind?: 'configuration';
+  kind: 'execution' | 'configuration';
   id?: string;
   componentId: string;
   componentName?: string;
@@ -101,16 +101,10 @@ export interface ResolvedParameter {
   targetParameter?: string;
 }
 
-export interface RuntimeCheck { id: string; kind: 'command' | 'image_command' | 'path_present' | 'path_absent' | 'service_inactive' | 'network_rules_absent' | 'tcp'; target: string; providedByReleaseId?: string }
-export interface LegacyYamlSettings { readonly gatherFacts: boolean; readonly checks: RuntimeCheck[] }
-export interface ResourceContract { version: 1; noManagedPaths: boolean; claims: ResourceClaim[] }
-export interface ResourceClaim { id: string; path: string; scope: 'file' | 'tree'; access: 'manage' | 'read' | 'verify'; exclusive?: boolean; excludes?: string[]; sharedPaths?: string[]; sharedWith?: { releaseId: string; claimId: string } }
 export interface ActionDefinition {
-  resourceContract?: ResourceContract;
   preCheckActionId?: string;
   postCheckActionId?: string;
   become?: boolean;
-  legacyYamlSettings?: LegacyYamlSettings;
   id?: string;
   name?: string;
   type: 'check' | 'inspect' | 'preflight' | 'install' | 'configure' | 'upgrade' | 'verify' | 'rollback' | 'uninstall';
@@ -373,6 +367,7 @@ export interface RunPage {
 
 export interface Component {
   id: string;
+  canDelete?: boolean;
   readContext?: {
     evidence: Record<string, ReleaseEvidenceSummary>;
     workItems: WorkItem[];
@@ -427,7 +422,6 @@ export interface ScenarioEdge {
 export type ScenarioExecutionMode = 'install' | 'upgrade' | 'baseline_verify';
 
 export interface ScenarioAcceptanceJob {
- legacyYamlSettings?: LegacyYamlSettings;
   id: string; name: string; purpose: string; hostGroup: string; timeoutSeconds: number;
   riskLevel: 'low' | 'medium' | 'high' | 'destructive'; requiredCredentials: string[];
   become: boolean; playbook: string; playbookSha256: string; mayMutate: boolean;
@@ -962,7 +956,7 @@ export interface ComponentTestPlan {
 }
 
 export interface EnvironmentRollbackPlan extends ComponentTestPlan {
-  nodes: string[];
+  targetHosts: EnvironmentHost[];
   environmentName: string;
   sources: Array<{ runId: string; kind: NonNullable<Run['kind']>; scenarioRevisionId?: string; componentCount: number }>;
   componentCount: number;

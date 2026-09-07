@@ -19,9 +19,8 @@ func importGovernanceFixture(t *testing.T) (*Platform, domain.User, domain.Envir
 	if err := testDatabase(p).CreateComponent(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	definition := domain.EnvironmentParameterDefinition{ID: "import-count", Key: "count", Label: "Count", Type: domain.ParameterTypeInteger, Enum: []any{2, 4}, CreatedBy: seed.PlatformAdminID, CreatedAt: now}
 	r := domain.ComponentRelease{ID: "import-contract-r1", ComponentID: c.ID, LineID: "import-line", LineName: "Import", Version: "1.0.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now, EnvironmentConstraints: map[string]any{}, Parameters: []domain.ParameterDefinition{
-		{Name: "count", Description: "Instance count", Type: domain.ParameterTypeInteger, Enum: definition.Enum, Required: true, Modifiable: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}},
+		{Name: "count", Description: "Instance count", Type: domain.ParameterTypeInteger, Enum: []any{2, 4}, Required: true, Modifiable: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}},
 		{Name: "region", Description: "Placement region", Type: domain.ParameterTypeString, Enum: []any{"north", "south"}, MinLength: 3, Required: true, Modifiable: true, Visibility: domain.ParameterPublic, ValueProvider: domain.ParameterProviderEnvironmentOwner, EnvironmentBinding: &domain.EnvironmentParameterBinding{Kind: domain.EnvironmentBindingPrivate}},
 	}}
 	if err := testDatabase(p).CreateComponentRelease(ctx, r); err != nil {

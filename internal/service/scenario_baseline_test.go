@@ -2,11 +2,32 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"codex/platform-demo/internal/domain"
 )
+
+func TestScenarioBaselineVerificationDoesNotInferMissingBaselineFromRuns(t *testing.T) {
+	p, db, owner, revision, env, _ := scenarioExecutionFixture(t)
+	ctx := context.Background()
+	installed := runScenarioProtocol(t, p, owner, revision.ID, env.ID, domain.ScenarioExecutionInstall, domain.RunScenarioTest)
+	if _, err := db.DB().ExecContext(ctx, "DELETE FROM scenario_installations WHERE environment_id=? AND scenario_id=?", env.ID, revision.ScenarioID); err != nil {
+		t.Fatal(err)
+	}
+	input := ScenarioExecutionRequest{EnvironmentID: env.ID, ExecutionMode: domain.ScenarioExecutionBaselineVerify}
+	preview, err := p.execution.PreviewScenarioExecution(ctx, owner, revision.ID, input, domain.RunScenario)
+	if err == nil && preview.Ready {
+		t.Fatal("verification inferred a missing baseline from successful historical Runs")
+	}
+	if _, err := db.GetScenarioInstallation(ctx, env.ID, revision.ScenarioID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("verification backfilled a baseline: %v", err)
+	}
+	if run, err := db.GetRun(ctx, installed.ID); err != nil || run.Status != domain.RunSucceeded {
+		t.Fatalf("verification changed source evidence: run=%+v err=%v", run, err)
+	}
+}
 
 func TestScenarioBaselineVerificationPreservesTestIdentityAndEvidence(t *testing.T) {
 	p, db, owner, revision, env, _ := scenarioExecutionFixture(t)

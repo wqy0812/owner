@@ -173,7 +173,7 @@ erDiagram
 - `environment_owner`：维护自己拥有的环境，审批该环境上的危险运行。
 - `platform_admin`：维护平台选项目录和环境变量字段，审核 Component Release 合同；对业务资源全局只读。
 
-全局环境参数治理已停用。组件 Owner 定义参数与公开性、修改权限及值提供方；环境填写型字段按 Release ID 与参数名保存，其他组件通过公开参数映射引用。当前参数合同只接受组件所属绑定；旧全局字段接口、默认值回填和运行解析均已删除。现有精确数据库合同中的 `environment_parameter_definitions`、`environment_parameter_defaults` 表及 Catalog 表结构保留，避免代码清理引入结构变更；业务不再读写这些表，也不提供旧合同转换。
+全局环境参数治理已停用。组件 Owner 定义参数与公开性、修改权限及值提供方；环境填写型字段按 Release ID 与参数名保存，其他组件通过公开参数映射引用。当前参数合同只接受组件所属绑定；旧全局字段接口、默认值回填和运行解析均已删除。已删除停用的全局参数表、默认值校验及 Catalog 备份恢复逻辑。
 
 当前 seed 包含两个组件 Owner、一个集群 Owner 和一个环境 Owner。会话令牌只在 Cookie 中返回，数据库保存令牌 SHA-256 摘要，会话有效期为 24 小时。
 
@@ -202,13 +202,13 @@ Released Release 不可修改。创建 Draft 必须先预览并提交 `expectedP
 
 每个 Release 保存不可变的 `playbook_workspace_root` 和全树摘要。新目录由组件 slug、发布线业务名称和版本业务名称规范化生成，并在版本段追加完整、不可变的 Release ID；数据库唯一索引提供第二道碰撞防线。Draft 改版本号或发布线名称时先验证并移动目录，再提交数据库引用，失败时恢复原目录；Released/Deprecated 根目录保持冻结。已保存 Action 的 Kind 不可修改，平台把入口固定为 `<kind>.yml`。运行按 Release 验证并复制工作区；Verify/Inspect 可在同一 Run 内复用只读快照，其他动作使用隔离快照，每步后重新校验全树摘要。
 
-结构合同 `clusterforge-v1-20260906-workbench-run-observations` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期有已授权的保留历史离线转换，详见[场景生命周期](scenario-lifecycle.md)。
+结构合同 `clusterforge-v1-20260907-no-resource-contract` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节或整目录文件快照（`kind=file/directory`，每个 Release 最多一条记录）。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期同样只维护当前合同，详见[场景生命周期](scenario-lifecycle.md)。
 
 未发布 Draft 可随时废弃，即使已经产生或正在产生验证 Run；废弃只关闭编辑与候选共享，不删除合同或证据。未发布的 Deprecated Release 可恢复为 Draft，但同一发布线已有其他 Draft、或同一父版本已有其他有效后继时恢复失败关闭。永久删除仅接受从未发布且已废弃的 Release；事务内再次确认不存在组件/场景 Run、镜像构建、下游依赖、场景 Revision 引用、其他 Release/Action 合同引用或环境安装记录，然后删除 Release 自有合同数据及空发布线，并保留 `component_release.deleted` 审计。已发布版本永不物理删除。
 
 参数 `type` 只允许 `string`、`boolean`、`integer`、`number`、`object` 和 `array`；`fixedValue`、`suggestedValue`、`testValue`、`enum` 与 `minLength` 必须和类型一致。合法提供方组合为：组件固定值必须不可修改并填写 `fixedValue`；场景和环境字段必须可修改且不得固定；上游映射必须不可修改并存在唯一映射。环境字段只接受组件所属绑定。分配给场景或环境 Owner 的 `object`、`array` 字段必须提供受控枚举，由界面生成选择控件，禁止退化为原始 JSON 编辑。`suggestedValue` 只供 Owner 显式采用，绝不自动生效。
 
-场景节点锁定 Release，但同一 Component 在图中不要求唯一。若同一软件需要投放到 `k8smaster` 与 `k8snode`，组件 Owner 必须建立主机组各自固定的独立发布线；这些发布线可以复用 Playbook 和制品，但每个 Action 的主机组仍属于不可由场景修改的 Release 合同。场景 Owner 只选择精确 Release 和 Action。执行依赖必须绑定锁定指定上游 Release 的节点，并形成正确的执行先后关系。`kind: "configuration"` 仅引用执行前可确定的公开参数，保留准确版本和来源节点选择，不生成执行顺序线。参数按字段引用图解析；组件间可以互相引用不同配置字段，但字段值循环、私有来源、类型不匹配和人工覆盖仍被拒绝。候选集完整锁定并测试所有配置来源。
+场景节点锁定 Release，但同一 Component 在图中不要求唯一。若同一软件需要投放到 `k8smaster` 与 `k8snode`，组件 Owner 必须建立主机组各自固定的独立发布线；这些发布线可以复用 Playbook 和制品，但每个 Action 的主机组仍属于不可由场景修改的 Release 合同。场景 Owner 只选择精确 Release 和 Action。依赖类型必须显式填写 `kind: "execution"` 或 `kind: "configuration"`，缺省和空值均拒绝。执行依赖必须绑定锁定指定上游 Release 的节点，并形成正确的执行先后关系。`kind: "configuration"` 仅引用执行前可确定的公开参数，保留准确版本和来源节点选择，不生成执行顺序线。参数按字段引用图解析；组件间可以互相引用不同配置字段，但字段值循环、私有来源、类型不匹配和人工覆盖仍被拒绝。候选集完整锁定并测试所有配置来源。
 
 安装验证按 `upgrade` → `install` → `configure` → `preflight` → `inspect` 的顺序选择第一个已定义主动作，随后在定义了 `verify` 时追加验证步骤。回滚测试始终执行 Draft 自身的 rollback 合同：带 from/to 的版本回滚必须选择一个同组件的 Released/Deprecated Release 追加其 verify；只有 from/to 都为空、目标为干净状态的清理 rollback 才允许 `rollback_only`。普通 `rollback_only` 仅证明清理动作完成，不能作为候选共享或发布所需的回退后验证证据；清理 rollback 若以动作标签 `clusterforge.rollback-self-verifies` 明确声明 Playbook 内含严格后置验证，则相同内容摘要下成功的 `rollback_only` 可作为回退证据。该标签用于其他 Action 或版本回滚时，Release 合同校验直接拒绝。`clusterforge.` 前缀保留为合同元数据命名空间，执行器不会把这类标签传给 Ansible `--tags`；其余动作标签仍用于选择 Ansible task。
 
@@ -329,7 +329,6 @@ SQLite 主要表如下：
 | `publication_state` | 全局发布纪元 | 发布事务内防并发漂移 |
 | `platform_option_categories` / `platform_options` | 适配维度与选项 | 父子目录、必填与历史引用保护 |
 | `environment_variable_definitions` | 非敏感环境变量字段 | 治理名称与类型 |
-| `environment_parameter_definitions` / `environment_parameter_defaults` | 停用的全局参数结构 | 当前业务不再读写，不提供旧合同转换 |
 | `playbook_action_mutations` | Action 文件提交恢复日志 | HTTP 开放前恢复未完成文件操作 |
 | `run_retention_policy` / `run_retention_cursors` | 自动历史处理策略和扫描游标 | 初始关闭，持续推进候选扫描 |
 | `run_archive_tasks` / `run_archive_files` | 归档租约任务和已验证文件清单 | 完成校验及事务后才删除在线日志 |
@@ -506,8 +505,10 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 
 ### 7.10 整集群回滚
 
-- 只允许目标环境 Owner 在环境没有活动 Run 时预览；没有当前安装基线时失败关闭。
+- 只允许目标环境 Owner 在环境没有活动 Run 时预览；没有安装基线或待恢复操作时返回空预览，不创建 Run，也不据此证明主机已干净。
 - 平台按安装来源 Run 的完成时间倒序分层，并在每个来源内反转原安装节点顺序，生成 `environment_rollback` 锁定步骤。
+- 安装来源确定主机组名称，当前 Inventory 确定成员；允许成员和连接信息相对安装时变化。预览锁定当前成员、Inventory 和共享服务边界，提交核对摘要，执行与续跑使用本次锁定环境版本。共享服务组保留，混合组和归属冲突阻断。
+- 所有回滚统一执行主体和必需的后检查；主体成功但后检查失败时保留恢复基线。连续续跑使用保留的父动作身份，已完成回滚的检查不重放。
 - 每项都重新校验安装记录、`backup_ref`、来源 Run、Release rollback 动作与安装 Playbook 指纹；任一证据缺失或漂移都会阻断。
 - 预览不创建 Run。提交必须携带当前 `planDigest` 并完整输入环境名称，创建的破坏性 Run 固定进入 `awaiting_approval`。
 - `environment_rollback` 从提交到终态独占目标环境；数据库同时阻止该环境创建其他活动 Run，也阻止在已有活动 Run 时创建整环境回滚。
@@ -593,6 +594,7 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | GET / POST | `/components` | 默认摘要列表；`view=contracts` 返回完整合同 / 创建组件 |
 | GET | `/components/{id}/usage` | 按 `releaseId` 与 `includeHistory` 查询直接引用；仅组件 Owner 或平台 Owner |
 | GET / PATCH | `/components/{id}` | 详情 / 修改元数据 |
+| DELETE | `/components/{id}` | 仅组件本人 Owner 可永久删除无任何版本、无引用的空组件；保留审计 |
 | POST | `/components/{id}/release-draft-plan` | 预览全新发布线或发布线演进 Draft，并生成计划指纹 |
 | POST | `/components/{id}/release-drafts` | 按 `expectedPlanDigest` 创建 Draft |
 | PATCH | `/component-release-lines/{id}` | 修改发布线展示名称并记录审计 |
@@ -624,6 +626,7 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | DELETE | `/component-releases/{id}/images/{name}` | 从 Draft 移除镜像引用 |
 | GET | `/component-releases/{id}/playbook-workspace` | 加载工作区文件清单与树摘要 |
 | GET / PUT / POST / PATCH / DELETE | `/component-releases/{id}/playbook-workspace/file` | 读取、保存、上传、重命名或删除工作区文件；写入需文件和工作区摘要前置条件 |
+| DELETE | `/component-releases/{id}/playbook-workspace/directory` | 按 `path` 和 `expectedTreeSha256` 递归删除 Draft 辅助目录；拒绝包含 Action 入口的目录，整目录恢复日志与新清单原子提交 |
 | GET | `/image-builds/{id}` | 查询镜像构建详情与日志 |
 
 ### 9.3 场景
@@ -740,6 +743,7 @@ Release 返回 `definitionGeneration`；更新时使用 `expectedDefinitionGener
 ### 9.7 列表与详情读取合同
 
 - `GET /components` 返回摘要，不携带完整 Release、Action、参数和工作区。编排确需完整合同时显式使用 `view=contracts`。`GET /components/{id}` 返回选中组件及 `readContext`；`releaseLines` 用 `releaseIds` 引用版本，不重复序列化完整 Release。详情提供 `playbookFileCount`，文件清单单独从工作区接口读取。
+- 组件详情的 `canDelete` 表示当前用户是否可以删除组件；仅本人组件 Owner 且所有状态版本数为零、无依赖/环境安装/执行回执引用时为 true。前端仅在该值为 true 时显示删除入口，字段缺失时隐藏。删除接口在 Catalog 写事务内重新核对同一组条件，将组件、空发布线删除与 `component.deleted` 审计、目录纪元递增一并提交；提交后才发送同名 SSE。成功返回 `200 {data:{deleted:true}}`，无权限返回 403，不存在返回 404，状态或引用冲突返回可解释的 409。
 - `GET /runs` 接受 `page`（默认 1）、`pageSize`（默认 50，1–100）、`archive=unarchived|archived|all`、`filter=all|active|finished` 和 `environmentId`。返回 `{items, page, pageSize, total}`；摘要不包含执行快照、步骤和日志，详情独立请求。
 - `GET /component-releases/{id}/run-evidence` 使用不可变 Run 快照判断引用并返回摘要；批量审批从独立候选接口加载，不受当前列表分页限制。
 - 已按策略清理的 Run：原有查看权限用户访问详情返回 HTTP 410、错误码 `run.cleaned`；无权限用户仍返回 403。归档包缺失或校验不通过时下载报错，不能伪装成空日志。
@@ -799,7 +803,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_RUN_ARCHIVE_DIR` | 未配置 | 独立持久化归档目录的绝对路径；未配置时归档不可用，普通 Run 可执行 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260906-workbench-run-observations` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。本次不提供自动分支归属转换；既有转换工具拒绝缺少固定分支范围或存在范围冲突的输入，不能把历史版本静默归并成一个分支。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅转换旧 V1 的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260907-no-resource-contract` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。历史离线转换入口已删除，分支范围必须按当前规则声明。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅复制当前精确合同的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
 
 ### 11.1 发布目录灾备
 

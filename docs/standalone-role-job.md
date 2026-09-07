@@ -1,6 +1,6 @@
 # 原生 Ansible 作业包
 
-新作业使用 `clusterforge-native-job-v3` 契约，直接通过 `ansible-playbook` 运行，不需要 ClusterForge 服务或 Go 启动器。旧 `clusterforge-role-job-v1` 和 `clusterforge-native-job-v2` 下载包保留原内容、摘要、入口和版本要求。
+新作业使用 `clusterforge-native-job-v4` 契约，直接通过 `ansible-playbook` 运行，不需要 ClusterForge 服务或 Go 启动器。首版仅支持当前作业契约，不转换旧作业包。
 
 ## 执行方式
 

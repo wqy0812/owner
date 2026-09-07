@@ -51,7 +51,7 @@ func TestRunLogsBrowserFixture(t *testing.T) {
 		if err := db.CreateComponent(ctx, domain.Component{ID: id, Name: fmt.Sprintf("下游组件 %d", i+1), Slug: id, OwnerID: "component-owner", Layer: domain.LayerRuntimeState, CreatedAt: now, UpdatedAt: now}); err != nil {
 			t.Fatal(err)
 		}
-		release := domain.ComponentRelease{ID: id + "-release", ComponentID: id, Version: "1.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now, Dependencies: []domain.ComponentDependency{{ID: id + "-dependency", ReleaseID: id + "-release", UpstreamComponentID: "component-1", UpstreamReleaseID: "scenario-release", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: params[0].Name, TargetParameter: "pki_dir"}}}}}
+		release := domain.ComponentRelease{ID: id + "-release", ComponentID: id, Version: "1.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable, RiskLevel: domain.RiskLow, CreatedAt: now, Dependencies: []domain.ComponentDependency{{Kind: "execution", ID: id + "-dependency", ReleaseID: id + "-release", UpstreamComponentID: "component-1", UpstreamReleaseID: "scenario-release", ParameterMappings: []domain.ParameterMapping{{UpstreamParameter: params[0].Name, TargetParameter: "pki_dir"}}}}}
 		if err := db.CreateComponentRelease(ctx, release); err != nil {
 			t.Fatal(err)
 		}

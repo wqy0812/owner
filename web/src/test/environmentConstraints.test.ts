@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeEnvironmentConstraintDimensions, childOptionsForSelection, environmentConstraintDimensions, environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection, toggleConstraintValue, toggleHierarchicalConstraintValue } from '../types/environmentConstraints';
+import { activeEnvironmentConstraintDimensions, childOptionsForSelection, environmentConstraintDimensions, environmentConstraintGroups, parseConstraintSelection, serializeConstraintSelection, toggleConstraintValue, toggleHierarchicalConstraintValue, unselectedConstraintDimensions } from '../types/environmentConstraints';
 import type { PlatformOptionCategory } from '../types/domain';
 
 const usage = { componentReleases: 0, scenarioRevisions: 0, environmentRevisions: 0 };
@@ -18,6 +18,22 @@ const categories: PlatformOptionCategory[] = [
 const dimensions = environmentConstraintDimensions(categories);
 
 describe('dynamic environment constraints', () => {
+  it('distinguishes a blank form from an existing unrestricted scope', () => {
+    expect(unselectedConstraintDimensions(parseConstraintSelection(undefined, dimensions), dimensions)).toEqual(dimensions);
+    expect(unselectedConstraintDimensions(parseConstraintSelection({}, dimensions), dimensions)).toEqual([]);
+  });
+
+  it('requires an explicit unrestricted choice after clearing the last tag', () => {
+    const selected = toggleHierarchicalConstraintValue({}, dimensions, 'architecture', 'amd64');
+    const cleared = toggleHierarchicalConstraintValue(selected, dimensions, 'architecture', 'amd64');
+    expect(cleared.architecture).toBeUndefined();
+    const unrestricted = toggleHierarchicalConstraintValue(selected, dimensions, 'architecture');
+    expect(unrestricted.architecture).toEqual([]);
+    expect(serializeConstraintSelection(unrestricted, dimensions)).toEqual({});
+    expect(toggleHierarchicalConstraintValue(unrestricted, dimensions, 'architecture').architecture).toBeUndefined();
+    expect(toggleHierarchicalConstraintValue(unrestricted, dimensions, 'architecture', 'arm64').architecture).toEqual(['arm64']);
+  });
+
   it('uses category order and display labels', () => {
     expect(environmentConstraintGroups({ architecture: ['amd64', 'arm64'], operatingSystem: ['Kylin'] }, dimensions)).toEqual([
       { key: 'architecture', label: '架构', values: ['x86/amd64', 'ARM/arm64'] },
@@ -56,7 +72,9 @@ describe('dynamic environment constraints', () => {
     expect(childOptionsForSelection({ ...active[1], options: [...active[1].options, { ...active[1].options[0], id: 'orphan', value: 'orphan@1', parentOptionId: undefined }] }, active[0], ['docker']).map((item) => item.value)).toEqual(['docker@20.10.21']);
     const selection = { containerRuntime: ['docker', 'containerd'], containerRuntimeVersion: ['docker@20.10.21', 'containerd@2.0.10'] };
     expect(toggleHierarchicalConstraintValue(selection, active, 'containerRuntime', 'docker')).toEqual({ containerRuntime: ['containerd'], containerRuntimeVersion: ['containerd@2.0.10'] });
-    expect(toggleHierarchicalConstraintValue({ containerRuntime: ['docker'] }, active, 'containerRuntime', 'containerd')).toEqual({ containerRuntime: ['docker', 'containerd'], containerRuntimeVersion: [] });
+    expect(toggleHierarchicalConstraintValue({ containerRuntime: ['docker'] }, active, 'containerRuntime', 'containerd')).toEqual({ containerRuntime: ['docker', 'containerd'] });
+    expect(toggleHierarchicalConstraintValue(selection, active, 'containerRuntime')).toEqual({ containerRuntime: [] });
+    expect(toggleHierarchicalConstraintValue({ containerRuntime: [], containerRuntimeVersion: [] }, active, 'containerRuntime', 'docker')).toEqual({ containerRuntime: ['docker'] });
     expect(toggleHierarchicalConstraintValue(selection, active, 'containerRuntimeVersion', 'docker@20.10.21').containerRuntimeVersion).toEqual(['containerd@2.0.10']);
     expect(toggleHierarchicalConstraintValue(selection, active, 'missing', 'value').missing).toEqual(['value']);
   });
