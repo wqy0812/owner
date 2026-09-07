@@ -226,7 +226,7 @@ func scenarioExecutionOrderIssues(graph domain.ScenarioGraph) []domain.Validatio
 			sort.Strings(ready) // Stable diagnostics only; never select an execution order.
 			issues := make([]domain.ValidationIssue, 0, len(ready))
 			for _, id := range ready {
-				issues = append(issues, domain.ValidationIssue{Code: "execution_order_undetermined", NodeID: id, Message: "执行顺序尚未确定，请由场景 Owner 补充手工顺序线；已发布版本需复制为新 Revision，补线并重新测试发布"})
+				issues = append(issues, domain.ValidationIssue{Code: "execution_order_undetermined", NodeID: id, Message: "执行顺序尚未确定，请由场景 Owner 补充手工顺序线；已发布版本需复制为新版本，补线并重新测试发布"})
 			}
 			return issues
 		}

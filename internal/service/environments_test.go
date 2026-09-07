@@ -159,7 +159,7 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 	var updateErr error
 	platform.ConfigureEnvironmentHealthDialer(func(_ context.Context, _, _ string) (net.Conn, error) {
 		updateOnce.Do(func() {
-			_, updateErr = platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.11", User: "root", Port: 22, Groups: []string{"all"}}}, "检查期间更新 Revision")
+			_, updateErr = platform.environments.UpdateInventory(context.Background(), owner, environment.ID, []InventoryHost{{Name: "node-2", Address: "192.0.2.11", User: "root", Port: 22, Groups: []string{"all"}}}, "检查期间更新版本")
 		})
 		left, right := net.Pipe()
 		_ = right.Close()
@@ -181,7 +181,7 @@ func TestEnvironmentConnectivityKeepsOneRevisionWhenUpdateRacesTCPCheck(t *testi
 		t.Fatal(err)
 	}
 	if current.CurrentRevisionID == checkedRevision.CurrentRevisionID {
-		t.Fatal("test did not create a concurrent Environment Revision")
+		t.Fatal("test did not create a concurrent 环境版本")
 	}
 	if check.TCP.EnvironmentRevisionID != checkedRevision.CurrentRevisionID || check.SSH.EnvironmentRevisionID != checkedRevision.CurrentRevisionID {
 		t.Fatalf("revision tcp=%s ssh=%s want=%s current=%s", check.TCP.EnvironmentRevisionID, check.SSH.EnvironmentRevisionID, checkedRevision.CurrentRevisionID, current.CurrentRevisionID)

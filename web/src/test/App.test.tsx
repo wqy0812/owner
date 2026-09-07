@@ -439,14 +439,14 @@ describe('platform shell and RBAC UI', () => {
     const remove = await screen.findByRole('button', { name: `移除失效参数 ${key}` });
     expect(screen.getByRole('region', { name: '失效环境参数' })).toHaveTextContent('1 项待清理');
     expect(screen.getByRole('region', { name: '失效环境参数' })).toHaveTextContent('small');
-    expect(screen.getByRole('button', { name: '保存新 Revision' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存新版本' })).toBeDisabled();
     await userEvent.click(remove);
     await userEvent.click(screen.getByRole('button', { name: '放弃本页更改' }));
     expect(screen.getByRole('button', { name: `移除失效参数 ${key}` })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: `移除失效参数 ${key}` }));
-    await userEvent.click(screen.getByRole('button', { name: '保存新 Revision' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存新版本' }));
     await userEvent.type(within(screen.getByRole('dialog')).getByRole('textbox', { name: '变更原因' }), '移除已删除的组件字段');
-    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认创建 Revision' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认创建版本' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/environment-test/parameters') && init?.method === 'PUT')).toBe(true));
     const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/environment-test/parameters') && init?.method === 'PUT')!;
     expect(JSON.parse(String(call[1]?.body)).values).toEqual({});
@@ -1226,13 +1226,13 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/manual/workflow');
     expect(await screen.findByRole('heading', { name: '平台说明书' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '平台工作流程总览' })).toBeInTheDocument();
-    for (const label of ['1. 组件 Release', '2. 场景 Revision', '3. 环境 Revision', '4. Run']) {
+    for (const label of ['1. 组件 Release', '2. 场景版本', '3. 环境版本', '4. Run']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(screen.getAllByText(/当前为项目首个版本（V1）/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/环境仅用于测试，不是生产环境/).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: '场景节点数不等于环境主机数' })).toBeInTheDocument();
-    expect(screen.getByText(/实际数量以当前 Revision 为准/)).toBeInTheDocument();
+    expect(screen.getByText(/实际数量以当前版本为准/)).toBeInTheDocument();
     const commonButtons = screen.getByRole('region', { name: '全员公共按钮操作目录' });
     expect(commonButtons).toHaveTextContent('切换演示身份');
     expect(commonButtons).toHaveTextContent('灾备目录');
@@ -1271,7 +1271,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '集群 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加节点 / 编辑节点 / 移除节点', '主机组管理 / 应用更改', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新 Revision', '确认创建 Revision', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准', '创建私有仓库 / 创建并接入', '立即备份', '从恢复点恢复空库 / 预览恢复 / 确认恢复空库']) {
+    for (const label of ['新建环境 / 创建环境', '添加节点 / 编辑节点 / 移除节点', '主机组管理 / 应用更改', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新版本', '确认创建版本', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准', '创建私有仓库 / 创建并接入', '立即备份', '从恢复点恢复空库 / 预览恢复 / 确认恢复空库']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });
@@ -2346,12 +2346,12 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '添加变量' }));
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '环境变量名' }), 'IMAGE_REGISTRY');
     await userEvent.type(screen.getByRole('textbox', { name: /环境变量 IMAGE_REGISTRY 的值/ }), 'registry.example.test:5000/');
-    await userEvent.click(screen.getByRole('button', { name: '保存新 Revision' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存新版本' }));
     await userEvent.type(screen.getByRole('textbox', { name: '变更原因' }), '配置测试镜像仓库');
-    await userEvent.click(screen.getByRole('button', { name: '确认创建 Revision' }));
+    await userEvent.click(screen.getByRole('button', { name: '确认创建版本' }));
 
     await waitFor(() => expect(submitted).toEqual({ IMAGE_REGISTRY: 'registry.example.test:5000/' }));
-    expect(await screen.findByText('环境 Revision 已更新')).toBeInTheDocument();
+    expect(await screen.findByText('环境版本已更新')).toBeInTheDocument();
   });
 
   it('runs TCP and SSH checks from one button and displays classified errors', async () => {
@@ -2472,7 +2472,7 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: '恢复环境' }));
 
     expect(await screen.findByText('环境已恢复')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('该环境已归档，仅保留配置和历史证据；不能创建版本、健康检查、构建或 Run。需要再次使用时先恢复环境。')).not.toBeInTheDocument());
   });
 
   it('shows an empty rollback state when no installation or recovery baselines exist', async () => {
@@ -2831,7 +2831,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('downloads the current scenario Revision as JSON instead of using the clipboard', async () => {
+  it('downloads the current scenario 版本 as JSON instead of using the clipboard', async () => {
     installFetch({ initialUser: carol, withScenario: true });
     let exportedBlob: Blob | undefined;
     let downloadedAs = '';
@@ -3043,7 +3043,7 @@ describe('platform shell and RBAC UI', () => {
     vi.stubGlobal('confirm', confirm);
     renderApp('/scenarios');
 
-    const revisionSelect = await screen.findByRole('combobox', { name: 'Revision' });
+    const revisionSelect = await screen.findByRole('combobox', { name: '版本' });
     expect(within(revisionSelect).getByRole('option', { name: 'r2 · 草稿 · 当前' })).toBeInTheDocument();
     expect(within(revisionSelect).getByRole('option', { name: 'r1 · 已发布' })).toBeInTheDocument();
     await userEvent.selectOptions(revisionSelect, released.id);
@@ -3052,10 +3052,10 @@ describe('platform shell and RBAC UI', () => {
     await userEvent.selectOptions(revisionSelect, draft.id);
     await userEvent.click(screen.getByRole('button', { name: '放弃草稿' }));
 
-    expect(confirm).toHaveBeenCalledWith('确认放弃 Revision 2 草稿？\n系统将恢复到最近的不可变 Revision，当前草稿会保留在历史记录中。');
+    expect(confirm).toHaveBeenCalledWith('确认放弃版本 2 草稿？\n系统将恢复到最近的不可变版本，当前草稿会保留在历史记录中。');
     expect(await screen.findByText('草稿已放弃')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Revision' })).toHaveValue(released.id));
-    expect(within(screen.getByRole('combobox', { name: 'Revision' })).getByRole('option', { name: 'r2 · 已放弃' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '版本' })).toHaveValue(released.id));
+    expect(within(screen.getByRole('combobox', { name: '版本' })).getByRole('option', { name: 'r2 · 已放弃' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新增版本' })).toBeInTheDocument();
   });
 
@@ -3085,7 +3085,7 @@ describe('platform shell and RBAC UI', () => {
     renderApp('/scenarios');
 
     await userEvent.click(await screen.findByRole('button', { name: '删除场景' }));
-    expect(confirm).toHaveBeenCalledWith('确认永久删除场景“Disposable Scenario”？\n将删除整个场景及 1 个未发布 Revision。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。');
+    expect(confirm).toHaveBeenCalledWith('确认永久删除场景“Disposable Scenario”？\n将删除整个场景及 1 个未发布版本。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。');
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/scenarios/scenario-delete') && init?.method === 'DELETE')).toBe(false);
 
     confirm.mockReturnValue(true);
@@ -3159,7 +3159,7 @@ describe('platform shell and RBAC UI', () => {
     expect(screen.getByRole('button', { name: '环境测试' })).toBeDisabled();
   });
 
-  it('ignores a late save after leaving and returning to a Revision', async () => {
+  it('ignores a late save after leaving and returning to a 版本', async () => {
     const base = installFetch({ initialUser: carol, withScenario: true });
     let complete: ((response: Response) => void) | undefined;
     let submitted: any;
@@ -3180,8 +3180,8 @@ describe('platform shell and RBAC UI', () => {
     await screen.findByRole('button', { name: /containerd.*已使用 1 次/ });
     await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
     await waitFor(() => expect(complete).toBeDefined());
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), 'other-revision');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), 'scenario-sample-r1');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '版本' }), 'other-revision');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '版本' }), 'scenario-sample-r1');
     await userEvent.click(screen.getByRole('button', { name: /containerd.*已使用 1 次/ }));
     await act(async () => { complete!(await json({ id: 'scenario-sample-r1', scenarioId: 'scenario-sample', revision: 1, state: 'draft', revisionDigest: 'late-digest', ...submitted.graph, nodes: submitted.graph.nodes.map((node: any) => ({ ...node, data: { ...node.data, componentId: 'component-containerd' } })) })); });
     await screen.findByText('场景图已保存');
@@ -3228,7 +3228,7 @@ describe('platform shell and RBAC UI', () => {
             reasons: [{
               code: 'environment.credentials_missing',
               message: 'environment is missing required CredentialRefs: K8S_ENCRYPTION_KEY',
-              cause: { kind: 'platform_rule', summary: '目标 Environment Revision 缺少执行计划要求的 CredentialRef' },
+              cause: { kind: 'platform_rule', summary: '目标环境版本缺少执行计划要求的 CredentialRef' },
               nextAction: { label: '查看目标环境凭据', href: '/environments?selected=environment-test&tab=credentials' },
             }],
             primaryAction: { label: '查看目标环境凭据', href: '/environments?selected=environment-test&tab=credentials' },
@@ -3369,7 +3369,7 @@ describe('scenario workspace loading and settings', () => {
     expect(screen.queryByText('从旧备份重建')).not.toBeInTheDocument();
   });
 
-  it('resets settings on Revision changes and keeps historical adaptation values read-only', async () => {
+  it('resets settings on 版本 changes and keeps historical adaptation values read-only', async () => {
     const base = installFetch({ initialUser: carol, withScenario: true });
     const sample = (await (await base('/api/v1/scenarios')).json()).items[0];
     const historical = { ...sample.currentRevision, id: 'historical-r1', state: 'released', environmentConstraints: { architecture: ['arm64'] } };
@@ -3380,14 +3380,14 @@ describe('scenario workspace loading and settings', () => {
     const settings = await screen.findByRole('region', { name: '适配检查' });
     await userEvent.click(within(settings).getByText('适配检查'));
     expect(within(settings).queryByRole('checkbox')).not.toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), historical.id);
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '版本' }), historical.id);
     await waitFor(() => expect(settings.querySelector('details')!.open).toBe(false));
     expect(settings.querySelector('.scenario-settings__summary')).toHaveTextContent('ARM/arm64');
     await userEvent.click(within(settings).getByText('适配检查'));
     expect(within(settings).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByLabelText('分支适配标签')).toHaveTextContent('ARM/arm64');
     expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Revision' }), sample.currentRevision.id);
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '版本' }), sample.currentRevision.id);
     await waitFor(() => expect(settings.querySelector('details')!.open).toBe(false));
     expect(screen.getByRole('button', { name: '保存草稿' })).toBeEnabled();
   });
@@ -3435,4 +3435,109 @@ it('opens Run history management on demand for the platform admin', async () => 
   await userEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
   expect(screen.queryByRole('dialog', { name: '运行历史管理' })).not.toBeInTheDocument();
   expect(screen.getByRole('link', { name: '集群' })).toHaveAttribute('href', '/scenarios');
+});
+
+describe('environment history version deletion', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function historyFixture(options: { blocked?: boolean; failDelete?: boolean; viewer?: typeof dave; archived?: boolean } = {}) {
+    const fallback = installFetch({ initialUser: options.viewer ?? dave });
+    const r1 = { id: 'deletion-r1', environmentId: 'environment-test', revision: 1, facts: {}, hosts: [], parameters: {}, variables: {}, credentialRefs: [], changeReason: 'Revision 原始备注' };
+    const r2 = { ...r1, id: 'deletion-r2', revision: 2, changeReason: '当前配置' };
+    let revisions = [r2, r1];
+    const preview = {
+      environmentId: 'environment-test', environmentName: 'History Environment', revisionId: r1.id, revision: 1,
+      current: false, archived: false, runCount: options.blocked ? 1 : 0, imageBuildCount: 0, healthCheckCount: 2, sshCheckCount: 1,
+      canDelete: !options.blocked, blockers: options.blocked ? [{ code: 'environment_revision.run_history', message: '该版本被 1 个 Run 引用，必须保留' }] : [],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (isEnvironmentList(url)) return json([{ id: 'environment-test', name: 'History Environment', ownerId: dave.id, currentRevisionId: r2.id, currentRevision: r2, revisions,
+        ...(revisions.length > 1 ? { healthCheck: { id: 'historical-tcp', environmentId: 'environment-test', environmentRevisionId: r1.id, status: 'healthy', results: [], checkedAt: '2026-09-07T00:00:00Z' } } : {}),
+        ...(options.archived ? { archivedAt: '2026-09-07T00:00:00Z' } : {}) }]);
+      if (url.endsWith('/deletion-r1/deletion-impact')) return json(preview);
+      if (url.endsWith('/revisions/deletion-r1') && init?.method === 'DELETE') {
+        if (options.failDelete) return json({ error: { code: 'conflict', message: '确认期间新增了运行引用，请重新核对' } }, 409);
+        revisions = [r2]; return json({ deleted: true });
+      }
+      return fallback(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return { fetchMock, removeRemotely: () => { revisions = [r2]; } };
+  }
+
+  it('previews on demand, preserves the original note, cancels without deleting and refreshes after confirmation', async () => {
+    const { fetchMock } = historyFixture();
+    renderApp('/environments');
+    expect(await screen.findByRole('heading', { name: '版本历史' })).toBeInTheDocument();
+    expect(screen.getByText('Revision 原始备注')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除版本 r2' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('deletion-impact'))).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: '删除版本 r1' }));
+    const dialog = await screen.findByRole('dialog', { name: '删除环境版本' });
+    expect(await within(dialog).findByText('这是不可恢复的永久删除')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '确认删除版本' })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: '删除版本 r1' }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: /我确认永久删除/ }));
+    await userEvent.click(screen.getByRole('button', { name: '确认删除版本' }));
+    await waitFor(() => expect(screen.queryByText('Revision 原始备注')).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: '删除环境版本' })).not.toBeInTheDocument();
+    expect(screen.getByText('当前配置')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1);
+  });
+
+  it('shows run blockers and keeps deletion disabled', async () => {
+    const { fetchMock } = historyFixture({ blocked: true });
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '删除版本 r1' }));
+    expect(await screen.findByText('该版本被 1 个 Run 引用，必须保留')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认删除版本' })).toBeDisabled();
+    expect(screen.queryByRole('checkbox', { name: /我确认永久删除/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+  });
+
+  it('retains the dialog and version on conflict and requires a new preview', async () => {
+    const { fetchMock } = historyFixture({ failDelete: true });
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '删除版本 r1' }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: /我确认永久删除/ }));
+    await userEvent.click(screen.getByRole('button', { name: '确认删除版本' }));
+    expect(await screen.findByText('确认期间新增了运行引用，请重新核对')).toBeInTheDocument();
+    expect(screen.getByText('版本删除未完成')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '版本删除影响' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '删除环境版本' })).toBeInTheDocument();
+    expect(screen.getByText('Revision 原始备注')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认删除版本' })).toBeDisabled();
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /重试/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('deletion-impact'))).toHaveLength(2));
+    expect(await screen.findByRole('checkbox', { name: /我确认永久删除/ })).not.toBeChecked();
+  });
+
+  it('disables deletion for unsaved edits and refreshes remote deletion events', async () => {
+    const { removeRemotely } = historyFixture();
+    renderApp('/environments');
+    const remove = await screen.findByRole('button', { name: '删除版本 r1' });
+    await userEvent.click(screen.getByRole('tab', { name: '凭据引用' }));
+    await userEvent.click(screen.getByRole('button', { name: '添加引用' }));
+    expect(remove).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '放弃本页更改' }));
+    expect(remove).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: '添加引用' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '凭据名称' }), 'unsaved-name');
+    removeRemotely();
+    act(() => EventSourceMock.instances.at(-1)?.emit('environment.revision_deleted', { environmentId: 'environment-test', revisionId: 'deletion-r1' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '删除版本 r1' })).not.toBeInTheDocument());
+    expect(screen.getByRole('textbox', { name: '凭据名称' })).toHaveValue('unsaved-name');
+    expect(screen.getByRole('button', { name: '保存新版本' })).toBeEnabled();
+    expect(screen.getByText('尚未检查')).toBeInTheDocument();
+  });
+
+  it.each(['other-owner', 'admin', 'archived'])('hides deletion for %s', async mode => {
+    historyFixture({ viewer: mode === 'other-owner' ? { ...dave, id: 'other-owner' } : mode === 'admin' ? admin : dave, archived: mode === 'archived' });
+    renderApp('/environments');
+    expect(await screen.findByRole('heading', { name: '版本历史' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除版本 r1' })).not.toBeInTheDocument();
+  });
 });

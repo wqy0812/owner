@@ -144,11 +144,11 @@ func (p *EnvironmentService) Delete(ctx context.Context, user domain.User, envir
 	}
 	if impact.RunCount > 0 {
 		base := fmt.Errorf("%w: environment is retained by %d run(s)", domain.ErrConflict, impact.RunCount)
-		return actionableExistingError(base, "environment.run_history", "该环境已有运行记录，必须保留环境与 Revision 快照；可以改为归档", "查看运行记录", "/runs")
+		return actionableExistingError(base, "environment.run_history", "该环境已有运行记录，必须保留环境与版本快照；可以改为归档", "查看运行记录", "/runs")
 	}
 	if impact.ImageBuildCount > 0 {
 		base := fmt.Errorf("%w: environment is retained by %d image build(s)", domain.ErrConflict, impact.ImageBuildCount)
-		return actionableExistingError(base, "environment.build_history", "该环境已有镜像构建记录，必须保留环境与 Revision 快照；可以改为归档", "查看组件构建记录", "/components")
+		return actionableExistingError(base, "environment.build_history", "该环境已有镜像构建记录，必须保留环境与版本快照；可以改为归档", "查看组件构建记录", "/components")
 	}
 	audit := newAuditEvent(user, "environment.deleted", "environment", environment.ID, map[string]any{
 		"name": environment.Name, "revisionCount": impact.RevisionCount,
@@ -228,7 +228,7 @@ func ensureEnvironmentActive(environment domain.Environment) error {
 }
 
 func archivedEnvironmentError(environmentID string) error {
-	return actionableExistingError(fmt.Errorf("%w: environment is archived", domain.ErrConflict), "environment.archived", "该环境已归档，不能再创建 Revision、健康检查、构建或 Run", "恢复环境", "/environments?selected="+environmentID)
+	return actionableExistingError(fmt.Errorf("%w: environment is archived", domain.ErrConflict), "environment.archived", "该环境已归档，不能再创建版本、健康检查、构建或 Run", "恢复环境", "/environments?selected="+environmentID)
 }
 
 func (p *EnvironmentService) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {

@@ -32,6 +32,7 @@ import type {
   EnvironmentHost,
   EnvironmentImportPlan,
   EnvironmentLifecycle,
+  EnvironmentRevisionDeletionImpact,
   EnvironmentRollbackPlan,
   EnvironmentRevision,
   EnvironmentParameterField,
@@ -1645,6 +1646,21 @@ export const api = {
   },
   async deleteEnvironment(environmentId: string) {
     await request<unknown>(`/environments/${environmentId}`, { method: 'DELETE' });
+  },
+  async environmentRevisionDeletionImpact(environmentId: string, revisionId: string, signal?: AbortSignal): Promise<EnvironmentRevisionDeletionImpact> {
+    const raw = requireRecord(unwrap(await get<unknown>(`/environments/${environmentId}/revisions/${revisionId}/deletion-impact`, signal)), 'environment version deletion impact');
+    return {
+      environmentId: requireString(raw, 'environmentId'), environmentName: requireString(raw, 'environmentName'),
+      revisionId: requireString(raw, 'revisionId'), revision: requireNumber(raw, 'revision'),
+      current: requireBoolean(raw, 'current'), archived: requireBoolean(raw, 'archived'),
+      runCount: requireNumber(raw, 'runCount'), imageBuildCount: requireNumber(raw, 'imageBuildCount'),
+      healthCheckCount: requireNumber(raw, 'healthCheckCount'), sshCheckCount: requireNumber(raw, 'sshCheckCount'),
+      canDelete: requireBoolean(raw, 'canDelete'),
+      blockers: requireRecords(raw, 'blockers').map(item => ({ code: requireString(item, 'code'), message: requireString(item, 'message') })),
+    };
+  },
+  async deleteEnvironmentRevision(environmentId: string, revisionId: string) {
+    await request<unknown>(`/environments/${environmentId}/revisions/${revisionId}`, { method: 'DELETE' });
   },
   async archiveEnvironment(environmentId: string) {
     return normalizeEnvironment(requireRecord(unwrap(await post<unknown>(`/environments/${environmentId}/archive`)), 'environment'));

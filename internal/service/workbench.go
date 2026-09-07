@@ -353,15 +353,15 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 		switch revision.Status {
 		case domain.RevisionDraft:
 			if latestSuccessfulTest != nil && !matchesCurrentDefinition[latestSuccessfulTest.ID] {
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据来自旧场景或旧 Release 定义，需要重新测试当前 Revision", EvidenceRunID: latestSuccessfulTest.ID, Cause: p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest), NextAction: testAction})
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据来自旧场景或旧 Release 定义，需要重新测试当前版本", EvidenceRunID: latestSuccessfulTest.ID, Cause: p.evidenceInvalidationCause(ctx, "scenario_revision", revision.ID, latestSuccessfulTest), NextAction: testAction})
 			} else {
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前 Revision 尚未通过完整环境测试", Cause: ruleCause("场景发布规则要求当前 Revision 完成一次完整环境测试"), NextAction: testAction})
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.test_required", Message: "当前版本尚未通过完整环境测试", Cause: ruleCause("场景发布规则要求当前版本完成一次完整环境测试"), NextAction: testAction})
 			}
 		case domain.RevisionTesting:
 			if len(issues) == 0 {
 				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 正在测试", scenario.Name, revision.Revision)
-				reason := domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行", Cause: ruleCause("当前 Revision 已由活动测试 Run 锁定"), NextAction: testAction}
+				reason := domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行", Cause: ruleCause("当前版本已由活动测试 Run 锁定"), NextAction: testAction}
 				if latest != nil {
 					reason.EvidenceRunID = latest.ID
 					reason.Cause = runCause(*latest)
@@ -376,7 +376,7 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 			if len(issues) == 0 && latestSuccessfulCurrent != nil {
 				status, priority = domain.WorkStatusActionRequired, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 已测试通过", scenario.Name, revision.Revision)
-				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前 Revision 可以预览候选集并发布", Cause: ruleCause("DAG 校验和当前定义的完整测试证据均已满足"), NextAction: workAction("预览候选集并发布", scenarioHref+"&action=publish")})
+				reasons = append(reasons, domain.WorkReason{Code: "scenario.ready_to_publish", Message: "当前版本可以预览候选集并发布", Cause: ruleCause("DAG 校验和当前定义的完整测试证据均已满足"), NextAction: workAction("预览候选集并发布", scenarioHref+"&action=publish")})
 				action = domain.WorkAction{Label: "预览候选集并发布", Href: fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=publish", scenario.ID, revision.ID)}
 			} else if len(issues) == 0 {
 				reason := domain.WorkReason{Code: "scenario.test_evidence_stale", Message: "完整测试证据对应的组件 Release 定义已变化，需要重新测试", Cause: ruleCause("场景测试证据必须同时匹配 DAG 和每个锁定 Release 的当前定义"), NextAction: testAction}
@@ -396,7 +396,7 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 		} else if latest != nil && latest.InputSnapshot["cleaned"] != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 			embedded[latest.ID] = true
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
-			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前 Revision 最近一次完整测试失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
+			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前版本最近一次完整测试失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
 			action = domain.WorkAction{Label: "查看失败运行", Href: "/runs?selected=" + latest.ID}
 		}
 		items = append(items, domain.WorkItem{
@@ -418,7 +418,7 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 		environmentHref := "/environments?selected=" + environment.ID
 		var inventory InventoryDocument
 		if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil || len(inventory.Hosts) == 0 {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.inventory_empty", Message: "当前 Revision 尚未配置 Inventory 主机", Cause: ruleCause("交付计划必须解析到至少一台 Inventory 主机"), NextAction: workAction("配置 Inventory", environmentHref+"&tab=inventory")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.inventory_empty", Message: "当前版本尚未配置 Inventory 主机", Cause: ruleCause("交付计划必须解析到至少一台 Inventory 主机"), NextAction: workAction("配置 Inventory", environmentHref+"&tab=inventory")})
 		}
 		if strings.TrimSpace(environment.Revision.Variables["IMAGE_REGISTRY"]) == "" {
 			reasons = append(reasons, domain.WorkReason{Code: "environment.registry_missing", Message: "缺少 IMAGE_REGISTRY", Cause: ruleCause("镜像交付需要环境声明 IMAGE_REGISTRY"), NextAction: workAction("配置镜像仓库", environmentHref+"&tab=variables&focus=IMAGE_REGISTRY")})
@@ -427,14 +427,14 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 			reasons = append(reasons, domain.WorkReason{Code: "environment.file_station_missing", Message: "缺少 FILE_STATION", Cause: ruleCause("组件介质交付需要环境声明 FILE_STATION"), NextAction: workAction("配置 File Station", environmentHref+"&tab=variables&focus=FILE_STATION")})
 		}
 		if environment.HealthCheck == nil {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前 Revision 尚未执行 TCP 端点检查", Cause: ruleCause("TCP 连通性证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_missing", Message: "当前版本尚未执行 TCP 端点检查", Cause: ruleCause("TCP 连通性证据必须绑定当前环境版本"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
 			at := environment.Revision.CreatedAt
-			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
+			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的版本"), ActorID: environment.Revision.CreatedBy, At: &at}
 			if environment.Revision.CreatedBy == user.ID {
 				cause.ActorName = user.Name
 			}
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近 TCP 检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_stale", Message: "最近 TCP 检查来自旧环境版本，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.HealthCheck.Status == "degraded" {
 			failed := 0
 			for _, result := range environment.HealthCheck.Results {
@@ -443,17 +443,17 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 				}
 			}
 			checkedAt := environment.HealthCheck.CheckedAt
-			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed), Cause: &domain.WorkCause{Kind: "health_check", Summary: "当前 Revision 的只读 TCP 检查未全部通过", At: &checkedAt}, NextAction: workAction("查看异常端点", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.health_degraded", Message: fmt.Sprintf("当前检查有 %d 个端点不可达", failed), Cause: &domain.WorkCause{Kind: "health_check", Summary: "当前版本的只读 TCP 检查未全部通过", At: &checkedAt}, NextAction: workAction("查看异常端点", environmentHref+"&focus=health")})
 		}
 		if environment.SSHCheck == nil {
-			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_missing", Message: "当前 Revision 尚未执行 SSH 检查", Cause: ruleCause("SSH 认证与远端 true 执行证据必须绑定当前 Environment Revision"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_missing", Message: "当前版本尚未执行 SSH 检查", Cause: ruleCause("SSH 认证与远端 true 执行证据必须绑定当前环境版本"), NextAction: workAction("检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.SSHCheck.EnvironmentRevisionID != environment.CurrentRevisionID {
 			at := environment.Revision.CreatedAt
-			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的 Revision"), ActorID: environment.Revision.CreatedBy, At: &at}
+			cause := &domain.WorkCause{Kind: "revision_change", Summary: valueOr(environment.Revision.ChangeReason, "环境配置已创建新的版本"), ActorID: environment.Revision.CreatedBy, At: &at}
 			if environment.Revision.CreatedBy == user.ID {
 				cause.ActorName = user.Name
 			}
-			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_stale", Message: "最近 SSH 检查来自旧 Environment Revision，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_stale", Message: "最近 SSH 检查来自旧环境版本，需要重新检查", Cause: cause, NextAction: workAction("重新检查环境连通性", environmentHref+"&focus=health")})
 		} else if environment.SSHCheck.Status == "degraded" {
 			failed := 0
 			for _, result := range environment.SSHCheck.Results {
@@ -462,7 +462,7 @@ func environmentOwnerWork(user domain.User, environments []domain.Environment) [
 				}
 			}
 			checkedAt := environment.SSHCheck.CheckedAt
-			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_degraded", Message: fmt.Sprintf("当前 SSH 检查有 %d 项失败", failed), Cause: &domain.WorkCause{Kind: "ssh_check", Summary: "当前 Revision 的 SSH 认证或远端 true 执行未全部通过", At: &checkedAt}, NextAction: workAction("查看 SSH 错误", environmentHref+"&focus=health")})
+			reasons = append(reasons, domain.WorkReason{Code: "environment.ssh_degraded", Message: fmt.Sprintf("当前 SSH 检查有 %d 项失败", failed), Cause: &domain.WorkCause{Kind: "ssh_check", Summary: "当前版本的 SSH 认证或远端 true 执行未全部通过", At: &checkedAt}, NextAction: workAction("查看 SSH 错误", environmentHref+"&focus=health")})
 		}
 		if len(reasons) == 0 {
 			continue
@@ -498,7 +498,7 @@ func impactWork(user domain.User, notifications []domain.Notification, scenarios
 			items = append(items, domain.WorkItem{
 				ID: "upstream_impact:" + scenarioID, Kind: "upstream_impact", Priority: domain.WorkPriorityInfo, Status: domain.WorkStatusAttention,
 				Title: scenario.Name + " 有上游变化待评估", Subject: domain.WorkSubject{Type: "scenario", ID: scenario.ID, Name: scenario.Name},
-				Reasons:       []domain.WorkReason{{Code: "scenario.upstream_change_review", Message: fmt.Sprintf("有 %d 条未读上游发布影响；不会自动使当前 Revision 失效", len(notices)), Cause: ruleCause("上游发布只产生影响评估，不自动改变锁定 Release"), NextAction: workAction("评估影响", "/notifications?scenario="+scenarioID)}},
+				Reasons:       []domain.WorkReason{{Code: "scenario.upstream_change_review", Message: fmt.Sprintf("有 %d 条未读上游发布影响；不会自动使当前版本失效", len(notices)), Cause: ruleCause("上游发布只产生影响评估，不自动改变锁定 Release"), NextAction: workAction("评估影响", "/notifications?scenario="+scenarioID)}},
 				PrimaryAction: domain.WorkAction{Label: "评估影响", Href: "/notifications?scenario=" + scenarioID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: latest.CreatedAt,
 			})
 		}

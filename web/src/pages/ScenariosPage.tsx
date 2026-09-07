@@ -370,7 +370,7 @@ export function ScenariosPage() {
   async function publish() {
     if (orderBlocked || !revision) return; setBusy('publish');
     setOperationExplanation(undefined);
-    try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景 Revision 与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components', 'workbench']); }
+    try { await api.publishScenario(revision.id); notify('success', '候选发布集已原子发布', `场景版本与 ${candidateSet?.releases.length ?? 0} 个候选组件版本已一次提交。`); setCandidateSet(undefined); signalRefresh(['scenarios', 'components', 'workbench']); }
     catch (reason) { setOperationExplanation(actionableExplanation(reason)); notify('error', '发布失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
@@ -445,7 +445,7 @@ export function ScenariosPage() {
   }
 
   async function abandonDraft() {
-    if (!revision || !window.confirm(`确认放弃 Revision ${revision.revision} 草稿？\n系统将恢复到最近的不可变 Revision，当前草稿会保留在历史记录中。`)) return; setBusy('abandon');
+    if (!revision || !window.confirm(`确认放弃版本 ${revision.revision} 草稿？\n系统将恢复到最近的不可变版本，当前草稿会保留在历史记录中。`)) return; setBusy('abandon');
     try {
       const scenario = await api.abandonScenarioRevision(revision.id);
       const restoredRevisionId = scenario.currentRevision?.id;
@@ -453,27 +453,27 @@ export function ScenariosPage() {
         selected: selectedScenario?.id ?? scenario.id,
         ...(restoredRevisionId ? { revision: restoredRevisionId } : {}),
       }, { replace: true });
-      notify('success', '草稿已放弃', `已恢复到 Revision ${scenario.currentRevision?.revision ?? '—'}。`);
+      notify('success', '草稿已放弃', `已恢复到版本 ${scenario.currentRevision?.revision ?? '—'}。`);
       signalRefresh('scenarios');
     } catch (reason) { notify('error', '放弃草稿失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function deprecateRevision() {
-    if (!revision || !window.confirm(`确认废弃 Revision ${revision.revision}？`)) return; setBusy('deprecate');
-    try { await api.deprecateScenario(revision.id); notify('success', '场景 Revision 已废弃'); signalRefresh('scenarios'); }
+    if (!revision || !window.confirm(`确认废弃版本 ${revision.revision}？`)) return; setBusy('deprecate');
+    try { await api.deprecateScenario(revision.id); notify('success', '场景版本已废弃'); signalRefresh('scenarios'); }
     catch (reason) { notify('error', '废弃失败', displayError(reason)); } finally { setBusy(undefined); }
   }
 
   async function deleteScenario() {
     if (!selectedScenario) return;
     const revisionCount = selectedScenario.revisions?.length ?? 0;
-    if (!window.confirm(`确认永久删除场景“${selectedScenario.name}”？\n将删除整个场景及 ${revisionCount} 个未发布 Revision。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。`)) return;
+    if (!window.confirm(`确认永久删除场景“${selectedScenario.name}”？\n将删除整个场景及 ${revisionCount} 个未发布版本。\n\n仅从未发布且从未产生 Run 的场景允许删除；此操作不可恢复。`)) return;
     setBusy('delete-scenario');
     setDeleteExplanation(undefined);
     try {
       await api.deleteScenario(selectedScenario.id);
       setSearchParams({}, { replace: true });
-      notify('success', '场景已删除', `“${selectedScenario.name}”及其未发布 Revision 已永久删除。`);
+      notify('success', '场景已删除', `“${selectedScenario.name}”及其未发布版本已永久删除。`);
       signalRefresh(['scenarios', 'workbench']);
     } catch (reason) {
       setDeleteExplanation(actionableExplanation(reason));
@@ -488,8 +488,8 @@ export function ScenariosPage() {
       {contractsUnavailable && <section className="panel scenario-contract-status" aria-label="组件合同待就绪"><h3>{componentsError ? '组件合同加载失败' : '组件合同暂不可用'}</h3><p>已保存的连线和参数保持完整；合同齐备前暂停拓扑与参数编辑、测试和发布。</p><div className="scenario-contract-status__items">{(revision?.nodes ?? []).filter(node => !(components ?? []).some(component => component.releases?.some(release => release.id === node.data.releaseId))).map(node => <p key={node.id}>{node.data.label} · {node.data.contractAvailability === 'unshared' ? '组件尚未共享' : node.data.contractAvailability === 'missing' ? '组件版本不存在' : '未返回此版本合同'} · 负责人：{node.data.componentOwnerName || '待核对'}</p>)}</div><button className="button button--quiet" onClick={() => { void reloadComponents(); void reload(); }}>重新检查</button></section>}
       <div className="scenario-toolbar panel">
         <label><span>当前场景</span><select value={selectedScenario?.id ?? ''} onChange={(event) => setSearchParams({ selected: event.target.value })}>{scenarios?.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}</option>)}</select></label>
-				{revision && <label><span>Revision</span><select aria-label="Revision" value={revision.id} onChange={(event) => { if (selectedScenario) setSearchParams({ selected: selectedScenario.id, revision: event.target.value }); }}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
-        {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前 Revision' : '历史 Revision'}</span><StatusPill status={revision.state} /></div>}
+				{revision && <label><span>版本</span><select aria-label="版本" value={revision.id} onChange={(event) => { if (selectedScenario) setSearchParams({ selected: selectedScenario.id, revision: event.target.value }); }}>{selectedScenario?.revisions?.map((item) => <option key={item.id} value={item.id}>r{item.revision} · {item.state === 'draft' ? '草稿' : item.state === 'testing' ? '测试中' : item.state === 'test_passed' ? '测试通过' : item.state === 'released' ? '已发布' : item.state === 'abandoned' ? '已放弃' : '已废弃'}{item.id === (selectedScenario.currentRevisionId ?? currentRevision?.id) ? ' · 当前' : ''}</option>)}</select></label>}
+        {revision && <div className="scenario-revision"><span>{isCurrentRevision ? '当前版本' : '历史版本'}</span><StatusPill status={revision.state} /></div>}
         {revision && <BranchScope scope={revision.environmentConstraints}/>}
         <div className="scenario-toolbar__actions">
           <button className="button button--quiet" disabled={!revision || busy === 'validate'} onClick={() => void validate()}><CheckCircle2 size={16} /> 校验</button>
@@ -582,7 +582,7 @@ export function ScenariosPage() {
     {createOpen && <ScenarioCreateModal scenarios={scenarios ?? []} initialSourceRevisionId={forkSource} onClose={() => setCreateOpen(false)} onDone={scenario => { setCreateOpen(false); setSection('target'); setSearchParams({ selected: scenario.id }); signalRefresh('scenarios'); }} />}
     {clonePlan && <Modal title="新增版本预览" description="仅从本场景已发布且正式运行、业务验收均成功的版本创建。" onClose={() => setClonePlan(undefined)}><div className="modal-body"><p>r{clonePlan.sourceRevision} → r{clonePlan.nextRevision} 草稿</p><BranchScope scope={revision?.environmentConstraints} full/><p>新版本沿用当前分支的适配范围。</p><p>{clonePlan.nodeCount} 个节点 · {clonePlan.edgeCount} 条依赖与编排顺序</p><p>锁定来源正式 Run：{clonePlan.sourceRunId}</p><p>新版本需分别通过安装测试、升级测试及完整业务验收。</p></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => setClonePlan(undefined)}>取消</button><button className="button button--primary" disabled={busy === 'clone'} onClick={() => void createVersion()}>确认新增版本</button></footer></Modal>}
     {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate} />}
-    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景 Revision 将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景 Revision。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={orderBlocked || !candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
+    {candidateSet && <Modal title="候选发布集" description="以下 Draft 与场景版本将在同一事务中发布；任一项变化都会整体失败。" onClose={() => setCandidateSet(undefined)}><div className="modal-body candidate-release-set">{candidateSet.releases.length ? candidateSet.releases.map((item) => <div key={item.releaseId}><strong>{item.componentName}</strong><span>{item.version}</span></div>) : <p>本场景只引用已发布组件；本次仅发布场景版本。</p>}{candidateSet.issues.map((issue) => <div className="inline-warning" key={`${issue.nodeId}-${issue.code}`}><span>{issue.nodeId ? `${issue.nodeId}：` : ''}{issue.message}</span></div>)}<StatusExplanationPanel explanation={operationExplanation} title="场景发布被阻断" /></div><footer className="modal-actions"><button className="button button--quiet" onClick={() => { setCandidateSet(undefined); setOperationExplanation(undefined); }}>取消</button><button className="button button--primary" disabled={orderBlocked || !candidateSet.ready || busy === 'publish'} onClick={() => void publish()}><Rocket size={16} /> {busy === 'publish' ? '原子发布中…' : '确认原子发布'}</button></footer></Modal>}
   </div>;
 }
 

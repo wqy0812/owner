@@ -204,6 +204,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ['catalog_backup.updated', () => scheduleRefresh(['catalog-repository', 'workbench'])],
       ['scenario.deleted', () => scheduleRefresh(['scenarios', 'workbench'])],
       ['environment.deleted', () => scheduleRefresh(['environments', 'workbench'])],
+      ['environment.revision_deleted', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.archived', () => scheduleRefresh(['environments', 'workbench'])],
       ['environment.unarchived', () => scheduleRefresh(['environments', 'workbench'])],
       ['platform_options.updated', () => scheduleRefresh(['platform-options', 'components', 'environments', 'scenarios'])],

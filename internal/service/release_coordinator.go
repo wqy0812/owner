@@ -106,7 +106,7 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 	}
 	if scenario.CurrentRevisionID != revisionID {
 		base := fmt.Errorf("%w: only the current scenario revision can be published", domain.ErrConflict)
-		return revision, actionableExistingError(base, "scenario.not_current", "历史 Revision 保持不可变，只有当前 Revision 可以发布", "查看当前 Revision", "/scenarios?selected="+scenario.ID)
+		return revision, actionableExistingError(base, "scenario.not_current", "历史版本保持不可变，只有当前版本可以发布", "查看当前版本", "/scenarios?selected="+scenario.ID)
 	}
 	if revision.DigestVersion >= domain.ScenarioDigestVersion {
 		if len(revision.AcceptanceJobs) == 0 {
@@ -118,7 +118,7 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 	}
 	if revision.Status != domain.RevisionTestPassed || revision.TestPassedAt == nil {
 		base := fmt.Errorf("%w: the current scenario revision must pass a complete test before publishing", domain.ErrConflict)
-		return revision, actionableExistingError(base, "scenario.test_required", "发布规则要求当前 Revision 通过完整环境测试", "前往场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
+		return revision, actionableExistingError(base, "scenario.test_required", "发布规则要求当前版本通过完整环境测试", "前往场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
 	}
 	publicationEpoch, err := c.store.GetPublicationEpoch(ctx)
 	if err != nil {
@@ -152,7 +152,7 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			base := fmt.Errorf("%w: no successful complete test evidence exists for the current scenario revision", domain.ErrConflict)
-			return revision, actionableExistingError(base, "scenario.test_required", "当前 Revision 缺少可用于发布的完整测试证据", "重新运行场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
+			return revision, actionableExistingError(base, "scenario.test_required", "当前版本缺少可用于发布的完整测试证据", "重新运行场景测试", fmt.Sprintf("/scenarios?selected=%s&revision=%s&action=test", scenario.ID, revision.ID))
 		}
 		return revision, err
 	}

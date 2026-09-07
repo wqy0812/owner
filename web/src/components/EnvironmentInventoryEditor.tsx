@@ -96,7 +96,7 @@ function HostGroupManager({ hosts, options, onClose, onApply }: Pick<Props, 'hos
       </section>
     </div>
     {ungrouped.length > 0 && <div className="host-group-validation" role="alert">{ungrouped.map((host) => host.name).join('、')} 尚未分组，请至少加入一个主机组后再应用。</div>}
-    <footer className="modal-actions host-group-footer"><div aria-live="polite">{added || removed ? `新增 ${added} 项、移除 ${removed} 项分组关系` : '暂无分组变更'}<small>应用后，点击“保存新 Revision”生效。</small></div><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={(!added && !removed) || ungrouped.length > 0} onClick={() => onApply(draft)}><Check size={15} /> 应用更改</button></footer>
+    <footer className="modal-actions host-group-footer"><div aria-live="polite">{added || removed ? `新增 ${added} 项、移除 ${removed} 项分组关系` : '暂无分组变更'}<small>应用后，点击“保存新版本”生效。</small></div><button className="button button--quiet" onClick={onClose}>取消</button><button className="button button--primary" disabled={(!added && !removed) || ungrouped.length > 0} onClick={() => onApply(draft)}><Check size={15} /> 应用更改</button></footer>
   </Modal>;
 }
 

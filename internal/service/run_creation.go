@@ -25,7 +25,7 @@ func (c *ExecutionService) createRun(ctx context.Context, user domain.User, envi
 	}
 	if expectedPlanDigest != "" && expectedPlanDigest != planDigest {
 		base := fmt.Errorf("%w: execution plan changed after preview; refresh the plan before submitting", domain.ErrConflict)
-		return domain.Run{}, actionableExistingError(base, "execution.plan_changed", "环境 Revision、输入、Release 定义或可执行内容在预览后发生变化", "重新预览执行计划", c.planRefreshHref(ctx, kind, releaseID, revisionID, environment.ID))
+		return domain.Run{}, actionableExistingError(base, "execution.plan_changed", "环境版本、输入、Release 定义或可执行内容在预览后发生变化", "重新预览执行计划", c.planRefreshHref(ctx, kind, releaseID, revisionID, environment.ID))
 	}
 	prepared := lockedRunPreparation{ID: runID, CapturedAt: now, Plan: plan, Destructive: destructive}
 	return c.creator.createRun(ctx, user, environment, kind, releaseID, revisionID, action, prepared, resolvedParametersByNode, expectedScenarioDigest...)

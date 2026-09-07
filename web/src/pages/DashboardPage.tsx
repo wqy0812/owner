@@ -26,7 +26,7 @@ function sections(workbench: Workbench): Section[] {
 
 function subjectLabel(item: WorkItem) {
   if (item.subject.version) return item.subject.version;
-  if (item.subject.revision) return `Revision ${item.subject.revision}`;
+  if (item.subject.revision) return `版本 ${item.subject.revision}`;
   if (item.subject.environment) return item.subject.environment;
   return item.subject.type.replaceAll('_', ' ');
 }

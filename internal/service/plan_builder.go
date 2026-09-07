@@ -403,7 +403,7 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		return lockedPlan{}, "", false, actionableExistingError(
 			err,
 			"environment.credentials_missing",
-			"目标 Environment Revision 缺少执行计划要求的 CredentialRef",
+			"目标环境版本缺少执行计划要求的 CredentialRef",
 			"查看目标环境凭据",
 			fmt.Sprintf("/environments?selected=%s&tab=credentials", environment.ID),
 		)

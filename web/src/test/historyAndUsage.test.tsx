@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -99,9 +100,9 @@ it("filters exact versions and history, keeps private summaries private and link
   expect(screen.getByText("引用 2 次", { exact: false })).toBeInTheDocument();
   expect(screen.getByText("仅引用摘要")).toBeInTheDocument();
   expect(
-    screen.queryByRole("link", { name: "查看版本" }),
+    within(screen.getByText("Private · 1").closest("article")!).queryByRole("link", { name: "查看版本" }),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "查看 Revision" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "查看版本" })).toHaveAttribute(
     "href",
     "/scenarios?selected=scene&revision=r1",
   );

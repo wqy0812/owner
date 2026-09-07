@@ -44,7 +44,7 @@ export function ComponentUsagePanel({ component }: { component: Component }) {
           包含历史引用
         </label>
       </div>
-      {history ? <p>包含旧 Revision、已废弃及已放弃记录。</p> : null}
+      {history ? <p>包含旧版本、已废弃及已放弃记录。</p> : null}
       {error ? (
         <ErrorBlock message={error} onRetry={() => void reload()} />
       ) : loading && !data ? (
@@ -90,11 +90,11 @@ export function ComponentUsagePanel({ component }: { component: Component }) {
               {data.scenarios.map((row) => (
                 <article key={`${row.revisionId}:${row.releaseId}`}>
                   <strong>
-                    {row.name} · Revision {row.revision}
+                    {row.name} · 版本 {row.revision}
                   </strong>
                   <p>
                     {STATUS_LABELS[row.status] ?? row.status} · {row.ownerName}{" "}
-                    · {row.current ? "当前 Revision" : "历史 Revision"}
+                    · {row.current ? "当前版本" : "历史版本"}
                   </p>
                   <p>
                     使用 {row.version} · 引用 {row.references} 次
@@ -103,7 +103,7 @@ export function ComponentUsagePanel({ component }: { component: Component }) {
                     <Link
                       to={`/scenarios?selected=${encodeURIComponent(row.scenarioId)}&revision=${encodeURIComponent(row.revisionId)}`}
                     >
-                      查看 Revision
+                      查看版本
                     </Link>
                   ) : (
                     <small>仅引用摘要</small>

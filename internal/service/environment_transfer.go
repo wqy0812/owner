@@ -205,7 +205,7 @@ func (p *EnvironmentService) PreviewImport(ctx context.Context, user domain.User
 			return plan, fmt.Errorf("%w: new environment name is required", domain.ErrInvalid)
 		}
 		plan.NextRevision = 1
-		plan.Changes = []string{"创建新环境", "创建初始 Environment Revision r1"}
+		plan.Changes = []string{"创建新环境", "创建初始环境版本 r1"}
 	case "existing":
 		environment, err := p.store.GetEnvironment(ctx, input.Target.EnvironmentID, false)
 		if err != nil {
@@ -276,7 +276,7 @@ func environmentSnapshotDiff(current domain.EnvironmentRevision, incoming Enviro
 		changes = append(changes, "CredentialRef 将更新")
 	}
 	if len(changes) == 0 {
-		changes = append(changes, "配置内容无变化，但仍会创建有审计记录的新 Revision")
+		changes = append(changes, "配置内容无变化，但仍会创建有审计记录的新版本")
 	}
 	return changes
 }

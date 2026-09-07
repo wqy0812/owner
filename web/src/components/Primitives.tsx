@@ -43,12 +43,12 @@ export function LoadingBlock({ label = '加载中' }: { label?: string }) {
   );
 }
 
-export function ErrorBlock({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorBlock({ message, onRetry, title = '暂时无法读取数据' }: { message: string; onRetry?: () => void; title?: string }) {
   return (
     <div className="state-block state-block--error" role="alert">
       <AlertCircle size={24} />
       <div>
-        <strong>暂时无法读取数据</strong>
+        <strong>{title}</strong>
         <span>{message}</span>
       </div>
       {onRetry && (

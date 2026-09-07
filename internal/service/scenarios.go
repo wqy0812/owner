@@ -69,11 +69,11 @@ func (p *ScenarioService) Delete(ctx context.Context, user domain.User, scenario
 	}
 	if impact.RunCount > 0 {
 		base := fmt.Errorf("%w: scenario is retained by %d run(s)", domain.ErrConflict, impact.RunCount)
-		return actionableExistingError(base, "scenario.run_history", "该场景已有运行记录，必须保留场景与 Revision 快照", "查看运行记录", "/runs")
+		return actionableExistingError(base, "scenario.run_history", "该场景已有运行记录，必须保留场景与版本快照", "查看运行记录", "/runs")
 	}
 	if impact.PublishedRevisionCount > 0 {
 		base := fmt.Errorf("%w: scenario has %d published revision(s)", domain.ErrConflict, impact.PublishedRevisionCount)
-		return actionableExistingError(base, "scenario.published_history", "该场景已有已发布或已废弃 Revision，不能物理删除", "废弃已发布 Revision", "/scenarios?selected="+scenario.ID)
+		return actionableExistingError(base, "scenario.published_history", "该场景已有已发布或已废弃版本，不能物理删除", "废弃已发布版本", "/scenarios?selected="+scenario.ID)
 	}
 	audit := newAuditEvent(user, "scenario.deleted", "scenario", scenario.ID, map[string]any{
 		"slug": scenario.Slug, "name": scenario.Name, "revisionCount": impact.RevisionCount,

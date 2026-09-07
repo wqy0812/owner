@@ -593,6 +593,21 @@ export interface Environment {
   updatedAt?: string;
 }
 
+export interface EnvironmentRevisionDeletionImpact {
+  environmentId: string;
+  environmentName: string;
+  revisionId: string;
+  revision: number;
+  current: boolean;
+  archived: boolean;
+  runCount: number;
+  imageBuildCount: number;
+  healthCheckCount: number;
+  sshCheckCount: number;
+  canDelete: boolean;
+  blockers: Array<{ code: string; message: string }>;
+}
+
 export interface EnvironmentLifecycle {
   revisionCount: number;
   runCount: number;

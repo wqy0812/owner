@@ -102,7 +102,7 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 		return mapSQLError(err)
 	}
 	if currentEnvironment != run.EnvironmentRevisionID {
-		return fmt.Errorf("%w: 环境 Revision 已变化", domain.ErrConflict)
+		return fmt.Errorf("%w: 环境版本已变化", domain.ErrConflict)
 	}
 	baseline, err := getScenarioInstallation(ctx, q, run.EnvironmentID, revision.ScenarioID)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
