@@ -7,24 +7,16 @@ import (
 	"strings"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
 var imageLogicalNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-var ociDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 func normalizeImageLogicalName(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if !imageLogicalNamePattern.MatchString(value) {
 		return "", fmt.Errorf("%w: image logicalName must start with a lowercase letter and contain only lowercase letters, digits or underscores", domain.ErrInvalid)
-	}
-	return value, nil
-}
-
-func normalizeOCIDigest(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if !ociDigestPattern.MatchString(value) {
-		return "", fmt.Errorf("%w: image digest must be sha256 followed by 64 lowercase hexadecimal characters", domain.ErrInvalid)
 	}
 	return value, nil
 }
@@ -35,25 +27,6 @@ func normalizeImageSourceRef(value string) (string, error) {
 		return "", fmt.Errorf("%w: image sourceRef must be an OCI registry reference without a URL scheme", domain.ErrInvalid)
 	}
 	return value, nil
-}
-
-func digestFromResolvedImageRef(value string) (string, error) {
-	index := strings.LastIndex(value, "@")
-	if index < 0 {
-		return "", fmt.Errorf("%w: registry did not return an immutable image digest", domain.ErrConflict)
-	}
-	return normalizeOCIDigest(value[index+1:])
-}
-
-func immutableImageSourceRef(sourceRef, digest string) string {
-	repository := sourceRef
-	if at := strings.LastIndex(repository, "@"); at >= 0 {
-		repository = repository[:at]
-	}
-	if colon := strings.LastIndex(repository, ":"); colon > strings.LastIndex(repository, "/") {
-		repository = repository[:colon]
-	}
-	return repository + "@" + digest
 }
 
 func (p *CatalogService) RegisterImage(ctx context.Context, user domain.User, releaseID, logicalName, sourceRef, expectedDigest string) (domain.ComponentImage, error) {
@@ -85,15 +58,15 @@ func (p *CatalogService) RegisterImage(ctx context.Context, user domain.User, re
 		return domain.ComponentImage{}, err
 	}
 	observed := ""
-	if err := p.imageDelivery.Probe(ctx, ImageLocation{Ref: sourceRef, ObservedDigest: &observed}, ImageDigest{}); err != nil {
+	if err := p.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: sourceRef, ObservedDigest: &observed}, mediadelivery.ImageDigest{}); err != nil {
 		return domain.ComponentImage{}, fmt.Errorf("probe image source: %w", err)
 	}
-	digest, err := digestFromResolvedImageRef(observed)
+	digest, err := mediadelivery.DigestFromResolvedImageRef(observed)
 	if err != nil {
 		return domain.ComponentImage{}, err
 	}
 	if strings.TrimSpace(expectedDigest) != "" {
-		expectedDigest, err = normalizeOCIDigest(expectedDigest)
+		expectedDigest, err = mediadelivery.NormalizeOCIDigest(expectedDigest)
 		if err != nil {
 			return domain.ComponentImage{}, err
 		}
@@ -139,10 +112,10 @@ func (p *CatalogService) UpdateImageSource(ctx context.Context, user domain.User
 		return domain.ComponentImage{}, err
 	}
 	observed := ""
-	if err := p.imageDelivery.Probe(ctx, ImageLocation{Ref: sourceRef, ObservedDigest: &observed}, ImageDigest{Value: current.Digest}); err != nil {
+	if err := p.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: sourceRef, ObservedDigest: &observed}, mediadelivery.ImageDigest{Value: current.Digest}); err != nil {
 		return domain.ComponentImage{}, fmt.Errorf("probe image source: %w", err)
 	}
-	digest, err := digestFromResolvedImageRef(observed)
+	digest, err := mediadelivery.DigestFromResolvedImageRef(observed)
 	if err != nil {
 		return domain.ComponentImage{}, err
 	}

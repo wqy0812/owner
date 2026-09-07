@@ -21,6 +21,7 @@ import (
 	"time"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/fss"
 	"codex/platform-demo/internal/seed"
@@ -1560,9 +1561,9 @@ type fakeRunner struct {
 
 type fakeImageDelivery struct{ targetPresent bool }
 
-func (delivery *fakeImageDelivery) Probe(_ context.Context, location service.ImageLocation, _ service.ImageDigest) error {
+func (delivery *fakeImageDelivery) Probe(_ context.Context, location mediadelivery.ImageLocation, _ mediadelivery.ImageDigest) error {
 	if strings.Contains(location.Ref, "registry.example.test:5000/") && !delivery.targetPresent {
-		return service.ErrDeliveryTargetMissing
+		return mediadelivery.ErrDeliveryTargetMissing
 	}
 	if location.ObservedDigest != nil {
 		*location.ObservedDigest = location.Ref
@@ -1570,7 +1571,7 @@ func (delivery *fakeImageDelivery) Probe(_ context.Context, location service.Ima
 	return nil
 }
 
-func (*fakeImageDelivery) Transfer(context.Context, service.ImageTransfer) error { return nil }
+func (*fakeImageDelivery) Transfer(context.Context, mediadelivery.ImageTransfer) error { return nil }
 
 func (f *fakeRunner) Digest(playbook string) (string, string, error) {
 	content, err := os.ReadFile(filepath.Join(f.root, filepath.FromSlash(playbook)))

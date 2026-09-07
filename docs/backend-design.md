@@ -84,7 +84,10 @@ flowchart LR
 | `internal/service` | RBAC、Owner 校验、业务状态转换、参数解析、作业规划和调度 |
 | `internal/store` | SQLite 首版结构初始化、合同校验、查询、事务、并发状态抢占和持久化 |
 | `internal/api` | Cookie 会话、REST/SSE 路由、DTO、可见性过滤和统一错误 |
-| `internal/ansible` | 路径约束、摘要、工作区快照、Ansible 子进程、取消和日志脱敏 |
+| `internal/ansible` | 路径约束、JobPlan 完整摘要、工作区快照、Ansible 子进程、取消和日志脱敏 |
+| `internal/imagebuild` | 隔离 Dockerfile 构建、输出读取、取消、临时目录回收和不可变镜像结果 |
+| `internal/delivery` | 介质位置/身份/传输合同、HTTP/FSS 与 Docker 实现及独立介质准备 |
+| `internal/jobcli` | 独立命令、执行阶段、结果锁、回执和 Metadata 的只读介质投影 |
 | `internal/seed` | 幂等写入演示身份、组件、场景和环境 |
 | `internal/ui` | 开发/嵌入两种静态资源处理 |
 
@@ -96,7 +99,9 @@ flowchart LR
 
 `module_dependencies.go` 声明每个模块实际使用的 Store 接口及协作接口；组合根将同一个
 SQLite Store 注入这些接口。接口保留现有事务操作，既不拆散事务，也不引入通用 Repository
-或动态容器。Scenario 验收编辑的活动 Run 查询也通过 Store 的具名接口完成，写入时仍由
+或动态容器。`ImageBuildBackend` 仅执行已授权的构建，Catalog 保留构建状态、日志持久化、镜像事务和审计。
+平台 Probe 装饰器保留准备进度、来源/身份/适配器实例隔离的请求内去重和脱敏；底层 delivery 不认识 PreparationCheck 或 Store。
+Scenario 验收编辑的活动 Run 查询也通过 Store 的具名接口完成，写入时仍由
 原有事务再次检查。
 
 | 对象 | 实际职责 |

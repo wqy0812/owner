@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/imagebuild"
 	"codex/platform-demo/internal/sshcheck"
 	"codex/platform-demo/internal/store"
 )
@@ -59,13 +61,13 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	control := &executionControl{active: make(map[string]context.CancelFunc)}
-	artifact := NewHTTPArtifactDelivery(nil)
-	image := NewDockerImageDelivery("docker")
+	artifact := observeArtifactDelivery(mediadelivery.NewHTTPArtifactDelivery(nil))
+	image := observeImageDelivery(mediadelivery.NewDockerImageDelivery("docker"))
 	actions := &ActionPlanner{}
 	approvals := &ApprovalService{}
 	audit := &AuditRecorder{}
 	catalogRules := &CatalogRules{}
-	catalog := &CatalogService{}
+	catalog := &CatalogService{imageBuilder: imagebuild.NewDocker("", "docker")}
 	delivery := &DeliveryService{}
 	environments := &EnvironmentService{}
 	execution := &ExecutionService{}
@@ -239,18 +241,19 @@ func (p *Platform) Hub() *EventHub                    { return p.hub }
 func (p *Platform) Audit() *AuditRecorder             { return p.audit }
 func (p *Platform) ConfigurePlaybookRoot(root string) { p.workspace.root = strings.TrimSpace(root) }
 func (p *Platform) ConfigureImageBuilder(root, binary string) {
-	p.catalog.imageBuildRoot = strings.TrimSpace(root)
-	p.catalog.dockerBinary = strings.TrimSpace(binary)
-	image := NewDockerImageDelivery(p.catalog.dockerBinary)
+	p.catalog.imageBuilder = imagebuild.NewDocker(root, binary)
+	image := observeImageDelivery(mediadelivery.NewDockerImageDelivery(binary))
 	p.catalog.imageDelivery = image
 	p.delivery.imageDelivery = image
 }
-func (p *Platform) ConfigureDeliveryAdapters(artifact ArtifactDelivery, image ImageDelivery) {
+func (p *Platform) ConfigureDeliveryAdapters(artifact mediadelivery.ArtifactDelivery, image mediadelivery.ImageDelivery) {
 	if artifact != nil {
+		artifact = observeArtifactDelivery(artifact)
 		p.catalog.artifactDelivery = artifact
 		p.delivery.artifactDelivery = artifact
 	}
 	if image != nil {
+		image = observeImageDelivery(image)
 		p.catalog.imageDelivery = image
 		p.delivery.imageDelivery = image
 	}

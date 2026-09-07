@@ -1,7 +1,7 @@
 import { scenarioGraphContent } from '../types/scenarioGraphContent';
 import type { RunActivity, RunWaitingObservation } from '../types/domain';
-import type { ArchiveHealth, ArchiveInfo, CleanupItem, RetentionPolicy } from '../components/RunRetentionPanel';
-import type { ComponentUsage } from '../components/ComponentUsagePanel';
+import type { ArchiveHealth, ArchiveInfo, CleanupItem, RetentionPolicy } from '../types/runRetention';
+import type { ComponentUsage } from '../types/componentUsage';
 import type {
   ComponentSummary, EvidenceSummary, ReleaseEvidenceSummary, RunPage, RunSummary,
   ActionDefinition,
@@ -1234,7 +1234,7 @@ function normalizeCatalogRestorePlan(value: unknown): CatalogRestorePlan {
   };
 }
 
-function normalizePreparation(value: unknown): import('../components/ExecutionPreparationPanel').PreparationSession {
+function normalizePreparation(value: unknown): import('../types/executionPreparation').PreparationSession {
  const raw=requireRecord(value,'execution preparation');const input=requireRecord(raw.input,'preparation request');const output=requireRecord(raw.output,'preparation result');
  const kind=requireEnum(input,['component_test','scenario_execution'] as const,'kind');
  return {id:requireString(raw,'id'),status:requireEnum(raw,['queued','running','succeeded','failed','cancelled','interrupted','timed_out'] as const,'status'),input:{kind,subjectId:requireString(input,'subjectId'),environmentId:requireString(input,'environmentId')},output:{checks:requireRecords(output,'checks').map(check=>({id:requireString(check,'id'),category:requireString(check,'category'),label:requireString(check,'label'),status:requireString(check,'status'),host:optionalString(check,'host'),source:optionalString(check,'source'),message:optionalString(check,'message'),elapsedMs:requireNumber(check,'elapsedMs'),startedAt:optionalString(check,'startedAt')})),plan:output.plan,error:optionalString(output,'error'),explanation:output.explanation?normalizeWorkExplanation(output.explanation):undefined}};
@@ -1263,8 +1263,8 @@ export const api = {
     return response.blob();
   },
  async verifiedJobEligibility(id: string, signal?: AbortSignal): Promise<{eligible:boolean; reason?:string;rootRunId?:string;stageCount:number;evidenceRunIds:string[]}>{const raw=requireRecord(unwrap(await get<unknown>(`/runs/${encodeURIComponent(id)}/verified-job-eligibility`,signal)),'job eligibility');return {eligible:requireBoolean(raw,'eligible'),reason:optionalString(raw,'reason'),rootRunId:optionalString(raw,'rootRunId'),stageCount:requireNumber(raw,'stageCount'),evidenceRunIds:requireStringArray(raw,'evidenceRunIds')};},
- async createPreparation(input: import('../components/ExecutionPreparationPanel').PreparationRequest & { idempotencyKey: string }): Promise<import('../components/ExecutionPreparationPanel').PreparationSession> { return normalizePreparation(unwrap(await post<unknown>('/execution-preparations', input))); },
- async preparation(id: string): Promise<import('../components/ExecutionPreparationPanel').PreparationSession> { return normalizePreparation(unwrap(await get<unknown>(`/execution-preparations/${encodeURIComponent(id)}`))); },
+ async createPreparation(input: import('../types/executionPreparation').PreparationRequest & { idempotencyKey: string }): Promise<import('../types/executionPreparation').PreparationSession> { return normalizePreparation(unwrap(await post<unknown>('/execution-preparations', input))); },
+ async preparation(id: string): Promise<import('../types/executionPreparation').PreparationSession> { return normalizePreparation(unwrap(await get<unknown>(`/execution-preparations/${encodeURIComponent(id)}`))); },
  async cancelPreparation(id: string) { return unwrap(await post<unknown>(`/execution-preparations/${encodeURIComponent(id)}/cancel`, {})); },
  preparationPlan(kind: string, value: unknown): ComponentTestPlan | ScenarioExecutionPreview { const raw = requireRecord(value, 'prepared plan'); return kind === 'component_test' ? normalizeComponentTestPlan(raw) : normalizeScenarioExecution(raw); },
  async executorHealth() { return unwrap(await get<unknown>('/executor-health')) as {status:string;controller:string;ansible:string;python:string;checkedAt:string;message:string;repairLocation:string}; },

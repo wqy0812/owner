@@ -1,6 +1,6 @@
 import sample from '../../../examples/components/host-foundation-example.json';
 import { describe, expect, it } from 'vitest';
-import { parseComponentImportTemplate } from '../pages/componentTemplateImport';
+import { parseComponentImportTemplate } from '../features/components/import/parseComponentTemplate';
 import { parseScenarioTemplate, serializeScenarioTemplate, validateScenarioTemplateReferences } from '../pages/scenarioTemplate';
 import type { Component } from '../types/domain';
 

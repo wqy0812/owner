@@ -4,7 +4,7 @@ import { scenarioGraphSignature } from '../types/scenarioGraphContent';
 import { ScenarioAcceptanceEditor } from '../components/ScenarioAcceptanceEditor';
 import { ScenarioExecutionPanel, ScenarioEvidence } from '../components/ScenarioExecutionPanel';
 import { ScenarioCreateModal } from '../components/ScenarioCreateModal';
-import { replaceScenarioNodeRelease, changedReleaseParameterIssues, changedReleaseDependencyIssues, scenarioParameterError } from './scenarioLifecycle';
+import { replaceScenarioNodeRelease, changedReleaseParameterIssues, changedReleaseDependencyIssues, scenarioParameterError } from '../features/scenarios/model';
 import type { ScenarioClonePlan } from '../types/domain';
 import { JobPlanPreview } from '../components/JobPlanPreview';
 import type { ComponentTestPlan } from '../types/domain';

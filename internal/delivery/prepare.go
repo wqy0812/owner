@@ -1,24 +1,15 @@
-package service
+package delivery
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strings"
-
-	ansiblerunner "codex/platform-demo/internal/ansible"
 )
 
-func DigestStandalonePlan(plan ansiblerunner.JobPlan) string { return digestValue(plan) }
-
-// Standalone delivery uses the same identity-aware adapters as platform jobs.
-func PrepareStandaloneJobMedia(ctx context.Context, metadata map[string]any) error {
-	plan, err := mapToPlan(metadata)
-	if err != nil {
-		return err
-	}
-	artifacts := NewHTTPArtifactDelivery(nil)
-	images := NewDockerImageDelivery("docker")
+// Prepare reuses verified targets, performs planned transfers, then verifies the
+// selected media locations. Approval and execution timing belong to the caller.
+func Prepare(ctx context.Context, plan Plan, artifacts ArtifactDelivery, images ImageDelivery) error {
 	for _, transfer := range plan.ArtifactTransfers {
 		target := ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}
 		identity := ArtifactIdentity{SHA256: transfer.SHA256, SizeBytes: transfer.SizeBytes}

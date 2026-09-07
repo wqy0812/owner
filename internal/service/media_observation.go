@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	mediadelivery "codex/platform-demo/internal/delivery"
 )
 
 type mediaObservationKey struct{}
@@ -98,7 +100,7 @@ func observePlannedMediaTransfer(ctx context.Context, target string) {
 		state.report(check)
 	}
 }
-func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocation, identity ArtifactIdentity) error {
+func (d *observedArtifactDelivery) Probe(ctx context.Context, location mediadelivery.ArtifactLocation, identity mediadelivery.ArtifactIdentity) error {
 	source := location.URL
 	if source == "" {
 		source = location.FileStation + "/" + location.RelativePath
@@ -106,13 +108,13 @@ func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocat
 	key := digestValue(struct {
 		Source        string
 		AccessContext string
-		Identity      ArtifactIdentity
-	}{source, fmt.Sprintf("%p", d.client), identity})
+		Identity      mediadelivery.ArtifactIdentity
+	}{source, fmt.Sprintf("%p", d), identity})
 	size, _, err := observedProbe(ctx, key, source, func(ctx context.Context) (int64, string, error) {
 		var size int64
 		probeLocation := location
 		probeLocation.ObservedSize = &size
-		err := d.probe(ctx, probeLocation, identity)
+		err := d.ArtifactDelivery.Probe(ctx, probeLocation, identity)
 		return size, "", err
 	})
 	if location.ObservedSize != nil {
@@ -120,17 +122,35 @@ func (d *HTTPArtifactDelivery) Probe(ctx context.Context, location ArtifactLocat
 	}
 	return err
 }
-func (d *DockerImageDelivery) Probe(ctx context.Context, location ImageLocation, identity ImageDigest) error {
-	key := digestValue(struct{ Ref, Digest, AccessContext string }{location.Ref, identity.Value, d.binary})
+func (d *observedImageDelivery) Probe(ctx context.Context, location mediadelivery.ImageLocation, identity mediadelivery.ImageDigest) error {
+	key := digestValue(struct{ Ref, Digest, AccessContext string }{location.Ref, identity.Value, fmt.Sprintf("%p", d)})
 	_, digest, err := observedProbe(ctx, key, location.Ref, func(ctx context.Context) (int64, string, error) {
 		var digest string
 		probeLocation := location
 		probeLocation.ObservedDigest = &digest
-		err := d.probe(ctx, probeLocation, identity)
+		err := d.ImageDelivery.Probe(ctx, probeLocation, identity)
 		return 0, digest, err
 	})
 	if location.ObservedDigest != nil {
 		*location.ObservedDigest = digest
 	}
 	return err
+}
+
+// One wrapper instance is shared by Catalog and Delivery. Its identity isolates
+// access configuration, even when two adapters probe the same source and digest.
+type observedArtifactDelivery struct{ mediadelivery.ArtifactDelivery }
+type observedImageDelivery struct{ mediadelivery.ImageDelivery }
+
+func observeArtifactDelivery(adapter mediadelivery.ArtifactDelivery) mediadelivery.ArtifactDelivery {
+	if _, ok := adapter.(*observedArtifactDelivery); ok {
+		return adapter
+	}
+	return &observedArtifactDelivery{ArtifactDelivery: adapter}
+}
+func observeImageDelivery(adapter mediadelivery.ImageDelivery) mediadelivery.ImageDelivery {
+	if _, ok := adapter.(*observedImageDelivery); ok {
+		return adapter
+	}
+	return &observedImageDelivery{ImageDelivery: adapter}
 }

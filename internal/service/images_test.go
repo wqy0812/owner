@@ -7,17 +7,18 @@ import (
 	"testing"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
 type imageDeliveryStub struct {
 	resolved string
 	err      error
-	probes   []ImageLocation
-	digests  []ImageDigest
+	probes   []mediadelivery.ImageLocation
+	digests  []mediadelivery.ImageDigest
 }
 
-func (s *imageDeliveryStub) Probe(_ context.Context, location ImageLocation, digest ImageDigest) error {
+func (s *imageDeliveryStub) Probe(_ context.Context, location mediadelivery.ImageLocation, digest mediadelivery.ImageDigest) error {
 	s.probes = append(s.probes, location)
 	s.digests = append(s.digests, digest)
 	if s.err != nil {
@@ -29,7 +30,7 @@ func (s *imageDeliveryStub) Probe(_ context.Context, location ImageLocation, dig
 	return nil
 }
 
-func (*imageDeliveryStub) Transfer(context.Context, ImageTransfer) error { return nil }
+func (*imageDeliveryStub) Transfer(context.Context, mediadelivery.ImageTransfer) error { return nil }
 
 func TestComponentImageLifecyclePreservesImmutableDigest(t *testing.T) {
 	platform, database := readinessTestPlatform(t)
@@ -150,16 +151,16 @@ func TestImageReferenceNormalizationAndIdentity(t *testing.T) {
 	if got, err := normalizeImageLogicalName(" MAIN_1 "); err != nil || got != "main_1" {
 		t.Fatalf("logical name=%q err=%v", got, err)
 	}
-	if got, err := normalizeOCIDigest(" SHA256:" + strings.Repeat("D", 64) + " "); err != nil || got != digest {
+	if got, err := mediadelivery.NormalizeOCIDigest(" SHA256:" + strings.Repeat("D", 64) + " "); err != nil || got != digest {
 		t.Fatalf("digest=%q err=%v", got, err)
 	}
-	if got, err := digestFromResolvedImageRef("registry.test/runtime@" + digest); err != nil || got != digest {
+	if got, err := mediadelivery.DigestFromResolvedImageRef("registry.test/runtime@" + digest); err != nil || got != digest {
 		t.Fatalf("resolved digest=%q err=%v", got, err)
 	}
-	if got := immutableImageSourceRef("registry.test:5000/runtime:latest", digest); got != "registry.test:5000/runtime@"+digest {
+	if got := mediadelivery.ImmutableImageSourceRef("registry.test:5000/runtime:latest", digest); got != "registry.test:5000/runtime@"+digest {
 		t.Fatalf("immutable ref=%q", got)
 	}
-	if _, err := digestFromResolvedImageRef("registry.test/runtime:latest"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := mediadelivery.DigestFromResolvedImageRef("registry.test/runtime:latest"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("mutable resolved ref error=%v", err)
 	}
 }

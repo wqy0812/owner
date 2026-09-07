@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -41,30 +42,32 @@ func TestLockedCachedMediaRecheckedAndDeduplicated(t *testing.T) {
 
 type stubArtifactDelivery struct {
 	probeErr error
-	probes   []ArtifactLocation
+	probes   []mediadelivery.ArtifactLocation
 }
 
-func (s *stubArtifactDelivery) Probe(_ context.Context, location ArtifactLocation, _ ArtifactIdentity) error {
+func (s *stubArtifactDelivery) Probe(_ context.Context, location mediadelivery.ArtifactLocation, _ mediadelivery.ArtifactIdentity) error {
 	s.probes = append(s.probes, location)
 	return s.probeErr
 }
 
-func (*stubArtifactDelivery) Transfer(context.Context, ArtifactTransfer) error { return nil }
+func (*stubArtifactDelivery) Transfer(context.Context, mediadelivery.ArtifactTransfer) error {
+	return nil
+}
 
 type stubImageDelivery struct{ probeErr error }
 
-func (s stubImageDelivery) Probe(context.Context, ImageLocation, ImageDigest) error {
+func (s stubImageDelivery) Probe(context.Context, mediadelivery.ImageLocation, mediadelivery.ImageDigest) error {
 	return s.probeErr
 }
 
-func (stubImageDelivery) Transfer(context.Context, ImageTransfer) error { return nil }
+func (stubImageDelivery) Transfer(context.Context, mediadelivery.ImageTransfer) error { return nil }
 
 func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
 	p := &DeliveryService{}
 	if _, err := p.finalizeDeliveryPlan(context.Background(), lockedPlan{}, []DeliveryDecisionInput{{RequirementID: "extra", Mode: "direct"}}, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("decision without requirements error=%v", err)
 	}
-	plan := lockedPlan{DeliveryRequirements: []DeliveryRequirement{{ID: "artifact:a"}, {ID: "image:b"}}}
+	plan := lockedPlan{DeliveryRequirements: []mediadelivery.Requirement{{ID: "artifact:a"}, {ID: "image:b"}}}
 	for name, inputs := range map[string][]DeliveryDecisionInput{
 		"missing":   {{RequirementID: "artifact:a", Mode: "direct"}},
 		"duplicate": {{RequirementID: "artifact:a", Mode: "direct"}, {RequirementID: "artifact:a", Mode: "transfer"}},
@@ -78,13 +81,13 @@ func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
 }
 
 func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
-	artifactDelivery := &stubArtifactDelivery{probeErr: ErrDeliveryTargetMissing}
+	artifactDelivery := &stubArtifactDelivery{probeErr: mediadelivery.ErrDeliveryTargetMissing}
 	p := &DeliveryService{artifactDelivery: artifactDelivery}
 	at := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	checksum := strings.Repeat("a", 64)
 	plan := lockedPlan{
 		Steps: []lockedStep{{ID: "install", Variables: map[string]any{}}, {ID: "unrelated", Variables: map[string]any{}}},
-		DeliveryRequirements: []DeliveryRequirement{{
+		DeliveryRequirements: []mediadelivery.Requirement{{
 			ID: "artifact:release:runtime", Kind: "artifact", Name: "runtime", Identity: "sha256:" + checksum,
 			Source: "https://source.test/runtime.tgz", Target: "http://fss.test/components/runtime.tgz", TransferAvailable: true,
 			StepIDs: []string{"install"}, TargetStation: "fss.test", RelativePath: "components/runtime.tgz", SizeBytes: 42,
@@ -116,7 +119,7 @@ func TestFinalizeDirectImageBindsImmutableSource(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("b", 64)
 	plan := lockedPlan{
 		Steps: []lockedStep{{ID: "install", Variables: map[string]any{}}},
-		DeliveryRequirements: []DeliveryRequirement{{
+		DeliveryRequirements: []mediadelivery.Requirement{{
 			ID: "image:release:main", Kind: "image", Name: "main", Identity: digest,
 			Source: "registry.test/runtime@" + digest, StepIDs: []string{"install"},
 		}},
@@ -154,8 +157,8 @@ func TestDeliveryVariableBindingRejectsParameterCollisions(t *testing.T) {
 
 func TestDeliveryRequirementDeduplicatesSharedReleaseAcrossSteps(t *testing.T) {
 	plan := lockedPlan{}
-	appendDeliveryRequirement(&plan, DeliveryRequirement{ID: "artifact:r:a", StepIDs: []string{"step-1"}})
-	appendDeliveryRequirement(&plan, DeliveryRequirement{ID: "artifact:r:a", StepIDs: []string{"step-2"}})
+	appendDeliveryRequirement(&plan, mediadelivery.Requirement{ID: "artifact:r:a", StepIDs: []string{"step-1"}})
+	appendDeliveryRequirement(&plan, mediadelivery.Requirement{ID: "artifact:r:a", StepIDs: []string{"step-2"}})
 	if len(plan.DeliveryRequirements) != 1 || !reflect.DeepEqual(plan.DeliveryRequirements[0].StepIDs, []string{"step-1", "step-2"}) {
 		t.Fatalf("requirements=%+v", plan.DeliveryRequirements)
 	}
@@ -163,13 +166,13 @@ func TestDeliveryRequirementDeduplicatesSharedReleaseAcrossSteps(t *testing.T) {
 
 func TestDeliveryTargetPresenceDistinguishesKindsAndProbeFailures(t *testing.T) {
 	p := &DeliveryService{artifactDelivery: &stubArtifactDelivery{probeErr: errors.New("fss unavailable")}, imageDelivery: stubImageDelivery{probeErr: errors.New("missing")}}
-	if _, err := p.deliveryTargetPresent(context.Background(), DeliveryRequirement{Kind: "artifact", Target: "http://fss.test/file"}); err == nil || !strings.Contains(err.Error(), "probe artifact target") {
+	if _, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "artifact", Target: "http://fss.test/file"}); err == nil || !strings.Contains(err.Error(), "probe artifact target") {
 		t.Fatalf("artifact probe error=%v", err)
 	}
-	if present, err := p.deliveryTargetPresent(context.Background(), DeliveryRequirement{Kind: "image", Target: "registry.test/image@sha256:abc"}); err != nil || present {
+	if present, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "image", Target: "registry.test/image@sha256:abc"}); err != nil || present {
 		t.Fatalf("missing image present=%v err=%v", present, err)
 	}
-	if _, err := p.deliveryTargetPresent(context.Background(), DeliveryRequirement{Kind: "archive"}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "archive"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown kind error=%v", err)
 	}
 }

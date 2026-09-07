@@ -18,7 +18,7 @@
 | Run 刷新与工作台性能 | [活动读取与工作台合同](run-activity-and-workbench.md) | 场景保存基线、等待状态表、增量日志与按角色查询；[验收记录](records/2026-09-07-performance-validation.md) |
 | 场景分支、版本升级和业务验收 | [场景生命周期](scenario-lifecycle.md) | 新建分支、双测试发布、环境基线、失败恢复和保留历史转换 |
 | 回看配置来源与分支界面改造 | [2026-09-06 配置来源、分支适配标签与管理界面方案](configuration-provenance-branch-ui-plan-2026-09-06.md) | 本地实施完成：[验证记录](records/2026-09-06-configuration-provenance-branch-ui-validation.md)；来源展示、固定分支范围、类别层级与目录样板 |
-| 规划组件前端与构建交付职责拆分 | [2026-09-06 组件前端与构建交付落地方案](component-ui-and-delivery-modularization-plan-2026-09-06.md) | 规划稿：组件功能模块、前端类型归位、Docker 构建适配器、共享介质与独立 CLI；尚未实施 |
+| 组件前端与构建交付职责拆分 | [2026-09-06 组件前端与构建交付落地方案](component-ui-and-delivery-modularization-plan-2026-09-06.md) | 已实施：[2026-09-07 验收记录](component-ui-and-delivery-modularization-validation-2026-09-07.md)；组件功能模块、公共类型、Docker 构建与独立 CLI 交付边界 |
 | 平台操作者 | [平台说明书](platform-manual.md) | 功能入口、工作流、角色操作条件、结果与风险 |
 | 适配范围、直接引用与历史管理 | [运行历史与适配说明](run-history-and-adaptation.md) | 当前匹配规则、成功归档、失败清理、完整历史备份 |
 | 灾备配置、备份与恢复 | [Catalog 与数据库备份恢复](catalog-backup-and-restore.md) | 私有 Git Catalog、SQLite 快照、恢复点、空库恢复和失败边界 |

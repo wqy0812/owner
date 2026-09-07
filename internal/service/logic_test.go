@@ -8,14 +8,15 @@ import (
 	"testing"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
 func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
 	platform := &DeliveryService{}
 	plan := lockedPlan{
-		DeliveryRequirements: []DeliveryRequirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
-		DeliveryDecisions:    []DeliveryDecision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
+		DeliveryRequirements: []mediadelivery.Requirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
+		DeliveryDecisions:    []mediadelivery.Decision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
 	}
 	approvedAt := time.Now().UTC()
 	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, nil, domain.User{ID: "environment-owner"}, approvedAt)
@@ -32,10 +33,10 @@ func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
 
 type presentArtifactDelivery struct{}
 
-func (presentArtifactDelivery) Probe(context.Context, ArtifactLocation, ArtifactIdentity) error {
+func (presentArtifactDelivery) Probe(context.Context, mediadelivery.ArtifactLocation, mediadelivery.ArtifactIdentity) error {
 	return nil
 }
-func (presentArtifactDelivery) Transfer(context.Context, ArtifactTransfer) error {
+func (presentArtifactDelivery) Transfer(context.Context, mediadelivery.ArtifactTransfer) error {
 	return errors.New("transfer must not run during approval finalization")
 }
 
@@ -43,7 +44,7 @@ func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
 	platform := &DeliveryService{artifactDelivery: presentArtifactDelivery{}}
 	plan := lockedPlan{
 		Steps: []lockedStep{{ID: "step-1", Variables: map[string]any{}}},
-		DeliveryRequirements: []DeliveryRequirement{{
+		DeliveryRequirements: []mediadelivery.Requirement{{
 			ID: "artifact:runtime", Kind: "artifact", Name: "runtime", Identity: "sha256:" + strings.Repeat("a", 64),
 			Source: "https://source.test/runtime.tgz", Target: "http://target.test/components/runtime.tgz",
 			TransferAvailable: true, TargetStation: "target.test", RelativePath: "components/runtime.tgz", StepIDs: []string{"step-1"},

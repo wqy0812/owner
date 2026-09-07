@@ -47,3 +47,14 @@ Ansible 和控制端 Python 必须与清单中的精确版本一致，包含 Ans
 运行页面的“下载本次作业包”保留本次实际执行快照；续跑的快照可能只包含剩余步骤。“下载已验证完整作业”对应 `GET /api/v1/runs/{id}/job-bundle?verified=true`，要求场景成功并具有完整业务验收证据。
 
 正式交付沿续跑链核对环境、版本、源码、参数及各阶段状态，返回根 Run 的完整流程，清单 `verification` 记录证据 Run 链和原始包摘要。缺少该字段的包不能视为已验证的完整集群交付。场景预览导出的调试包仍使用既有 `job-plan`、`job-bundle` 接口。
+
+## 独立介质准备与包依赖
+
+CLI 通过 `internal/jobcli/media.go` 读取 JobPlan.Metadata 的介质字段，并调用 `internal/delivery.Prepare`。
+缺失的计划目标按显式决定转移，转移后再次核验身份；已有正确内容直接复用。摘要不一致和目标缺失保持不同错误。
+每次底层 Probe 有三分钟上限并遵守父 context 取消；执行和回执仍由 CLI 管理。
+包含 `source_verify` 的升级作业仍在来源验证完成后才准备介质。
+
+平台与 CLI 共用介质类型及传输实现，平台另行记录准备进度、审批和逐 Run 交付结果。
+CLI 不导入 service、store、api 或 SQLite。完整计划使用 `ansible.PlanDigest` 的既有 JSON + SHA-256 算法；
+介质投影不得覆盖原 Metadata，也不得用于计算完整计划摘要。历史作业包和回执不因内部代码拆分而重写。

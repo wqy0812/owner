@@ -1,18 +1,13 @@
 package service
 
 import (
-	"bufio"
+	"codex/platform-demo/internal/imagebuild"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -153,60 +148,14 @@ func (p *CatalogService) executeComponentImageBuild(build domain.ComponentImageB
 	p.emitImageBuildLog(build, "system", "starting isolated Dockerfile build")
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": build.ReleaseID, "status": domain.ImageBuildRunning})
 
-	root := p.imageBuildRoot
-	if root == "" {
-		root = filepath.Join(os.TempDir(), "newplatform-image-builds")
-	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		p.failImageBuild(build, err)
-		return
-	}
-	workdir, err := os.MkdirTemp(root, "image-build-")
+	result, err := p.imageBuilder.Build(ctx, imagebuild.Request{ImageRef: build.ImageRef, Dockerfile: dockerfile}, func(event imagebuild.LogEvent) {
+		p.emitImageBuildLog(build, event.Stream, event.Message)
+	})
 	if err != nil {
 		p.failImageBuild(build, err)
 		return
 	}
-	defer os.RemoveAll(workdir)
-	if err := os.Chmod(workdir, 0o700); err != nil {
-		p.failImageBuild(build, err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(workdir, "Dockerfile"), dockerfile, 0o600); err != nil {
-		p.failImageBuild(build, err)
-		return
-	}
-
-	docker := p.dockerBinary
-	if docker == "" {
-		docker = "docker"
-	}
-	steps := [][]string{
-		{"build", "--progress=plain", "--tag", build.ImageRef, "--file", "Dockerfile", "."},
-		{"push", build.ImageRef},
-	}
-	for _, args := range steps {
-		p.emitImageBuildLog(build, "system", "docker "+args[0]+" started")
-		if err := p.runImageBuildCommand(ctx, workdir, docker, args, build); err != nil {
-			p.failImageBuild(build, err)
-			return
-		}
-	}
-
-	output, err := exec.CommandContext(ctx, docker, "image", "inspect", "--format={{index .RepoDigests 0}}", build.ImageRef).Output()
-	if err != nil {
-		p.failImageBuild(build, fmt.Errorf("inspect pushed image digest: %w", err))
-		return
-	}
-	pushedDigest := strings.TrimSpace(string(output))
-	if !strings.Contains(pushedDigest, "@sha256:") {
-		p.failImageBuild(build, errors.New("registry did not return an immutable image digest"))
-		return
-	}
-	digest, err := digestFromResolvedImageRef(pushedDigest)
-	if err != nil {
-		p.failImageBuild(build, err)
-		return
-	}
+	pushedDigest, digest := result.ResolvedRef, result.Digest
 	finished := time.Now().UTC()
 	image := domain.ComponentImage{
 		ID: newID("image"), ReleaseID: build.ReleaseID, LogicalName: "main", Digest: digest,
@@ -221,38 +170,6 @@ func (p *CatalogService) executeComponentImageBuild(build domain.ComponentImageB
 	p.audit.Record(context.Background(), actor, "component.image_saved", "component_release", build.ReleaseID, map[string]any{"logicalName": image.LogicalName, "digest": image.Digest, "sourceRef": image.SourceRef, "buildId": build.ID})
 	p.emitImageBuildLog(build, "system", "published "+pushedDigest)
 	p.hub.Publish("image_build.updated", map[string]any{"buildId": build.ID, "releaseId": build.ReleaseID, "status": domain.ImageBuildSucceeded, "imageDigest": pushedDigest})
-}
-
-func (p *CatalogService) runImageBuildCommand(ctx context.Context, workdir, binary string, args []string, build domain.ComponentImageBuild) error {
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Dir = workdir
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go p.captureImageBuildOutput(stdout, "stdout", build, &readers)
-	go p.captureImageBuildOutput(stderr, "stderr", build, &readers)
-	waitErr := cmd.Wait()
-	readers.Wait()
-	return waitErr
-}
-
-func (p *CatalogService) captureImageBuildOutput(reader io.Reader, stream string, build domain.ComponentImageBuild, wait *sync.WaitGroup) {
-	defer wait.Done()
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-	for scanner.Scan() {
-		p.emitImageBuildLog(build, stream, scanner.Text())
-	}
 }
 
 func (p *CatalogService) emitImageBuildLog(build domain.ComponentImageBuild, stream, message string) {

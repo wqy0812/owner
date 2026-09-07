@@ -16,6 +16,8 @@
 | 场景依赖连线和参数来源 | 后端设计第 7 节 | `internal/service/scenario_graph.go`、`parameter_graph.go`、`plan_builder.go`、`web/src/pages/scenarioGraph.ts` | `scenario_graph_test.go`、`parameter_graph_test.go`、前端 `scenarioGraph.test.ts` |
 | Inventory 与 Revision | 平台说明书第 5 节 | `internal/service/environments.go`、`internal/api/environment_transfer.go`、`web/src/components/EnvironmentInventoryEditor.tsx` | Environment/导入权限测试、前端 `EnvironmentInventoryEditor.test.tsx` |
 | Run 计划、审批、取消与续跑 | 后端设计第 7 节 | `internal/service/plan_builder.go`、`run_creator.go`、`run_executor.go`、`approval_service.go`、`run_retry.go` | Run/审批/重试测试；真实执行另按授权验收 |
+| 组件页面编辑和版本操作 | [项目结构](project-structure.md) | `web/src/features/components/`，页面负责组合，草稿属于相应流程 | `App.test.tsx`、`ReleaseLifecycleActions.test.tsx`、`PlaybookWorkspaceEditor.test.tsx`、live API 浏览器验收 |
+| 镜像构建与独立介质交付 | [后端设计](backend-design.md)、[独立作业](standalone-role-job.md) | `internal/imagebuild/`、`internal/delivery/`、`internal/service/media_observation.go`、`internal/jobcli/media.go` | 构建/交付/观测测试、JSON 与摘要基线、`make test-role-job` |
 | 组件直接引用、列表性能 | 后端设计第 9.6 节、项目结构第 10 节 | `internal/service/component_usage.go`、`component_read_context.go`、`internal/store/component_summaries.go`、`run_summaries.go` | `internal/api/read_models_test.go`、`history_usage_test.go`、对应基准 |
 | Run 归档、清理与恢复 | [运行历史管理](run-history-and-adaptation.md)、[备份恢复](catalog-backup-and-restore.md) | `internal/service/run_archive.go`、`internal/store/run_archive.go`、`run_cleanup.go`、`internal/runarchive/`、`internal/backup/run_history.go` | 对应归档、并发保护、备份恢复测试及临时文件验证 |
 | 平台目录、工作台和通知 | 后端设计第 6、9、10 节 | `internal/service/platform_options.go`、`platform_parameters.go`、`workbench.go`、前端 `PlatformManagementPage.tsx` | 目录引用/RBAC 测试、前端 `App.test.tsx` |
@@ -94,3 +96,8 @@ pnpm --dir web dev --host 127.0.0.1 --port 15173 --strictPort
 `make check-docs` 离线校验 Markdown 相对文件链接、API 方法/路径覆盖、正式文档中的数据库合同号、页面路由覆盖和 API 文件索引。它不能证明说明的业务语义正确，也不会联网验证外链、部署状态或执行真实 Run。
 
 每次交接至少留下：问题与最终行为、代码入口、文档变更、已执行验证及结果、剩余限制。尚未完成的工作注明下一步、阻断原因和验收条件；历史验收数量、主机地址和旧基准只能作为定位线索，开展新任务时重新核对。
+
+组件模块和交付边界回归应同时检查导入方向与行为：功能模块不导入 pages，API/types 不导入 UI；
+`go list -deps ./cmd/clusterforge-job` 不得出现 internal/service、internal/store、internal/api 或 SQLite 驱动。
+`internal/service/testdata/media-plan-before-*.json` 和 `internal/ansible/testdata/media-job-before.*`
+保存提取前的 JSON/摘要基线，修改介质字段或摘要算法时不能仅重写期望值让测试通过。

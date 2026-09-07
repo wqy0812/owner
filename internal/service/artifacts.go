@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -194,8 +195,8 @@ func (p *CatalogService) RegisterArtifact(ctx context.Context, user domain.User,
 		return domain.ComponentArtifact{}, fmt.Errorf("%w: artifact filename is required", domain.ErrInvalid)
 	}
 	size := int64(0)
-	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL, ObservedSize: &size}, ArtifactIdentity{SHA256: expectedSHA}); err != nil {
-		if errors.Is(err, ErrArtifactIdentityMismatch) {
+	if err := p.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{URL: sourceURL, ObservedSize: &size}, mediadelivery.ArtifactIdentity{SHA256: expectedSHA}); err != nil {
+		if errors.Is(err, mediadelivery.ErrArtifactIdentityMismatch) {
 			return domain.ComponentArtifact{}, fmt.Errorf("%w: probe artifact source: %v", domain.ErrConflict, err)
 		}
 		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)
@@ -249,8 +250,8 @@ func (p *CatalogService) UpdateArtifactSource(ctx context.Context, user domain.U
 	if current.ID == "" {
 		return domain.ComponentArtifact{}, domain.ErrNotFound
 	}
-	if err := p.artifactDelivery.Probe(ctx, ArtifactLocation{URL: sourceURL}, ArtifactIdentity{SHA256: current.SHA256, SizeBytes: current.SizeBytes}); err != nil {
-		if errors.Is(err, ErrArtifactIdentityMismatch) {
+	if err := p.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{URL: sourceURL}, mediadelivery.ArtifactIdentity{SHA256: current.SHA256, SizeBytes: current.SizeBytes}); err != nil {
+		if errors.Is(err, mediadelivery.ErrArtifactIdentityMismatch) {
 			return domain.ComponentArtifact{}, fmt.Errorf("%w: probe artifact source: %v", domain.ErrConflict, err)
 		}
 		return domain.ComponentArtifact{}, fmt.Errorf("probe artifact source: %w", err)

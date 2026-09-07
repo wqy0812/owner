@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/ansible"
-	"codex/platform-demo/internal/service"
 )
 
 type Receipt struct {
@@ -129,7 +128,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		plan.Steps = stages
-		digest := service.DigestStandalonePlan(plan)
+		digest := ansible.PlanDigest(plan)
 		if operation == "rollback-preview" {
 			return json.NewEncoder(stdout).Encode(map[string]any{"planDigest": digest, "steps": stages})
 		}
@@ -182,7 +181,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		if mediaReady {
 			return nil
 		}
-		if err := service.PrepareStandaloneJobMedia(ctx, plan.Metadata); err != nil {
+		if err := prepareJobMedia(ctx, plan.Metadata); err != nil {
 			return err
 		}
 		mediaReady = true

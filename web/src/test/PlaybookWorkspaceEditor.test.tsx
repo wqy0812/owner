@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
-import { PlaybookWorkspaceEditor } from '../pages/ComponentsPage';
+import { PlaybookWorkspaceEditor } from '../features/components/contract/PlaybookWorkspaceEditor';
 import type { PlaybookWorkspaceFile } from '../types/domain';
 
 beforeEach(() => vi.restoreAllMocks());

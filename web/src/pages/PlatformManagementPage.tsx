@@ -1,4 +1,4 @@
-import { ArchiveRestore, Ban, Plus, Trash2 } from 'lucide-react';
+import { ArchiveRestore, Ban, Cpu, Layers3, Link2, Monitor, Network, Plus, Server, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from '../api/client';
 import { useApp, displayError } from '../context/AppContext';
@@ -26,12 +26,21 @@ type RenameTarget = {
   label: string;
 };
 
+type OptionCreateTarget = {
+  categoryId: string;
+  draftKey: string;
+  parent?: PlatformOption;
+  buttonLabel: string;
+};
+
 export function PlatformManagementPage() {
   const { user, platformOptionCategories, platformOptionsLoading, notify, scheduleRefresh } = useApp();
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [createdCategoryId, setCreatedCategoryId] = useState('');
   const [categoryForm, setCategoryForm] = useState({ label: '', parentCategoryId: '', environmentRequired: false });
   const [optionLabels, setOptionLabels] = useState<Record<string, string>>({});
+  const [optionCreateTarget, setOptionCreateTarget] = useState<OptionCreateTarget | null>(null);
+  const optionSubmitting = useRef(false);
   const [busy, setBusy] = useState('');
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const renameSubmitting = useRef(false);
@@ -40,6 +49,7 @@ export function PlatformManagementPage() {
   const admin = user.role === 'platform_admin';
 
   const categoryById = new Map(platformOptionCategories.map((category) => [category.id, category]));
+  const optionCreateCategory = optionCreateTarget ? categoryById.get(optionCreateTarget.categoryId) : undefined;
   const visibleCategories = platformOptionCategories.filter((category) => !category.parentCategoryId || !categoryById.has(category.parentCategoryId));
 
   useEffect(() => { if (createdCategoryId && categoryById.has(createdCategoryId)) { document.getElementById(`category-${createdCategoryId}`)?.scrollIntoView({behavior:'smooth', block:'center'}); setCreatedCategoryId(''); } }, [createdCategoryId, platformOptionCategories]);
@@ -63,14 +73,16 @@ export function PlatformManagementPage() {
 
   async function createOption(categoryId: string, draftKey: string, parentOptionId?: string) {
     const label = optionLabels[draftKey]?.trim();
-    if (!label) return;
+    if (!label || optionSubmitting.current) return;
+    optionSubmitting.current = true;
     setBusy(`option:new:${draftKey}`);
     try {
       await api.createPlatformOption(categoryId, label, parentOptionId);
       setOptionLabels((current) => ({ ...current, [draftKey]: '' }));
+      setOptionCreateTarget(null);
       scheduleRefresh('platform-options');
       notify('success', '选项已新增');
-    } catch (error) { notify('error', '新增选项失败', displayError(error)); } finally { setBusy(''); }
+    } catch (error) { notify('error', '新增选项失败', displayError(error)); } finally { optionSubmitting.current = false; setBusy(''); }
   }
 
   async function setRetired(kind: 'category' | 'option', id: string, retired: boolean) {
@@ -183,6 +195,16 @@ export function PlatformManagementPage() {
     return <span className={`category-status${category.environmentRequired ? ' category-status--required' : ''}`}>{qualified ? `${category.label}：${label}` : label}</span>;
   }
 
+  function categoryIcon(category: PlatformOptionCategory) {
+    const Icon = category.kind === 'host_group' ? Server : category.key === 'architecture' ? Cpu : category.key === 'operatingSystem' ? Monitor : category.key === 'ipFamily' ? Network : Layers3;
+    return <span className={`category-icon${category.kind === 'host_group' ? ' category-icon--host' : ''}`} aria-hidden="true"><Icon size={20} /></span>;
+  }
+
+  function optionUsage(usage: PlatformOptionUsage) {
+    const used = usageTotal(usage) > 0;
+    return <span className={`option-usage${used ? ' option-usage--linked' : ''}`}>{used ? <Link2 size={12} aria-hidden="true" /> : null}{usageText(usage)}</span>;
+  }
+
   function categoryActions(category: PlatformOptionCategory, hasChildren = false) {
     const protectedCategory = category.kind === 'host_group';
     const categoryUsed = usageTotal(category.usage) > 0;
@@ -192,81 +214,80 @@ export function PlatformManagementPage() {
       {!protectedCategory ? <button type="button" className="button button--quiet button--small" disabled={Boolean(busy)} onClick={() => void setRetired('category', category.id, !category.retiredAt)}>
         {category.retiredAt ? <ArchiveRestore size={14} /> : <Ban size={14} />}{category.retiredAt ? '恢复' : '退役'}
       </button> : null}
-      <button type="button" className="button button--danger button--small" disabled={protectedCategory || categoryUsed || hasChildren || Boolean(busy)} title={deleteTitle} onClick={() => void deleteCategory(category.id, category.label)}>
+      <button type="button" className="button button--quiet button--small category-delete" disabled={protectedCategory || categoryUsed || hasChildren || Boolean(busy)} title={deleteTitle} onClick={() => void deleteCategory(category.id, category.label)}>
         <Trash2 size={14} /> 彻底删除
       </button>
     </div>;
   }
 
-  function optionActions(category: PlatformOptionCategory, option: PlatformOption, descendants: PlatformOption[] = []) {
+  function optionActions(category: PlatformOptionCategory, option: PlatformOption, descendants: PlatformOption[] = [], compact = false) {
     const protectedCategory = category.kind === 'host_group';
     const retireBlocked = !option.retiredAt && descendants.some((child) => !child.retiredAt);
     const deleteBlocked = descendants.length > 0;
     const deleteTitle = protectedCategory ? '主机组选项受系统保护' : usageTotal(option.usage) ? usageText(option.usage) : deleteBlocked ? '仍有关联子选项，不能删除' : '彻底删除选项';
-    return <div className="form-actions option-actions">
-      {!protectedCategory ? <button type="button" className="button button--quiet button--small" disabled={Boolean(busy) || retireBlocked} title={retireBlocked ? '请先退役关联子选项' : option.retiredAt ? '恢复选项' : '退役选项'} onClick={() => void setRetired('option', option.id, !option.retiredAt)}>{option.retiredAt ? '恢复' : '退役'}</button> : null}
-      <button type="button" className="button button--quiet button--small" disabled={protectedCategory || usageTotal(option.usage) > 0 || deleteBlocked || Boolean(busy)} title={deleteTitle} onClick={() => void deleteOption(option.id, option.label)}><Trash2 size={14} /> 彻底删除</button>
+    return <div className={`form-actions option-actions${compact ? ' option-actions--compact' : ''}`}>
+      {!protectedCategory ? <button type="button" className="button button--quiet button--small" aria-label={option.retiredAt ? '恢复' : '退役'} disabled={Boolean(busy) || retireBlocked} title={retireBlocked ? '请先退役关联子选项' : option.retiredAt ? '恢复选项' : '退役选项'} onClick={() => void setRetired('option', option.id, !option.retiredAt)}>{compact ? option.retiredAt ? <ArchiveRestore size={12} /> : <Ban size={12} /> : option.retiredAt ? '恢复' : '退役'}</button> : null}
+      <button type="button" className="button button--quiet button--small category-delete" aria-label="彻底删除" disabled={protectedCategory || usageTotal(option.usage) > 0 || deleteBlocked || Boolean(busy)} title={deleteTitle} onClick={() => void deleteOption(option.id, option.label)}><Trash2 size={compact ? 12 : 14} />{compact ? null : '彻底删除'}</button>
     </div>;
   }
 
-  function optionForm(category: PlatformOptionCategory, draftKey: string, options: { parent?: PlatformOption; hierarchicalRoot?: boolean } = {}) {
+  function optionCreateButton(category: PlatformOptionCategory, draftKey: string, options: { parent?: PlatformOption; hierarchicalRoot?: boolean } = {}) {
     const { parent, hierarchicalRoot } = options;
-    const subject = parent ? `${parent.label}新增${category.label}` : `${category.label}新增选项`;
     const buttonLabel = parent ? `新增${category.label}` : hierarchicalRoot ? `新增${category.label}` : '新增选项';
-    return <div className={parent ? 'hierarchy-inline-form' : 'inline-form'}>
-      <input aria-label={`为${subject}`} value={optionLabels[draftKey] ?? ''} onChange={(event) => setOptionLabels((current) => ({ ...current, [draftKey]: event.target.value }))} placeholder={parent ? `输入${parent.label}的${category.label}` : `输入${category.label}显示名`} />
-      <button type="button" className="button button--secondary" disabled={Boolean(busy)} onClick={() => void createOption(category.id, draftKey, parent?.id)}><Plus size={15} /> {buttonLabel}</button>
-    </div>;
+    return <button type="button" className={`button category-add-option${parent ? ' category-add-option--child' : ''}`} disabled={Boolean(busy)} onClick={() => setOptionCreateTarget({ categoryId: category.id, draftKey, parent, buttonLabel })}><Plus size={14} /> {buttonLabel}</button>;
   }
 
   function flatCategoryCard(category: PlatformOptionCategory) {
     const orphaned = Boolean(category.parentCategoryId && !categoryById.has(category.parentCategoryId));
     const protectedCategory = category.kind === 'host_group';
-    return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}`} id={`category-${category.id}`} key={category.id}>
-      <div className="section-heading">
-        <div>{categoryLabel(category, true)}<div className="category-status-row">{requiredPill(category)}{protectedCategory ? <span className="category-status">系统保护 · 主机组</span> : null}</div></div>
+    return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}${category.retiredAt ? ' category-card--retired' : ''}`} id={`category-${category.id}`} key={category.id}>
+      <div className="section-heading category-heading">
+        <div className="category-heading__identity">{categoryIcon(category)}<div>{categoryLabel(category, true)}<div className="category-status-row"><span className="category-option-count">{category.options.length} 个选项</span>{requiredPill(category)}{protectedCategory ? <span className="category-status">系统保护 · 主机组</span> : null}</div></div></div>
         {categoryActions(category)}
       </div>
       {orphaned ? <div className="inline-warning">关联的父类别不存在；当前类别仅供查看，请先修复目录关系。</div> : null}
-      <div className="table-wrap"><table><thead><tr><th>显示名</th><th>引用</th><th /></tr></thead><tbody>
-        {category.options.map((option) => <tr key={option.id}><td>{optionLabel(option)}</td><td>{usageText(option.usage)}</td><td>{optionActions(category, option)}</td></tr>)}
-        {!category.options.length && <tr><td colSpan={3}>暂无选项</td></tr>}
+      <div className="table-wrap category-option-table"><table aria-label={`${category.label}选项`}><thead><tr><th scope="col">显示名</th><th scope="col">引用</th><th scope="col">操作</th></tr></thead><tbody>
+        {category.options.map((option) => <tr className={option.retiredAt ? 'category-option--retired' : undefined} key={option.id}><td>{optionLabel(option)}</td><td>{optionUsage(option.usage)}</td><td>{optionActions(category, option)}</td></tr>)}
+        {!category.options.length && <tr><td colSpan={3}><div className="category-empty"><Layers3 size={20} aria-hidden="true" /><strong>暂无选项</strong><span>{category.retiredAt || orphaned ? '当前类别仅供查看' : '在下方添加第一个选项'}</span></div></td></tr>}
       </tbody></table></div>
-      {!category.retiredAt && !orphaned ? optionForm(category, category.id) : null}
+      {!category.retiredAt && !orphaned ? <div className="category-add-footer">{optionCreateButton(category, category.id)}</div> : null}
     </section>;
   }
 
   function hierarchicalCategoryCard(root: PlatformOptionCategory, children: PlatformOptionCategory[]) {
     const rootOptionIds = new Set(root.options.map((option) => option.id));
     const orphanOptions = children.flatMap((child) => child.options.filter((option) => !option.parentOptionId || !rootOptionIds.has(option.parentOptionId)).map((option) => ({ child, option })));
-    return <section className="panel category-card category-card--hierarchical" id={`category-${root.id}`} key={root.id}>
-      <div className="section-heading hierarchy-heading">
-        <div>
+    return <section className={`panel category-card category-card--hierarchical${root.retiredAt ? ' category-card--retired' : ''}`} id={`category-${root.id}`} key={root.id}>
+      <div className="section-heading category-heading hierarchy-heading">
+        <div className="category-heading__identity">{categoryIcon(root)}<div>
           <div className="category-path">{categoryLabel(root, true)}{children.map((child) => <span className="category-path__child" key={child.id}><span aria-hidden="true">→</span>{categoryLabel(child)}</span>)}</div>
-          <div className="category-status-row">{requiredPill(root)}{children.map((child) => <span key={child.id}>{requiredPill(child, true)}</span>)}</div>
-        </div>
+          <div className="category-status-row"><span className="category-option-count">{root.options.length} 个父选项 · {children.length} 个子类别</span>{requiredPill(root)}{children.map((child) => <span key={child.id}>{requiredPill(child, true)}</span>)}</div>
+        </div></div>
         {categoryActions(root, true)}
       </div>
-      <div className="hierarchy-child-settings" aria-label="从属类别管理">
-        {children.map((child) => <div key={child.id}><span><strong>{child.label}</strong><small>从属 {root.label}</small></span>{categoryActions(child)}</div>)}
+      <div className="hierarchy-columns">
+        <span>父标签 <strong>{root.label}</strong></span>
+        <div className="hierarchy-child-settings" aria-label="从属类别管理">
+          {children.map((child) => <div key={child.id}><span>子标签 <strong>{child.label}</strong></span>{categoryActions(child)}</div>)}
+        </div>
       </div>
       <div className="hierarchy-option-list">
         {root.options.map((parent) => {
           const descendants = children.flatMap((child) => child.options.filter((option) => option.parentOptionId === parent.id));
           return <article className={`hierarchy-parent${parent.retiredAt ? ' hierarchy-parent--retired' : ''}`} key={parent.id}>
-            <header className="hierarchy-parent__header"><div>{optionLabel(parent)}<small>{usageText(parent.usage)}</small></div><span>{descendants.length} 个关联选项</span>{optionActions(root, parent, descendants)}</header>
+            <header className="hierarchy-parent__header"><span className="hierarchy-parent-tag">{optionLabel(parent)}</span>{optionUsage(parent.usage)}{optionActions(root, parent, descendants)}</header>
             <div className="hierarchy-children">
               {children.map((child) => {
                 const linked = child.options.filter((option) => option.parentOptionId === parent.id);
                 const canAdd = !root.retiredAt && !parent.retiredAt && !child.retiredAt;
                 const draftKey = `${child.id}:${parent.id}`;
                 return <section className="hierarchy-child-section" key={child.id}>
-                  <header><strong>{child.label}</strong><span>{linked.length ? `${linked.length} 项` : '暂无'}</span></header>
-                  <div className="hierarchy-child-rows">
-                    {linked.map((option) => <div className="hierarchy-child-row" key={option.id}><div>{optionLabel(option)}<small>{usageText(option.usage)}</small></div>{optionActions(child, option)}</div>)}
-                    {!linked.length ? <div className="hierarchy-empty">尚未录入{parent.label}的{child.label}</div> : null}
+                  {children.length > 1 ? <header><strong>{child.label}</strong></header> : null}
+                  <div className="hierarchy-child-tags">
+                    {linked.map((option) => <div className={`hierarchy-child-tag${option.retiredAt ? ' hierarchy-child-tag--retired' : ''}`} key={option.id}><div>{optionLabel(option)}{usageTotal(option.usage) > 0 ? optionUsage(option.usage) : null}</div>{optionActions(child, option, [], true)}</div>)}
+                    {canAdd ? optionCreateButton(child, draftKey, { parent }) : null}
+                    {!linked.length ? <span className="hierarchy-empty">暂无{child.label}</span> : null}
                   </div>
-                  {canAdd ? optionForm(child, draftKey, { parent }) : null}
                 </section>;
               })}
             </div>
@@ -275,7 +296,7 @@ export function PlatformManagementPage() {
         {!root.options.length ? <div className="hierarchy-empty hierarchy-empty--root">尚未录入{root.label}；请先新增父选项。</div> : null}
       </div>
       {orphanOptions.length ? <section className="hierarchy-orphans"><header><strong>未关联选项</strong><span>父选项不存在，仅保留历史查看</span></header>{orphanOptions.map(({ child, option }) => <div key={option.id}><span><small>{child.label}</small>{optionLabel(option)}</span>{optionActions(child, option)}</div>)}</section> : null}
-      {!root.retiredAt ? optionForm(root, root.id, { hierarchicalRoot: true }) : null}
+      {!root.retiredAt ? <div className="category-add-footer">{optionCreateButton(root, root.id, { hierarchicalRoot: true })}</div> : null}
     </section>;
   }
 
@@ -309,7 +330,7 @@ export function PlatformManagementPage() {
           </section>
         </div>
       </section>
-      <section className="directory-section" aria-label="环境适配维度"><header className="section-heading"><div><h2>环境适配维度</h2><p>类别下维护选项，父子类别在同一组中管理。</p></div><button className="button button--primary" onClick={() => openCategory()}><Plus size={16} /> 新增类别</button></header>
+      <section className="directory-section" aria-label="环境适配维度"><header className="section-heading"><div><h2>环境适配维度</h2><p>类别下维护选项，父子类别在同一组中管理。双击名称可更名。</p></div><button className="button button--primary" onClick={() => openCategory()}><Plus size={16} /> 新增类别</button></header>
       {platformOptionsLoading ? <LoadingBlock label="正在加载平台目录…" /> : <div className="card-grid">
         {visibleCategories.filter(category => category.kind === 'environment_dimension').map((category) => {
           const children = childCategories(category.id);
@@ -317,6 +338,13 @@ export function PlatformManagementPage() {
         })}
       </div>}</section>
       <section className="directory-section" aria-label="主机组目录"><header className="section-heading"><h2>主机组</h2></header><div className="card-grid">{visibleCategories.filter(category => category.kind === 'host_group').map(category => flatCategoryCard(category))}</div></section>
+      {optionCreateTarget && optionCreateCategory && <Modal title={`${optionCreateTarget.buttonLabel} · ${optionCreateTarget.parent?.label ?? optionCreateCategory.label}`} description="录入显示名，保存后添加到对应类别。" onClose={() => { if (!optionSubmitting.current) setOptionCreateTarget(null); }}>
+        <form className="option-create-dialog" onSubmit={(event) => { event.preventDefault(); void createOption(optionCreateTarget.categoryId, optionCreateTarget.draftKey, optionCreateTarget.parent?.id); }}>
+          <div className="option-create-context"><Layers3 size={17} aria-hidden="true" /><span>{optionCreateTarget.parent ? <>{categoryById.get(optionCreateCategory.parentCategoryId ?? '')?.label} <strong>{optionCreateTarget.parent.label}</strong><span aria-hidden="true">→</span></> : null}<strong>{optionCreateCategory.label}</strong></span></div>
+          <label><span>显示名</span><input autoFocus required aria-label={`为${optionCreateTarget.parent ? `${optionCreateTarget.parent.label}新增${optionCreateCategory.label}` : `${optionCreateCategory.label}新增选项`}`} value={optionLabels[optionCreateTarget.draftKey] ?? ''} disabled={Boolean(busy)} onChange={(event) => setOptionLabels((current) => ({ ...current, [optionCreateTarget.draftKey]: event.target.value }))} placeholder={optionCreateTarget.parent ? `输入${optionCreateTarget.parent.label}的${optionCreateCategory.label}` : `输入${optionCreateCategory.label}显示名`} /></label>
+          <div className="form-actions"><button type="button" className="button button--quiet" disabled={Boolean(busy)} onClick={() => setOptionCreateTarget(null)}>取消</button><button className="button button--primary" disabled={Boolean(busy) || !optionLabels[optionCreateTarget.draftKey]?.trim()}><Plus size={15} />{optionCreateTarget.buttonLabel}</button></div>
+        </form>
+      </Modal>}
       {categoryOpen && <Modal title={categoryForm.parentCategoryId ? `新增子类别 · ${categoryById.get(categoryForm.parentCategoryId)?.label ?? ''}` : '新增环境维度类别'} description="创建后在类别中录入选项。" onClose={() => setCategoryOpen(false)}><div className="category-create-dialog">      <form className="category-create-form" onSubmit={(event) => void createCategory(event)}>
         <label><span>类别名称</span><input value={categoryForm.label} onChange={(event) => setCategoryForm((current) => ({ ...current, label: event.target.value }))} placeholder="例如 CPU 厂商" required /></label>
         <label><span>父类别（可选）</span><select value={categoryForm.parentCategoryId} onChange={(event) => setCategoryForm((current) => ({ ...current, parentCategoryId: event.target.value }))}><option value="">无（根类别）</option>{platformOptionCategories.filter((item) => item.kind === 'environment_dimension' && !item.parentCategoryId && !item.retiredAt).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>

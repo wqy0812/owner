@@ -844,7 +844,7 @@ export interface Run {
  executionMode?: ScenarioExecutionMode; sourceRevisionId?: string; baselineRunId?: string;
  jobDigest?: string;
  exitCode?: number;
-  archive?: import("../components/RunRetentionPanel").ArchiveInfo;
+  archive?: import('./runRetention').ArchiveInfo;
   id: string;
   kind?: 'component_test' | 'scenario_test' | 'scenario_run' | 'environment_rollback';
   name?: string;

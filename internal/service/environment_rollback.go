@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -31,7 +32,7 @@ type EnvironmentRollbackPlan struct {
 	RequiresApproval      bool                        `json:"requiresApproval"`
 	PlanDigest            string                      `json:"planDigest"`
 	Steps                 []ComponentTestPlanStep     `json:"steps"`
-	DeliveryRequirements  []DeliveryRequirement       `json:"deliveryRequirements"`
+	DeliveryRequirements  []mediadelivery.Requirement `json:"deliveryRequirements"`
 }
 
 type EnvironmentRollbackSource struct {
@@ -60,6 +61,14 @@ func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User
 		}
 		return EnvironmentRollbackPlan{Nodes: nodes}, err
 	}
+	if len(prepared.steps) == 0 {
+		return EnvironmentRollbackPlan{
+			EnvironmentID: prepared.environment.ID, EnvironmentName: prepared.environment.Name,
+			EnvironmentRevisionID: prepared.environment.Revision.ID,
+			Nodes:                 []string{}, Sources: []EnvironmentRollbackSource{},
+			Steps: []ComponentTestPlanStep{}, DeliveryRequirements: []mediadelivery.Requirement{},
+		}, nil
+	}
 	plan, digest, destructive, err := p.planner.prepareLockedPlan(ctx, prepared.environment, domain.RunEnvironmentRollback, "preview", prepared.sourceRuns[0].CreatedAt, prepared.steps)
 	if err != nil {
 		return EnvironmentRollbackPlan{}, err
@@ -74,6 +83,9 @@ func (p *ExecutionService) StartRollback(ctx context.Context, user domain.User, 
 			err = actionableExistingError(err, "rollback.baseline_invalid", "当前安装清单、来源 Run 或备份基线无法生成安全回滚计划", "检查环境与来源 Run", "/environments?selected="+environmentID)
 		}
 		return domain.Run{}, err
+	}
+	if len(prepared.steps) == 0 {
+		return domain.Run{}, fmt.Errorf("%w: 当前环境暂无可回滚组件，无需创建回滚 Run", domain.ErrConflict)
 	}
 	if strings.TrimSpace(input.ExpectedPlanDigest) == "" {
 		return domain.Run{}, fmt.Errorf("%w: preview the cluster rollback plan before submitting", domain.ErrInvalid)
@@ -126,7 +138,9 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 		return preparedEnvironmentRollback{}, err
 	}
 	if len(installations) == 0 {
-		return preparedEnvironmentRollback{}, fmt.Errorf("%w: environment is already clean; no installed-component baselines were found", domain.ErrConflict)
+		// No recorded installation or pending recovery is a normal preview state.
+		// StartRollback still rejects creating a Run without executable steps.
+		return preparedEnvironmentRollback{environment: environment}, nil
 	}
 	installationsByRun := map[string][]domain.EnvironmentComponentInstallation{}
 	installedByComponent := make(map[string]domain.EnvironmentComponentInstallation, len(installations))

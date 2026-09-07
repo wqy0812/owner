@@ -23,7 +23,9 @@ owner/
 │   └── fss/                          # 文件介质站可执行程序入口
 ├── internal/
 │   ├── ansible/                      # 密封原生 Role 作业、资源边界、执行与恢复
-│   ├── jobcli/                       # 独立作业命令、结果锁和回执
+│   ├── jobcli/                       # 独立作业命令、结果锁、回执和介质投影
+│   ├── delivery/                     # 介质合同、身份、HTTP/FSS 和 Docker 交付
+│   ├── imagebuild/                   # 隔离 Dockerfile 构建、输出和临时目录
 │   ├── api/                          # HTTP API、会话和 SSE
 │   ├── backup/                       # SQLite/Git Catalog 快照、恢复与调度
 │   ├── deploydb/                     # 部署数据库检查、独立完整历史备份入口
@@ -177,7 +179,7 @@ Service 是业务核心，主要职责包括：
 - 生成组件测试、回滚测试、场景测试和正式运行计划。
 - 按环境维护 FIFO Worker，恢复异常中断的 Run。
 - 执行审批、取消、通知、审计和日志脱敏。
-- 调用 Docker CLI 构建镜像。
+- 管理镜像构建权限、记录、审计和状态，通过 `ImageBuildBackend` 调用隔离构建实现。
 - 维护介质/镜像内容身份与可变来源；规划目标优先、来源回退和逐项交付选择，执行时由目标 FSS/Registry 拉取或平移。
 
 主要实现位置：
@@ -196,7 +198,8 @@ Service 是业务核心，主要职责包括：
 | `run_scheduler.go` / `execution_control.go` | FIFO Worker 与执行取消注册 |
 | `run_executor.go` / `role_jobs.go` | 执行编排和唯一的作业包构建/保存/执行路径 |
 | `execution_recording.go` / `lifecycle_recorder.go` | 阶段记录、回执、安装基线、终态和事件 |
-| `delivery_execution.go` / `delivery_planner.go` / `delivery_binding.go` | DeliveryService 交付规划、来源绑定和传输 |
+| `delivery_execution.go` / `delivery_planner.go` / `delivery_binding.go` | DeliveryService 交付规划、来源绑定和逐 Run 的传输记录 |
+| `image_builds.go` / `media_observation.go` | 构建业务记录，以及平台准备检查、请求内探测去重和观测值回传 |
 | `approval_service.go` / `run_archive.go` | 审批/取消、独立归档工作线程 |
 
 旧的 `application_services.go`、`application_commands.go`、`execution_components.go`
@@ -268,6 +271,7 @@ UI 包负责提供 React 静态文件：
 web/src/
 ├── api/client.ts                    # fetch 封装、首版 DTO 映射和错误处理
 ├── components/                      # 应用外壳、版本守卫和公共编辑器
+├── features/                        # 组件编辑流程与场景纯模型
 ├── context/AppContext.tsx           # 当前用户、身份切换和全局刷新
 ├── hooks/useApiData.ts              # 按查询范围隔离数据、取消请求和合并刷新
 ├── pages/                           # 按产品导航拆分的页面
@@ -383,8 +387,8 @@ make build
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
 | 新增组件示例 | `examples/components`、导入合同与本地隔离验证；历史 `examples/ansible` 不自动进入业务目录 |
 | 新增前端页面 | `web/src/pages`、`App.tsx`、API Client、类型和测试 |
-| 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`delivery_adapters.go`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
-| 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、Delivery 适配器、Store/API 和组件页 |
+| 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`internal/delivery/`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
+| 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、`internal/imagebuild/`、`internal/delivery/`、Store/API 和组件页 |
 | 修改测试部署 | `deploy` 与 `scripts`，并执行实际测试环境验证 |
 
 ## 9. 修改前后的检查原则
@@ -407,3 +411,22 @@ Run 列表从 `run_summaries.go` 分页查询摘要，详情才读取步骤及�
 `useApiData` 按查询范围隔离数据，合并进行中请求的刷新信号；身份/查询切换及卸载会取消旧请求。Readiness 在单次读取中复用目录定义和文件检查，最终发布、计划提交和执行仍独立验证当前合同。证据索引使用当前合同摘要、证据类型和证据时间三个生成列。
 
 历史测量见 [2026-09-03 性能记录](records/2026-09-03-read-performance.md)。旧数字不代表今天的 HTTP 响应或真实环境性能；复测时应记录代码版本、数据规模、是否包含文件读取和浏览器渲染。
+
+## 组件功能与交付边界（2026-09-07）
+
+`web/src/pages/ComponentsPage.tsx` 负责页面组合、公共查询、选中身份和跨流程刷新。
+`features/components/catalog` 管理目录筛选与只读 Release 展示；`contract` 管理合同、动作和文件草稿；
+`media`、`verification`、`releases`、`import` 分别拥有介质、验证、版本操作及导入流程。
+`useComponentSelection.ts` 管理 URL 深链消费与定位，编辑器通过 dirty/完成事件协作。
+纯计算和动作选项属于 `features/components/model.ts`；场景生命周期纯函数属于
+`features/scenarios/model.ts`。API 直接导入 `types/runRetention.ts`、`types/componentUsage.ts`、`types/executionPreparation.ts`，不再依赖 UI 类型。
+
+`internal/imagebuild` 接收已确定的目标引用和 Dockerfile，完成 build → push → inspect，返回不可变身份。
+它负责临时目录、输出读取、取消和清理；Catalog 保留事务、审计和事件。`ConfigureImageBuilder`
+仍同时为构建和镜像交付配置同一 Docker binary。
+
+`internal/delivery` 持有可移植介质字段、HTTP/FSS 与 Docker 适配器及独立准备流程。
+平台的 `media_observation.go` 包装 Probe，按来源、身份和适配器实例隔离请求内缓存；
+Catalog 与 Delivery 共享一个包装实例。底层 Probe 自带三分钟上限，Transfer 保留父 context。
+`internal/jobcli/media.go` 只读取现有 Metadata 的介质投影，不回写或重新构造完整元数据。
+完整 JobPlan 摘要统一由 `ansible.PlanDigest` 计算；CLI 依赖图不再包含 service、store、api 或 SQLite。

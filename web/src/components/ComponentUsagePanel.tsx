@@ -5,36 +5,6 @@ import { useApp } from "../context/AppContext";
 import { useApiData } from "../hooks/useApiData";
 import { STATUS_LABELS, type Component } from "../types/domain";
 import { EmptyState, ErrorBlock, LoadingBlock } from "./Primitives";
-export interface ComponentUsage {
-  componentCount: number;
-  scenarioCount: number;
-  components: Array<{
-    componentId: string;
-    name: string;
-    releaseId: string;
-    version: string;
-    lineName: string;
-    status: string;
-    ownerName: string;
-    upstreamReleaseId: string;
-    upstreamVersion: string;
-    dependencyKind: string;
-    canViewDetails: boolean;
-  }>;
-  scenarios: Array<{
-    scenarioId: string;
-    name: string;
-    revisionId: string;
-    revision: number;
-    status: string;
-    ownerName: string;
-    releaseId: string;
-    version: string;
-    current: boolean;
-    references: number;
-    canViewDetails: boolean;
-  }>;
-}
 export function ComponentUsagePanel({ component }: { component: Component }) {
   const { user } = useApp();
   const [releaseId, setReleaseId] = useState("");

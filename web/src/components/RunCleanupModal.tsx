@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import { displayError, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import { ErrorBlock, LoadingBlock, Modal } from './Primitives';
-import type { CleanupItem } from './RunRetentionPanel';
+import type { CleanupItem } from '../types/runRetention';
 
 export function RunCleanupModal({ runIds, onClose, onDeleted }: { runIds: string[]; onClose: () => void; onDeleted: (ids: string[]) => void }) {
   const { user, notify, signalRefresh } = useApp();

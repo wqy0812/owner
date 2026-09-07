@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	mediadelivery "codex/platform-demo/internal/delivery"
 )
 
 func TestPreparationMediaDeduplicatesOnlyWithinSourceAndContext(t *testing.T) {
@@ -60,7 +62,7 @@ func TestPreparationMediaCancellationStopsProbe(t *testing.T) {
 func TestPreparationPlannedTransferIsProvidedNeverPassed(t *testing.T) {
 	checks := map[string]PreparationCheck{}
 	ctx := withMediaObservation(context.Background(), func(c PreparationCheck) { checks[c.ID] = c })
-	_, _, _ = observedProbe(ctx, "target", "files.test/components/a", func(context.Context) (int64, string, error) { return 0, "", ErrDeliveryTargetMissing })
+	_, _, _ = observedProbe(ctx, "target", "files.test/components/a", func(context.Context) (int64, string, error) { return 0, "", mediadelivery.ErrDeliveryTargetMissing })
 	_, _, _ = observedProbe(ctx, "source", "https://source.test/a", func(context.Context) (int64, string, error) { return 0, "", errors.New("source failed") })
 	observePlannedMediaTransfer(ctx, "http://files.test/components/a")
 	for _, c := range checks {
@@ -70,5 +72,28 @@ func TestPreparationPlannedTransferIsProvidedNeverPassed(t *testing.T) {
 		if c.Source == "https://source.test/a" && c.Status != "failed" {
 			t.Fatal("unrelated source failure suppressed", c)
 		}
+	}
+}
+
+func TestMediaDecoratorsIsolateAdaptersAndReturnObservedValues(t *testing.T) {
+	checks := []PreparationCheck{}
+	ctx := withMediaObservation(context.Background(), func(c PreparationCheck) { checks = append(checks, c) })
+	first := &imageDeliveryStub{resolved: "registry.test/a@sha256:first"}
+	second := &imageDeliveryStub{resolved: "registry.test/a@sha256:second"}
+	a, b := observeImageDelivery(first), observeImageDelivery(second)
+	if observeImageDelivery(a) != a {
+		t.Fatal("adapter wrapped twice")
+	}
+	for _, item := range []struct {
+		adapter mediadelivery.ImageDelivery
+		want    string
+	}{{a, first.resolved}, {a, first.resolved}, {b, second.resolved}} {
+		var digest string
+		if err := item.adapter.Probe(ctx, mediadelivery.ImageLocation{Ref: "registry.test/a:1", ObservedDigest: &digest}, mediadelivery.ImageDigest{}); err != nil || digest != item.want {
+			t.Fatalf("digest=%s error=%v", digest, err)
+		}
+	}
+	if len(first.probes) != 1 || len(second.probes) != 1 || len(checks) != 4 {
+		t.Fatalf("probes=%d/%d checks=%d", len(first.probes), len(second.probes), len(checks))
 	}
 }

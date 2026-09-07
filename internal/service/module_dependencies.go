@@ -8,7 +8,9 @@ import (
 	"time"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/imagebuild"
 	"codex/platform-demo/internal/store"
 )
 
@@ -57,13 +59,12 @@ type catalogRulesStore interface {
 }
 
 type CatalogService struct {
-	artifactDelivery ArtifactDelivery
+	artifactDelivery mediadelivery.ArtifactDelivery
 	audit            auditPort
 	catalogRules     catalogRulesPort
-	dockerBinary     string
 	hub              *EventHub
-	imageBuildRoot   string
-	imageDelivery    ImageDelivery
+	imageBuilder     ImageBuildBackend
+	imageDelivery    mediadelivery.ImageDelivery
 	publication      publicationPort
 	releaseRules     *ReleaseRules
 	rootCtx          context.Context
@@ -128,8 +129,8 @@ type catalogStore interface {
 }
 
 type DeliveryService struct {
-	artifactDelivery ArtifactDelivery
-	imageDelivery    ImageDelivery
+	artifactDelivery mediadelivery.ArtifactDelivery
+	imageDelivery    mediadelivery.ImageDelivery
 	store            deliveryStore
 }
 
@@ -649,4 +650,9 @@ type workspaceVerifierPort interface {
 type executionControl struct {
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
+}
+
+// ImageBuildBackend executes the already-authorized build; Catalog owns records and events.
+type ImageBuildBackend interface {
+	Build(context.Context, imagebuild.Request, func(imagebuild.LogEvent)) (imagebuild.Result, error)
 }

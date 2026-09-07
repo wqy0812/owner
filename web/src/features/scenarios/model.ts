@@ -1,4 +1,4 @@
-import type { ComponentRelease, ParameterDefinition, ScenarioAcceptanceJob, ScenarioNode, ScenarioNodeData } from '../types/domain';
+import type { ComponentRelease, ParameterDefinition, ScenarioAcceptanceJob, ScenarioNode, ScenarioNodeData } from '../../types/domain';
 
 // getRandomValues is available on the platform's HTTP origins as well as HTTPS.
 export function newScenarioClientID(): string {

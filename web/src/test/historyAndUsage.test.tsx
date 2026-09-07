@@ -9,12 +9,13 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   ComponentUsagePanel,
-  type ComponentUsage,
 } from "../components/ComponentUsagePanel";
 import { RunCleanupModal } from "../components/RunCleanupModal";
 import { RunRetentionPanel } from "../components/RunRetentionPanel";
 import { api } from "../api/client";
 import type { Component, RunSummary } from "../types/domain";
+
+import type { ComponentUsage } from '../types/componentUsage';
 
 const app = vi.hoisted(() => ({
   user: { id: "owner", role: "platform_admin" },

@@ -274,7 +274,7 @@ func (r *Runner) BuildJob(ctx context.Context, plan JobPlan) (*JobBundle, error)
 	if err := writeJobFiles(directory, plan); err != nil {
 		return fail(err)
 	}
-	manifest := JobManifest{Contract: JobContract, Plan: plan, Files: map[string]string{}, GeneratedEntries: entries, EntryPoint: "site.yml", FullPlanDigest: jsonDigest(plan)}
+	manifest := JobManifest{Contract: JobContract, Plan: plan, Files: map[string]string{}, GeneratedEntries: entries, EntryPoint: "site.yml", FullPlanDigest: PlanDigest(plan)}
 	if err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return e
@@ -420,7 +420,7 @@ func (b *JobBundle) Validate() error {
 	if (!IsNativeJobContract(m.Contract) && m.Contract != LegacyJobContract) || expected == "" || jsonDigest(m) != expected {
 		return fmt.Errorf("job manifest digest mismatch")
 	}
-	if IsNativeJobContract(m.Contract) && (m.EntryPoint != "site.yml" || m.FullPlanDigest != jsonDigest(m.Plan)) {
+	if IsNativeJobContract(m.Contract) && (m.EntryPoint != "site.yml" || m.FullPlanDigest != PlanDigest(m.Plan)) {
 		return fmt.Errorf("native job full plan identity mismatch")
 	}
 	for relative, expected := range m.Files {
@@ -479,3 +479,6 @@ func RoleName(releaseID string) string {
 	}
 	return "cf_" + readable + "_" + jsonDigest(releaseID)[:16]
 }
+
+// PlanDigest is the canonical digest of the complete immutable JobPlan.
+func PlanDigest(plan JobPlan) string { return jsonDigest(plan) }

@@ -402,8 +402,11 @@ describe('platform shell and RBAC UI', () => {
     })).toBe(true));
 
     const architectureCard = screen.getByRole('heading', { name: '架构' }).closest('section')!;
-    await userEvent.type(within(architectureCard).getByRole('textbox', { name: '为架构新增选项' }), 'RISC-V');
+    expect(within(architectureCard).queryByRole('textbox')).not.toBeInTheDocument();
     await userEvent.click(within(architectureCard).getByRole('button', { name: '新增选项' }));
+    const optionDialog = screen.getByRole('dialog', { name: '新增选项 · 架构' });
+    await userEvent.type(within(optionDialog).getByRole('textbox', { name: '为架构新增选项' }), 'RISC-V');
+    await userEvent.click(within(optionDialog).getByRole('button', { name: '新增选项' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/platform-option-categories/architecture/options') && init?.method === 'POST' && String(init.body).includes('RISC-V'))).toBe(true));
 
     expect(screen.queryByRole('heading', { name: '全局环境参数字段' })).not.toBeInTheDocument();
@@ -466,16 +469,25 @@ describe('platform shell and RBAC UI', () => {
     expect(within(dockerGroup).getByText('20.10.24')).toBeInTheDocument();
     expect(within(containerdGroup).getByText('2.0.10')).toBeInTheDocument();
 
-    const dockerInput = within(dockerGroup).getByRole('textbox', { name: '为Docker新增运行时版本' });
-    const containerdInput = within(containerdGroup).getByRole('textbox', { name: '为containerd新增运行时版本' });
-    await userEvent.type(dockerInput, '25.0.0');
-    expect(containerdInput).toHaveValue('');
+    expect(within(runtimeCard).queryByRole('textbox')).not.toBeInTheDocument();
     await userEvent.click(within(dockerGroup).getByRole('button', { name: '新增运行时版本' }));
+    const dockerInput = within(screen.getByRole('dialog')).getByRole('textbox', { name: '为Docker新增运行时版本' });
+    await userEvent.type(dockerInput, '25.0.0');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }));
+    await userEvent.click(within(containerdGroup).getByRole('button', { name: '新增运行时版本' }));
+    const containerdInput = within(screen.getByRole('dialog')).getByRole('textbox', { name: '为containerd新增运行时版本' });
+    expect(containerdInput).toHaveValue('');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }));
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/platform-option-categories/containerRuntimeVersion/options') && init?.method === 'POST')).toBe(false);
+    await userEvent.click(within(dockerGroup).getByRole('button', { name: '新增运行时版本' }));
+    expect(within(screen.getByRole('dialog')).getByRole('textbox')).toHaveValue('25.0.0');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '新增运行时版本' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => {
       if (!String(input).endsWith('/platform-option-categories/containerRuntimeVersion/options') || init?.method !== 'POST') return false;
       const body = JSON.parse(String(init.body));
       return body.label === '25.0.0' && body.parentOptionId === 'runtime-docker';
     })).toBe(true));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     const dockerHeader = dockerGroup.querySelector<HTMLElement>('.hierarchy-parent__header')!;
     expect(within(dockerHeader).getByRole('button', { name: '退役' })).toBeDisabled();
@@ -2461,6 +2473,61 @@ describe('platform shell and RBAC UI', () => {
 
     expect(await screen.findByText('环境已恢复')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('该环境已归档，仅保留配置和历史证据；不能创建 Revision、健康检查、构建或 Run。需要再次使用时先恢复环境。')).not.toBeInTheDocument());
+  });
+
+  it('shows an empty rollback state when no installation or recovery baselines exist', async () => {
+    const fetchMock = installFetch({ initialUser: dave });
+    const baseFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/environments/environment-test/cluster-rollback-plan')) return json({
+        environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
+        nodes: [], sources: [], componentCount: 0, nodeCount: 0,
+        destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
+      });
+      return baseFetch(input, init);
+    });
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
+    const dialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
+    expect(await within(dialog).findByText('暂无可回滚组件')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('平台当前没有该环境的组件安装基线或待恢复操作，无需创建回滚 Run。');
+    for (const message of ['暂时无法读取数据', '回滚操作被阻断', '回滚会修改目标环境', '指定版本']) {
+      expect(dialog).not.toHaveTextContent(message);
+    }
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '创建回滚 Run（待审批）' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('textbox', { name: '确认回滚环境名称' })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog.querySelector('footer')!).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog', { name: '手动回滚组件' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/cluster-rollback-runs'))).toBe(false);
+  });
+
+  it('keeps rollback request failures visible and allows retrying into an empty state', async () => {
+    const fetchMock = installFetch({ initialUser: dave });
+    const baseFetch = fetchMock.getMockImplementation()!;
+    let previewCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/environments/environment-test/cluster-rollback-plan')) {
+        previewCount += 1;
+        if (previewCount === 1) return json({ error: { code: 'INTERNAL', message: '读取安装基线失败' } }, 500);
+        return json({
+          environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
+          nodes: [], sources: [], componentCount: 0, nodeCount: 0,
+          destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
+        });
+      }
+      return baseFetch(input, init);
+    });
+    renderApp('/environments');
+    await userEvent.click(await screen.findByRole('button', { name: '手动回滚组件' }));
+    const dialog = await screen.findByRole('dialog', { name: '手动回滚组件' });
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('读取安装基线失败');
+    expect(within(dialog).queryByText('暂无可回滚组件')).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: '重试' }));
+    expect(await within(dialog).findByText('暂无可回滚组件')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    expect(previewCount).toBe(2);
   });
 
   it('previews and submits restoration to backup baselines with exact-name confirmation', async () => {

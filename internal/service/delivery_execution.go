@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
-	"strings"
 )
 
 func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan lockedPlan) error {
@@ -22,9 +23,9 @@ func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan lockedPlan
 			var err error
 			switch media.Kind {
 			case "artifact":
-				err = e.artifactDelivery.Probe(ctx, ArtifactLocation{URL: media.Location}, ArtifactIdentity{SHA256: strings.TrimPrefix(media.Identity, "sha256:"), SizeBytes: media.SizeBytes})
+				err = e.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{URL: media.Location}, mediadelivery.ArtifactIdentity{SHA256: strings.TrimPrefix(media.Identity, "sha256:"), SizeBytes: media.SizeBytes})
 			case "image":
-				err = e.imageDelivery.Probe(ctx, ImageLocation{Ref: media.Location}, ImageDigest{Value: media.Identity})
+				err = e.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: media.Location}, mediadelivery.ImageDigest{Value: media.Identity})
 			default:
 				return fmt.Errorf("unknown locked media kind: %s", media.Kind)
 			}
@@ -39,15 +40,15 @@ func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan lockedPlan
 func (e *DeliveryService) mirrorRunImages(ctx context.Context, runID string, plan *lockedPlan) error {
 	for _, transfer := range plan.ImageTransfers {
 		_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("mirroring image from %s to %s", transfer.SourceRegistry, transfer.TargetRegistry), CreatedAt: time.Now().UTC()})
-		if err := e.imageDelivery.Probe(ctx, ImageLocation{Ref: transfer.TargetDigest}, ImageDigest{Value: transfer.TargetDigest}); err == nil {
+		if err := e.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: transfer.TargetDigest}, mediadelivery.ImageDigest{Value: transfer.TargetDigest}); err == nil {
 			if resultErr := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, "reused_target", transfer.TargetDigest, "target content appeared while approval was pending"); resultErr != nil {
 				return resultErr
 			}
 			continue
 		}
-		request := ImageTransfer{
-			Source: ImageLocation{Ref: transfer.SourceDigest}, Target: ImageLocation{Ref: transfer.TargetRef},
-			Digest: ImageDigest{Value: transfer.TargetDigest},
+		request := mediadelivery.ImageTransfer{
+			Source: mediadelivery.ImageLocation{Ref: transfer.SourceDigest}, Target: mediadelivery.ImageLocation{Ref: transfer.TargetRef},
+			Digest: mediadelivery.ImageDigest{Value: transfer.TargetDigest},
 			Log: func(message string) {
 				_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: Redact(message).(string), CreatedAt: time.Now().UTC()})
 			},
@@ -72,15 +73,15 @@ func (e *DeliveryService) mirrorRunArtifacts(ctx context.Context, runID string, 
 		message := fmt.Sprintf("mirroring media %s from %s to %s", transfer.Alias, transfer.SourceURL, transfer.TargetStation)
 		_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: message, CreatedAt: time.Now().UTC()})
 
-		location := ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}
-		identity := ArtifactIdentity{SHA256: transfer.SHA256, SizeBytes: transfer.SizeBytes}
+		location := mediadelivery.ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}
+		identity := mediadelivery.ArtifactIdentity{SHA256: transfer.SHA256, SizeBytes: transfer.SizeBytes}
 		err := e.artifactDelivery.Probe(ctx, location, identity)
-		if err != nil && !errors.Is(err, ErrDeliveryTargetMissing) {
+		if err != nil && !errors.Is(err, mediadelivery.ErrDeliveryTargetMissing) {
 			_ = e.recordDeliveryResult(context.Background(), runID, plan, transfer.RequirementID, "failed", artifactURL(transfer.TargetStation, transfer.RelativePath), err.Error())
 			return fmt.Errorf("verify target media %s: %w", transfer.Alias, err)
 		}
-		if errors.Is(err, ErrDeliveryTargetMissing) {
-			request := ArtifactTransfer{Source: ArtifactLocation{URL: transfer.SourceURL}, Target: location, Identity: identity}
+		if errors.Is(err, mediadelivery.ErrDeliveryTargetMissing) {
+			request := mediadelivery.ArtifactTransfer{Source: mediadelivery.ArtifactLocation{URL: transfer.SourceURL}, Target: location, Identity: identity}
 			if err := e.artifactDelivery.Transfer(ctx, request); err != nil {
 				_ = e.recordDeliveryResult(context.Background(), runID, plan, transfer.RequirementID, "failed", artifactURL(transfer.TargetStation, transfer.RelativePath), err.Error())
 				return fmt.Errorf("mirror media %s: %w", transfer.Alias, err)

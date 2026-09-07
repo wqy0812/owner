@@ -1,14 +1,13 @@
-import { newScenarioClientID as newClientID } from '../pages/scenarioLifecycle';
+import type { PreparationRequest, PreparationSession } from '../types/executionPreparation';
+import { newScenarioClientID as newClientID } from '../features/scenarios/model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { displayError, useApp } from '../context/AppContext';
-import type { ComponentTestPlan, ComponentTestRequest, ScenarioExecutionPreview } from '../types/domain';
+import type { ComponentTestPlan, ScenarioExecutionPreview } from '../types/domain';
 import { StatusExplanationPanel } from './StatusExplanationPanel';
 import { CheckCircle2, ClipboardCheck, CircleDashed, LoaderCircle, XCircle } from 'lucide-react';
 import { StatusPill } from './Primitives';
 
-export interface PreparationRequest { kind: 'component_test' | 'scenario_execution'; subjectId: string; environmentId: string; component?: ComponentTestRequest; scenario?: { environmentId: string; executionMode: string; testOnly: boolean } }
-export interface PreparationSession { id: string; status: string; input: PreparationRequest; output: { checks: Array<{ id: string; category: string; label: string; host?: string; status: string; message?: string; source?: string; elapsedMs: number; startedAt?: string }>; plan?: unknown; error?: string; explanation?: import('../types/domain').WorkExplanation } }
 const CATEGORIES: Record<string, string> = { runtime: '执行器', connectivity: '连通性', prerequisite: 'Ansible 运行基础', residual: '历史残留探测', component_check: '组件 YAML 检查', resource_contract: '资源合同', media: '介质核验' };
 const STATES: Record<string, string> = { queued: '等待准备', running: '正在检查', pending: '待检查', scheduled: '执行时检查', passed: '通过', failed: '失败', skipped: '不适用', not_applicable: '不适用', provided: '由前置步骤提供', succeeded: '计划已生成', cancelled: '已取消', interrupted: '服务重启，需重新准备', timed_out: '准备超时' };
 export function ExecutionPreparationPanel({ request, disabled, onPlan }: { request: PreparationRequest; disabled?: boolean; onPlan: (plan: ComponentTestPlan | ScenarioExecutionPreview | undefined) => void }) {

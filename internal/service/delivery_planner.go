@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -48,9 +49,9 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 		if !ok {
 			return plan, fmt.Errorf("%w: delivery requirement %s has no decision", domain.ErrInvalid, requirement.ID)
 		}
-		decision := DeliveryDecision{RequirementID: requirement.ID, Mode: input.Mode, DecidedBy: user.ID, DecidedAt: at}
+		decision := mediadelivery.Decision{RequirementID: requirement.ID, Mode: input.Mode, DecidedBy: user.ID, DecidedAt: at}
 		plan.DeliveryDecisions = append(plan.DeliveryDecisions, decision)
-		result := DeliveryResult{RequirementID: requirement.ID, Mode: input.Mode, Status: "pending"}
+		result := mediadelivery.Result{RequirementID: requirement.ID, Mode: input.Mode, Status: "pending"}
 		location := requirement.Source
 		if input.Mode == "transfer" {
 			if !requirement.TransferAvailable || requirement.Target == "" {
@@ -64,13 +65,13 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 			if present {
 				result.Status, result.ActualLocation, result.CompletedAt = "reused_target", location, &at
 			} else if requirement.Kind == "artifact" {
-				plan.ArtifactTransfers = append(plan.ArtifactTransfers, lockedArtifactTransfer{
+				plan.ArtifactTransfers = append(plan.ArtifactTransfers, mediadelivery.PlannedArtifactTransfer{
 					RequirementID: requirement.ID, Alias: requirement.Name, SourceURL: requirement.Source,
 					TargetStation: requirement.TargetStation, RelativePath: requirement.RelativePath,
 					SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes,
 				})
 			} else {
-				plan.ImageTransfers = append(plan.ImageTransfers, lockedImageTransfer{
+				plan.ImageTransfers = append(plan.ImageTransfers, mediadelivery.PlannedImageTransfer{
 					RequirementID: requirement.ID, SourceRegistry: requirement.SourceRegistry, TargetRegistry: requirement.TargetRegistry,
 					SourceDigest: requirement.Source, TargetRef: requirement.TargetRef, TargetDigest: requirement.Target,
 				})
@@ -87,19 +88,19 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 	return plan, nil
 }
 
-func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement DeliveryRequirement) (bool, error) {
+func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement mediadelivery.Requirement) (bool, error) {
 	switch requirement.Kind {
 	case "artifact":
-		err := p.artifactDelivery.Probe(ctx, ArtifactLocation{FileStation: requirement.TargetStation, RelativePath: requirement.RelativePath}, ArtifactIdentity{SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes})
+		err := p.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{FileStation: requirement.TargetStation, RelativePath: requirement.RelativePath}, mediadelivery.ArtifactIdentity{SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes})
 		if err == nil {
 			return true, nil
 		}
-		if errors.Is(err, ErrDeliveryTargetMissing) {
+		if errors.Is(err, mediadelivery.ErrDeliveryTargetMissing) {
 			return false, nil
 		}
 		return false, fmt.Errorf("probe artifact target %s: %w", requirement.Target, err)
 	case "image":
-		if err := p.imageDelivery.Probe(ctx, ImageLocation{Ref: requirement.Target}, ImageDigest{Value: requirement.Identity}); err != nil {
+		if err := p.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: requirement.Target}, mediadelivery.ImageDigest{Value: requirement.Identity}); err != nil {
 			return false, nil
 		}
 		return true, nil
@@ -108,7 +109,7 @@ func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement
 	}
 }
 
-func bindDeliveryRequirementVariables(plan *lockedPlan, requirement DeliveryRequirement, location string) error {
+func bindDeliveryRequirementVariables(plan *lockedPlan, requirement mediadelivery.Requirement, location string) error {
 	stepSet := make(map[string]bool, len(requirement.StepIDs))
 	for _, id := range requirement.StepIDs {
 		stepSet[id] = true

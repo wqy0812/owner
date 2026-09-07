@@ -271,7 +271,7 @@ export function EnvironmentsPage() {
   }
 
   async function submitClusterRollback(confirmEnvironmentName: string) {
-    if (!selected || !rollbackPlan) return;
+    if (!selected || !rollbackPlan || rollbackPlan.componentCount === 0 || !rollbackPlan.planDigest) return;
     setRollbackBusy('submit');
     setRollbackError(undefined);
     setRollbackExplanation(undefined);
@@ -462,10 +462,11 @@ function ClusterRollbackModal({ environment, plan, error, explanation, busy, onS
   const [scopeCount, setScopeCount] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation === environment.name;
-  return <Modal size="wide" title="手动回滚组件" description={`目标环境：${environment.name}。按备份基线恢复安装前状态或指定版本。`} onClose={onClose}>
+  const empty = !busy && !error && plan?.componentCount === 0;
+  return <Modal size="wide" title="手动回滚组件" description={`目标环境：${environment.name}。按备份基线恢复组件安装前的状态。`} onClose={onClose}>
     <div className="modal-body cluster-rollback-preview">
-      <div className="warning-callout"><AlertTriangle size={19} /><div><strong>回滚会修改目标环境</strong><p>平台将依据已验证安装及未完成操作记录，按依赖逆序执行回滚和回滚后检查；组件已绑定的回滚前检查也会执行。备份基线不完整时拒绝生成计划。</p></div></div>
-      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : plan ? <>
+      {!empty && <div className="warning-callout"><AlertTriangle size={19} /><div><strong>回滚会修改目标环境</strong><p>平台将依据已验证安装及未完成操作记录，按依赖逆序执行回滚和回滚后检查；组件已绑定的回滚前检查也会执行。备份基线不完整时拒绝生成计划。</p></div></div>}
+      {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…" /> : error ? <><ErrorBlock message={error} onRetry={onRetry} /><StatusExplanationPanel explanation={explanation} title="回滚操作被阻断" /></> : empty ? <EmptyState title="暂无可回滚组件" description="平台当前没有该环境的组件安装基线或待恢复操作，无需创建回滚 Run。" /> : plan ? <>
         <section className="cluster-rollback-summary"><div><span>来源 Run</span><strong>{plan.sources.length} 个</strong></div><div><span>组件</span><strong>{plan.componentCount}</strong></div><div><span>回滚节点</span><strong>{plan.nodeCount}</strong></div><div><span>Environment Revision</span><strong>{plan.environmentRevisionId}</strong></div></section>
         <section className="cluster-rollback-sources" aria-label="安装基线来源">{plan.sources.map((source) => <Link key={source.runId} to={`/runs?selected=${source.runId}`}><span>{source.kind}</span><strong>{source.runId}</strong><small>{source.componentCount} 个组件</small></Link>)}</section>
         <label><span>回滚范围</span><select aria-label="回滚节点范围" value={scopeCount} onChange={(event) => setScopeCount(event.target.value)}><option value="">全部待恢复节点</option>{(plan.nodes ?? []).map((_, index) => <option key={index} value={index + 1}>逆序计划的前 {index + 1} 个节点</option>)}</select><small>范围包含所选组件的下游节点，以维持依赖关系。</small></label>
@@ -474,7 +475,7 @@ function ClusterRollbackModal({ environment, plan, error, explanation, busy, onS
         <label><span>输入环境名称以确认</span><input aria-label="确认回滚环境名称" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={environment.name} autoComplete="off" /><small>必须完整输入：{environment.name}</small></label>
       </> : null}
     </div>
-    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>取消</button><button className="button button--danger" disabled={!plan || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)}>{busy === 'submit' ? '正在锁定计划…' : '创建回滚 Run（待审批）'}</button></footer>
+    <footer className="modal-actions"><button className="button button--quiet" disabled={busy !== undefined} onClick={onClose}>{empty ? '关闭' : '取消'}</button>{!empty && <button className="button button--danger" disabled={!plan || !plan.planDigest || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)}>{busy === 'submit' ? '正在锁定计划…' : '创建回滚 Run（待审批）'}</button>}</footer>
   </Modal>;
 }
 

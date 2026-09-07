@@ -19,7 +19,7 @@ export function ReleaseReviewModal({ releaseId, onClose, onDecided }: { releaseI
   const { notify, platformOptionCategories } = useApp();
   const query = useApiData((signal) => api.previewReleaseReview(releaseId, signal), [releaseId], 'workbench');
   const [decision, setDecision] = useState<'approve'|'reject'>();
-  const [affected, setAffected] = useState<import('./ComponentUsagePanel').ComponentUsage>();
+  const [affected, setAffected] = useState<import('../types/componentUsage').ComponentUsage>();
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState<'approve' | 'reject' | ''>('');
   const [decisionError, setDecisionError] = useState('');

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -156,10 +157,10 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 		SourceID, Status, EnvironmentRevisionID, ArtifactDigest, RecoveryStateDigest string
 		Start                                                                        int
 		Steps                                                                        []lockedStep
-		DeliveryRequirements                                                         []DeliveryRequirement
-		DeliveryDecisions                                                            []DeliveryDecision
-		ArtifactTransfers                                                            []lockedArtifactTransfer
-		ImageTransfers                                                               []lockedImageTransfer
+		DeliveryRequirements                                                         []mediadelivery.Requirement
+		DeliveryDecisions                                                            []mediadelivery.Decision
+		ArtifactTransfers                                                            []mediadelivery.PlannedArtifactTransfer
+		ImageTransfers                                                               []mediadelivery.PlannedImageTransfer
 	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, result.RecoveryStateDigest, start, remaining, locked.DeliveryRequirements, locked.DeliveryDecisions, locked.ArtifactTransfers, locked.ImageTransfers})
 	return result, nil
 }

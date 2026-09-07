@@ -5,7 +5,7 @@ import { api, actionableExplanation } from '../api/client';
 import { displayError, useApp } from '../context/AppContext';
 import { StatusExplanationPanel } from './StatusExplanationPanel';
 import { InfoNote } from './Primitives';
-import { newScenarioClientID } from '../pages/scenarioLifecycle';
+import { newScenarioClientID } from '../features/scenarios/model';
 import type { Environment, ScenarioEdge, ScenarioExecutionMode, ScenarioExecutionPreview, ScenarioRevision, WorkExplanation } from '../types/domain';
 
 const MODE_LABELS: Record<ScenarioExecutionMode, string> = { install: '完整安装', upgrade: '升级已有集群', baseline_verify: '恢复后基线复核' };

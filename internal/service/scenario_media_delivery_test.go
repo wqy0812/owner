@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
 	"codex/platform-demo/internal/testutil"
@@ -61,19 +62,19 @@ func (r *scenarioOrderedMediaRunner) RunJob(ctx context.Context, request ansible
 
 type scenarioOrderedImageDelivery struct{ before func(string) error }
 
-func (s scenarioOrderedImageDelivery) Probe(context.Context, ImageLocation, ImageDigest) error {
-	return ErrDeliveryTargetMissing
+func (s scenarioOrderedImageDelivery) Probe(context.Context, mediadelivery.ImageLocation, mediadelivery.ImageDigest) error {
+	return mediadelivery.ErrDeliveryTargetMissing
 }
-func (s scenarioOrderedImageDelivery) Transfer(_ context.Context, _ ImageTransfer) error {
+func (s scenarioOrderedImageDelivery) Transfer(_ context.Context, _ mediadelivery.ImageTransfer) error {
 	return s.before("image")
 }
 
 type scenarioOrderedArtifactDelivery struct{ before func(string) error }
 
-func (s scenarioOrderedArtifactDelivery) Probe(context.Context, ArtifactLocation, ArtifactIdentity) error {
-	return ErrDeliveryTargetMissing
+func (s scenarioOrderedArtifactDelivery) Probe(context.Context, mediadelivery.ArtifactLocation, mediadelivery.ArtifactIdentity) error {
+	return mediadelivery.ErrDeliveryTargetMissing
 }
-func (s scenarioOrderedArtifactDelivery) Transfer(_ context.Context, _ ArtifactTransfer) error {
+func (s scenarioOrderedArtifactDelivery) Transfer(_ context.Context, _ mediadelivery.ArtifactTransfer) error {
 	return s.before("artifact")
 }
 
@@ -137,9 +138,9 @@ func queueScenarioWithMedia(t *testing.T, p *Platform, owner domain.User, revisi
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.InputSnapshot["imageTransfers"] = []lockedImageTransfer{{RequirementID: "image", SourceRegistry: "source", TargetRegistry: "target", SourceDigest: "source/image@sha256:abc", TargetRef: "target/image:version", TargetDigest: "target/image@sha256:abc"}}
-	run.InputSnapshot["artifactTransfers"] = []lockedArtifactTransfer{{RequirementID: "artifact", Alias: "installer", SourceURL: "http://source/package", TargetStation: "target", RelativePath: "package.tar", SHA256: "abc", SizeBytes: 1}}
-	run.InputSnapshot["deliveryResults"] = []DeliveryResult{{RequirementID: "image", Mode: "transfer", Status: "pending"}, {RequirementID: "artifact", Mode: "transfer", Status: "pending"}}
+	run.InputSnapshot["imageTransfers"] = []mediadelivery.PlannedImageTransfer{{RequirementID: "image", SourceRegistry: "source", TargetRegistry: "target", SourceDigest: "source/image@sha256:abc", TargetRef: "target/image:version", TargetDigest: "target/image@sha256:abc"}}
+	run.InputSnapshot["artifactTransfers"] = []mediadelivery.PlannedArtifactTransfer{{RequirementID: "artifact", Alias: "installer", SourceURL: "http://source/package", TargetStation: "target", RelativePath: "package.tar", SHA256: "abc", SizeBytes: 1}}
+	run.InputSnapshot["deliveryResults"] = []mediadelivery.Result{{RequirementID: "image", Mode: "transfer", Status: "pending"}, {RequirementID: "artifact", Mode: "transfer", Status: "pending"}}
 	encoded, err := json.Marshal(run.InputSnapshot)
 	if err != nil {
 		t.Fatal(err)

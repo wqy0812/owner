@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
+	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -532,7 +533,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 			BackupPlaybookSHA: backupPlaybookSHA, BackupCapturedAt: backupCapturedAt,
 		})
 	}
-	digestRequirements := append([]DeliveryRequirement(nil), plan.DeliveryRequirements...)
+	digestRequirements := append([]mediadelivery.Requirement(nil), plan.DeliveryRequirements...)
 	for index := range digestRequirements {
 		digestRequirements[index].StepIDs = nil
 	}
@@ -541,9 +542,9 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 		EnvironmentRevisionID      string
 		TreeDigest                 string
 		Steps                      []digestStep
-		ArtifactTransfers          []lockedArtifactTransfer
-		ImageTransfers             []lockedImageTransfer
-		DeliveryRequirements       []DeliveryRequirement
+		ArtifactTransfers          []mediadelivery.PlannedArtifactTransfer
+		ImageTransfers             []mediadelivery.PlannedImageTransfer
+		DeliveryRequirements       []mediadelivery.Requirement
 		InstallationBaselineDigest string
 		RecoveryEnvironmentDigest  string
 	}{Runtime: plan.Runtime, EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, DeliveryRequirements: digestRequirements, InstallationBaselineDigest: plan.InstallationBaselineDigest, RecoveryEnvironmentDigest: plan.RecoveryEnvironmentDigest})
@@ -590,6 +591,6 @@ func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment doma
 	return ComponentTestPlan{
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		Destructive: destructive, RequiresApproval: destructive, PlanDigest: digest, Steps: steps,
-		DeliveryRequirements: append([]DeliveryRequirement{}, plan.DeliveryRequirements...),
+		DeliveryRequirements: append([]mediadelivery.Requirement{}, plan.DeliveryRequirements...),
 	}
 }

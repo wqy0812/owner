@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { displayError, useApp } from '../context/AppContext';
 import { ParameterValueEditor } from './ParameterEditors';
 import { EmptyState, ErrorBlock, LoadingBlock, StatusPill } from './Primitives';
-import { moveAcceptanceJob, newAcceptanceJob } from '../pages/scenarioLifecycle';
+import { moveAcceptanceJob, newAcceptanceJob } from '../features/scenarios/model';
 import type { Component, Environment, ParameterDefinition, PlaybookWorkspaceFile, ScenarioAcceptance, ScenarioAcceptanceJob, ScenarioNode, ScenarioParameterBinding } from '../types/domain';
 
 export function ScenarioAcceptanceEditor({ revisionId, editable, nodes, components, environments, onSaved }: {

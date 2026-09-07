@@ -1,6 +1,6 @@
 # 组件前端与构建交付职责拆分落地方案
 
-> 状态：规划稿，尚未实施。
+> 状态：2026-09-07 已实施，验证记录见 [实施验收](component-ui-and-delivery-modularization-validation-2026-09-07.md)。
 > 基线：2026-09-06 当前工作区，包含未提交修改；不代表测试环境部署状态。
 > 范围：架构复核后的第 2 项“组件页面拆分与前端类型归位”、第 3 项“Docker 构建执行提取与独立 CLI 介质依赖收敛”。
 
@@ -12,7 +12,7 @@
 
 执行快照整体强类型化是另一个事项，本方案不以它为前置条件。介质提取只共享已有介质字段的类型，不重新设计完整执行合同。后端全量业务拆包、通用工作流、通用执行引擎、全站状态管理替换及公共 API 客户端整体重写均不进入本轮。
 
-本次方案交付只增加规划文档与索引。实现阶段按以下批次集中推进，不在每批之间重复等待确认；完成连贯改造后统一回归，编译失败和关键行为退化应即时处理。
+本方案最初只交付规划文档与索引；用户随后授权实施，现已按以下批次集中完成并进入验收。
 
 ## 2. 当前代码及迁移关注点
 
@@ -21,9 +21,9 @@
 | [ComponentsPage.tsx](../web/src/pages/ComponentsPage.tsx) | 目录选择、Release 深链、合同、动作、文件、镜像、介质、验证和多个弹窗 | 编辑状态、未保存保护、身份切换和异步请求归属不能被拆散 |
 | [API client](../web/src/api/client.ts) | 公共请求、响应校验和多个业务接口 | 从 UI 文件导入的是类型；归位类型即可消除该依赖，无需重写请求系统 |
 | [image_builds.go](../internal/service/image_builds.go) | 构建权限与记录，也直接管理 Docker 进程、临时目录和输出 | 业务状态继续由 Catalog 管理，进程细节移入构建实现 |
-| [delivery_adapters.go](../internal/service/delivery_adapters.go) | HTTP/FSS、Docker 镜像探测与复制 | 引用了同包的镜像身份解析，须一并明确归属 |
+| 原 `delivery_adapters.go`（现 [delivery](../internal/delivery/)） | HTTP/FSS、Docker 镜像探测与复制 | 引用了同包的镜像身份解析，须一并明确归属 |
 | [media_observation.go](../internal/service/media_observation.go) | 适配器 Probe 的公共入口、请求内去重、超时和准备进度 | 不能仅移动适配器文件，否则丢失报告、缓存隔离或超时语义 |
-| [standalone_media.go](../internal/service/standalone_media.go) | 独立介质准备及 JobPlan 摘要 | 依赖完整 lockedPlan，导致 CLI 导入 service |
+| 原 `standalone_media.go`（现 [CLI 介质](../internal/jobcli/media.go)） | 独立介质准备及 JobPlan 摘要 | 依赖完整 lockedPlan，导致 CLI 导入 service |
 | [jobcli/run.go](../internal/jobcli/run.go) | run/resume/rollback-preview/rollback、结果锁与回执 | 介质准备时机、摘要和已有回执必须保持一致 |
 
 ## 3. 第 2 项：组件前端拆分
@@ -226,4 +226,4 @@ CLI 中 source_verify 完成后才准备升级介质的时机保持原样；run/
 
 完成后更新 project-structure、backend-design、development-guide 和 standalone-role-job 的实际职责说明；按日期新增验证记录。规划稿在实施完成前不能改写为现状说明。
 
-最终交付应能说明：哪些职责移到了哪里、哪些旧入口被删除、哪些行为通过了验证，以及是否存在未完成验证。提交、推送和部署分别记录；当前请求只授权规划，尚未执行这些动作。
+最终交付应能说明：哪些职责移到了哪里、哪些旧入口被删除、哪些行为通过了验证，以及是否存在未完成验证。提交、推送和部署分别记录；后续请求已授权本方案实施；提交、推送和部署仍未执行。

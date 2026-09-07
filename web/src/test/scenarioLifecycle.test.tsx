@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import { ScenarioCreateModal } from '../components/ScenarioCreateModal';
 import { ScenarioExecutionPanel } from '../components/ScenarioExecutionPanel';
 import { ScenarioAcceptanceEditor } from '../components/ScenarioAcceptanceEditor';
-import { changedReleaseParameterIssues, changedReleaseDependencyIssues, moveAcceptanceJob, newAcceptanceJob, replaceScenarioNodeRelease } from '../pages/scenarioLifecycle';
+import { changedReleaseParameterIssues, changedReleaseDependencyIssues, moveAcceptanceJob, newAcceptanceJob, replaceScenarioNodeRelease } from '../features/scenarios/model';
 import type { ComponentRelease, Environment, Scenario, ScenarioAcceptance, ScenarioExecutionPreview, ScenarioNode, ScenarioRevision } from '../types/domain';
 
 const { notify, signalRefresh } = vi.hoisted(() => ({ notify: vi.fn(), signalRefresh: vi.fn() }));
