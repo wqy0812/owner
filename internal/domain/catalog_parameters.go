@@ -1,8 +1,9 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
-	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 var imageRegistryPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
 var EnvironmentVariablePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+var parameterNumberPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 
 func MatchesParameterType(value any, expected string) bool {
 	if value == nil {
@@ -19,37 +21,27 @@ func MatchesParameterType(value any, expected string) bool {
 	kind := reflect.TypeOf(value).Kind()
 	switch expected {
 	case "string":
-		return kind == reflect.String
+		_, number := value.(json.Number)
+		return kind == reflect.String && !number
 	case "boolean":
 		return kind == reflect.Bool
 	case "object":
 		return kind == reflect.Map
 	case "array":
 		return kind == reflect.Array || kind == reflect.Slice
-	case "number":
-		return isNumericKind(kind)
-	case "integer":
-		if !isNumericKind(kind) {
+	case "number", "integer":
+		text, numeric := parameterNumberText(value)
+		if !numeric {
 			return false
 		}
-		switch number := value.(type) {
-		case float32:
-			return math.Trunc(float64(number)) == float64(number)
-		case float64:
-			return math.Trunc(number) == number
-		default:
-			return true
-		}
+		_, exponent, valid := normalizeParameterNumber(text)
+		return valid && (expected == "number" || exponent.Sign() >= 0)
 	case "null":
 		return false
 	default:
 		// Parameter types are validated when the release contract is saved.
 		return true
 	}
-}
-
-func isNumericKind(kind reflect.Kind) bool {
-	return kind >= reflect.Int && kind <= reflect.Float64
 }
 
 func ContainsParameterValue(values []any, value any) bool {
@@ -62,22 +54,101 @@ func ContainsParameterValue(values []any, value any) bool {
 }
 
 func ParameterValuesEqual(left, right any) bool {
-	if left != nil && right != nil && isNumericKind(reflect.TypeOf(left).Kind()) && isNumericKind(reflect.TypeOf(right).Kind()) {
-		return numericValue(left) == numericValue(right)
+	leftText, leftNumeric := parameterNumberText(left)
+	rightText, rightNumeric := parameterNumberText(right)
+	if leftNumeric || rightNumeric {
+		if !leftNumeric || !rightNumeric {
+			return false
+		}
+		leftDigits, leftExponent, leftValid := normalizeParameterNumber(leftText)
+		rightDigits, rightExponent, rightValid := normalizeParameterNumber(rightText)
+		return leftValid && rightValid && leftDigits == rightDigits && leftExponent.Cmp(rightExponent) == 0
+	}
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	l, r := reflect.ValueOf(left), reflect.ValueOf(right)
+	if l.Kind() != r.Kind() {
+		return false
+	}
+	// Parameter containers are JSON trees. Compare their children using the same
+	// numeric semantics as scalars while preserving keys, order and nil containers.
+	switch l.Kind() {
+	case reflect.Map:
+		if l.Type().Key() != r.Type().Key() || l.IsNil() != r.IsNil() || l.Len() != r.Len() {
+			return false
+		}
+		entries := l.MapRange()
+		for entries.Next() {
+			other := r.MapIndex(entries.Key())
+			if !other.IsValid() || !ParameterValuesEqual(entries.Value().Interface(), other.Interface()) {
+				return false
+			}
+		}
+		return true
+	case reflect.Slice, reflect.Array:
+		if l.Len() != r.Len() || (l.Kind() == reflect.Slice && l.IsNil() != r.IsNil()) {
+			return false
+		}
+		for i := 0; i < l.Len(); i++ {
+			if !ParameterValuesEqual(l.Index(i).Interface(), r.Index(i).Interface()) {
+				return false
+			}
+		}
+		return true
 	}
 	return reflect.DeepEqual(left, right)
 }
 
-func numericValue(value any) float64 {
+func parameterNumberText(value any) (string, bool) {
+	if number, ok := value.(json.Number); ok {
+		return string(number), true
+	}
+	if value == nil {
+		return "", false
+	}
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(reflected.Int())
+		return strconv.FormatInt(reflected.Int(), 10), true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return float64(reflected.Uint())
+		return strconv.FormatUint(reflected.Uint(), 10), true
+	case reflect.Float32, reflect.Float64:
+		return strconv.FormatFloat(reflected.Float(), 'g', -1, reflected.Type().Bits()), true
 	default:
-		return reflected.Float()
+		return "", false
 	}
+}
+
+// normalizeParameterNumber represents a number as signed significant digits
+// times 10^exponent. Keeping the exponent separate avoids float rounding and
+// expanding potentially enormous JSON exponents into equally enormous integers.
+func normalizeParameterNumber(text string) (string, *big.Int, bool) {
+	if !parameterNumberPattern.MatchString(text) {
+		return "", nil, false
+	}
+	exponent := new(big.Int)
+	if index := strings.IndexAny(text, "eE"); index >= 0 {
+		exponent.SetString(text[index+1:], 10)
+		text = text[:index]
+	}
+	negative := strings.HasPrefix(text, "-")
+	text = strings.TrimPrefix(text, "-")
+	fractionDigits := 0
+	if index := strings.IndexByte(text, '.'); index >= 0 {
+		fractionDigits = len(text) - index - 1
+		text = text[:index] + text[index+1:]
+	}
+	text = strings.TrimLeft(text, "0")
+	if text == "" {
+		return "0", new(big.Int), true
+	}
+	digits := strings.TrimRight(text, "0")
+	exponent.Add(exponent, big.NewInt(int64(len(text)-len(digits)-fractionDigits)))
+	if negative {
+		digits = "-" + digits
+	}
+	return digits, exponent, true
 }
 
 func ValidateResolvedParameters(parameters []ParameterDefinition, resolved map[string]any) error {
