@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"codex/platform-demo/internal/domain"
 	"context"
 	"errors"
 	"net/http"
@@ -65,7 +66,7 @@ func TestPrepareArtifactsVerifyBeforeAndAfterTransfer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adapter := &artifactRecorder{initial: tc.initial, after: tc.after, transfer: tc.transfer}
-			plan := Plan{ArtifactTransfers: []PlannedArtifactTransfer{{SourceURL: "https://source/a", TargetStation: "target", RelativePath: "a", SHA256: "abc"}}}
+			plan := Plan{ArtifactTransfers: []domain.RunArtifactTransfer{{SourceURL: "https://source/a", TargetStation: "target", RelativePath: "a", SHA256: "abc"}}}
 			err := Prepare(context.Background(), plan, adapter, &imageRecorder{})
 			if !errors.Is(err, tc.err) || !reflect.DeepEqual(adapter.events, tc.want) {
 				t.Fatalf("events=%v err=%v", adapter.events, err)
@@ -76,9 +77,9 @@ func TestPrepareArtifactsVerifyBeforeAndAfterTransfer(t *testing.T) {
 func TestPrepareVerifiesChosenLocationsAndImageTransfers(t *testing.T) {
 	artifacts := &artifactRecorder{}
 	images := &imageRecorder{targetError: ErrDeliveryTargetMissing}
-	plan := Plan{ImageTransfers: []PlannedImageTransfer{{SourceDigest: "source@sha256:abc", TargetRef: "target:1", TargetDigest: "target@sha256:abc"}},
-		DeliveryRequirements: []Requirement{{ID: "a", Kind: "artifact", Source: "https://source/a", Target: "https://target/a"}, {ID: "b", Kind: "artifact", Source: "https://source/b"}, {ID: "i", Kind: "image", Source: "source@sha256:abc", Target: "target@sha256:abc"}},
-		DeliveryDecisions:    []Decision{{RequirementID: "a", Mode: "transfer"}, {RequirementID: "b", Mode: "direct"}, {RequirementID: "i", Mode: "transfer"}}}
+	plan := Plan{ImageTransfers: []domain.RunImageTransfer{{SourceDigest: "source@sha256:abc", TargetRef: "target:1", TargetDigest: "target@sha256:abc"}},
+		DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "a", Kind: "artifact", Source: "https://source/a", Target: "https://target/a"}, {ID: "b", Kind: "artifact", Source: "https://source/b"}, {ID: "i", Kind: "image", Source: "source@sha256:abc", Target: "target@sha256:abc"}},
+		DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "a", Mode: "transfer"}, {RequirementID: "b", Mode: "direct"}, {RequirementID: "i", Mode: "transfer"}}}
 	if err := Prepare(context.Background(), plan, artifacts, images); err != nil {
 		t.Fatal(err)
 	}

@@ -11,10 +11,12 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import uuid
+
+sys.dont_write_bytecode = True
+from deployment_source import index_source_copy, source_digest, source_files
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = "clusterforge-test-ubuntu"
@@ -43,28 +45,6 @@ def run(args, *, cwd=None, log=None, stdin=None, env=None):
     return subprocess.check_output(args, cwd=cwd, env=env, stdin=stdin,
                                    text=True, stderr=subprocess.PIPE).strip()
 
-
-def source_files(root):
-    names = subprocess.check_output(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root)
-    return [Path(os.fsdecode(name)) for name in sorted(set(names.split(b"\0")) - {b""})]
-
-
-def source_digest(root, files):
-    root = root.resolve()
-    digest = hashlib.sha256()
-    for relative in files:
-        path = root / relative
-        digest.update(os.fsencode(str(relative)) + b"\0")
-        if not path.exists() and not path.is_symlink():
-            digest.update(b"deleted\0")
-            continue
-        require(not path.is_symlink() or path.resolve().is_relative_to(root),
-                "Source symlink leaves the repository: " + str(relative))
-        digest.update(str(path.lstat().st_mode).encode() + b"\0")
-        digest.update(os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def validate_target(info, compose, contract):
@@ -167,22 +147,20 @@ class Deployment:
         self.source_hash = source_digest(ROOT, self.files)
         self.source = temporary / "source"
         self.source.mkdir()
-        self.archive = temporary / "source.tar"
-        with tarfile.open(self.archive, "w") as archive:
-            for relative in self.files:
-                path = ROOT / relative
-                if not path.exists() and not path.is_symlink():
-                    continue
-                target = self.source / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if path.is_symlink():
-                    target.symlink_to(os.readlink(path))
-                else:
-                    shutil.copy2(path, target)
-                archive.add(target, arcname=str(relative), recursive=False)
+        for relative in self.files:
+            path = ROOT / relative
+            if not path.exists() and not path.is_symlink():
+                continue
+            target = self.source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink():
+                target.symlink_to(os.readlink(path))
+            else:
+                shutil.copy2(path, target)
         require(source_digest(self.source, self.files) == self.source_hash,
                 "Source changed while copying the checkout")
         self.check_source()
+        index_source_copy(self.source)
         require((ROOT / "web/node_modules").is_dir(), "Install frontend dependencies with make bootstrap first")
         (self.source / "web/node_modules").symlink_to(ROOT / "web/node_modules", target_is_directory=True)
         # Relocation is intentional. Never let pnpm reinstall into the shared dependency directory.
@@ -259,22 +237,12 @@ class Deployment:
         if self.options.skip_tests:
             self.announce("Skipping project regression; runtime, data and artifact checks remain mandatory")
             return
-        self.announce("Running deployment and Go tests")
-        run(["python3", "scripts/test-deploy-local-docker.py"], cwd=self.source,
-            log=self.record / "deployment-tests.log")
-        run(["go", "test", "./..."], cwd=self.source, log=self.record / "go-tests.log")
-        self.announce("Running frontend tests")
-        run(["pnpm", "--dir", "web", "test"], cwd=self.source, env=self.frontend_env,
-            log=self.record / "frontend-tests.log")
-        self.docker_run("exec", self.candidate, "mkdir", "-p", "/workspace/source")
-        with self.archive.open("rb") as archive:
-            self.docker_run("cp", "-", self.candidate + ":/workspace/source", stdin=archive)
-        self.announce("Running isolated Ansible 2.8.8 Role and SSH tests")
-        self.docker_run("exec", "-w", "/workspace/source", self.candidate,
-                        "make", "test-role-job", "ANSIBLE_PLAYBOOK=/opt/ansible/bin/ansible-playbook",
-                        log=self.record / "ansible-tests.log")
-        self.docker_run("exec", self.candidate, "ansible-playbook", "-i", "/etc/ansible/inventory.ini",
-                        "/opt/clusterforge-test/smoke.yml", log=self.record / "ssh-smoke.log")
+        self.announce("Running the unified deployment gate against the isolated candidate")
+        run(["make", "test-deploy"], cwd=self.source,
+            env={**self.frontend_env, "CLUSTERFORGE_GATE_CONTAINER": self.candidate,
+                 "CLUSTERFORGE_GATE_DOCKER_CONTEXT": self.context,
+                 "CLUSTERFORGE_GATE_EVIDENCE_ROOT": str(self.record / "gate")},
+            log=self.record / "deployment-gate.log")
 
     def save_configuration(self):
         backup = self.record / "configuration"

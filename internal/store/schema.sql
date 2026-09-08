@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260907-no-resource-contract');
+VALUES(1, 'clusterforge-v1-20260908-typed-run-snapshot');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -272,7 +272,8 @@ CREATE TABLE IF NOT EXISTS runs (
   scenario_revision_id TEXT REFERENCES scenario_revisions(id),
   action_kind TEXT NOT NULL DEFAULT '',
   destructive INTEGER NOT NULL DEFAULT 0,
-  input_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(input_snapshot_json)),
+  execution_snapshot_json TEXT NOT NULL CHECK (json_valid(execution_snapshot_json)),
+  delivery_results_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(delivery_results_json) AND json_type(delivery_results_json)='array'),
   artifact_digest TEXT NOT NULL DEFAULT '',
   retry_of_run_id TEXT REFERENCES runs(id),
   retry_root_run_id TEXT REFERENCES runs(id),
@@ -285,19 +286,33 @@ CREATE TABLE IF NOT EXISTS runs (
   -- Query projections are derived from the locked snapshot, never independently
   -- written. Keep missing or non-text metadata NULL rather than coercing it.
   component_spec_digest TEXT GENERATED ALWAYS AS (
-    CASE WHEN json_type(input_snapshot_json,'$.componentReleaseSpecDigest')='text'
-      THEN json_extract(input_snapshot_json,'$.componentReleaseSpecDigest') END
+    CASE WHEN json_type(execution_snapshot_json,'$.subject.componentReleaseSpecDigest')='text'
+      THEN json_extract(execution_snapshot_json,'$.subject.componentReleaseSpecDigest') END
   ) VIRTUAL,
   component_evidence_kind TEXT GENERATED ALWAYS AS (
-    CASE WHEN json_type(input_snapshot_json,'$.componentTestEvidence')='text'
-      THEN json_extract(input_snapshot_json,'$.componentTestEvidence') END
+    CASE WHEN json_type(execution_snapshot_json,'$.subject.componentTestEvidence')='text'
+      THEN json_extract(execution_snapshot_json,'$.subject.componentTestEvidence') END
   ) VIRTUAL,
   evidence_at TEXT GENERATED ALWAYS AS (COALESCE(finished_at,created_at)) VIRTUAL,
   scenario_spec_digest TEXT GENERATED ALWAYS AS (
-    CASE WHEN json_type(input_snapshot_json,'$.scenarioRevisionSpecDigest')='text'
-      THEN json_extract(input_snapshot_json,'$.scenarioRevisionSpecDigest') END
+    CASE WHEN json_type(execution_snapshot_json,'$.subject.scenarioRevisionSpecDigest')='text'
+      THEN json_extract(execution_snapshot_json,'$.subject.scenarioRevisionSpecDigest') END
   ) VIRTUAL
 );
+
+CREATE TABLE IF NOT EXISTS run_snapshot_references (
+ run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+ referenced_run_id TEXT NOT NULL REFERENCES runs(id),
+ PRIMARY KEY(run_id,referenced_run_id), CHECK(run_id<>referenced_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_snapshot_references_target ON run_snapshot_references(referenced_run_id);
+CREATE TRIGGER IF NOT EXISTS runs_snapshot_frozen
+BEFORE UPDATE OF execution_snapshot_json ON runs
+WHEN NEW.execution_snapshot_json<>OLD.execution_snapshot_json AND (
+ OLD.status<>'awaiting_approval' OR NEW.status<>'queued' OR
+ NOT EXISTS(SELECT 1 FROM approvals WHERE run_id=OLD.id AND status='approved')
+)
+BEGIN SELECT RAISE(ABORT,'queued Run execution snapshot is immutable'); END;
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_requester ON runs(requested_by, created_at DESC);
@@ -751,14 +766,17 @@ CREATE INDEX IF NOT EXISTS idx_run_archive_tasks_state ON run_archive_tasks(stat
 CREATE INDEX IF NOT EXISTS idx_runs_retention_scan ON runs(status,finished_at,id) WHERE finished_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_audit_cleanup_results ON audit_events(created_at DESC) WHERE action IN ('run.cleaned','run.cleanup_skipped','run.cleanup_failed');
 CREATE TABLE IF NOT EXISTS run_cleanup_history (
- id TEXT PRIMARY KEY,kind TEXT NOT NULL,status TEXT NOT NULL CHECK(status='failed'),requested_by TEXT NOT NULL,environment_id TEXT NOT NULL REFERENCES environments(id),environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),component_release_id TEXT REFERENCES component_releases(id),scenario_revision_id TEXT REFERENCES scenario_revisions(id),action_kind TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT NOT NULL,cleaned_at TEXT NOT NULL,actor_id TEXT NOT NULL,reason TEXT NOT NULL,identity_json TEXT NOT NULL CHECK(json_valid(identity_json))
+ id TEXT PRIMARY KEY,kind TEXT NOT NULL,status TEXT NOT NULL CHECK(status='failed'),requested_by TEXT NOT NULL,environment_id TEXT NOT NULL REFERENCES environments(id),environment_revision_id TEXT NOT NULL REFERENCES environment_revisions(id),component_release_id TEXT REFERENCES component_releases(id),scenario_revision_id TEXT REFERENCES scenario_revisions(id),action_kind TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT NOT NULL,cleaned_at TEXT NOT NULL,actor_id TEXT NOT NULL,reason TEXT NOT NULL,component_spec_digest TEXT,scenario_spec_digest TEXT,release_locks_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(release_locks_json))
 );
 CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_update BEFORE UPDATE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS run_cleanup_history_no_delete BEFORE DELETE ON run_cleanup_history BEGIN SELECT RAISE(ABORT,'cleanup history is immutable'); END;
-CREATE VIEW IF NOT EXISTS retained_run_history AS
- SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at,component_spec_digest,scenario_spec_digest FROM runs
- UNION ALL SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,0,identity_json,'',NULL,NULL,0,0,'记录已按保留策略清理',created_at,NULL,finished_at,json_extract(identity_json,'$.componentReleaseSpecDigest'),json_extract(identity_json,'$.scenarioRevisionSpecDigest') FROM run_cleanup_history;
 CREATE TABLE IF NOT EXISTS run_retention_cursors(status TEXT PRIMARY KEY,finished_at TEXT NOT NULL,run_id TEXT NOT NULL);
+CREATE VIEW IF NOT EXISTS retained_run_history AS
+ SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at,component_spec_digest,scenario_spec_digest,component_evidence_kind,0 AS cleaned FROM runs
+ UNION ALL SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,0,'',NULL,NULL,0,0,'记录已按保留策略清理',created_at,NULL,finished_at,component_spec_digest,scenario_spec_digest,'',1 FROM run_cleanup_history;
+CREATE VIEW IF NOT EXISTS run_release_visibility AS
+ SELECT runs.id AS run_id,json_extract(step.value,'$.releaseId') AS release_id FROM runs,json_each(execution_snapshot_json,'$.plan.steps') step
+ UNION SELECT h.id,json_extract(step.value,'$.releaseId') FROM run_cleanup_history h,json_each(h.release_locks_json) step;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_log_insert BEFORE INSERT ON run_logs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'Run logs have been archived'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_update BEFORE UPDATE ON runs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.id) BEGIN SELECT RAISE(ABORT,'archived Run core is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_step_update BEFORE UPDATE ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;

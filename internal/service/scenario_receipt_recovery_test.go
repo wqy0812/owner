@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/store"
 	"codex/platform-demo/internal/testutil"
 )
 
@@ -93,7 +93,7 @@ func TestScenarioFailedUpgradeRequiresRecoveryVerificationBeforeNewUpgrade(t *te
 			if phase == "execute" && retryErr == nil {
 				t.Fatal("unsafe upgrade body retry accepted")
 			}
-			failedSnapshot, _ := json.Marshal(failed.InputSnapshot)
+			failedSnapshot, _ := json.Marshal(failed.Snapshot)
 			receipt, err := db.LatestActionReceiptForNode(ctx, formalEnv.ID, original.ComponentID, "", original.NodeID)
 			if err != nil {
 				t.Fatal(err)
@@ -137,7 +137,7 @@ func TestScenarioFailedUpgradeRequiresRecoveryVerificationBeforeNewUpgrade(t *te
 			if err != nil || baseline.State != "complete" || baseline.TestOnly || baseline.RunID != sourceRun.ID {
 				t.Fatalf("recovered baseline=%+v %v", baseline, err)
 			}
-			if verified.InputSnapshot["executionMode"] != "baseline_verify" {
+			if verified.Snapshot.ScenarioExecution.Mode != "baseline_verify" {
 				t.Fatalf("not baseline verification: %+v", verified)
 			}
 			recovered, err := db.IsActionReceiptRecovered(ctx, receipt)
@@ -156,7 +156,7 @@ func TestScenarioFailedUpgradeRequiresRecoveryVerificationBeforeNewUpgrade(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			oldSnapshot, _ := json.Marshal(old.InputSnapshot)
+			oldSnapshot, _ := json.Marshal(old.Snapshot)
 			if old.Status != domain.RunFailed || string(oldSnapshot) != string(failedSnapshot) {
 				t.Fatal("new upgrade changed old failed Run")
 			}
@@ -181,11 +181,11 @@ func TestScenarioBaselineCannotRecoverUnverifiedNewNodeByCheckingOnlyOldNodes(t 
 	runScenarioProtocol(t, p, owner, revision.ID, env.ID, domain.ScenarioExecutionInstall, domain.RunScenarioTest)
 	added := scenarioPlannerRelease(t, p, "introduced-service", "introduced-component", "", domain.ActionInstall)
 	now := time.Now().UTC()
-	failed := domain.Run{ID: "failed-added-component", Kind: domain.RunScenarioTest, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.Revision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &now}
+	failed := domain.Run{ID: "failed-added-component", Kind: domain.RunScenarioTest, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.Revision.ID, ScenarioRevisionID: revision.ID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}
 	if err := testutil.InsertRunRecord(ctx, db.DB(), failed); err != nil {
 		t.Fatal(err)
 	}
-	receipt := store.ActionExecutionReceipt{RunID: failed.ID, StepID: "introduced-install", EnvironmentID: env.ID, ComponentID: added.ComponentID, ReleaseID: added.ID, ActionID: added.ID + "-install", SourceNodeID: "introduced", Status: "started", BackupRef: "/backups/introduced", StartedAt: now, UpdatedAt: now}
+	receipt := domain.ActionExecutionReceipt{RunID: failed.ID, StepID: "introduced-install", EnvironmentID: env.ID, ComponentID: added.ComponentID, ReleaseID: added.ID, ActionID: added.ID + "-install", SourceNodeID: "introduced", Status: "started", BackupRef: "/backups/introduced", StartedAt: now, UpdatedAt: now}
 	if err := db.RecordActionExecution(ctx, receipt); err != nil {
 		t.Fatal(err)
 	}

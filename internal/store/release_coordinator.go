@@ -129,36 +129,6 @@ func (s *Store) PublishComponentRelease(ctx context.Context, id string, expected
 	return publicationWriteError(tx.Commit())
 }
 
-func releaseLocksFromRunSnapshot(snapshot map[string]any) (map[string]string, error) {
-	rawSteps, ok := snapshot["steps"].([]any)
-	if !ok || len(rawSteps) == 0 {
-		return nil, fmt.Errorf("%w: scenario test has no locked steps", domain.ErrConflict)
-	}
-	if parents, ok := snapshot["parentSteps"].([]any); ok {
-		rawSteps = append(append([]any{}, rawSteps...), parents...)
-	}
-	locks := map[string]string{}
-	for _, raw := range rawSteps {
-		step, ok := raw.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("%w: scenario test contains an invalid locked step", domain.ErrConflict)
-		}
-		if step["sourceType"] == "scenario_acceptance" {
-			continue
-		}
-		releaseID, _ := step["releaseId"].(string)
-		digest, _ := step["releaseSpecDigest"].(string)
-		if releaseID == "" || digest == "" {
-			return nil, fmt.Errorf("%w: scenario test step is missing its release definition digest", domain.ErrConflict)
-		}
-		if existing, duplicate := locks[releaseID]; duplicate && existing != digest {
-			return nil, fmt.Errorf("%w: scenario test locked conflicting definitions for release %s", domain.ErrConflict, releaseID)
-		}
-		locks[releaseID] = digest
-	}
-	return locks, nil
-}
-
 func getRunRecord(ctx context.Context, q queryer, id string) (domain.Run, error) {
 	run, err := scanRun(q.QueryRowContext(ctx, runSelect+` WHERE id=?`, id))
 	return run, mapSQLError(err)
@@ -168,7 +138,7 @@ func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run
 	if run.Kind != domain.RunScenarioTest || run.Status != domain.RunSucceeded || run.ScenarioRevisionID != revision.ID {
 		return nil, fmt.Errorf("%w: Run is not successful evidence for this scenario revision", domain.ErrConflict)
 	}
-	mode, _ := run.InputSnapshot["executionMode"].(string)
+	mode := run.Snapshot.ScenarioExecution.Mode
 	if mode != "install" && mode != "upgrade" {
 		return nil, domain.ErrConflict
 	}
@@ -178,11 +148,11 @@ func scenarioTestEvidenceMatches(ctx context.Context, tx queryer, run domain.Run
 	if err := validateScenarioAdaptationRead(ctx, tx, revision); err != nil {
 		return nil, err
 	}
-	lockedScenarioDigest, _ := run.InputSnapshot["scenarioRevisionSpecDigest"].(string)
+	lockedScenarioDigest := run.Snapshot.Subject.ScenarioRevisionSpecDigest
 	if lockedScenarioDigest == "" || lockedScenarioDigest != domain.ScenarioRevisionSpecDigest(revision) {
 		return nil, fmt.Errorf("%w: scenario test evidence belongs to a different graph definition", domain.ErrConflict)
 	}
-	locks, err := releaseLocksFromRunSnapshot(run.InputSnapshot)
+	locks, err := run.Snapshot.ReleaseLocks()
 	if err != nil {
 		return nil, err
 	}

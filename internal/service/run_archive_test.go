@@ -2,6 +2,8 @@ package service
 
 import (
 	"archive/tar"
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -32,8 +34,8 @@ func TestRunArchiveRoundTripRedactionAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := domain.Run{ID: "archive-run", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, FinishedAt: &now, InputSnapshot: map[string]any{"password": "DO-NOT-EXPORT", "steps": []any{}}}
-	if err = db.CreateRun(ctx, r, nil); err != nil {
+	r := domain.Run{ID: "archive-run", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, FinishedAt: &now, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node", Variables: map[string]any{"password": "DO-NOT-EXPORT"}}}})}
+	if err = testutil.InsertRunRecord(ctx, db.DB(), r); err != nil {
 		t.Fatal(err)
 	}
 	for _, message := range []string{"first\nline", "last"} {
@@ -166,8 +168,8 @@ func TestArchiveStorageAndCancellationPreserveOnlineData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := domain.Run{ID: "cancel-archive", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, FinishedAt: &now, InputSnapshot: map[string]any{}}
-	if err = db.CreateRun(ctx, r, nil); err != nil {
+	r := domain.Run{ID: "cancel-archive", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{})}
+	if err = testutil.InsertRunRecord(ctx, db.DB(), r); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.AppendRunLog(ctx, domain.RunLog{RunID: r.ID, Stream: "stdout", Message: "keep this", CreatedAt: now}); err != nil {
@@ -213,18 +215,18 @@ func TestAutomaticRetentionProgressesPastProtectedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refs := []any{}
+	refs := []domain.RunInstallationBaseline{}
 	for i := 0; i < 101; i++ {
 		id := fmt.Sprintf("retention-%03d", i)
-		r := domain.Run{ID: id, Kind: domain.RunScenario, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: old, FinishedAt: &old, InputSnapshot: map[string]any{}}
-		if err = db.CreateRun(ctx, r, nil); err != nil {
+		r := domain.Run{ID: id, Kind: domain.RunScenario, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: old, FinishedAt: &old, Snapshot: runfixture.Snapshot(map[string]any{})}
+		if err = testutil.InsertRunRecord(ctx, db.DB(), r); err != nil {
 			t.Fatal(err)
 		}
 		if i < 100 {
-			refs = append(refs, map[string]any{"runId": id})
+			refs = append(refs, domain.RunInstallationBaseline{InstallRunID: id})
 		}
 	}
-	holder := domain.Run{ID: "retention-holder", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: old, FinishedAt: &old, InputSnapshot: map[string]any{"sources": refs}}
+	holder := domain.Run{ID: "retention-holder", Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: old, FinishedAt: &old, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}, InstallationBaseline: refs})}
 	if err = db.CreateRun(ctx, holder, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -284,8 +286,8 @@ func TestCleanupDoesNotResurfaceAnOlderWorkbenchFailure(t *testing.T) {
 	}
 	for i, id := range []string{"workbench-older-failure", "workbench-latest-failure"} {
 		at := now.Add(time.Duration(-100+i) * 24 * time.Hour)
-		r := domain.Run{ID: id, Kind: domain.RunComponentTest, Status: domain.RunFailed, ComponentReleaseID: release.ID, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: at, FinishedAt: &at, InputSnapshot: map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(release)}}
-		if err = db.CreateRun(ctx, r, nil); err != nil {
+		r := domain.Run{ID: id, Kind: domain.RunComponentTest, Status: domain.RunFailed, ComponentReleaseID: release.ID, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: at, FinishedAt: &at, Snapshot: runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(release)})}
+		if err = testutil.InsertRunRecord(ctx, db.DB(), r); err != nil {
 			t.Fatal(err)
 		}
 	}

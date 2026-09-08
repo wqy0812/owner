@@ -1,6 +1,8 @@
 package api
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"net/http"
 	"strings"
@@ -19,8 +21,8 @@ func TestRunActivityContractVisibilityAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := domain.Run{ID: "activity-contract", Kind: domain.RunScenario, Status: domain.RunRunning, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.EnvironmentOwnerID, CreatedAt: time.Now().UTC(), InputSnapshot: map[string]any{}}
-	if err = f.database.CreateRun(ctx, run, nil); err != nil {
+	run := domain.Run{ID: "activity-contract", Kind: domain.RunScenario, Status: domain.RunRunning, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.EnvironmentOwnerID, CreatedAt: time.Now().UTC(), Snapshot: runfixture.Snapshot(map[string]any{})}
+	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, message := range []string{`{"kind":"waiting","stepId":"s","host":"h","task":"ready","result":{"waiting":{"observed":"Pending"}}}`, `{"kind":"result","stepId":"x","result":{"password":"DO-NOT-EXPOSE"}}`} {

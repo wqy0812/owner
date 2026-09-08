@@ -4,7 +4,7 @@ import "embed"
 
 const (
 	// schemaContract is the current database contract accepted by this V1 build.
-	schemaContract = "clusterforge-v1-20260907-no-resource-contract"
+	schemaContract = "clusterforge-v1-20260908-typed-run-snapshot"
 	// CurrentSchemaContract is exposed for offline tools which must emit data for
 	// exactly the schema accepted by this build. Runtime databases must already
 	// use this exact contract.

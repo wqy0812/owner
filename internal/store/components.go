@@ -364,10 +364,10 @@ WHERE id=?
 	AND NOT EXISTS (
 	  SELECT 1
 	  FROM retained_run_history runs
-	    JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
+	    JOIN run_release_visibility step ON step.run_id=runs.id
 	    WHERE runs.scenario_revision_id IS NOT NULL
 	    AND runs.kind IN ('scenario_test','scenario_run')
-	    AND json_extract(step.value, '$.releaseId')=component_releases.id
+	    AND step.release_id=component_releases.id
 	    AND component_releases.status='released'
 	)`, timeText(at), id)
 	if err != nil {
@@ -470,8 +470,8 @@ SELECT
   (SELECT COUNT(DISTINCT r.id) FROM retained_run_history r
    WHERE r.component_release_id=?
       OR (r.kind IN ('scenario_test','scenario_run') AND EXISTS (
-        SELECT 1 FROM json_each(r.input_snapshot_json, '$.steps') step
-        WHERE json_extract(step.value, '$.releaseId')=?
+        SELECT 1 FROM run_release_visibility step
+        WHERE step.run_id=r.id AND step.release_id=?
       ))),
   (SELECT COUNT(*) FROM component_image_builds WHERE release_id=?),
   (SELECT COUNT(*) FROM component_dependencies WHERE upstream_release_id=?),

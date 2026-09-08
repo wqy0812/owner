@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
 
-if ! command -v ansible-playbook >/dev/null 2>&1; then
-  echo "ansible-playbook is not installed; skipping kubeadm component ownership checks"
-  exit 0
+if [ -z "${ANSIBLE_PLAYBOOK:-}" ] || ! command -v "$ANSIBLE_PLAYBOOK" >/dev/null 2>&1; then
+  echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable" >&2
+  exit 1
 fi
+export ANSIBLE_PLAYBOOK
 
 python3 - <<'PY'
 import hashlib
@@ -20,7 +21,7 @@ import tempfile
 import unittest
 
 playbooks = pathlib.Path('examples/ansible/k8s-1.17.5-kubeadm/components')
-ansible = shutil.which('ansible-playbook')
+ansible = os.environ['ANSIBLE_PLAYBOOK']
 
 
 class OwnershipChecks(unittest.TestCase):
@@ -80,7 +81,7 @@ if name == 'kubectl':
     print(json.dumps({'items': [{'metadata': {'uid': uid}} for key, uid in state['resources'].items() if key in args]}))
 elif name == 'docker':
     if args[0] == 'ps':
-        filters = [args[i + 1].removeprefix('label=') for i, arg in enumerate(args) if arg == '--filter']
+        filters = [args[i + 1][len('label='):] if args[i + 1].startswith('label=') else args[i + 1] for i, arg in enumerate(args) if arg == '--filter']
         containers = [c for c in state['containers'] if all(c['Config']['Labels'].get(f.split('=', 1)[0]) == f.split('=', 1)[1] for f in filters)]
         print('\\n'.join(c['Id'] for c in containers))
     elif args[0] == 'inspect':
@@ -153,7 +154,7 @@ else:
                    OWNERSHIP_FAIL_DELETE='1' if fail_delete else '0',
                    ANSIBLE_NOCOLOR='1', ANSIBLE_LOCAL_TEMP=str(self.root / 'ansible'))
         result = subprocess.run([ansible, '-i', str(self.inventory), str(test_playbook), '-e', '@' + str(variables)],
-                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
         self.assertEqual(result.returncode == 0, success, result.stdout)
         if message:
             self.assertIn(message, result.stdout)
@@ -168,7 +169,7 @@ else:
     def test_component_playbooks_parse_with_their_imports(self):
         result = subprocess.run([ansible, '-i', str(self.inventory), '--syntax-check',
                                  *[str(file) for file in sorted(playbooks.glob('*.yml'))]],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=45)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_coredns_missing_receipt_stops_before_cluster_commands(self):

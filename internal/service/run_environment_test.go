@@ -25,17 +25,17 @@ func TestRunEnvironmentStillRejectsQueuedConfigurationDrift(t *testing.T) {
 	run := domain.Run{Kind: domain.RunScenario, EnvironmentID: "environment", EnvironmentRevisionID: "locked"}
 	for _, tc := range []struct {
 		name, current string
-		steps         []lockedStep
+		steps         []domain.RunPlanStep
 		conflict      bool
 	}{
-		{"unchanged", "locked", []lockedStep{{ID: "install"}}, false},
-		{"changed", "new-revision", []lockedStep{{ID: "install"}}, true},
-		{"mixed frozen and new actions", "new-revision", []lockedStep{{SourceParametersFrozen: true}, {ID: "install"}}, true},
-		{"frozen source verification", "new-revision", []lockedStep{{SourceParametersFrozen: true}}, false},
+		{"unchanged", "locked", []domain.RunPlanStep{{ID: "install"}}, false},
+		{"changed", "new-revision", []domain.RunPlanStep{{ID: "install"}}, true},
+		{"mixed frozen and new actions", "new-revision", []domain.RunPlanStep{{SourceParametersFrozen: true}, {ID: "install"}}, true},
+		{"frozen source verification", "new-revision", []domain.RunPlanStep{{SourceParametersFrozen: true}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder := &PlanBuilder{store: runEnvironmentFixture{current: tc.current}}
-			err := builder.verifyRunEnvironment(context.Background(), run, lockedPlan{Steps: tc.steps})
+			err := builder.verifyRunEnvironment(context.Background(), run, domain.RunExecutionPlan{Steps: tc.steps})
 			if errors.Is(err, domain.ErrConflict) != tc.conflict || (!tc.conflict && err != nil) {
 				t.Fatalf("configuration drift guard: %v", err)
 			}

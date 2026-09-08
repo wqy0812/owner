@@ -4,7 +4,6 @@ import (
 	"codex/platform-demo/internal/domain"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -12,14 +11,6 @@ import (
 // JSON references are explicit identity fields, not substring matches against
 // messages, parameters or backup paths. The same predicate fences all writers.
 const runReferenceKeySQL = `('installRunId','backupInstallRunId','sourceRunId','baselineRunId','retryOfRunId','retryRootRunId','install_run_id','runId')`
-
-// Locked step variables and resolved parameter values are user data. Even a
-// nested field named runId in those values is not a platform history reference.
-// Authoritative rollback identities are retained separately in step.backup and
-// installationBaseline. Use this same predicate for reads and final writes.
-const runSnapshotReferenceSQL = `j.key IN ` + runReferenceKeySQL + ` AND j.type='text'
- AND j.fullkey NOT LIKE '$.steps[%].variables.%'
- AND j.fullkey NOT LIKE '$.resolvedParametersByNode.%'`
 
 func cleanupPreview(ctx context.Context, q queryer, id string, days int, now time.Time) (domain.RunCleanupPreview, error) {
 	p := domain.RunCleanupPreview{RunID: id, Reasons: []string{}}
@@ -45,7 +36,7 @@ func cleanupPreview(ctx context.Context, q queryer, id string, days int, now tim
 		{`SELECT EXISTS(SELECT 1 FROM environment_component_installations WHERE install_run_id=? OR EXISTS(SELECT 1 FROM json_tree(backup_metadata_json) j WHERE j.key IN ` + runReferenceKeySQL + ` AND j.type='text' AND j.value=?))`, "被环境安装记录或安装备份引用"},
 		{`SELECT EXISTS(SELECT 1 FROM runs WHERE id<>? AND (retry_of_run_id=? OR retry_root_run_id=?))`, "被其他 Run 的续跑链引用"},
 		{`SELECT EXISTS(SELECT 1 FROM action_execution_receipts WHERE run_id=? OR EXISTS(SELECT 1 FROM json_tree(backup_json) j WHERE j.key IN ` + runReferenceKeySQL + ` AND j.type='text' AND j.value=?))`, "被操作及恢复记录引用"},
-		{`SELECT EXISTS(SELECT 1 FROM runs WHERE id<>? AND EXISTS(SELECT 1 FROM json_tree(input_snapshot_json) j WHERE ` + runSnapshotReferenceSQL + ` AND j.value=?))`, "被执行快照中的安装来源或回滚备份引用"},
+		{`SELECT EXISTS(SELECT 1 FROM run_snapshot_references WHERE run_id<>? AND referenced_run_id=?)`, "被执行快照中的安装来源或回滚备份引用"},
 		{`SELECT EXISTS(SELECT 1 FROM scenario_installations WHERE run_id=? OR mutating_run_id=?)`, "被场景完整版本或部分变更引用"},
 		{`SELECT EXISTS(SELECT 1 FROM scenario_execution_submissions WHERE run_id=? AND run_id=?)`, "被场景幂等提交记录引用"},
 	}
@@ -111,32 +102,21 @@ func (s *Store) CleanupRuns(ctx context.Context, ids []string, actor, source str
 		}
 	}
 	for _, id := range ids {
-		r, e := getRunRecord(ctx, tx, id)
+		r, e := getRunIdentity(ctx, tx, id)
 		if e != nil {
 			return e
 		}
-		identity := map[string]any{"cleaned": true}
-		for _, key := range []string{"componentReleaseSpecDigest", "scenarioRevisionSpecDigest", "environmentRevisionId"} {
-			if v, ok := r.InputSnapshot[key].(string); ok {
-				identity[key] = v
-			}
+		var raw string
+		// Decode only retained identity fields; timeout, inputs and delivery
+		// observations are deliberately outside the cleanup decoding boundary.
+		if e = tx.QueryRowContext(ctx, `SELECT json_object('subject',json_extract(execution_snapshot_json,'$.subject'),'plan',json_extract(execution_snapshot_json,'$.plan')) FROM runs WHERE id=?`, id).Scan(&raw); e != nil {
+			return e
 		}
-		// Only Release identities remain for visibility, lifecycle guards and workload
-		// ordering. No parameters, error output, locked plan or credential data remain.
-		steps := []map[string]any{}
-		seen := map[string]bool{}
-		if rows, ok := r.InputSnapshot["steps"].([]any); ok {
-			for _, v := range rows {
-				if row, ok := v.(map[string]any); ok {
-					if release, ok := row["releaseId"].(string); ok && release != "" && !seen[release] {
-						steps = append(steps, map[string]any{"releaseId": release, "releaseSpecDigest": row["releaseSpecDigest"]})
-						seen[release] = true
-					}
-				}
-			}
+		identity, e := domain.DecodeRunCleanupIdentity([]byte(raw))
+		if e != nil {
+			return e
 		}
-		identity["steps"] = steps
-		_, err = tx.ExecContext(ctx, `INSERT INTO run_cleanup_history(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,created_at,finished_at,cleaned_at,actor_id,reason,identity_json) VALUES(?,?,'failed',?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, timeText(r.CreatedAt), ptrTimeText(r.FinishedAt), timeText(now), actor, source, jsonText(identity))
+		_, err = tx.ExecContext(ctx, `INSERT INTO run_cleanup_history(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,created_at,finished_at,cleaned_at,actor_id,reason,component_spec_digest,scenario_spec_digest,release_locks_json) VALUES(?,?,'failed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, timeText(r.CreatedAt), ptrTimeText(r.FinishedAt), timeText(now), actor, source, nullString(identity.ComponentReleaseSpecDigest), nullString(identity.ScenarioRevisionSpecDigest), jsonText(identity.ReleaseLocks))
 		if err != nil {
 			return err
 		}
@@ -173,36 +153,33 @@ func validateNewRunReferences(ctx context.Context, tx *sql.Tx, r domain.Run) err
 	if r.RetryRootRunID != "" {
 		refs[r.RetryRootRunID] = true
 	}
-	b, err := json.Marshal(r.InputSnapshot)
-	if err != nil {
-		return err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT j.value FROM json_tree(?) j WHERE `+runSnapshotReferenceSQL+` AND j.value<>''`, string(b))
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
+	for _, id := range r.Snapshot.ReferencedRunIDs() {
 		if id != r.ID {
 			refs[id] = true
 		}
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
 	for id := range refs {
 		var exists int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE id=?`, id).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE id=?`, id).Scan(&exists); err != nil {
 			return err
 		}
 		if exists != 1 {
 			return fmt.Errorf("%w: 引用的 Run %s 不存在或已清理", domain.ErrConflict, id)
+		}
+	}
+	return nil
+}
+
+func replaceRunSnapshotReferences(ctx context.Context, tx *sql.Tx, r domain.Run) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM run_snapshot_references WHERE run_id=?", r.ID); err != nil {
+		return err
+	}
+	for _, id := range r.Snapshot.ReferencedRunIDs() {
+		if id == r.ID {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO run_snapshot_references(run_id,referenced_run_id) VALUES(?,?)", r.ID, id); err != nil {
+			return err
 		}
 	}
 	return nil

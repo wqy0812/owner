@@ -113,8 +113,8 @@ func scenarioRoleContinuation(t *testing.T, binary string) {
 			if source.Status != domain.RunFailed {
 				t.Fatalf("source=%s %s", source.Status, source.Error)
 			}
-			snapshot := source.InputSnapshot
-			original, err := mapToPlan(snapshot)
+			snapshot := source.Snapshot
+			original, err := planFromRun(source)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,7 +172,7 @@ func scenarioRoleContinuation(t *testing.T, binary string) {
 					t.Fatal("failed Run was exported as a verified delivery")
 				}
 			}
-			continuation, err := mapToPlan(next.InputSnapshot)
+			continuation, err := planFromRun(next)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func scenarioRoleContinuation(t *testing.T, binary string) {
 				}
 			}
 			unchanged, _ := db.GetRun(ctx, source.ID)
-			if !reflect.DeepEqual(unchanged.InputSnapshot, snapshot) {
+			if !reflect.DeepEqual(unchanged.Snapshot, snapshot) {
 				t.Fatal("source history was modified")
 			}
 			state, err := db.GetScenarioInstallation(ctx, env.ID, revision.ScenarioID)

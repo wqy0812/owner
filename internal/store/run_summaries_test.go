@@ -2,6 +2,7 @@ package store
 
 import (
 	"codex/platform-demo/internal/domain"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -58,7 +59,7 @@ type summaryQueryGuard struct {
 
 func (q *summaryQueryGuard) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	q.calls++
-	for _, heavy := range []string{"run_logs", "run_steps", "backup", "input_snapshot_json"} {
+	for _, heavy := range []string{"run_logs", "run_steps", "backup", "execution_snapshot_json"} {
 		if strings.Contains(query, heavy) {
 			panic("summary read accessed " + heavy)
 		}
@@ -91,7 +92,7 @@ func TestBatchCandidatesCoverAllPagesAndExcludeDeliveryChoices(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO approvals(id,run_id,requested_at) SELECT 'approval-'||id,id,created_at FROM runs`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.deliveryRequirements',json('[{"key":"choice"}]')) WHERE id='history-000000'`); err != nil {
+	if _, err := runfixture.CorruptSnapshot(context.Background(), s.DB(), `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.delivery.requirements',json('[{"key":"choice"}]')) WHERE id='history-000000'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB().Exec(`UPDATE approvals SET status='approved' WHERE run_id='history-000001'`); err != nil {

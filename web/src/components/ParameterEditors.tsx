@@ -1,7 +1,7 @@
 import { Field } from './Field';
 import { Input, Select, Radio, Checkbox, Button } from 'antd';
 import { ChevronDown } from 'lucide-react';
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type { Component, ComponentDependency, ComponentRelease, ParameterDefinition, ParameterMapping, ParameterType, ParameterValueProvider } from '../types/domain';
 const PARAMETER_TYPES: ParameterType[] = ['string', 'boolean', 'integer', 'number', 'object', 'array'];
 const VALUE_PROVIDER_LABELS: Record<ParameterValueProvider, string> = {
@@ -10,6 +10,13 @@ const VALUE_PROVIDER_LABELS: Record<ParameterValueProvider, string> = {
     environment_owner: '环境 Owner 填写',
     upstream_mapping: '上游映射提供',
 };
+function matchesParameterType(value: unknown, type: ParameterType) {
+    if (type === 'array') return Array.isArray(value);
+    if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
+    if (type === 'integer') return typeof value === 'number' && Number.isSafeInteger(value);
+    if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+    return typeof value === type;
+}
 export function emptyParameter(): ParameterDefinition {
     return { name: '', description: '', type: 'string', required: false, visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '', enum: undefined };
 }
@@ -94,6 +101,8 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
         if (seen.has(parameter.name))
             errors.push(`参数 ${parameter.name} 重复`);
         seen.add(parameter.name);
+        if (parameter.enum?.some(value => !matchesParameterType(value, parameter.type)))
+            errors.push(`参数 ${parameter.name} 的枚举必须全部符合 ${parameter.type} 类型`);
         if (/(password|secret|token|private[_-]?key|encryption[_-]?key|credential)/i.test(parameter.name) && !parameter.name.toLowerCase().endsWith('_version')) {
             errors.push(`敏感参数 ${parameter.name} 必须使用 CredentialRef`);
         }
@@ -147,14 +156,22 @@ export function parameterContractErrors(parameters: ParameterDefinition[], depen
     }
     return [...new Set(errors)];
 }
-export function ParameterTable({ parameters, onChange, disabled }: {
+export function ParameterTable({ parameters, onChange, disabled, onValidationChange }: {
     parameters: ParameterDefinition[];
     onChange: (parameters: ParameterDefinition[]) => void;
     disabled?: boolean;
+    onValidationChange?: (valid: boolean) => void;
 }) {
     const [expandedIndex, setExpandedIndex] = useState<number>();
+    const [enumErrors, setEnumErrors] = useState<Record<number, string>>({});
+    const [enumDrafts, setEnumDrafts] = useState<Record<number, string>>({});
+    useEffect(() => onValidationChange?.(!Object.values(enumErrors).some(Boolean)), [enumErrors, onValidationChange]);
     const tableId = useId();
     function update(index: number, patch: Partial<ParameterDefinition>) {
+        if (patch.type) {
+            setEnumErrors(errors => { const next = { ...errors }; delete next[index]; return next; });
+            setEnumDrafts(drafts => { const next = { ...drafts }; delete next[index]; return next; });
+        }
         onChange(parameters.map((item, current) => current === index ? { ...item, ...patch } : item));
     }
     function changeProvider(index: number, valueProvider: ParameterValueProvider) {
@@ -171,6 +188,8 @@ export function ParameterTable({ parameters, onChange, disabled }: {
         onChange(parameters.map((item, current) => current === index ? base : item));
     }
     function removeParameter(index: number) {
+        setEnumDrafts(drafts => Object.fromEntries(Object.entries(drafts).filter(([key]) => Number(key) !== index).map(([key, text]) => [Number(key) > index ? Number(key) - 1 : Number(key), text])));
+        setEnumErrors(errors => Object.fromEntries(Object.entries(errors).filter(([key]) => Number(key) !== index).map(([key, error]) => [Number(key) > index ? Number(key) - 1 : Number(key), error])));
         onChange(parameters.filter((_, current) => current !== index));
         setExpandedIndex((current) => current === undefined || current < index ? current : current === index ? undefined : current - 1);
     }
@@ -184,7 +203,7 @@ export function ParameterTable({ parameters, onChange, disabled }: {
             const displayName = parameter.name || `未命名参数 ${index + 1}`;
             const editorId = `${tableId}-parameter-${index}`;
             const enumRequired = (parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && (parameter.type === 'object' || parameter.type === 'array');
-            return <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}${expanded ? ' is-expanded' : ''}`}>
+            return <article key={index} className={`parameter-card parameter-card--${parameter.visibility}${expanded ? ' is-expanded' : ''}`}>
       <button type="button" className="parameter-card__summary" aria-label={`${expanded ? '收起' : '编辑'}参数 ${displayName}`} aria-expanded={expanded} aria-controls={editorId} onClick={() => setExpandedIndex(expanded ? undefined : index)}>
         <span className="parameter-card__identity"><strong>{displayName}</strong><small>{parameter.description || '尚未填写说明'}</small></span>
         <span className="parameter-card__meta">
@@ -237,7 +256,7 @@ export function ParameterTable({ parameters, onChange, disabled }: {
       <section className="parameter-card__section" aria-labelledby={`${editorId}-validation`}>
         <h3 id={`${editorId}-validation`}>校验约束</h3>
         <div className="parameter-card__fields">
-        <Field required={enumRequired} label={"枚举"}><Input aria-required={enumRequired} aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })}/></Field>
+        <Field required={enumRequired} label={"枚举"}><ParameterEnumEditor key={parameter.type} parameter={parameter} required={enumRequired} disabled={disabled} onChange={values => update(index, { enum: values })} text={enumDrafts[index]} onTextChange={text => setEnumDrafts(drafts => ({ ...drafts, [index]: text }))} error={enumErrors[index]} onError={error => setEnumErrors(errors => ({ ...errors, [index]: error }))}/></Field>
         {parameter.type === 'string' ? <Field label={"最小长度"}><Input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })}/></Field> : null}
         </div>
       </section>
@@ -248,6 +267,22 @@ export function ParameterTable({ parameters, onChange, disabled }: {
     {!disabled && <Button className="button button--secondary" onClick={addParameter} htmlType={"button"} type="default">新增参数</Button>}
   </div>;
 }
+function ParameterEnumEditor({ parameter, required, disabled, onChange, error, onError, text, onTextChange }: {
+    parameter: ParameterDefinition; required: boolean; disabled?: boolean;
+    onChange: (values: unknown[]) => void; error?: string; onError: (error: string) => void; text?: string; onTextChange: (text: string) => void;
+}) {
+    const format = () => parameter.type === 'string' ? (parameter.enum ?? []).join(', ') : parameter.enum?.length ? JSON.stringify(parameter.enum) : '';
+    return <><Input aria-required={required} aria-invalid={!!error} aria-label="枚举" disabled={disabled} value={text ?? format()}
+        placeholder={parameter.type === 'string' ? '逗号分隔' : parameter.type === 'object' ? '[{"mode":"safe"},{"mode":"fast"}]' : parameter.type === 'array' ? '[["a"],["b","c"]]' : '[1,2]'}
+        onChange={event => {
+            const next = event.target.value; onTextChange(next);
+            try {
+                const values = parameter.type === 'string' ? next.split(',').map(value => value.trim()).filter(Boolean) : JSON.parse(next.trim() || '[]');
+                if (!Array.isArray(values) || values.some(value => !matchesParameterType(value, parameter.type))) throw new Error();
+                onError(''); onChange(values);
+            } catch { onError(`请输入元素类型为 ${parameter.type} 的 JSON 数组`); }
+        }}/>{parameter.type !== 'string' && <small>填写 JSON 数组，每项都是一个可选值。</small>}{error && <small role="alert">{error}</small>}</>;
+}
 export function ParameterValueEditor({ id, parameter, value, disabled, optional, onChange }: {
     id?: string;
     parameter: Pick<ParameterDefinition, 'name' | 'type' | 'enum'>;
@@ -257,7 +292,7 @@ export function ParameterValueEditor({ id, parameter, value, disabled, optional,
     onChange: (value: unknown) => void;
 }) {
     if (parameter.enum?.length) {
-        return <Select id={id} aria-label={`${parameter.name} 的值`} value={value === undefined ? '' : JSON.stringify(value)} disabled={disabled} onChange={(selectedValue) => onChange(selectedValue === '' ? undefined : JSON.parse(selectedValue))} popupMatchSelectWidth={true}><Select.Option value="">{optional ? '未填写' : '请选择'}</Select.Option>{parameter.enum.map((item) => <Select.Option key={JSON.stringify(item)} value={JSON.stringify(item)}>{String(item)}</Select.Option>)}</Select>;
+        return <Select id={id} aria-label={`${parameter.name} 的值`} value={value === undefined ? '' : JSON.stringify(value)} disabled={disabled} onChange={(selectedValue) => onChange(selectedValue === '' ? undefined : JSON.parse(selectedValue))} popupMatchSelectWidth={true}><Select.Option value="">{optional ? '未填写' : '请选择'}</Select.Option>{parameter.enum.map((item) => <Select.Option key={JSON.stringify(item)} value={JSON.stringify(item)}>{typeof item === 'object' ? JSON.stringify(item) : String(item)}</Select.Option>)}</Select>;
     }
     if (parameter.type === 'boolean') {
         return <Select id={id} aria-label={`${parameter.name} 的值`} value={value === undefined ? '' : String(Boolean(value))} disabled={disabled} onChange={(selectedValue) => onChange(selectedValue === '' ? undefined : selectedValue === 'true')} popupMatchSelectWidth={true}>

@@ -226,15 +226,15 @@ func (s *Store) WorkbenchSubjects(ctx context.Context, user domain.User) (out Wo
 	return out, tx.Commit()
 }
 
-func readWorkbenchRuns(ctx context.Context, q queryer, query string, args ...any) ([]domain.Run, error) {
+func readWorkbenchRuns(ctx context.Context, q queryer, query string, args ...any) ([]domain.RunReadModel, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []domain.Run{}
+	out := []domain.RunReadModel{}
 	for rows.Next() {
-		r, e := scanRun(rows)
+		r, e := scanRunReadModel(rows)
 		if e != nil {
 			return nil, e
 		}
@@ -243,29 +243,30 @@ func readWorkbenchRuns(ctx context.Context, q queryer, query string, args ...any
 	return out, rows.Err()
 }
 
-func (s *Store) WorkbenchRuns(ctx context.Context, user domain.User) ([]domain.Run, error) {
+func (s *Store) WorkbenchRuns(ctx context.Context, user domain.User) ([]domain.RunReadModel, error) {
 	where, args := runVisibility(user)
 	// Rank identities, not JSON plans. Retention tombstones must participate so
 	// deleting a newer success never resurrects a superseded failure.
 	query := `WITH visible AS MATERIALIZED (SELECT id,status,created_at,kind,environment_id,component_release_id,scenario_revision_id,action_kind FROM retained_run_history runs WHERE ` + where + `), ranked AS (
 SELECT id,status,ROW_NUMBER() OVER(PARTITION BY kind,environment_id,COALESCE(component_release_id,''),CASE WHEN component_release_id IS NOT NULL THEN '' ELSE COALESCE(scenario_revision_id,'') END,CASE WHEN component_release_id IS NOT NULL THEN action_kind ELSE '' END ORDER BY created_at DESC,id DESC) AS position FROM visible)
 `
-	selection := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1)
-	selection = strings.Replace(selection, "input_snapshot_json", `CASE WHEN status IN ('running','queued','awaiting_approval','failed','interrupted') THEN input_snapshot_json ELSE '{"cleaned":true}' END`, 1)
+	selection := `SELECT ` + runReadColumns + `,CASE WHEN status IN ('running','queued','awaiting_approval','failed','interrupted') THEN ` + runReadStepsSQL + ` ELSE '[]' END,'[]' FROM retained_run_history runs`
 	query += selection + ` WHERE id IN (SELECT id FROM ranked WHERE position=1 OR status IN ('running','queued','awaiting_approval')) ORDER BY created_at DESC,id DESC`
 	return readWorkbenchRuns(ctx, s.db, query, args...)
 }
 
-func (s *Store) WorkbenchComponentRun(ctx context.Context, user domain.User, releaseID, digest string) ([]domain.Run, error) {
+func (s *Store) WorkbenchComponentRun(ctx context.Context, user domain.User, releaseID, digest string) ([]domain.RunReadModel, error) {
 	where, args := runVisibility(user)
 	args = append([]any{releaseID, digest}, args...)
-	query := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE component_release_id=? AND component_spec_digest=? AND kind='component_test' AND (` + where + `) ORDER BY created_at DESC,id DESC LIMIT 1`
+	// Select the bounded identity before evaluating step JSON projections. A
+	// compound history view may otherwise evaluate every candidate before LIMIT.
+	query := runReadSelect + ` WHERE id IN (SELECT id FROM retained_run_history runs WHERE component_release_id=? AND component_spec_digest=? AND kind='component_test' AND (` + where + `) ORDER BY created_at DESC,id DESC LIMIT 1)`
 	return readWorkbenchRuns(ctx, s.db, query, args...)
 }
 
 // No fixed history cutoff: callers advance this keyset until the required
 // exact-contract evidence is found or candidates are exhausted.
-func (s *Store) WorkbenchScenarioRuns(ctx context.Context, user domain.User, revisionID, digest string, success bool, before time.Time, beforeID string) ([]domain.Run, error) {
+func (s *Store) WorkbenchScenarioRuns(ctx context.Context, user domain.User, revisionID, digest string, success bool, before time.Time, beforeID string) ([]domain.RunReadModel, error) {
 	where, args := runVisibility(user)
 	where = `scenario_revision_id=? AND kind='scenario_test' AND (` + where + `)`
 	args = append([]any{revisionID}, args...)
@@ -280,7 +281,7 @@ func (s *Store) WorkbenchScenarioRuns(ctx context.Context, user domain.User, rev
 		where += ` AND (created_at<? OR (created_at=? AND id<?))`
 		args = append(args, timeText(before), timeText(before), beforeID)
 	}
-	query := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE ` + where + ` ORDER BY created_at DESC,id DESC LIMIT 64`
+	query := runReadSelect + ` WHERE id IN (SELECT id FROM retained_run_history runs WHERE ` + where + ` ORDER BY created_at DESC,id DESC LIMIT 64) ORDER BY created_at DESC,id DESC`
 	return readWorkbenchRuns(ctx, s.db, query, args...)
 }
 
@@ -291,7 +292,7 @@ type WorkbenchMetadata struct {
 	Revisions  map[string]domain.ScenarioRevision
 }
 
-func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []domain.Run) (out WorkbenchMetadata, err error) {
+func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []domain.RunReadModel) (out WorkbenchMetadata, err error) {
 	out = WorkbenchMetadata{map[string]domain.Component{}, map[string]domain.ComponentRelease{}, map[string]domain.Scenario{}, map[string]domain.ScenarioRevision{}}
 	releaseIDs, revisionIDs := map[string]bool{}, map[string]bool{}
 	for _, r := range runs {

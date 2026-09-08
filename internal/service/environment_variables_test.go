@@ -36,18 +36,18 @@ func TestNormalizeEnvironmentVariablesAndRegistry(t *testing.T) {
 
 func TestInjectEnvironmentVariablesDirectlyAndRejectsCollisions(t *testing.T) {
 	revision := domain.EnvironmentRevision{Variables: map[string]string{"IMAGE_REGISTRY": "registry.example.test:5000"}}
-	steps := []lockedStep{{Variables: map[string]any{"component_version": "1.0.0"}}}
+	steps := []domain.RunPlanStep{{Variables: map[string]any{"component_version": "1.0.0"}}}
 	if err := injectEnvironmentVariables(revision, steps); err != nil {
 		t.Fatal(err)
 	}
 	if steps[0].Variables["IMAGE_REGISTRY"] != "registry.example.test:5000" {
 		t.Fatalf("variables=%#v", steps[0].Variables)
 	}
-	if err := injectEnvironmentVariables(revision, []lockedStep{{Variables: map[string]any{"IMAGE_REGISTRY": "override"}}}); err == nil || !strings.Contains(err.Error(), "component parameter") {
+	if err := injectEnvironmentVariables(revision, []domain.RunPlanStep{{Variables: map[string]any{"IMAGE_REGISTRY": "override"}}}); err == nil || !strings.Contains(err.Error(), "component parameter") {
 		t.Fatalf("component collision err=%v", err)
 	}
 	revision.CredentialRefs = []domain.CredentialRef{{Name: "IMAGE_REGISTRY", Kind: "envVarRef", Reference: "REGISTRY_REF"}}
-	if err := injectEnvironmentVariables(revision, []lockedStep{{Variables: map[string]any{}}}); err == nil || !strings.Contains(err.Error(), "CredentialRef") {
+	if err := injectEnvironmentVariables(revision, []domain.RunPlanStep{{Variables: map[string]any{}}}); err == nil || !strings.Contains(err.Error(), "CredentialRef") {
 		t.Fatalf("credential collision err=%v", err)
 	}
 }

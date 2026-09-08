@@ -11,7 +11,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan lockedPlan) error {
+func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan domain.RunExecutionPlan) error {
 	seen := map[string]bool{}
 	for _, step := range plan.Steps {
 		for _, media := range step.Media {
@@ -37,7 +37,7 @@ func (e *DeliveryService) verifyLockedMedia(ctx context.Context, plan lockedPlan
 	return nil
 }
 
-func (e *DeliveryService) mirrorRunImages(ctx context.Context, runID string, plan *lockedPlan) error {
+func (e *DeliveryService) mirrorRunImages(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error {
 	for _, transfer := range plan.ImageTransfers {
 		_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("mirroring image from %s to %s", transfer.SourceRegistry, transfer.TargetRegistry), CreatedAt: time.Now().UTC()})
 		if err := e.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: transfer.TargetDigest}, mediadelivery.ImageDigest{Value: transfer.TargetDigest}); err == nil {
@@ -68,7 +68,7 @@ func (e *DeliveryService) mirrorRunImages(ctx context.Context, runID string, pla
 	return nil
 }
 
-func (e *DeliveryService) mirrorRunArtifacts(ctx context.Context, runID string, plan *lockedPlan) error {
+func (e *DeliveryService) mirrorRunArtifacts(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error {
 	for _, transfer := range plan.ArtifactTransfers {
 		message := fmt.Sprintf("mirroring media %s from %s to %s", transfer.Alias, transfer.SourceURL, transfer.TargetStation)
 		_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: message, CreatedAt: time.Now().UTC()})
@@ -102,7 +102,7 @@ func (e *DeliveryService) mirrorRunArtifacts(ctx context.Context, runID string, 
 	return nil
 }
 
-func (e *DeliveryService) recordDeliveryResult(ctx context.Context, runID string, plan *lockedPlan, requirementID, status, location, message string) error {
+func (e *DeliveryService) recordDeliveryResult(ctx context.Context, runID string, plan *domain.RunExecutionPlan, requirementID, status, location, message string) error {
 	now := time.Now().UTC()
 	for index := range plan.DeliveryResults {
 		if plan.DeliveryResults[index].RequirementID == requirementID {
@@ -114,4 +114,41 @@ func (e *DeliveryService) recordDeliveryResult(ctx context.Context, runID string
 		}
 	}
 	return fmt.Errorf("%w: delivery result %s is missing from locked plan", domain.ErrConflict, requirementID)
+}
+
+// Retry attempts re-observe direct or previously present media as well as newly
+// transferred media. Results are recorded only after content verification.
+func (e *DeliveryService) verifyRunMedia(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error {
+	if err := e.verifyLockedMedia(ctx, *plan); err != nil {
+		return err
+	}
+	for _, result := range append([]domain.RunDeliveryResult{}, plan.DeliveryResults...) {
+		if result.Status != "pending" {
+			continue
+		}
+		for _, req := range plan.DeliveryRequirements {
+			if req.ID == result.RequirementID {
+				status, location := "direct", req.Source
+				if result.Mode == "transfer" {
+					status, location = "reused_target", req.Target
+				}
+				var err error
+				switch req.Kind {
+				case "artifact":
+					err = e.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{URL: location}, mediadelivery.ArtifactIdentity{SHA256: strings.TrimPrefix(req.Identity, "sha256:"), SizeBytes: req.SizeBytes})
+				case "image":
+					err = e.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: location}, mediadelivery.ImageDigest{Value: req.Identity})
+				default:
+					err = fmt.Errorf("unknown media requirement kind %q", req.Kind)
+				}
+				if err != nil {
+					return err
+				}
+				if err := e.recordDeliveryResult(ctx, runID, plan, req.ID, status, location, "locked content verified for this attempt"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

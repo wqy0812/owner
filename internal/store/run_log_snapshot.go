@@ -10,11 +10,11 @@ import (
 )
 
 type RunLogSnapshot struct {
-	Run        domain.Run         `json:"run"`
-	CapturedAt time.Time          `json:"capturedAt"`
-	LastLogID  int64              `json:"lastLogId"`
-	LogCount   int64              `json:"logCount"`
-	Archive    *domain.RunArchive `json:"-"`
+	Run        domain.RunReadModel `json:"run"`
+	CapturedAt time.Time           `json:"capturedAt"`
+	LastLogID  int64               `json:"lastLogId"`
+	LogCount   int64               `json:"logCount"`
+	Archive    *domain.RunArchive  `json:"-"`
 }
 
 // StreamRunLogSnapshot binds the run, steps, archive decision and log boundary
@@ -25,15 +25,11 @@ func (s *Store) StreamRunLogSnapshot(ctx context.Context, id string, visit func(
 		return out, err
 	}
 	defer tx.Rollback()
-	out.Run, err = getRunRecord(ctx, tx, id)
+	out.Run, err = getRunDiagnosticRecord(ctx, tx, id)
 	if err != nil {
 		return out, err
 	}
 	out.CapturedAt = time.Now().UTC()
-	out.Run.Steps, err = listRunSteps(ctx, tx, id)
-	if err != nil {
-		return out, err
-	}
 	a, err := readRunArchive(ctx, tx, id)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, sql.ErrNoRows) {
 		return out, err

@@ -12,7 +12,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (lockedPlan, error) {
+func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (domain.RunExecutionPlan, error) {
 	if len(plan.DeliveryRequirements) == 0 {
 		if len(inputs) != 0 {
 			return plan, fmt.Errorf("%w: run has no delivery requirements", domain.ErrInvalid)
@@ -49,9 +49,9 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 		if !ok {
 			return plan, fmt.Errorf("%w: delivery requirement %s has no decision", domain.ErrInvalid, requirement.ID)
 		}
-		decision := mediadelivery.Decision{RequirementID: requirement.ID, Mode: input.Mode, DecidedBy: user.ID, DecidedAt: at}
+		decision := domain.RunDeliveryDecision{RequirementID: requirement.ID, Mode: input.Mode, DecidedBy: user.ID, DecidedAt: at}
 		plan.DeliveryDecisions = append(plan.DeliveryDecisions, decision)
-		result := mediadelivery.Result{RequirementID: requirement.ID, Mode: input.Mode, Status: "pending"}
+		result := domain.RunDeliveryResult{RequirementID: requirement.ID, Mode: input.Mode, Status: "pending"}
 		location := requirement.Source
 		if input.Mode == "transfer" {
 			if !requirement.TransferAvailable || requirement.Target == "" {
@@ -65,13 +65,13 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 			if present {
 				result.Status, result.ActualLocation, result.CompletedAt = "reused_target", location, &at
 			} else if requirement.Kind == "artifact" {
-				plan.ArtifactTransfers = append(plan.ArtifactTransfers, mediadelivery.PlannedArtifactTransfer{
+				plan.ArtifactTransfers = append(plan.ArtifactTransfers, domain.RunArtifactTransfer{
 					RequirementID: requirement.ID, Alias: requirement.Name, SourceURL: requirement.Source,
 					TargetStation: requirement.TargetStation, RelativePath: requirement.RelativePath,
 					SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes,
 				})
 			} else {
-				plan.ImageTransfers = append(plan.ImageTransfers, mediadelivery.PlannedImageTransfer{
+				plan.ImageTransfers = append(plan.ImageTransfers, domain.RunImageTransfer{
 					RequirementID: requirement.ID, SourceRegistry: requirement.SourceRegistry, TargetRegistry: requirement.TargetRegistry,
 					SourceDigest: requirement.Source, TargetRef: requirement.TargetRef, TargetDigest: requirement.Target,
 				})
@@ -88,7 +88,7 @@ func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan lockedP
 	return plan, nil
 }
 
-func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement mediadelivery.Requirement) (bool, error) {
+func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement domain.RunDeliveryRequirement) (bool, error) {
 	switch requirement.Kind {
 	case "artifact":
 		err := p.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{FileStation: requirement.TargetStation, RelativePath: requirement.RelativePath}, mediadelivery.ArtifactIdentity{SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes})
@@ -109,7 +109,7 @@ func (p *DeliveryService) deliveryTargetPresent(ctx context.Context, requirement
 	}
 }
 
-func bindDeliveryRequirementVariables(plan *lockedPlan, requirement mediadelivery.Requirement, location string) error {
+func bindDeliveryRequirementVariables(plan *domain.RunExecutionPlan, requirement domain.RunDeliveryRequirement, location string) error {
 	stepSet := make(map[string]bool, len(requirement.StepIDs))
 	for _, id := range requirement.StepIDs {
 		stepSet[id] = true

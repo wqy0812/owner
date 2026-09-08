@@ -3,8 +3,6 @@ package service
 import (
 	"time"
 
-	ansiblerunner "codex/platform-demo/internal/ansible"
-	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -12,76 +10,9 @@ type digestRunner interface {
 	Digest(string) (playbookSHA256, treeSHA256 string, err error)
 }
 
-type lockedStep struct {
-	RollbackSourceVariables map[string]any           `json:"rollbackSourceVariables,omitempty"`
-	RollbackSourceFrozen    bool                     `json:"rollbackSourceFrozen,omitempty"`
-	RollbackSourceActionID  string                   `json:"rollbackSourceActionId,omitempty"`
-	Media                   []ansiblerunner.JobMedia `json:"media,omitempty"`
-	SourceParametersFrozen  bool                     `json:"sourceParametersFrozen,omitempty"`
-	SourceType              string                   `json:"sourceType,omitempty"`
-	ScenarioRevisionID      string                   `json:"scenarioRevisionId,omitempty"`
-	AcceptanceJobID         string                   `json:"acceptanceJobId,omitempty"`
-	Stage                   string                   `json:"stage,omitempty"`
-	MayMutate               bool                     `json:"mayMutate,omitempty"`
-	ParentActionID          string                   `json:"parentActionId"`
-	SourceNodeID            string                   `json:"sourceNodeId"`
-	Phase                   string                   `json:"phase"`
-	Become                  bool                     `json:"become"`
-	ID                      string                   `json:"id"`
-	NodeID                  string                   `json:"nodeId"`
-	Name                    string                   `json:"name"`
-	ComponentID             string                   `json:"componentId"`
-	ComponentName           string                   `json:"componentName"`
-	ReleaseID               string                   `json:"releaseId"`
-	ReleaseVersion          string                   `json:"releaseVersion"`
-	ReleaseSpecDigest       string                   `json:"releaseSpecDigest"`
-	ActionID                string                   `json:"actionId"`
-	Action                  domain.ActionKind        `json:"action"`
-	FromReleaseID           string                   `json:"fromReleaseId,omitempty"`
-	ToReleaseID             string                   `json:"toReleaseId,omitempty"`
-	Playbook                string                   `json:"playbook"`
-	PlaybookDigest          string                   `json:"playbookDigest"`
-	WorkspaceDigest         string                   `json:"workspaceDigest"`
-	Tags                    []string                 `json:"tags"`
-	Limit                   string                   `json:"limit"`
-	Variables               map[string]any           `json:"variables"`
-	RequiredCredentials     []string                 `json:"requiredCredentials"`
-	TimeoutSeconds          int                      `json:"timeoutSeconds"`
-	NeedsApproval           bool                     `json:"needsApproval"`
-	RetrySafe               bool                     `json:"retrySafe"`
-	BackupRef               string                   `json:"backupRef,omitempty"`
-	Backup                  *domain.BackupMetadata   `json:"backup,omitempty"`
-}
-
-type lockedPlan struct {
-	ResetTargets               []InventoryHost                         `json:"resetTargets,omitempty"`
-	ResetBoundaryDigest        string                                  `json:"resetBoundaryDigest,omitempty"`
-	RecoveryEnvironmentDigest  string                                  `json:"recoveryEnvironmentDigest,omitempty"`
-	ParentSteps                []lockedStep                            `json:"parentSteps"`
-	Runtime                    ansiblerunner.JobRuntime                `json:"runtime"`
-	Steps                      []lockedStep                            `json:"steps"`
-	DeliveryRequirements       []mediadelivery.Requirement             `json:"deliveryRequirements,omitempty"`
-	DeliveryDecisions          []mediadelivery.Decision                `json:"deliveryDecisions,omitempty"`
-	DeliveryResults            []mediadelivery.Result                  `json:"deliveryResults,omitempty"`
-	ArtifactTransfers          []mediadelivery.PlannedArtifactTransfer `json:"artifactTransfers,omitempty"`
-	ImageTransfers             []mediadelivery.PlannedImageTransfer    `json:"imageTransfers,omitempty"`
-	TreeDigest                 string                                  `json:"treeDigest"`
-	InstallationBaseline       []lockedInstallationBaseline            `json:"installationBaseline,omitempty"`
-	InstallationBaselineDigest string                                  `json:"installationBaselineDigest,omitempty"`
-}
-
 type DeliveryDecisionInput struct {
 	RequirementID string `json:"requirementId"`
 	Mode          string `json:"mode"`
-}
-
-type lockedInstallationBaseline struct {
-	NodeID         string `json:"nodeId"`
-	ComponentID    string `json:"componentId"`
-	ReleaseID      string `json:"releaseId"`
-	InstallRunID   string `json:"installRunId"`
-	BackupRef      string `json:"backupRef"`
-	PlaybookSHA256 string `json:"playbookSha256"`
 }
 
 type ComponentTestMode string
@@ -139,19 +70,19 @@ type ComponentTestPlanStep struct {
 }
 
 type ComponentTestPlan struct {
-	EnvironmentID         string                      `json:"environmentId"`
-	EnvironmentRevisionID string                      `json:"environmentRevisionId"`
-	Destructive           bool                        `json:"destructive"`
-	RequiresApproval      bool                        `json:"requiresApproval"`
-	PlanDigest            string                      `json:"planDigest"`
-	Steps                 []ComponentTestPlanStep     `json:"steps"`
-	DeliveryRequirements  []mediadelivery.Requirement `json:"deliveryRequirements"`
+	EnvironmentID         string                          `json:"environmentId"`
+	EnvironmentRevisionID string                          `json:"environmentRevisionId"`
+	Destructive           bool                            `json:"destructive"`
+	RequiresApproval      bool                            `json:"requiresApproval"`
+	PlanDigest            string                          `json:"planDigest"`
+	Steps                 []ComponentTestPlanStep         `json:"steps"`
+	DeliveryRequirements  []domain.RunDeliveryRequirement `json:"deliveryRequirements"`
 }
 
 type preparedComponentTest struct {
 	release     domain.ComponentRelease
 	environment domain.Environment
 	action      domain.ActionKind
-	steps       []lockedStep
+	steps       []domain.RunPlanStep
 	provenance  map[string]map[string]resolvedParameter
 }

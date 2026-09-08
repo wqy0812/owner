@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"testing"
 	"time"
@@ -11,52 +12,52 @@ import (
 func TestScenarioReceiptRecoveryRequiresCurrentExactVerifiedBaseline(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(*Store, map[string]any, *ActionExecutionReceipt, time.Time)
+		mutate func(*Store, map[string]any, *domain.ActionExecutionReceipt, time.Time)
 		want   bool
 	}{
 		{name: "restored formal baseline", want: true},
-		{name: "mutating acceptance generation", want: true, mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "mutating acceptance generation", want: true, mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET generation=3`)
 		}},
-		{name: "removed historical baseline is rejected", want: false, mutate: func(_ *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
-			s["historicalBaselineRunId"] = "baseline"
+		{name: "removed historical baseline is rejected", want: false, mutate: func(_ *Store, s map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
+
 			s["baselineRunId"] = ""
-			s["historicalBaselineTestOnly"] = false
+
 		}},
-		{name: "test remains test", want: true, mutate: func(db *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "test remains test", want: true, mutate: func(db *Store, s map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			s["baselineTestOnly"] = true
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET state='test',test_only=1`)
 		}},
-		{name: "no explicit coverage", mutate: func(_ *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "no explicit coverage", mutate: func(_ *Store, s map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			delete(s, "recoveredReceipts")
 		}},
-		{name: "coverage other operation", mutate: func(_ *Store, s map[string]any, r *ActionExecutionReceipt, _ time.Time) {
+		{name: "coverage other operation", mutate: func(_ *Store, s map[string]any, r *domain.ActionExecutionReceipt, _ time.Time) {
 			other := *r
 			other.StepID = "another-step"
-			s["recoveredReceipts"] = []ActionExecutionReceipt{other}
+			s["recoveredReceipts"] = []domain.ActionExecutionReceipt{other}
 		}},
-		{name: "verification predates operation", mutate: func(db *Store, _ map[string]any, r *ActionExecutionReceipt, _ time.Time) {
+		{name: "verification predates operation", mutate: func(db *Store, _ map[string]any, r *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE runs SET finished_at=? WHERE id='verify'`, timeText(r.UpdatedAt.Add(-time.Second)))
 		}},
-		{name: "failed verification", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "failed verification", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE runs SET status='failed' WHERE id='verify'`)
 		}},
-		{name: "ordinary install is not recovery", mutate: func(_ *Store, s map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "ordinary install is not recovery", mutate: func(_ *Store, s map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			s["executionMode"] = "install"
 		}},
-		{name: "later baseline update", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, at time.Time) {
+		{name: "later baseline update", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, at time.Time) {
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET updated_at=?`, timeText(at.Add(time.Second)))
 		}},
-		{name: "partial state", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "partial state", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET state='partial',mutating_run_id='failed'`)
 		}},
-		{name: "baseline identity changed", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "baseline identity changed", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE scenario_installations SET run_id='other'`)
 		}},
-		{name: "actual installation drift", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "actual installation drift", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE environment_component_installations SET backup_ref='replaced'`)
 		}},
-		{name: "later operation", mutate: func(db *Store, _ map[string]any, r *ActionExecutionReceipt, at time.Time) {
+		{name: "later operation", mutate: func(db *Store, _ map[string]any, r *domain.ActionExecutionReceipt, at time.Time) {
 			later := *r
 			later.StepID = "later"
 			later.UpdatedAt = at.Add(time.Second)
@@ -64,7 +65,7 @@ func TestScenarioReceiptRecoveryRequiresCurrentExactVerifiedBaseline(t *testing.
 				panic(err)
 			}
 		}},
-		{name: "receipt bytes changed", mutate: func(db *Store, _ map[string]any, _ *ActionExecutionReceipt, _ time.Time) {
+		{name: "receipt bytes changed", mutate: func(db *Store, _ map[string]any, _ *domain.ActionExecutionReceipt, _ time.Time) {
 			_, _ = db.db.Exec(`UPDATE action_execution_receipts SET backup_ref='other-backup'`)
 		}},
 	} {
@@ -80,7 +81,7 @@ func TestScenarioReceiptRecoveryRequiresCurrentExactVerifiedBaseline(t *testing.
 				insertScenarioSourceRun(t, db, revision, run.id, "scenario_run", run.status, run.mode)
 			}
 			at := time.Now().UTC()
-			receipt := ActionExecutionReceipt{RunID: "failed", StepID: "change", EnvironmentID: "env", ComponentID: "component", ReleaseID: "release", ActionID: "upgrade", SourceNodeID: "runtime", Status: "main_succeeded", BackupRef: "failed-backup", StartedAt: at.Add(-2 * time.Minute), UpdatedAt: at.Add(-time.Minute), Backup: domain.BackupMetadata{InstallRunID: "failed", NodeID: "runtime", CapturedAt: at.Add(-2 * time.Minute)}}
+			receipt := domain.ActionExecutionReceipt{RunID: "failed", StepID: "change", EnvironmentID: "env", ComponentID: "component", ReleaseID: "release", ActionID: "upgrade", SourceNodeID: "runtime", Status: "main_succeeded", BackupRef: "failed-backup", StartedAt: at.Add(-2 * time.Minute), UpdatedAt: at.Add(-time.Minute), Backup: domain.BackupMetadata{InstallRunID: "failed", NodeID: "runtime", CapturedAt: at.Add(-2 * time.Minute)}}
 			if err := db.RecordActionExecution(ctx, receipt); err != nil {
 				t.Fatal(err)
 			}
@@ -93,14 +94,14 @@ func TestScenarioReceiptRecoveryRequiresCurrentExactVerifiedBaseline(t *testing.
 			if err := db.SaveScenarioInstallation(ctx, baseline, 0); err != nil {
 				t.Fatal(err)
 			}
-			snapshot := map[string]any{"scenarioContractVersion": 2, "executionMode": "baseline_verify", "scenarioId": scenario.ID, "baselineRunId": "baseline", "baselineInstallationDigest": digest, "baselineTestOnly": false, "recoveredReceipts": []ActionExecutionReceipt{receipt}}
+			snapshot := map[string]any{"scenarioContractVersion": 2, "executionMode": "baseline_verify", "targetNodes": []domain.ScenarioTargetNode{}, "acceptanceJobIds": []string{}, "scenarioId": scenario.ID, "baselineRunId": "baseline", "baselineInstallationDigest": digest, "baselineTestOnly": false, "recoveredReceipts": []domain.ActionExecutionReceipt{receipt}}
 			if _, err := db.db.Exec(`UPDATE runs SET finished_at=? WHERE id='verify'`, timeText(at)); err != nil {
 				t.Fatal(err)
 			}
 			if tc.mutate != nil {
 				tc.mutate(db, snapshot, &receipt, at)
 			}
-			if _, err := db.db.Exec(`UPDATE runs SET input_snapshot_json=? WHERE id='verify'`, jsonText(snapshot)); err != nil {
+			if _, err := runfixture.CorruptSnapshot(context.Background(), db.db, `UPDATE runs SET execution_snapshot_json=? WHERE id='verify'`, jsonText(runfixture.Snapshot(snapshot))); err != nil {
 				t.Fatal(err)
 			}
 			recovered, err := db.IsActionReceiptRecovered(ctx, receipt)

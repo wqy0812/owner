@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
 
-if ! command -v ansible-playbook >/dev/null 2>&1; then
-  echo "ansible-playbook is not installed; skipping OpenFuyao component gates"
-  exit 0
+if [ -z "${ANSIBLE_PLAYBOOK:-}" ] || ! command -v "$ANSIBLE_PLAYBOOK" >/dev/null 2>&1; then
+  echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable" >&2
+  exit 1
 fi
+export ANSIBLE_PLAYBOOK
 
 snapshot_root="examples/ansible/openfuyao"
 inventory="$snapshot_root/component-bke-contract-test.inventory.ini"
@@ -21,11 +22,11 @@ for playbook in "$snapshot_root"/component-bke-*.platform.yml; do
   case "$playbook" in
     *contract-test.platform.yml) continue ;;
   esac
-  ansible-playbook -i "$inventory" -e "@$variables" --syntax-check "$playbook" >/dev/null
-  ansible-playbook -i "$inventory" -e "@$variables" --list-tasks "$playbook" >/dev/null
+  "$ANSIBLE_PLAYBOOK" -i "$inventory" -e "@$variables" --syntax-check "$playbook" >/dev/null
+  "$ANSIBLE_PLAYBOOK" -i "$inventory" -e "@$variables" --list-tasks "$playbook" >/dev/null
 done
 
-if ansible-playbook -i "$inventory" \
+if "$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=management_cluster_k8smaster \
   -e cluster_role= \
@@ -34,7 +35,7 @@ if ansible-playbook -i "$inventory" \
   exit 1
 fi
 
-if ansible-playbook -i "$inventory" \
+if "$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=work_cluster_k8smaster \
   -e cluster_role=manager "$contract" >/dev/null 2>&1; then
@@ -42,7 +43,7 @@ if ansible-playbook -i "$inventory" \
   exit 1
 fi
 
-if ansible-playbook -i "$inventory" \
+if "$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=work_cluster_k8smaster \
   -e cluster_role=work \
@@ -51,7 +52,7 @@ if ansible-playbook -i "$inventory" \
   exit 1
 fi
 
-if ansible-playbook -i "$inventory" \
+if "$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=work_cluster_k8smaster \
   -e cluster_role=work \
@@ -60,11 +61,11 @@ if ansible-playbook -i "$inventory" \
   exit 1
 fi
 
-ansible-playbook -i "$inventory" \
+"$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=management_cluster_k8smaster \
   -e cluster_role=manager "$contract" >/dev/null
-ansible-playbook -i "$inventory" \
+"$ANSIBLE_PLAYBOOK" -i "$inventory" \
   -e "@$variables" \
   -e target_host_group=work_cluster_k8smaster \
   -e cluster_role=work "$contract" >/dev/null

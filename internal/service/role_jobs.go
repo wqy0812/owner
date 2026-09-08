@@ -11,8 +11,8 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func jobPlanFromLocked(environmentID string, plan lockedPlan, inventory []byte) ansiblerunner.JobPlan {
-	job := ansiblerunner.JobPlan{Contract: ansiblerunner.JobContract, EnvironmentID: environmentID, Runtime: plan.Runtime, Inventory: string(inventory), Metadata: structToMap(plan)}
+func jobPlanFromLocked(environmentID string, plan domain.RunExecutionPlan, inventory []byte) ansiblerunner.JobPlan {
+	job := ansiblerunner.JobPlan{Contract: ansiblerunner.JobContract, EnvironmentID: environmentID, Runtime: nativeRuntime(plan.Runtime), Inventory: string(inventory), Metadata: structToMap(plan)}
 	if plan.ResetBoundaryDigest != "" {
 		scope := resetTaskTargetScope(plan.ResetTargets)
 		// The typed scope is reconstructed below by the executor from the same
@@ -21,7 +21,7 @@ func jobPlanFromLocked(environmentID string, plan lockedPlan, inventory []byte) 
 	}
 	credentials := map[string]bool{}
 	for _, s := range plan.Steps {
-		job.Steps = append(job.Steps, ansiblerunner.JobStep{Media: s.Media, Stage: s.Stage, SourceType: s.SourceType, ScenarioRevisionID: s.ScenarioRevisionID, ID: s.ID, NodeID: s.SourceNodeID, Name: s.Name, ReleaseID: s.ReleaseID, ComponentID: s.ComponentID, ParentActionID: s.ParentActionID, ActionID: s.ActionID, Action: string(s.Action), Phase: s.Phase, Playbook: s.Playbook, PlaybookDigest: s.PlaybookDigest, WorkspaceDigest: s.WorkspaceDigest, Limit: s.Limit, Variables: s.Variables, TimeoutSeconds: s.TimeoutSeconds, Become: s.Become, RetrySafe: s.RetrySafe})
+		job.Steps = append(job.Steps, ansiblerunner.JobStep{Media: nativeMedia(s.Media), Stage: s.Stage, SourceType: s.SourceType, ScenarioRevisionID: s.ScenarioRevisionID, ID: s.ID, NodeID: s.SourceNodeID, Name: s.Name, ReleaseID: s.ReleaseID, ComponentID: s.ComponentID, ParentActionID: s.ParentActionID, ActionID: s.ActionID, Action: string(s.Action), Phase: s.Phase, Playbook: s.Playbook, PlaybookDigest: s.PlaybookDigest, WorkspaceDigest: s.WorkspaceDigest, Limit: s.Limit, Variables: s.Variables, TimeoutSeconds: s.TimeoutSeconds, Become: s.Become, RetrySafe: s.RetrySafe})
 		for _, name := range s.RequiredCredentials {
 			if !credentials[name] {
 				job.RequiredCredentials = append(job.RequiredCredentials, name)
@@ -40,7 +40,7 @@ func connectionCredentials(values map[string]any) map[string]any {
 	}
 	return out
 }
-func lockedStepByID(steps []lockedStep, id string) *lockedStep {
+func lockedStepByID(steps []domain.RunPlanStep, id string) *domain.RunPlanStep {
 	for i := range steps {
 		if steps[i].ID == id {
 			return &steps[i]
@@ -48,7 +48,7 @@ func lockedStepByID(steps []lockedStep, id string) *lockedStep {
 	}
 	return nil
 }
-func parentExecutionStep(steps []lockedStep, check lockedStep) *lockedStep {
+func parentExecutionStep(steps []domain.RunPlanStep, check domain.RunPlanStep) *domain.RunPlanStep {
 	for i := range steps {
 		if steps[i].SourceNodeID == check.SourceNodeID && steps[i].ActionID == check.ParentActionID && steps[i].Phase == "execute" {
 			return &steps[i]
@@ -57,7 +57,7 @@ func parentExecutionStep(steps []lockedStep, check lockedStep) *lockedStep {
 	return nil
 }
 
-func (p *RunExecutor) executeLockedJob(ctx context.Context, run domain.Run, request ansiblerunner.JobRequest) (ansiblerunner.JobResult, error) {
+func (p *RunExecutor) executeLockedJob(ctx context.Context, run domain.Run, plan domain.RunExecutionPlan, request ansiblerunner.JobRequest) (ansiblerunner.JobResult, error) {
 	builder := p.jobs
 	if request.Plan.TaskTargetScope != nil {
 		revision, err := p.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
@@ -68,11 +68,10 @@ func (p *RunExecutor) executeLockedJob(ctx context.Context, run domain.Run, requ
 		if err := json.Unmarshal(revision.Inventory, &inventory); err != nil {
 			return ansiblerunner.JobResult{}, err
 		}
-		plan := lockedPlanFromMetadata(request.Plan.Metadata)
 		scope := resetTaskTargetScopeWithInventory(plan.ResetTargets, inventory)
 		request.Plan.TaskTargetScope = &scope
 	}
-	if err := p.rollback.addRecoverySteps(ctx, &request.Plan, lockedPlanFromMetadata(request.Plan.Metadata)); err != nil {
+	if err := p.rollback.addRecoverySteps(ctx, &request.Plan, plan); err != nil {
 		return ansiblerunner.JobResult{}, err
 	}
 	bundle, err := builder.BuildJob(ctx, request.Plan)
@@ -103,11 +102,7 @@ func attachJobCompanions(bundle *ansiblerunner.JobBundle) error {
 	return bundle.AddFile("README.md", []byte(nativeJobReadme), false)
 }
 
-func lockedPlanFromMetadata(metadata map[string]any) lockedPlan {
-	plan, _ := mapToPlan(metadata)
-	return plan
-}
-func (p *RollbackPlanner) addRecoverySteps(ctx context.Context, job *ansiblerunner.JobPlan, plan lockedPlan) error {
+func (p *RollbackPlanner) addRecoverySteps(ctx context.Context, job *ansiblerunner.JobPlan, plan domain.RunExecutionPlan) error {
 	for i := len(plan.ParentSteps) - 1; i >= 0; i-- {
 		main := plan.ParentSteps[i]
 		if main.Action != domain.ActionInstall && main.Action != domain.ActionUpgrade && main.Action != domain.ActionConfigure {
@@ -144,7 +139,7 @@ func (p *RollbackPlanner) addRecoverySteps(ctx context.Context, job *ansiblerunn
 		}
 		body.BackupRef, body.Backup = main.BackupRef, main.Backup
 		bindBackupVariables(&body, "restore", false)
-		stages, err := p.actions.expandActionSteps(ctx, []lockedStep{body})
+		stages, err := p.actions.expandActionSteps(ctx, []domain.RunPlanStep{body})
 		if err != nil {
 			return err
 		}
@@ -156,7 +151,7 @@ func (p *RollbackPlanner) addRecoverySteps(ctx context.Context, job *ansiblerunn
 		if err := p.workspaceVerifier.bindVerifiedWorkspaceDigests(ctx, stages); err != nil {
 			return err
 		}
-		recovery := jobPlanFromLocked(job.EnvironmentID, lockedPlan{Steps: stages}, nil)
+		recovery := jobPlanFromLocked(job.EnvironmentID, domain.RunExecutionPlan{Steps: stages}, nil)
 		for j := range recovery.Steps {
 			recovery.Steps[j].RecoveryOfStepID = main.ID
 		}
@@ -216,3 +211,17 @@ write platform approvals, test evidence or installation state. Inspect the
 verification field in manifest.json: its absence means this is a diagnostic or
 unverified package, not a verified complete cluster delivery.
 `
+
+func nativeRuntime(r domain.RunRuntime) ansiblerunner.JobRuntime {
+	return ansiblerunner.JobRuntime{AnsibleCore: r.AnsibleCore, Python: r.Python}
+}
+func nativeMedia(items []domain.RunMedia) []ansiblerunner.JobMedia {
+	if items == nil {
+		return nil
+	}
+	out := make([]ansiblerunner.JobMedia, 0, len(items))
+	for _, m := range items {
+		out = append(out, ansiblerunner.JobMedia{Kind: m.Kind, Location: m.Location, Identity: m.Identity, SizeBytes: m.SizeBytes})
+	}
+	return out
+}

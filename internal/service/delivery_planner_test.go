@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"codex/platform-demo/internal/ansible"
 	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
@@ -16,14 +15,14 @@ import (
 func TestLockedCachedMediaRecheckedAndDeduplicated(t *testing.T) {
 	probe := &stubArtifactDelivery{}
 	delivery := &DeliveryService{artifactDelivery: probe}
-	step := lockedStep{Variables: map[string]any{}}
+	step := domain.RunPlanStep{Variables: map[string]any{}}
 	if err := bindArtifactVariables(&step, domain.ComponentArtifact{Alias: "runtime", SHA256: strings.Repeat("a", 64), SizeBytes: 42}, "runtime.tgz", "http://fss.test/runtime.tgz"); err != nil {
 		t.Fatal(err)
 	}
 	if len(step.Media) != 1 || step.Media[0].SizeBytes != 42 {
 		t.Fatal("cached content was not locked")
 	}
-	plan := lockedPlan{Steps: []lockedStep{step, step}}
+	plan := domain.RunExecutionPlan{Steps: []domain.RunPlanStep{step, step}}
 	if err := delivery.verifyLockedMedia(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestLockedCachedMediaRecheckedAndDeduplicated(t *testing.T) {
 		t.Fatal("missing cached media accepted")
 	}
 	job := jobPlanFromLocked("env", plan, nil)
-	if !reflect.DeepEqual(job.Steps[0].Media, []ansible.JobMedia{step.Media[0]}) {
+	if !reflect.DeepEqual(job.Steps[0].Media, nativeMedia([]domain.RunMedia{step.Media[0]})) {
 		t.Fatal("export lost cached media identities")
 	}
 }
@@ -64,10 +63,10 @@ func (stubImageDelivery) Transfer(context.Context, mediadelivery.ImageTransfer) 
 
 func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
 	p := &DeliveryService{}
-	if _, err := p.finalizeDeliveryPlan(context.Background(), lockedPlan{}, []DeliveryDecisionInput{{RequirementID: "extra", Mode: "direct"}}, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.finalizeDeliveryPlan(context.Background(), domain.RunExecutionPlan{}, []DeliveryDecisionInput{{RequirementID: "extra", Mode: "direct"}}, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("decision without requirements error=%v", err)
 	}
-	plan := lockedPlan{DeliveryRequirements: []mediadelivery.Requirement{{ID: "artifact:a"}, {ID: "image:b"}}}
+	plan := domain.RunExecutionPlan{DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "artifact:a"}, {ID: "image:b"}}}
 	for name, inputs := range map[string][]DeliveryDecisionInput{
 		"missing":   {{RequirementID: "artifact:a", Mode: "direct"}},
 		"duplicate": {{RequirementID: "artifact:a", Mode: "direct"}, {RequirementID: "artifact:a", Mode: "transfer"}},
@@ -85,9 +84,9 @@ func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 	p := &DeliveryService{artifactDelivery: artifactDelivery}
 	at := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	checksum := strings.Repeat("a", 64)
-	plan := lockedPlan{
-		Steps: []lockedStep{{ID: "install", Variables: map[string]any{}}, {ID: "unrelated", Variables: map[string]any{}}},
-		DeliveryRequirements: []mediadelivery.Requirement{{
+	plan := domain.RunExecutionPlan{
+		Steps: []domain.RunPlanStep{{ID: "install", Variables: map[string]any{}}, {ID: "unrelated", Variables: map[string]any{}}},
+		DeliveryRequirements: []domain.RunDeliveryRequirement{{
 			ID: "artifact:release:runtime", Kind: "artifact", Name: "runtime", Identity: "sha256:" + checksum,
 			Source: "https://source.test/runtime.tgz", Target: "http://fss.test/components/runtime.tgz", TransferAvailable: true,
 			StepIDs: []string{"install"}, TargetStation: "fss.test", RelativePath: "components/runtime.tgz", SizeBytes: 42,
@@ -117,9 +116,9 @@ func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 func TestFinalizeDirectImageBindsImmutableSource(t *testing.T) {
 	p := &DeliveryService{}
 	digest := "sha256:" + strings.Repeat("b", 64)
-	plan := lockedPlan{
-		Steps: []lockedStep{{ID: "install", Variables: map[string]any{}}},
-		DeliveryRequirements: []mediadelivery.Requirement{{
+	plan := domain.RunExecutionPlan{
+		Steps: []domain.RunPlanStep{{ID: "install", Variables: map[string]any{}}},
+		DeliveryRequirements: []domain.RunDeliveryRequirement{{
 			ID: "image:release:main", Kind: "image", Name: "main", Identity: digest,
 			Source: "registry.test/runtime@" + digest, StepIDs: []string{"install"},
 		}},
@@ -144,21 +143,21 @@ func TestFinalizeDirectImageBindsImmutableSource(t *testing.T) {
 }
 
 func TestDeliveryVariableBindingRejectsParameterCollisions(t *testing.T) {
-	artifactStep := lockedStep{Variables: map[string]any{"runtime_url": "user-value"}}
+	artifactStep := domain.RunPlanStep{Variables: map[string]any{"runtime_url": "user-value"}}
 	err := bindArtifactVariables(&artifactStep, domain.ComponentArtifact{Alias: "runtime", SHA256: "sum"}, "runtime.tgz", "https://source.test/runtime.tgz")
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("artifact collision error=%v", err)
 	}
-	imageStep := lockedStep{Variables: map[string]any{"component_image_ref": "user-value"}}
+	imageStep := domain.RunPlanStep{Variables: map[string]any{"component_image_ref": "user-value"}}
 	if err := bindImageVariables(&imageStep, "main", "registry.test/runtime@sha256:abc", "sha256:abc"); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("image collision error=%v", err)
 	}
 }
 
 func TestDeliveryRequirementDeduplicatesSharedReleaseAcrossSteps(t *testing.T) {
-	plan := lockedPlan{}
-	appendDeliveryRequirement(&plan, mediadelivery.Requirement{ID: "artifact:r:a", StepIDs: []string{"step-1"}})
-	appendDeliveryRequirement(&plan, mediadelivery.Requirement{ID: "artifact:r:a", StepIDs: []string{"step-2"}})
+	plan := domain.RunExecutionPlan{}
+	appendDeliveryRequirement(&plan, domain.RunDeliveryRequirement{ID: "artifact:r:a", StepIDs: []string{"step-1"}})
+	appendDeliveryRequirement(&plan, domain.RunDeliveryRequirement{ID: "artifact:r:a", StepIDs: []string{"step-2"}})
 	if len(plan.DeliveryRequirements) != 1 || !reflect.DeepEqual(plan.DeliveryRequirements[0].StepIDs, []string{"step-1", "step-2"}) {
 		t.Fatalf("requirements=%+v", plan.DeliveryRequirements)
 	}
@@ -166,13 +165,13 @@ func TestDeliveryRequirementDeduplicatesSharedReleaseAcrossSteps(t *testing.T) {
 
 func TestDeliveryTargetPresenceDistinguishesKindsAndProbeFailures(t *testing.T) {
 	p := &DeliveryService{artifactDelivery: &stubArtifactDelivery{probeErr: errors.New("fss unavailable")}, imageDelivery: stubImageDelivery{probeErr: errors.New("missing")}}
-	if _, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "artifact", Target: "http://fss.test/file"}); err == nil || !strings.Contains(err.Error(), "probe artifact target") {
+	if _, err := p.deliveryTargetPresent(context.Background(), domain.RunDeliveryRequirement{Kind: "artifact", Target: "http://fss.test/file"}); err == nil || !strings.Contains(err.Error(), "probe artifact target") {
 		t.Fatalf("artifact probe error=%v", err)
 	}
-	if present, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "image", Target: "registry.test/image@sha256:abc"}); err != nil || present {
+	if present, err := p.deliveryTargetPresent(context.Background(), domain.RunDeliveryRequirement{Kind: "image", Target: "registry.test/image@sha256:abc"}); err != nil || present {
 		t.Fatalf("missing image present=%v err=%v", present, err)
 	}
-	if _, err := p.deliveryTargetPresent(context.Background(), mediadelivery.Requirement{Kind: "archive"}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := p.deliveryTargetPresent(context.Background(), domain.RunDeliveryRequirement{Kind: "archive"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown kind error=%v", err)
 	}
 }

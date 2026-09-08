@@ -24,7 +24,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		e.control.unregister(run.ID)
 	}()
 
-	plan, err := mapToPlan(run.InputSnapshot)
+	plan, err := planFromRun(run)
 	if err != nil {
 		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
@@ -55,13 +55,9 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		e.recorder.finishRun(run, domain.RunFailed, err)
 		return
 	}
-	lifecycle := run.ScenarioRevisionID != ""
-	upgradeDelivery := lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionUpgrade)
+	lifecycle := run.Kind == domain.RunScenario || run.Kind == domain.RunScenarioTest
+	upgradeDelivery := lifecycle && run.Snapshot.ScenarioExecution.Mode == domain.ScenarioExecutionUpgrade
 	pendingDelivery := len(plan.ImageTransfers) > 0 || len(plan.ArtifactTransfers) > 0
-	if lifecycle && run.InputSnapshot["executionMode"] == string(domain.ScenarioExecutionBaselineVerify) && (pendingDelivery || len(plan.DeliveryRequirements) > 0) {
-		e.recorder.finishRun(run, domain.RunFailed, fmt.Errorf("%w: 基线复核不能执行新的媒体交付；请先恢复目标环境媒体并重新预览", domain.ErrConflict))
-		return
-	}
 	deliver := func() error {
 		// Media copying may change the environment even if a later component
 		// task never starts. Persist that fact before contacting the target.
@@ -76,7 +72,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 		if err := e.delivery.mirrorRunArtifacts(ctx, run.ID, &plan); err != nil {
 			return err
 		}
-		return e.delivery.verifyLockedMedia(ctx, plan)
+		return e.delivery.verifyRunMedia(ctx, run.ID, &plan)
 	}
 	if !upgradeDelivery {
 		if err := deliver(); err != nil {
@@ -84,7 +80,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 			return
 		}
 	} else if !pendingDelivery {
-		if err := e.delivery.verifyLockedMedia(ctx, plan); err != nil {
+		if err := e.delivery.verifyRunMedia(ctx, run.ID, &plan); err != nil {
 			e.recorder.finishRun(run, domain.RunFailed, err)
 			return
 		}
@@ -169,7 +165,7 @@ func (e *RunExecutor) executeRun(run domain.Run) {
 
 		return nil
 	}
-	result, runErr := e.executeLockedJob(ctx, run, request)
+	result, runErr := e.executeLockedJob(ctx, run, plan, request)
 	if failure := logFailure.Load(); failure != nil {
 		runErr = fmt.Errorf("persist execution log: %w", *failure)
 	}

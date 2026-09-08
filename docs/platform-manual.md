@@ -895,7 +895,7 @@ make test-e2e
 make build
 ```
 
-`make test` 包含真实 localhost Ansible 生命周期，需要本机安装 Ansible。测试和构建通过只证明本地代码门禁通过，不代表任何真实集群安装验收完成。
+`make test-local` 包含公共检查、前端覆盖率和隔离 API 浏览器；`make test` 再包含显式指定 `ANSIBLE_PLAYBOOK` 的 Role 门禁。本地 Ansible 验证使用固定 Docker 2.8.8 环境。测试和构建通过只证明对应本地门禁通过，不代表任何真实集群安装验收完成。
 
 场景分支、版本演进、业务验收和恢复的详细合同，见[场景生命周期](scenario-lifecycle.md)。日常页面操作按本说明书第 4 节执行。
 

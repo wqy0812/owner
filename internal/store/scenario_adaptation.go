@@ -81,7 +81,7 @@ func validateRunAdaptationTx(ctx context.Context, tx *sql.Tx, run domain.Run) er
 		if err = domain.MatchEnvironment(revision.EnvironmentConstraints, env.Facts); err != nil {
 			return err
 		}
-		if digest, _ := run.InputSnapshot["scenarioRevisionSpecDigest"].(string); digest != "" && digest != domain.ScenarioRevisionSpecDigest(revision) {
+		if digest := run.Snapshot.Subject.ScenarioRevisionSpecDigest; digest != "" && digest != domain.ScenarioRevisionSpecDigest(revision) {
 			return fmt.Errorf("%w: 场景适配标签或图已变化，请重新预览", domain.ErrConflict)
 		}
 	}
@@ -89,25 +89,21 @@ func validateRunAdaptationTx(ctx context.Context, tx *sql.Tx, run domain.Run) er
 	if run.ComponentReleaseID != "" {
 		ids[run.ComponentReleaseID] = true
 	}
-	if steps, ok := run.InputSnapshot["steps"].([]any); ok {
-		for _, v := range steps {
-			if row, ok := v.(map[string]any); ok {
-				if row["sourceType"] == "scenario_acceptance" {
-					continue
+	for _, step := range run.Snapshot.Plan.Steps {
+		if step.SourceType == "scenario_acceptance" {
+			continue
+		}
+		if step.ReleaseID != "" {
+			if step.ReleaseSpecDigest != "" {
+				release, e := getComponentRelease(ctx, tx, step.ReleaseID)
+				if e != nil {
+					return e
 				}
-				if id, ok := row["releaseId"].(string); ok && id != "" {
-					if digest, ok := row["releaseSpecDigest"].(string); ok && digest != "" {
-						release, e := getComponentRelease(ctx, tx, id)
-						if e != nil {
-							return e
-						}
-						if domain.ComponentReleaseSpecDigest(release) != digest {
-							return fmt.Errorf("%w: 锁定组件合同已变化", domain.ErrConflict)
-						}
-					}
-					ids[id] = true
+				if domain.ComponentReleaseSpecDigest(release) != step.ReleaseSpecDigest {
+					return fmt.Errorf("%w: 锁定组件合同已变化", domain.ErrConflict)
 				}
 			}
+			ids[step.ReleaseID] = true
 		}
 	}
 	for id := range ids {

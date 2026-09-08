@@ -1,9 +1,10 @@
 import { expect, test, type Page, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { createDraft } from './liveFixtures';
 
 test.skip(!process.env.LIVE_API, 'requires the isolated Go browser fixture');
-const screenshots = path.resolve(process.cwd(), '../output/playwright/frontend-redesign/after');
+const screenshotPath = (name: string) => test.info().outputPath(`${name}.png`);
 async function identity(page: Page, role: string) {
   const response = await page.request.get('/api/v1/session/users');
   const { items } = await response.json();
@@ -12,11 +13,11 @@ async function identity(page: Page, role: string) {
   expect((await page.request.post('/api/v1/session/switch',{data:{userId:user.id}})).ok()).toBeTruthy();
 }
 async function capture(page: Page, name: string) {
-  await mkdir(screenshots,{recursive:true});
+  await mkdir(path.dirname(screenshotPath(name)),{recursive:true});
   await expect(page.locator('main h1')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.locator('.ant-tabs-ink-bar').evaluateAll(elements=>Promise.all(elements.flatMap(element=>element.getAnimations()).map(animation=>animation.finished.catch(()=>{}))));
-  await page.screenshot({path:path.join(screenshots,`${name}.png`), animations:'disabled'});
+  await page.screenshot({path:screenshotPath(name), animations:'disabled'});
 }
 async function geometry(dialog: Locator, width: number) {
   await expect(dialog).toBeVisible();
@@ -128,22 +129,12 @@ test('build update dialog prevents old-page work and stays open until refresh',a
   await page.goto('/components');await expect(page.locator('main h1')).toBeVisible();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));const dialog=page.getByRole('dialog',{name:'请刷新后继续操作',exact:true});await geometry(dialog,720);
   await expect(page.locator('.build-version-guard__content')).toHaveAttribute('inert','');
   await page.keyboard.press('Escape');await expect(dialog).toBeVisible();await expect(dialog.getByRole('button',{name:'刷新使用新版本',exact:true})).toBeEnabled();
-  await page.screenshot({path:path.join(screenshots,'build-update.png'),animations:'disabled'});
+  await page.screenshot({path:screenshotPath('build-update'),animations:'disabled'});
 });
 
 test('saves an action through the real API, reopens its YAML and preserves local text on conflict', async ({ page }) => {
   await identity(page, 'component_owner');
-  // This writable fixture has its own valid contract, separate from display-only lineage data.
-  const componentResponse = await page.request.post('/api/v1/components', { data: { name: 'Action browser acceptance', slug: 'action-browser-acceptance', layer: 'runtime_state', tags: [] } });
-  expect(componentResponse.ok(), await componentResponse.text()).toBeTruthy();
-  const { data: component } = await componentResponse.json();
-  const input = { mode: 'new_line', lineName: 'Browser acceptance', version: '1.0.0', releaseNotes: 'Isolated action persistence test', riskLevel: 'low', environmentConstraints: {} };
-  const preview = await page.request.post(`/api/v1/components/${component.id}/release-draft-plan`, { data: input });
-  expect(preview.ok(), await preview.text()).toBeTruthy();
-  const { data: plan } = await preview.json();
-  const creation = await page.request.post(`/api/v1/components/${component.id}/release-drafts`, { data: { ...input, expectedPlanDigest: plan.planDigest } });
-  expect(creation.ok(), await creation.text()).toBeTruthy();
-  const { data: release } = await creation.json();
+  const { component, release } = await createDraft(page.request, 'action-browser-acceptance');
   await page.goto(`/components?selected=${component.id}`);
   await page.getByRole('button', { name: 'Playbook', exact: true }).click();
   let dialog = page.getByRole('dialog', { name: /配置 Draft/ });

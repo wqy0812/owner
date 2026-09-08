@@ -10,19 +10,19 @@ import (
 func (c *RunCreator) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, prepared lockedRunPreparation, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedScenarioDigest ...string) (domain.Run, error) {
 	runID, now, plan, destructive := prepared.ID, prepared.CapturedAt, prepared.Plan, prepared.Destructive
 
-	snapshot := structToMap(plan)
+	snapshot := domain.SnapshotFromExecutionPlan(plan)
 	if kind == domain.RunComponentTest {
-		snapshot["componentTestEvidence"] = componentTestEvidence(action, plan.Steps)
+		snapshot.Subject.ComponentTestEvidence = componentTestEvidence(action, plan.Steps)
 	}
 	if len(resolvedParametersByNode) > 0 {
-		snapshot["resolvedParametersByNode"] = provenanceSnapshot(resolvedParametersByNode)
+		snapshot.Inputs.ResolvedParametersByNode = provenanceSnapshot(resolvedParametersByNode)
 	}
 	if releaseID != "" {
 		release, err := c.store.GetComponentRelease(ctx, releaseID)
 		if err != nil {
 			return domain.Run{}, err
 		}
-		snapshot["componentReleaseSpecDigest"] = componentReleaseSpecDigest(release)
+		snapshot.Subject.ComponentReleaseSpecDigest = componentReleaseSpecDigest(release)
 	}
 	if revisionID != "" {
 		revision, err := c.store.GetScenarioRevision(ctx, revisionID)
@@ -32,21 +32,22 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 		if len(expectedScenarioDigest) > 0 && expectedScenarioDigest[0] != scenarioRevisionSpecDigest(revision) {
 			return domain.Run{}, fmt.Errorf("%w: 场景在预览后变化，请重新预览", domain.ErrConflict)
 		}
-		snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
+		snapshot.Subject.ScenarioRevisionSpecDigest = scenarioRevisionSpecDigest(revision)
+		snapshot.Subject.ScenarioID = revision.ScenarioID
 	}
 	redactedRefs := make([]domain.CredentialRef, 0)
 	if environment.Revision != nil {
 		redactedRefs = domain.RedactCredentialRefs(environment.Revision.CredentialRefs, false)
 	}
-	snapshot["environmentRevisionId"] = environment.CurrentRevisionID
-	snapshot["credentialRefs"] = redactedRefs
+
+	snapshot.Inputs.CredentialRefs = redactedRefs
 	status := domain.RunQueued
 	var approval *domain.Approval
 	run := domain.Run{
 		ID: runID, Kind: kind, Status: status, RequestedBy: user.ID,
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		ComponentReleaseID: releaseID, ScenarioRevisionID: revisionID, Action: action,
-		Destructive: destructive, InputSnapshot: snapshot, ArtifactDigest: plan.TreeDigest, CreatedAt: now,
+		Destructive: destructive, Snapshot: snapshot, DeliveryResults: plan.DeliveryResults, ArtifactDigest: plan.TreeDigest, CreatedAt: now,
 	}
 	if destructive {
 		run.Status = domain.RunAwaitingApproval
@@ -67,7 +68,7 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 	return run, nil
 }
 
-func componentTestEvidence(action domain.ActionKind, steps []lockedStep) string {
+func componentTestEvidence(action domain.ActionKind, steps []domain.RunPlanStep) string {
 	complete := map[domain.ActionKind]bool{}
 	for i, step := range steps {
 		if step.Phase != "execute" {
@@ -107,7 +108,7 @@ func containsString(values []string, expected string) bool {
 	return false
 }
 
-func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []lockedStep) error {
+func injectEnvironmentVariables(revision domain.EnvironmentRevision, steps []domain.RunPlanStep) error {
 	credentialNames := make(map[string]struct{}, len(revision.CredentialRefs))
 	for _, ref := range revision.CredentialRefs {
 		credentialNames[ref.Name] = struct{}{}

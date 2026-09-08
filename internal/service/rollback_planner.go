@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/store"
 )
 
-func (r *RollbackPlanner) bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error {
+func (r *RollbackPlanner) bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *domain.RunExecutionPlan) error {
 	for index := range plan.Steps {
 		step := &plan.Steps[index]
 		switch step.Action {
@@ -96,7 +95,7 @@ func (r *RollbackPlanner) bindBackupPlan(ctx context.Context, environmentID, run
 	return nil
 }
 
-func priorSameRunBackupStep(steps []lockedStep, rollbackIndex int, rollback *lockedStep) *lockedStep {
+func priorSameRunBackupStep(steps []domain.RunPlanStep, rollbackIndex int, rollback *domain.RunPlanStep) *domain.RunPlanStep {
 	expectedReleaseID := rollback.ReleaseID
 	if rollback.FromReleaseID != "" {
 		expectedReleaseID = rollback.FromReleaseID
@@ -114,7 +113,7 @@ func priorSameRunBackupStep(steps []lockedStep, rollbackIndex int, rollback *loc
 	return nil
 }
 
-func (r *RollbackPlanner) bindInstallBackupStep(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, step *lockedStep) error {
+func (r *RollbackPlanner) bindInstallBackupStep(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, step *domain.RunPlanStep) error {
 	release, err := r.store.GetComponentRelease(ctx, step.ReleaseID)
 	if err != nil {
 		return err
@@ -158,7 +157,7 @@ func (r *RollbackPlanner) bindInstallBackupStep(ctx context.Context, environment
 	return nil
 }
 
-func bindBackupVariables(step *lockedStep, operation string, cleanupOnSuccess bool) {
+func bindBackupVariables(step *domain.RunPlanStep, operation string, cleanupOnSuccess bool) {
 	cleanupOnSuccess = false // Recovery material survives until the postcondition is verified.
 	metadata := step.Backup
 	step.Variables["clusterforge_backup_ref"] = step.BackupRef
@@ -267,7 +266,7 @@ func safeBackupSegment(value string) string {
 	return fmt.Sprintf("id-%x", digest[:12])
 }
 
-func (p *RollbackPlanner) installationForStep(ctx context.Context, environmentID string, step lockedStep) (domain.EnvironmentComponentInstallation, error) {
+func (p *RollbackPlanner) installationForStep(ctx context.Context, environmentID string, step domain.RunPlanStep) (domain.EnvironmentComponentInstallation, error) {
 	if step.BackupRef != "" {
 		all, err := p.store.ListEnvironmentComponentInstallations(ctx, environmentID)
 		if err != nil {
@@ -303,12 +302,12 @@ func (p *RollbackPlanner) installationForStep(ctx context.Context, environmentID
 	return item, domain.ErrNotFound
 }
 
-func (p *RollbackPlanner) pendingReceiptForStep(ctx context.Context, environmentID string, step lockedStep) (store.ActionExecutionReceipt, error) {
+func (p *RollbackPlanner) pendingReceiptForStep(ctx context.Context, environmentID string, step domain.RunPlanStep) (domain.ActionExecutionReceipt, error) {
 	receipts, err := p.store.LatestEnvironmentActionReceipts(ctx, environmentID)
 	if err != nil {
-		return store.ActionExecutionReceipt{}, err
+		return domain.ActionExecutionReceipt{}, err
 	}
-	matches := []store.ActionExecutionReceipt{}
+	matches := []domain.ActionExecutionReceipt{}
 	for _, r := range receipts {
 		if r.ComponentID != step.ComponentID || r.Status == "verified" {
 			continue
@@ -325,9 +324,9 @@ func (p *RollbackPlanner) pendingReceiptForStep(ctx context.Context, environment
 		return matches[0], nil
 	}
 	if len(matches) > 0 {
-		return store.ActionExecutionReceipt{}, fmt.Errorf("%w: select the exact component instance for pending recovery", domain.ErrConflict)
+		return domain.ActionExecutionReceipt{}, fmt.Errorf("%w: select the exact component instance for pending recovery", domain.ErrConflict)
 	}
-	return store.ActionExecutionReceipt{}, domain.ErrNotFound
+	return domain.ActionExecutionReceipt{}, domain.ErrNotFound
 }
 
 // Recovery baselines include operations which changed targets but have not passed their post-check.

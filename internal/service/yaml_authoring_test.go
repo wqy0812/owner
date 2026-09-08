@@ -61,7 +61,7 @@ func TestRollbackDefaultChecksUseTheSourceAndAcceptTwoStepEvidence(t *testing.T)
 		t.Fatal(err)
 	}
 	body.RollbackSourceActionID, body.RollbackSourceVariables, body.RollbackSourceFrozen = install.ID, map[string]any{"value": "original"}, true
-	steps, err := p.actions.expandActionSteps(context.Background(), []lockedStep{body})
+	steps, err := p.actions.expandActionSteps(context.Background(), []domain.RunPlanStep{body})
 	if err != nil || len(steps) != 2 {
 		t.Fatalf("steps=%+v err=%v", steps, err)
 	}
@@ -79,7 +79,7 @@ func TestRollbackDefaultChecksUseTheSourceAndAcceptTwoStepEvidence(t *testing.T)
 		t.Fatal("rollback without postcheck accepted")
 	}
 	body.RollbackSourceActionID = ""
-	if _, err := p.actions.expandActionSteps(context.Background(), []lockedStep{body}); err == nil {
+	if _, err := p.actions.expandActionSteps(context.Background(), []domain.RunPlanStep{body}); err == nil {
 		t.Fatal("ambiguous source accepted")
 	}
 }
@@ -88,7 +88,7 @@ func TestRollbackCheckSourceKeepsRepeatedComponentNodesSeparate(t *testing.T) {
 	p, _, _, release, _ := yamlActionFixture(t)
 	install, _ := findAction(release, domain.ActionInstall)
 	rollback, _ := findAction(release, domain.ActionRollback)
-	steps := []lockedStep{
+	steps := []domain.RunPlanStep{
 		{NodeID: "first", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: install.ID, Action: domain.ActionInstall, Variables: map[string]any{"value": "first-input"}},
 		{NodeID: "second", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: install.ID, Action: domain.ActionInstall, Variables: map[string]any{"value": "second-input"}},
 		{NodeID: "first-rollback", SourceNodeID: "first", ComponentID: release.ComponentID, ReleaseID: release.ID, ActionID: rollback.ID, Action: domain.ActionRollback},
@@ -118,7 +118,7 @@ func TestFrozenRecoveryChecksKeepSourceInputsAndRestoreContext(t *testing.T) {
 	main.BackupRef = "/var/lib/clusterforge/backups/fixture"
 	main.Backup = &domain.BackupMetadata{NodeID: "instance", ActionID: install.ID}
 	job := ansible.JobPlan{}
-	if err := p.rollback.addRecoverySteps(ctx, &job, lockedPlan{ParentSteps: []lockedStep{main}}); err != nil {
+	if err := p.rollback.addRecoverySteps(ctx, &job, domain.RunExecutionPlan{ParentSteps: []domain.RunPlanStep{main}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(job.Recovery) != 2 || job.Recovery[1].ActionID != install.PreCheckActionID {

@@ -14,6 +14,15 @@ const diagnostics: RunDiagnostics = { runId: run.id, status: 'failed', capturedA
 ] };
 beforeEach(() => vi.restoreAllMocks());
 
+it('keeps diagnostics and log download available while hiding retry for a damaged snapshot', async () => {
+  vi.spyOn(api, 'runDiagnostics').mockResolvedValue(diagnostics);
+  const damaged = { ...run, snapshotError: '执行快照不可用' };
+  render(<><RunDiagnosticsPanel run={damaged} retryBusy={false} onRetryRun={vi.fn()} onLocateStep={vi.fn()}/><RunLogDownload run={damaged}/></>);
+  expect(await screen.findByText(diagnostics.items[0].message)).toBeVisible();
+  expect(screen.queryByRole('button', { name: '预览安全续跑' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '下载完整日志包' })).toBeEnabled();
+});
+
 it('shows the specific cause first and expands full diagnostics without rereading on a detail refresh', async () => {
   const load = vi.spyOn(api, 'runDiagnostics').mockResolvedValue(diagnostics);
   const locate = vi.fn();

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 
 	ansible "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/store"
 	"codex/platform-demo/internal/testutil"
 )
 
@@ -21,7 +21,7 @@ type resetTestStore struct {
 	revisions     map[string]domain.EnvironmentRevision
 	runs          map[string]domain.Run
 	installations []domain.EnvironmentComponentInstallation
-	receipts      []store.ActionExecutionReceipt
+	receipts      []domain.ActionExecutionReceipt
 }
 
 func (s *resetTestStore) GetRun(_ context.Context, id string) (domain.Run, error) {
@@ -41,13 +41,13 @@ func (s *resetTestStore) GetEnvironmentRevision(_ context.Context, id string) (d
 func (s *resetTestStore) ListEnvironmentComponentInstallations(context.Context, string) ([]domain.EnvironmentComponentInstallation, error) {
 	return append([]domain.EnvironmentComponentInstallation{}, s.installations...), nil
 }
-func (s *resetTestStore) LatestEnvironmentActionReceipts(context.Context, string) ([]store.ActionExecutionReceipt, error) {
+func (s *resetTestStore) LatestEnvironmentActionReceipts(context.Context, string) ([]domain.ActionExecutionReceipt, error) {
 	return s.receipts, nil
 }
 
-func resetFixture(t *testing.T) (*RollbackPlanner, *resetTestStore, domain.EnvironmentRevision, lockedPlan) {
+func resetFixture(t *testing.T) (*RollbackPlanner, *resetTestStore, domain.EnvironmentRevision, domain.RunExecutionPlan) {
 	t.Helper()
-	hosts := []InventoryHost{
+	hosts := []domain.RunInventoryHost{
 		{Name: "control-a", Address: "192.0.2.1", Groups: []string{"control"}, User: "root"},
 		{Name: "control-b", Address: "192.0.2.2", Groups: []string{"control"}, User: "root"},
 		{Name: "worker-a", Address: "192.0.2.3", Groups: []string{"workers"}, User: "root"},
@@ -58,14 +58,14 @@ func resetFixture(t *testing.T) (*RollbackPlanner, *resetTestStore, domain.Envir
 	inventory, _ := json.Marshal(InventoryDocument{Hosts: hosts})
 	revision := domain.EnvironmentRevision{ID: "env-r1", EnvironmentID: "env", Inventory: inventory, Variables: map[string]string{"FILE_STATION": "192.0.2.50:8080", "IMAGE_REGISTRY": "192.0.2.51:5000/library"}}
 	data := &resetTestStore{revisions: map[string]domain.EnvironmentRevision{revision.ID: revision}, runs: map[string]domain.Run{}}
-	plan := lockedPlan{ResetTargets: hosts[:4]}
+	plan := domain.RunExecutionPlan{ResetTargets: hosts[:4]}
 	for _, group := range []string{"control", "workers", "media", "registry"} {
 		id := "component-" + group
 		backup := domain.BackupMetadata{EnvironmentID: "env", ComponentID: id, ReleaseID: id + "-v1", ActionID: "install-" + group, NodeID: group, InstallRunID: "install-run-" + group, PlaybookSHA256: "sha-" + group}
 		installation := domain.EnvironmentComponentInstallation{EnvironmentID: "env", ComponentID: id, ReleaseID: backup.ReleaseID, NodeID: group, InstallRunID: backup.InstallRunID, BackupRef: "backup-" + group, Backup: backup}
 		data.installations = append(data.installations, installation)
-		sourceStep := lockedStep{ID: group, SourceNodeID: group, ComponentID: id, ReleaseID: backup.ReleaseID, Action: domain.ActionInstall, ActionID: backup.ActionID, Limit: group}
-		data.runs[backup.InstallRunID] = domain.Run{ID: backup.InstallRunID, EnvironmentID: "env", EnvironmentRevisionID: revision.ID, InputSnapshot: structToMap(lockedPlan{Steps: []lockedStep{sourceStep}})}
+		sourceStep := domain.RunPlanStep{ID: group, NodeID: group, SourceNodeID: group, ComponentID: id, ReleaseID: backup.ReleaseID, Action: domain.ActionInstall, ActionID: backup.ActionID, Limit: group}
+		data.runs[backup.InstallRunID] = domain.Run{ID: backup.InstallRunID, Kind: domain.RunComponentTest, EnvironmentID: "env", EnvironmentRevisionID: revision.ID, Snapshot: runfixture.Snapshot(structToMap(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{sourceStep}}))}
 		if group == "control" || group == "workers" {
 			step := sourceStep
 			step.Action, step.Phase, step.ActionID = domain.ActionRollback, "execute", "rollback-"+group
@@ -73,7 +73,7 @@ func resetFixture(t *testing.T) (*RollbackPlanner, *resetTestStore, domain.Envir
 			plan.Steps = append(plan.Steps, step)
 		}
 	}
-	plan.ParentSteps = append([]lockedStep{}, plan.Steps...)
+	plan.ParentSteps = append([]domain.RunPlanStep{}, plan.Steps...)
 	var err error
 	plan.ResetBoundaryDigest, err = resetBoundaryDigest(context.Background(), revision, plan.ResetTargets)
 	if err != nil {
@@ -127,11 +127,11 @@ func TestEnvironmentResetUsesCurrentGroupMembersAndLocksPreview(t *testing.T) {
 			}
 			switch change {
 			case "add":
-				inventory.Hosts = append(inventory.Hosts, InventoryHost{Name: "control-new", Address: "192.0.2.99", Groups: []string{"control"}, User: "testops"})
+				inventory.Hosts = append(inventory.Hosts, domain.RunInventoryHost{Name: "control-new", Address: "192.0.2.99", Groups: []string{"control"}, User: "testops"})
 			case "remove":
 				inventory.Hosts = inventory.Hosts[1:]
 			case "replace":
-				inventory.Hosts[0] = InventoryHost{Name: "control-new", Address: "192.0.2.99", Groups: []string{"control"}, User: "testops"}
+				inventory.Hosts[0] = domain.RunInventoryHost{Name: "control-new", Address: "192.0.2.99", Groups: []string{"control"}, User: "testops"}
 			case "connection":
 				inventory.Hosts[0].Address, inventory.Hosts[0].User, inventory.Hosts[0].Port = "192.0.2.99", "testops", 2222
 			}
@@ -143,7 +143,7 @@ func TestEnvironmentResetUsesCurrentGroupMembersAndLocksPreview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []InventoryHost{}
+			want := []domain.RunInventoryHost{}
 			for _, host := range inventory.Hosts {
 				if host.Groups[0] == "control" || host.Groups[0] == "workers" {
 					want = append(want, host)
@@ -187,30 +187,38 @@ func TestEnvironmentResetRejectsMissingCurrentGroup(t *testing.T) {
 func TestEnvironmentResetRejectsPartialAndChangedPlans(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		change func(*resetTestStore, *domain.EnvironmentRevision, *lockedPlan)
+		change func(*resetTestStore, *domain.EnvironmentRevision, *domain.RunExecutionPlan)
 	}{
-		{"partial", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) {
+		{"partial", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
 			p.Steps = p.Steps[:1]
 			p.ParentSteps = p.Steps
 		}},
-		{"shared target", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) {
+		{"shared target", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
 			p.ResetTargets[0].Address = "192.0.2.50"
 		}},
-		{"unlocked targets", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) { p.ResetBoundaryDigest = "" }},
-		{"shared step", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) { p.Steps[0].Limit = "media" }},
-		{"mixed step", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) { p.Steps[0].Limit = "all" }},
-		{"partial hosts", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) {
-			p.Steps[0].Limit = "control-a"
-			p.ParentSteps = append([]lockedStep{}, p.Steps...)
+		{"unlocked targets", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
+			p.ResetBoundaryDigest = ""
 		}},
-		{"missing target", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *lockedPlan) { p.Steps[0].Limit = "unknown" }},
-		{"unresolved endpoint", func(_ *resetTestStore, rev *domain.EnvironmentRevision, _ *lockedPlan) {
+		{"shared step", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
+			p.Steps[0].Limit = "media"
+		}},
+		{"mixed step", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
+			p.Steps[0].Limit = "all"
+		}},
+		{"partial hosts", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
+			p.Steps[0].Limit = "control-a"
+			p.ParentSteps = append([]domain.RunPlanStep{}, p.Steps...)
+		}},
+		{"missing target", func(_ *resetTestStore, _ *domain.EnvironmentRevision, p *domain.RunExecutionPlan) {
+			p.Steps[0].Limit = "unknown"
+		}},
+		{"unresolved endpoint", func(_ *resetTestStore, rev *domain.EnvironmentRevision, _ *domain.RunExecutionPlan) {
 			rev.Variables["FILE_STATION"] = ":bad:endpoint"
 		}},
-		{"multi-level baseline", func(s *resetTestStore, _ *domain.EnvironmentRevision, _ *lockedPlan) {
+		{"multi-level baseline", func(s *resetTestStore, _ *domain.EnvironmentRevision, _ *domain.RunExecutionPlan) {
 			s.installations[0].Backup.Previous = &domain.EnvironmentComponentInstallation{}
 		}},
-		{"changed group", func(_ *resetTestStore, rev *domain.EnvironmentRevision, _ *lockedPlan) {
+		{"changed group", func(_ *resetTestStore, rev *domain.EnvironmentRevision, _ *domain.RunExecutionPlan) {
 			var inventory InventoryDocument
 			_ = json.Unmarshal(rev.Inventory, &inventory)
 			inventory.Hosts[0].Address = "192.0.2.99"
@@ -230,9 +238,9 @@ func TestEnvironmentResetRejectsPartialAndChangedPlans(t *testing.T) {
 func TestEnvironmentResetRejectsMixedSourceRunWithoutTrimming(t *testing.T) {
 	r, data, revision, _ := resetFixture(t)
 	source := data.runs["install-run-control"]
-	plan, _ := mapToPlan(source.InputSnapshot)
+	plan, _ := planFromRun(source)
 	plan.Steps[0].Limit = "all"
-	source.InputSnapshot = structToMap(plan)
+	source.Snapshot = domain.SnapshotFromExecutionPlan(plan)
 	data.runs[source.ID] = source
 	if _, err := r.environmentResetState(context.Background(), revision); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "混合主机组") {
 		t.Fatalf("mixed source accepted: %v", err)
@@ -254,8 +262,8 @@ func TestEnvironmentResetContinuationRequiresAllRemainingBaselinesIncludingPostc
 	// The first component finished; the next failed its postcheck after the body.
 	data.installations = data.installations[1:]
 	parent := plan.Steps[1]
-	plan.Steps = []lockedStep{{ID: "post", SourceNodeID: parent.SourceNodeID, ComponentID: parent.ComponentID, ParentActionID: parent.ActionID, Phase: "post", Limit: parent.Limit}}
-	data.receipts = []store.ActionExecutionReceipt{{ComponentID: parent.ComponentID, SourceNodeID: parent.SourceNodeID, BackupRef: parent.BackupRef, Backup: *parent.Backup, Status: "executed", StartedAt: time.Now()}}
+	plan.Steps = []domain.RunPlanStep{{ID: "post", SourceNodeID: parent.SourceNodeID, ComponentID: parent.ComponentID, ParentActionID: parent.ActionID, Phase: "post", Limit: parent.Limit}}
+	data.receipts = []domain.ActionExecutionReceipt{{ComponentID: parent.ComponentID, SourceNodeID: parent.SourceNodeID, BackupRef: parent.BackupRef, Backup: *parent.Backup, Status: "executed", StartedAt: time.Now()}}
 	if err := r.validateEnvironmentReset(context.Background(), revision, plan, false); err != nil {
 		t.Fatalf("postcheck continuation lost recovery coverage: %v", err)
 	}
@@ -272,7 +280,7 @@ func TestEnvironmentResetContinuationRequiresAllRemainingBaselinesIncludingPostc
 func TestEnvironmentResetValidatesTaskTargetsAgainstFullLockedInventory(t *testing.T) {
 	r, _, revision, plan := resetFixture(t)
 	plan.Steps[0].Playbook = "managed/component/tasks/rollback.yml"
-	plan.ParentSteps = append([]lockedStep{}, plan.Steps...)
+	plan.ParentSteps = append([]domain.RunPlanStep{}, plan.Steps...)
 	called := false
 	r.inspector = &testutil.Runner{TargetFunc: func(playbooks []string, scope ansible.TaskTargetScope) error {
 		called = true
@@ -297,12 +305,12 @@ func TestEnvironmentResetValidatesTaskTargetsAgainstFullLockedInventory(t *testi
 
 func TestEnvironmentResetRetryAfterPostcheckContinuation(t *testing.T) {
 	planner, data, revision, plan := resetFixture(t)
-	original := append([]lockedStep{}, plan.Steps...)
+	original := append([]domain.RunPlanStep{}, plan.Steps...)
 	plan.Steps = nil
 	for _, body := range original {
 		body.RetrySafe = true
 		plan.Steps = append(plan.Steps, body)
-		post := lockedStep{ID: body.ID + "-post", NodeID: body.ID + "-post", SourceNodeID: body.SourceNodeID, ComponentID: body.ComponentID, ReleaseID: body.ReleaseID, ActionID: body.ActionID + "-post", ParentActionID: body.ActionID, Phase: "post", Action: domain.ActionCheck, Limit: body.Limit, RetrySafe: true}
+		post := domain.RunPlanStep{ID: body.ID + "-post", NodeID: body.ID + "-post", SourceNodeID: body.SourceNodeID, ComponentID: body.ComponentID, ReleaseID: body.ReleaseID, ActionID: body.ActionID + "-post", ParentActionID: body.ActionID, Phase: "post", Action: domain.ActionCheck, Limit: body.Limit, RetrySafe: true}
 		plan.Steps = append(plan.Steps, post)
 	}
 	// Original attempt completed control body but failed its postcheck.

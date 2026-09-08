@@ -1,0 +1,117 @@
+{
+  "slug": "kubernetes-encryption-configuration",
+  "name": "Kubernetes Encryption Configuration",
+  "description": "管理 API Server 的 Secret 静态加密配置，通过 K8S_ENCRYPTION_KEY 凭据引用获得密钥。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [
+        "K8S_ENCRYPTION_KEY"
+      ],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [
+        "K8S_ENCRYPTION_KEY"
+      ],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [
+        "K8S_ENCRYPTION_KEY"
+      ],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [
+        "K8S_ENCRYPTION_KEY"
+      ],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [
+        "K8S_ENCRYPTION_KEY"
+      ],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

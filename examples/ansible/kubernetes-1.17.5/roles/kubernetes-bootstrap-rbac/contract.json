@@ -1,0 +1,128 @@
+{
+  "slug": "kubernetes-bootstrap-rbac",
+  "name": "Kubernetes Bootstrap RBAC",
+  "description": "管理节点引导和证书审批 RBAC，以及控制节点标签和污点；集群操作仅由首控制节点执行。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "admin_kubeconfig_path",
+      "description": "管理员 kubeconfig 路径；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "configuration",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "admin_kubeconfig_path",
+          "targetParameter": "admin_kubeconfig_path"
+        }
+      ]
+    },
+    {
+      "component": "kube-controller-manager",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

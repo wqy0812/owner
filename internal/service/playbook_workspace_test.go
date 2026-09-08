@@ -262,7 +262,8 @@ func TestAtomicActionRestoresEntrypointWhenCatalogTransactionFails(t *testing.T)
 }
 
 func TestPendingActionFileMutationIsRecoveredAfterProcessInterruption(t *testing.T) {
-	platform, database, root := componentImportRecoveryPlatform(t)
+	databasePath := filepath.Join(t.TempDir(), "platform.db")
+	platform, database, root := componentImportRecoveryPlatformAt(t, databasePath)
 	ctx := context.Background()
 	owner := domain.User{ID: "component-import-owner", Role: domain.RoleComponentOwner}
 	now := time.Now().UTC()
@@ -290,8 +291,28 @@ func TestPendingActionFileMutationIsRecoveredAfterProcessInterruption(t *testing
 	if err := os.WriteFile(entrypoint, []byte("---\n- hosts: interrupted\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := platform.catalog.RecoverActionFileMutations(ctx); err != nil {
-		t.Fatal(err)
+	// Recovery must survive a real Store close/reopen and run before scheduling.
+	for attempt := 0; attempt < 2; attempt++ {
+		platform.Close()
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := store.Open(ctx, databasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		database = reopened
+		t.Cleanup(func() { _ = reopened.Close() })
+		platform = newTestPlatform(t, database, nil, nil)
+		platform.ConfigurePlaybookRoot(root)
+		t.Cleanup(platform.Close)
+		if err := platform.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		persisted, err := database.GetComponentRelease(ctx, release.ID)
+		if err != nil || persisted.PlaybookTreeSHA256 == "" || len(persisted.PlaybookFiles) != 1 {
+			t.Fatalf("reopened manifest=%+v err=%v", persisted.PlaybookFiles, err)
+		}
 	}
 	recovered, err := os.ReadFile(entrypoint)
 	if err != nil || string(recovered) != string(before) {

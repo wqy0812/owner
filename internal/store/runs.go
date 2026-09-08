@@ -4,19 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"codex/platform-demo/internal/domain"
 )
 
-func (s *Store) UpdateRunDeliveryResults(ctx context.Context, runID string, results any) error {
+func (s *Store) UpdateRunDeliveryResults(ctx context.Context, runID string, results []domain.RunDeliveryResult) error {
+	if results == nil {
+		results = []domain.RunDeliveryResult{}
+	}
 	encoded, err := json.Marshal(results)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.deliveryResults',json(?)) WHERE id=? AND status='running'`, string(encoded), runID)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET delivery_results_json=? WHERE id=? AND status='running'`, string(encoded), runID)
 	if err != nil {
 		return err
 	}
@@ -27,6 +30,21 @@ func (s *Store) UpdateRunDeliveryResults(ctx context.Context, runID string, resu
 }
 
 func (s *Store) CreateRun(ctx context.Context, r domain.Run, approval *domain.Approval) error {
+	if err := domain.ValidateRunSnapshot(r); err != nil {
+		return err
+	}
+	encoded, err := domain.EncodeRunSnapshot(r.Snapshot)
+	if err != nil {
+		return err
+	}
+	results, err := json.Marshal(r.DeliveryResults)
+	if err != nil {
+		return err
+	}
+	if r.DeliveryResults == nil {
+		results = []byte("[]")
+	}
+
 	tx, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return err
@@ -60,9 +78,12 @@ SELECT EXISTS(
 	if err := validateRunReleaseLifecycle(ctx, tx, r); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, nullString(r.RetryOfRunID), nullString(r.RetryRootRunID), r.RetryAttempt, r.RetryStartStep, r.Error, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
+	_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,execution_snapshot_json,delivery_results_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, string(encoded), string(results), r.ArtifactDigest, nullString(r.RetryOfRunID), nullString(r.RetryRootRunID), r.RetryAttempt, r.RetryStartStep, r.Error, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
 	if err != nil {
 		return mapSQLError(err)
+	}
+	if err := replaceRunSnapshotReferences(ctx, tx, r); err != nil {
+		return err
 	}
 	if approval != nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO approvals(id,run_id,status,requested_at,decided_by,decision,reason,decided_at) VALUES(?,?,?,?,?,?,?,?)`, approval.ID, r.ID, approval.Status, timeText(approval.RequestedAt), nullString(approval.DecidedBy), approval.Decision, approval.Reason, ptrTimeText(approval.DecidedAt))
@@ -93,7 +114,7 @@ func validateRunReleaseLifecycle(ctx context.Context, tx *sql.Tx, r domain.Run) 
 	if err := tx.QueryRowContext(ctx, `
 SELECT EXISTS(
   SELECT 1
-  FROM json_each(?, '$.steps') AS step
+  FROM json_each(?, `+runSnapshotStepsPath+`) AS step
   LEFT JOIN component_releases release
     ON release.id=json_extract(step.value, '$.releaseId')
   WHERE COALESCE(json_extract(step.value, '$.sourceType'),'') != 'scenario_acceptance' AND (release.id IS NULL
@@ -107,7 +128,7 @@ SELECT EXISTS(
             AND release.released_at IS NOT NULL
           )
         END)
-)`, jsonText(r.InputSnapshot), r.Kind).Scan(&invalid); err != nil {
+)`, jsonText(r.Snapshot), r.Kind).Scan(&invalid); err != nil {
 		return err
 	}
 	if invalid != 0 {
@@ -120,22 +141,34 @@ func scanRun(row scanner) (domain.Run, error) {
 	var r domain.Run
 	var component, scenario, retryOf, retryRoot sql.NullString
 	var destructive int
-	var snapshot, created string
+	var snapshot, results, created string
 	var started, finished sql.NullString
-	err := row.Scan(&r.ID, &r.Kind, &r.Status, &r.RequestedBy, &r.EnvironmentID, &r.EnvironmentRevisionID, &component, &scenario, &r.Action, &destructive, &snapshot, &r.ArtifactDigest, &retryOf, &retryRoot, &r.RetryAttempt, &r.RetryStartStep, &r.Error, &created, &started, &finished)
+	err := row.Scan(&r.ID, &r.Kind, &r.Status, &r.RequestedBy, &r.EnvironmentID, &r.EnvironmentRevisionID, &component, &scenario, &r.Action, &destructive, &snapshot, &results, &r.ArtifactDigest, &retryOf, &retryRoot, &r.RetryAttempt, &r.RetryStartStep, &r.Error, &created, &started, &finished)
 	r.ComponentReleaseID = component.String
 	r.ScenarioRevisionID = scenario.String
 	r.RetryOfRunID = retryOf.String
 	r.RetryRootRunID = retryRoot.String
 	r.Destructive = destructive != 0
-	r.InputSnapshot = decodeJSON(snapshot, map[string]any{})
+	if err != nil {
+		return r, err
+	}
+	r.Snapshot, err = domain.DecodeRunSnapshot([]byte(snapshot))
+	if err != nil {
+		return r, fmt.Errorf("Run %s: %w", r.ID, err)
+	}
+	r.DeliveryResults, err = domain.DecodeRunDeliveryResults([]byte(results))
+	if err != nil {
+		return r, fmt.Errorf("Run %s: %w", r.ID, err)
+	}
 	r.CreatedAt = parseTime(created)
 	r.StartedAt = parseNullTime(started)
 	r.FinishedAt = parseNullTime(finished)
 	return r, err
 }
 
-const runSelect = `SELECT id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at FROM runs`
+const runColumns = `id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,execution_snapshot_json,delivery_results_json,artifact_digest,retry_of_run_id,retry_root_run_id,retry_attempt,retry_start_step,error_text,created_at,started_at,finished_at`
+
+const runSelect = `SELECT ` + runColumns + ` FROM runs`
 
 // CountScenarioRunsForComponentRelease counts scenario Runs whose immutable
 // execution snapshot locked the exact component Release. The snapshot is the
@@ -146,10 +179,10 @@ func (s *Store) CountScenarioRunsForComponentRelease(ctx context.Context, releas
 	err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(DISTINCT runs.id)
 FROM retained_run_history runs
-JOIN json_each(runs.input_snapshot_json, '$.steps') AS step
+JOIN run_release_visibility step ON step.run_id=runs.id
 WHERE runs.scenario_revision_id IS NOT NULL
   AND runs.kind IN ('scenario_test','scenario_run')
-  AND json_extract(step.value, '$.releaseId')=?`, releaseID).Scan(&count)
+  AND step.release_id=?`, releaseID).Scan(&count)
 	return count, err
 }
 
@@ -162,7 +195,7 @@ func (s *Store) ListRunsForComponentRelease(ctx context.Context, releaseID strin
 WHERE (runs.kind='component_test' AND runs.component_release_id=?)
    OR (runs.kind IN ('scenario_test','scenario_run') AND EXISTS (
      SELECT 1
-     FROM json_each(runs.input_snapshot_json, '$.steps') AS locked_step
+     FROM json_each(runs.execution_snapshot_json, `+runSnapshotStepsPath+`) AS locked_step
      WHERE json_extract(locked_step.value, '$.releaseId')=?
    ))
 ORDER BY runs.created_at DESC`, releaseID, releaseID)
@@ -226,10 +259,10 @@ SELECT EXISTS (
         WHERE cr.id=r.component_release_id AND c.owner_id=?
       )
       OR EXISTS (
-        SELECT 1 FROM json_each(r.input_snapshot_json, '$.steps') locked_step
-        JOIN component_releases cr ON cr.id=json_extract(locked_step.value, '$.releaseId')
+        SELECT 1 FROM run_release_visibility locked_step
+        JOIN component_releases cr ON cr.id=locked_step.release_id
         JOIN components c ON c.id=cr.component_id
-        WHERE c.owner_id=?
+        WHERE locked_step.run_id=r.id AND c.owner_id=?
       )
     ))
     OR (?='scenario_owner' AND EXISTS (
@@ -247,7 +280,7 @@ SELECT EXISTS (
 
 func (s *Store) ListRuns(ctx context.Context, viewer domain.User) ([]domain.Run, error) {
 	where, args := runVisibility(viewer)
-	q := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE ` + where + ` ORDER BY created_at DESC,id DESC`
+	q := runSelect + ` WHERE ` + where + ` ORDER BY created_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -379,7 +412,7 @@ UPDATE scenario_installations
 SET state='unverified',generation=generation+1,updated_at=?
 WHERE state IN ('complete','test') AND EXISTS (
   SELECT 1 FROM runs r JOIN scenario_revisions sr ON sr.id=r.scenario_revision_id
-  WHERE r.status='running' AND json_extract(r.input_snapshot_json,'$.scenarioContractVersion')=2
+  WHERE r.status='running' AND r.kind IN ('scenario_run','scenario_test') AND json_extract(r.execution_snapshot_json,`+runSnapshotContractPath+`)='clusterforge-run-v1'
     AND r.environment_id=scenario_installations.environment_id
     AND sr.scenario_id=scenario_installations.scenario_id
 )`, timeText(at)); err != nil {
@@ -431,16 +464,16 @@ runs.status IN ('awaiting_approval','queued') AND (
   OR (runs.scenario_revision_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM scenario_revisions sr WHERE sr.id=runs.scenario_revision_id
   ))
-  OR json_type(runs.input_snapshot_json, '$.steps') IS NOT 'array'
-  OR json_array_length(runs.input_snapshot_json, '$.steps')=0
+  OR json_type(runs.execution_snapshot_json, ` + runSnapshotStepsPath + `) IS NOT 'array'
+  OR json_array_length(runs.execution_snapshot_json, ` + runSnapshotStepsPath + `)=0
   OR EXISTS (
-    SELECT 1 FROM json_each(runs.input_snapshot_json, '$.steps') locked_step
+    SELECT 1 FROM json_each(runs.execution_snapshot_json, ` + runSnapshotStepsPath + `) locked_step
     WHERE CASE WHEN locked_step.type != 'object' THEN 1
       WHEN json_extract(locked_step.value,'$.sourceType')='scenario_acceptance' THEN
         CASE WHEN (
           runs.kind IN ('scenario_test','scenario_run')
           AND runs.scenario_revision_id IS NOT NULL
-          AND json_extract(runs.input_snapshot_json,'$.scenarioContractVersion')=2
+          AND json_extract(runs.execution_snapshot_json,` + runSnapshotContractPath + `)='clusterforge-run-v1'
           AND COALESCE(json_extract(locked_step.value,'$.releaseId'),'')=''
           AND COALESCE(json_extract(locked_step.value,'$.componentId'),'')=''
           AND json_extract(locked_step.value,'$.scenarioRevisionId')=runs.scenario_revision_id
@@ -481,28 +514,47 @@ func (s *Store) FailInvalidActiveRuns(ctx context.Context, at time.Time) (int64,
 		return 0, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-UPDATE scenario_revisions
-SET status='draft',test_passed_at=NULL
-WHERE status='testing' AND id IN (
-  SELECT scenario_revision_id FROM runs
-  WHERE scenario_revision_id IS NOT NULL AND `+invalidActiveRunPredicate+`
-)`); err != nil {
-		return 0, err
-	}
-	result, err := tx.ExecContext(ctx, `
-UPDATE runs
-SET status='failed',
-    error_text='invalid active run: referenced entity, approval, or locked plan is missing or inconsistent',
-    finished_at=?
-WHERE `+invalidActiveRunPredicate, timeText(at))
+	// Decode candidates through the same contract as creation and execution.
+	// Keep relational validation here, inside the transaction that fails the Run.
+	rows, err := tx.QueryContext(ctx, `SELECT id,kind,COALESCE(component_release_id,''),COALESCE(scenario_revision_id,''),COALESCE(retry_of_run_id,''),execution_snapshot_json,CASE WHEN `+invalidActiveRunPredicate+` THEN 1 ELSE 0 END FROM runs WHERE status IN ('awaiting_approval','queued')`)
 	if err != nil {
 		return 0, err
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
+	var invalid []string
+	for rows.Next() {
+		var run domain.Run
+		var raw string
+		var relationalInvalid bool
+		if err = rows.Scan(&run.ID, &run.Kind, &run.ComponentReleaseID, &run.ScenarioRevisionID, &run.RetryOfRunID, &raw, &relationalInvalid); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		run.Snapshot, err = domain.DecodeRunSnapshot([]byte(raw))
+		if err != nil || relationalInvalid || domain.ValidateRunSnapshot(run) != nil {
+			invalid = append(invalid, run.ID)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
 		return 0, err
 	}
+	rows.Close()
+	var count int64
+	for _, id := range invalid {
+		if _, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='draft',test_passed_at=NULL WHERE status='testing' AND id=(SELECT scenario_revision_id FROM runs WHERE id=? AND kind='scenario_test')`, id); err != nil {
+			return 0, err
+		}
+		result, e := tx.ExecContext(ctx, `UPDATE runs SET status='failed',error_text='invalid active run: referenced entity, approval, or locked plan is missing or inconsistent',finished_at=? WHERE id=?`, timeText(at), id)
+		if e != nil {
+			return 0, e
+		}
+		n, e := result.RowsAffected()
+		if e != nil {
+			return 0, e
+		}
+		count += n
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -552,36 +604,51 @@ WHERE kind='component_test' AND component_release_id=?
 }
 
 func (s *Store) ClaimNextRun(ctx context.Context, environmentID string, at time.Time) (domain.Run, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.Run{}, err
+	// Selection and claim share one write snapshot. A read-then-write transaction
+	// can deadlock when concurrent workers try to upgrade their SQLite locks.
+	var run domain.Run
+	err := withSQLiteBusyRetry(ctx, func() (err error) {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		run, err = scanRun(tx.QueryRowContext(ctx, `UPDATE runs SET status='running',started_at=?
+   WHERE id=(SELECT id FROM runs WHERE environment_id=? AND status='queued' ORDER BY created_at,id LIMIT 1)
+   AND NOT EXISTS(SELECT 1 FROM runs WHERE environment_id=? AND status='running') RETURNING `+runColumns, timeText(at), environmentID, environmentID))
+		if err == nil {
+			err = domain.ValidateRunSnapshot(run)
+		}
+		if errors.Is(err, domain.ErrInvalid) && run.ID != "" {
+			invalid := err
+			if _, err = tx.ExecContext(ctx, `UPDATE runs SET status='failed',error_text=?,finished_at=? WHERE id=?`, "invalid active run: "+invalid.Error(), timeText(at), run.ID); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='draft',test_passed_at=NULL WHERE status='testing' AND id=(SELECT scenario_revision_id FROM runs WHERE id=? AND kind='scenario_test')`, run.ID); err != nil {
+				return err
+			}
+			if err = tx.Commit(); err != nil {
+				return err
+			}
+			return invalid
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+
+	if errors.Is(err, sql.ErrNoRows) {
+		running, readErr := s.HasRunningRun(ctx, environmentID)
+		if readErr != nil {
+			return domain.Run{}, readErr
+		}
+		if running {
+			return domain.Run{}, domain.ErrConflict
+		}
+		return domain.Run{}, domain.ErrNotFound
 	}
-	defer tx.Rollback()
-	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE environment_id=? AND status='running'`, environmentID).Scan(&active); err != nil {
-		return domain.Run{}, err
-	}
-	if active > 0 {
-		return domain.Run{}, domain.ErrConflict
-	}
-	r, err := scanRun(tx.QueryRowContext(ctx, runSelect+` WHERE environment_id=? AND status='queued' ORDER BY created_at LIMIT 1`, environmentID))
-	if err != nil {
-		return r, mapSQLError(err)
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE runs SET status='running',started_at=? WHERE id=? AND status='queued'`, timeText(at), r.ID)
-	if err != nil {
-		return r, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return r, domain.ErrConflict
-	}
-	if err = tx.Commit(); err != nil {
-		return r, err
-	}
-	r.Status = domain.RunRunning
-	r.StartedAt = &at
-	return r, nil
+	return run, err
 }
 
 func (s *Store) CreateRunStep(ctx context.Context, st domain.RunStep) error {
@@ -719,10 +786,10 @@ func scanApproval(row scanner) (domain.Approval, error) {
 }
 
 func (s *Store) DecideApproval(ctx context.Context, id, userID, decision, reason string, at time.Time) error {
-	return s.DecideApprovalWithSnapshot(ctx, id, userID, decision, reason, nil, at)
+	return s.DecideApprovalWithSnapshot(ctx, id, userID, decision, reason, nil, nil, at)
 }
 
-func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot map[string]any, at time.Time) error {
+func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot *domain.RunSnapshot, results []domain.RunDeliveryResult, at time.Time) error {
 	if decision != "approved" && decision != "rejected" {
 		return domain.ErrInvalid
 	}
@@ -751,12 +818,46 @@ func (s *Store) DecideApprovalWithSnapshot(ctx context.Context, id, userID, deci
 	}
 	query := `UPDATE runs SET status=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
 	arguments := []any{runStatus, decision, timeText(at), runID}
+	if snapshot == nil && decision == "approved" {
+		current, e := getRunRecord(ctx, tx, runID)
+		if e != nil {
+			return e
+		}
+		current.Status = runStatus
+		if e = domain.ValidateRunSnapshot(current); e != nil {
+			return e
+		}
+	}
 	if snapshot != nil {
-		if err := validateNewRunReferences(ctx, tx, domain.Run{ID: runID, InputSnapshot: snapshot}); err != nil {
+		current, err := getRunRecord(ctx, tx, runID)
+		if err != nil {
 			return err
 		}
-		query = `UPDATE runs SET status=?,input_snapshot_json=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
-		arguments = []any{runStatus, jsonText(snapshot), decision, timeText(at), runID}
+		current.Snapshot = *snapshot
+		current.Status = runStatus
+		current.DeliveryResults = results
+		if err = domain.ValidateRunSnapshot(current); err != nil {
+			return err
+		}
+		encoded, err := domain.EncodeRunSnapshot(*snapshot)
+		if err != nil {
+			return err
+		}
+		resultJSON, err := json.Marshal(results)
+		if err != nil {
+			return err
+		}
+		if results == nil {
+			resultJSON = []byte("[]")
+		}
+		if err := validateNewRunReferences(ctx, tx, current); err != nil {
+			return err
+		}
+		query = `UPDATE runs SET status=?,execution_snapshot_json=?,delivery_results_json=?,finished_at=CASE WHEN ?='rejected' THEN ? ELSE finished_at END WHERE id=? AND status='awaiting_approval'`
+		arguments = []any{runStatus, string(encoded), string(resultJSON), decision, timeText(at), runID}
+		if err := replaceRunSnapshotReferences(ctx, tx, current); err != nil {
+			return err
+		}
 	}
 	runResult, err := tx.ExecContext(ctx, query, arguments...)
 	if err != nil {
@@ -798,6 +899,16 @@ WHERE a.id=? AND a.status='pending' AND r.status='awaiting_approval' AND e.owner
 				return nil, fmt.Errorf("%w: approval %s is stale or belongs to another environment owner", domain.ErrConflict, id)
 			}
 			return nil, err
+		}
+		if decision == "approved" {
+			r, e := getRunRecord(ctx, tx, runID)
+			if e != nil {
+				return nil, e
+			}
+			r.Status = domain.RunQueued
+			if e = domain.ValidateRunSnapshot(r); e != nil {
+				return nil, e
+			}
 		}
 		runIDs = append(runIDs, runID)
 	}

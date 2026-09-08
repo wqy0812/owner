@@ -6,7 +6,8 @@
 bin/
 data/
 coverage/
-output/
+output/*
+!output/go.mod
 web/node_modules/
 web/dist/
 web/coverage/

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
@@ -116,6 +117,34 @@ func (s *ExecutionService) readRunLogs(ctx context.Context, user domain.User, id
 	return snapshot, nil
 }
 
+// runLogSummary is an export-only identity projection, never an executable Run.
+type runLogSummary struct {
+	ID                    string            `json:"id"`
+	Kind                  domain.RunKind    `json:"kind"`
+	Status                domain.RunStatus  `json:"status"`
+	RequestedBy           string            `json:"requestedBy"`
+	EnvironmentID         string            `json:"environmentId"`
+	EnvironmentRevisionID string            `json:"environmentRevisionId"`
+	ComponentReleaseID    string            `json:"componentReleaseId,omitempty"`
+	ScenarioRevisionID    string            `json:"scenarioRevisionId,omitempty"`
+	Action                domain.ActionKind `json:"action,omitempty"`
+	Destructive           bool              `json:"destructive"`
+	ArtifactDigest        string            `json:"artifactDigest"`
+	RetryOfRunID          string            `json:"retryOfRunId,omitempty"`
+	RetryRootRunID        string            `json:"retryRootRunId,omitempty"`
+	RetryAttempt          int               `json:"retryAttempt,omitempty"`
+	RetryStartStep        int               `json:"retryStartStep,omitempty"`
+	Error                 string            `json:"error,omitempty"`
+	CreatedAt             time.Time         `json:"createdAt"`
+	StartedAt             *time.Time        `json:"startedAt,omitempty"`
+	FinishedAt            *time.Time        `json:"finishedAt,omitempty"`
+	Approval              *domain.Approval  `json:"approval,omitempty"`
+}
+
+func summarizeRunLogs(r domain.RunReadModel) runLogSummary {
+	return runLogSummary{ID: r.ID, Kind: r.Kind, Status: r.Status, RequestedBy: r.RequestedBy, EnvironmentID: r.EnvironmentID, EnvironmentRevisionID: r.EnvironmentRevisionID, ComponentReleaseID: r.ComponentReleaseID, ScenarioRevisionID: r.ScenarioRevisionID, Action: r.Action, Destructive: r.Destructive, ArtifactDigest: r.ArtifactDigest, RetryOfRunID: r.RetryOfRunID, RetryRootRunID: r.RetryRootRunID, RetryAttempt: r.RetryAttempt, RetryStartStep: r.RetryStartStep, Error: r.Error, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Approval: r.Approval}
+}
+
 type RunLogBundle struct {
 	File      *os.File
 	Filename  string
@@ -165,9 +194,7 @@ func (s *ExecutionService) RunLogBundle(ctx context.Context, user domain.User, i
 	}
 	diagnostics := RunDiagnostics{RunID: id, Status: snapshot.Run.Status, CapturedAt: snapshot.CapturedAt, LastLogID: snapshot.LastLogID, LogCount: snapshot.LogCount, Items: c.finish(snapshot.Run), Omitted: c.omitted}
 	// Run summary deliberately excludes the executable input snapshot.
-	run := snapshot.Run
-	run.InputSnapshot = nil
-	run.Steps = nil
+	run := summarizeRunLogs(snapshot.Run)
 	values := map[string]any{
 		"manifest.json": map[string]any{"formatVersion": "clusterforge-run-logs-v1", "runId": id, "capturedAt": snapshot.CapturedAt, "lastLogId": snapshot.LastLogID, "logCount": snapshot.LogCount, "status": run.Status, "snapshot": run.FinishedAt == nil},
 		"run.json":      run, "steps.json": snapshot.Run.Steps, "diagnostics.json": diagnostics,

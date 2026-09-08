@@ -1,6 +1,8 @@
 package api
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"testing"
@@ -33,7 +35,7 @@ func addSharedResetRecords(t *testing.T, f *apiFixture) []domain.EnvironmentComp
 		if i == 1 {
 			address = "192.0.2.51"
 		}
-		inventory.Hosts = append(inventory.Hosts, service.InventoryHost{Name: group, Address: address, Groups: []string{group}})
+		inventory.Hosts = append(inventory.Hosts, domain.RunInventoryHost{Name: group, Address: address, Groups: []string{group}})
 	}
 	revision.ID, revision.Revision, revision.CreatedAt = "environment-test-r2-shared", 2, now
 	revision.Variables = map[string]string{"FILE_STATION": "192.0.2.50:8080", "IMAGE_REGISTRY": "192.0.2.51:5000"}
@@ -45,9 +47,9 @@ func addSharedResetRecords(t *testing.T, f *apiFixture) []domain.EnvironmentComp
 	for _, group := range []string{"file_station", "image_registry"} {
 		backup := domain.BackupMetadata{EnvironmentID: revision.EnvironmentID, ComponentID: "component-test-runtime", ReleaseID: "release-test-runtime-1.0.0", ActionID: "action-test-runtime-install-1.0", InstallRunID: "run-shared-" + group, NodeID: group, CapturedAt: now, PlaybookSHA256: "shared-service-evidence"}
 		source := domain.Run{ID: backup.InstallRunID, Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: backup.ReleaseID, CreatedAt: now, FinishedAt: &now,
-			InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": group, "sourceNodeId": group, "componentId": backup.ComponentID, "releaseId": backup.ReleaseID, "actionId": backup.ActionID, "action": "install", "limit": group}}},
+			Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": group, "nodeId": group, "sourceNodeId": group, "componentId": backup.ComponentID, "releaseId": backup.ReleaseID, "actionId": backup.ActionID, "action": "install", "limit": group}}}),
 		}
-		if err := f.database.CreateRun(ctx, source, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, f.database.DB(), source, nil); err != nil {
 			t.Fatal(err)
 		}
 		item := domain.EnvironmentComponentInstallation{EnvironmentID: revision.EnvironmentID, ComponentID: backup.ComponentID, ReleaseID: backup.ReleaseID, NodeID: group, InstallRunID: source.ID, BackupRef: "/shared-backups/" + group, Backup: backup, TestOnly: true, InstalledAt: now}

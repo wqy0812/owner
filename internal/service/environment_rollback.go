@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -19,18 +18,18 @@ type EnvironmentRollbackRequest struct {
 }
 
 type EnvironmentRollbackPlan struct {
-	TargetHosts           []InventoryHost             `json:"targetHosts"`
-	EnvironmentID         string                      `json:"environmentId"`
-	EnvironmentName       string                      `json:"environmentName"`
-	EnvironmentRevisionID string                      `json:"environmentRevisionId"`
-	Sources               []EnvironmentRollbackSource `json:"sources"`
-	ComponentCount        int                         `json:"componentCount"`
-	NodeCount             int                         `json:"nodeCount"`
-	Destructive           bool                        `json:"destructive"`
-	RequiresApproval      bool                        `json:"requiresApproval"`
-	PlanDigest            string                      `json:"planDigest"`
-	Steps                 []ComponentTestPlanStep     `json:"steps"`
-	DeliveryRequirements  []mediadelivery.Requirement `json:"deliveryRequirements"`
+	TargetHosts           []domain.RunInventoryHost       `json:"targetHosts"`
+	EnvironmentID         string                          `json:"environmentId"`
+	EnvironmentName       string                          `json:"environmentName"`
+	EnvironmentRevisionID string                          `json:"environmentRevisionId"`
+	Sources               []EnvironmentRollbackSource     `json:"sources"`
+	ComponentCount        int                             `json:"componentCount"`
+	NodeCount             int                             `json:"nodeCount"`
+	Destructive           bool                            `json:"destructive"`
+	RequiresApproval      bool                            `json:"requiresApproval"`
+	PlanDigest            string                          `json:"planDigest"`
+	Steps                 []ComponentTestPlanStep         `json:"steps"`
+	DeliveryRequirements  []domain.RunDeliveryRequirement `json:"deliveryRequirements"`
 }
 
 type EnvironmentRollbackSource struct {
@@ -44,8 +43,8 @@ type preparedEnvironmentRollback struct {
 	environment        domain.Environment
 	sourceRuns         []domain.Run
 	installationsByRun map[string][]domain.EnvironmentComponentInstallation
-	steps              []lockedStep
-	targetHosts        []InventoryHost
+	steps              []domain.RunPlanStep
+	targetHosts        []domain.RunInventoryHost
 }
 
 func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User, environmentID string) (EnvironmentRollbackPlan, error) {
@@ -60,8 +59,8 @@ func (p *ExecutionService) PreviewRollback(ctx context.Context, user domain.User
 		return EnvironmentRollbackPlan{
 			EnvironmentID: prepared.environment.ID, EnvironmentName: prepared.environment.Name,
 			EnvironmentRevisionID: prepared.environment.Revision.ID,
-			TargetHosts:           []InventoryHost{}, Sources: []EnvironmentRollbackSource{},
-			Steps: []ComponentTestPlanStep{}, DeliveryRequirements: []mediadelivery.Requirement{},
+			TargetHosts:           []domain.RunInventoryHost{}, Sources: []EnvironmentRollbackSource{},
+			Steps: []ComponentTestPlanStep{}, DeliveryRequirements: []domain.RunDeliveryRequirement{},
 		}, nil
 	}
 	plan, digest, destructive, err := p.planner.prepareLockedPlan(ctx, prepared.environment, domain.RunEnvironmentRollback, "preview", prepared.sourceRuns[0].CreatedAt, prepared.steps)
@@ -159,7 +158,7 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 		if err != nil {
 			return preparedEnvironmentRollback{}, fmt.Errorf("%w: source installation Run %s no longer exists", domain.ErrConflict, sourceRunID)
 		}
-		if sourceRun.InputSnapshot["executionMode"] == "upgrade" {
+		if sourceRun.Snapshot.ScenarioExecution.Mode == "upgrade" {
 			return preparedEnvironmentRollback{}, fmt.Errorf("%w: 环境包含场景升级历史，整集群清空回滚不可用；请按保留的恢复作业恢复来源版本并执行基线复核", domain.ErrConflict)
 		}
 		if sourceRun.EnvironmentID != environmentID || (sourceRun.Kind != domain.RunScenario && sourceRun.Kind != domain.RunScenarioTest && sourceRun.Kind != domain.RunComponentTest) {
@@ -191,9 +190,9 @@ func (p *PlanBuilder) prepareEnvironmentRollback(ctx context.Context, user domai
 	})
 	releases := map[string]domain.ComponentRelease{}
 	covered := map[string]bool{}
-	steps := make([]lockedStep, 0)
+	steps := make([]domain.RunPlanStep, 0)
 	for _, sourceRun := range sourceRuns {
-		sourcePlan, err := mapToPlan(sourceRun.InputSnapshot)
+		sourcePlan, err := planFromRun(sourceRun)
 		if err != nil {
 			return preparedEnvironmentRollback{}, fmt.Errorf("%w: source Run %s has no usable locked plan", domain.ErrConflict, sourceRun.ID)
 		}
@@ -287,7 +286,7 @@ func rollbackVariablesFromInstall(values map[string]any, sourceRevision, current
 	return output
 }
 
-func (p *PlanBuilder) environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan lockedPlan, digest string, destructive bool) EnvironmentRollbackPlan {
+func (p *PlanBuilder) environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan domain.RunExecutionPlan, digest string, destructive bool) EnvironmentRollbackPlan {
 	base := p.componentTestPlanDTO(ctx, prepared.environment, plan, digest, destructive)
 	return EnvironmentRollbackPlan{
 		TargetHosts:   prepared.targetHosts,
@@ -311,7 +310,7 @@ func environmentRollbackSources(prepared preparedEnvironmentRollback) []Environm
 	return sources
 }
 
-func countStepComponents(steps []lockedStep) int {
+func countStepComponents(steps []domain.RunPlanStep) int {
 	components := map[string]struct{}{}
 	for _, step := range steps {
 		components[step.ComponentID] = struct{}{}
@@ -319,20 +318,20 @@ func countStepComponents(steps []lockedStep) int {
 	return len(components)
 }
 
-func installationBaselineFromSteps(steps []lockedStep) []lockedInstallationBaseline {
-	byComponent := map[string]lockedInstallationBaseline{}
+func installationBaselineFromSteps(steps []domain.RunPlanStep) []domain.RunInstallationBaseline {
+	byComponent := map[string]domain.RunInstallationBaseline{}
 	for _, step := range steps {
 		if step.Action != domain.ActionRollback && step.Action != domain.ActionUninstall || step.Backup == nil {
 			continue
 		}
-		byComponent[step.ComponentID+"/"+step.Backup.NodeID] = lockedInstallationBaseline{
+		byComponent[step.ComponentID+"/"+step.Backup.NodeID] = domain.RunInstallationBaseline{
 			NodeID:      step.Backup.NodeID,
 			ComponentID: step.ComponentID, ReleaseID: step.Backup.ReleaseID,
 			InstallRunID: step.Backup.InstallRunID, BackupRef: step.BackupRef,
 			PlaybookSHA256: step.Backup.PlaybookSHA256,
 		}
 	}
-	baseline := make([]lockedInstallationBaseline, 0, len(byComponent))
+	baseline := make([]domain.RunInstallationBaseline, 0, len(byComponent))
 	for _, item := range byComponent {
 		baseline = append(baseline, item)
 	}
@@ -342,13 +341,13 @@ func installationBaselineFromSteps(steps []lockedStep) []lockedInstallationBasel
 	return baseline
 }
 
-func installationBaselineDigest(baseline []lockedInstallationBaseline) string {
+func installationBaselineDigest(baseline []domain.RunInstallationBaseline) string {
 	encoded, _ := json.Marshal(baseline)
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }
 
-func isFinalCleanupStep(steps []lockedStep, index int) bool {
+func isFinalCleanupStep(steps []domain.RunPlanStep, index int) bool {
 	for later := index + 1; later < len(steps); later++ {
 		if steps[later].ComponentID == steps[index].ComponentID && (steps[later].Action == domain.ActionRollback || steps[later].Action == domain.ActionUninstall) {
 			return false
@@ -357,7 +356,7 @@ func isFinalCleanupStep(steps []lockedStep, index int) bool {
 	return true
 }
 
-func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error {
+func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan domain.RunExecutionPlan) error {
 	if run.Kind == domain.RunEnvironmentRollback {
 		revision, err := r.store.GetEnvironmentRevision(ctx, run.EnvironmentRevisionID)
 		if err != nil {

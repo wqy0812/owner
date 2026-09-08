@@ -1,0 +1,179 @@
+{
+  "slug": "kube-proxy",
+  "name": "kube-proxy",
+  "description": "管理六节点 kube-proxy DaemonSet、Service 转发及其网络规则恢复。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "control_plane_endpoint",
+      "description": "控制面 API 入口；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    },
+    {
+      "name": "pod_network_cidr",
+      "description": "Pod 网络 CIDR；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    },
+    {
+      "name": "admin_kubeconfig_path",
+      "description": "管理员 kubeconfig 路径；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "configuration",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "control_plane_endpoint",
+          "targetParameter": "control_plane_endpoint"
+        },
+        {
+          "upstreamParameter": "admin_kubeconfig_path",
+          "targetParameter": "admin_kubeconfig_path"
+        }
+      ]
+    },
+    {
+      "component": "kubernetes-bootstrap-rbac",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kube-apiserver",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kube-controller-manager",
+      "version": "1.17.5-env2.1",
+      "kind": "configuration",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "pod_network_cidr",
+          "targetParameter": "pod_network_cidr"
+        }
+      ]
+    },
+    {
+      "component": "kubelet",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [
+    {
+      "logicalName": "kube_proxy",
+      "digest": "sha256:6a7753fb66cc1736bb2bde941549d73efd71aca24fc9c54035f1ce4aaf0c8971",
+      "sourceRef": "registry.example.invalid/components/kube-proxy/kube_proxy@sha256:6a7753fb66cc1736bb2bde941549d73efd71aca24fc9c54035f1ce4aaf0c8971"
+    }
+  ],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

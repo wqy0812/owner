@@ -1,6 +1,7 @@
 package seed
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -450,11 +451,12 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		if err != nil || run.Status != domain.RunAwaitingApproval {
 			t.Fatalf("scenario %s run=%+v err=%v", expectation.revisionID, run, err)
 		}
-		steps, ok := run.InputSnapshot["steps"].([]any)
+		steps := runfixture.StepMaps(run.Snapshot.Plan.Steps)
+		ok := steps != nil
 		if !ok || len(steps) != expectation.steps {
-			t.Fatalf("scenario %s locked steps=%#v", expectation.revisionID, run.InputSnapshot["steps"])
+			t.Fatalf("scenario %s locked steps=%#v", expectation.revisionID, run.Snapshot.Plan.Steps)
 		}
-		snapshotJSON, _ := json.Marshal(run.InputSnapshot)
+		snapshotJSON, _ := json.Marshal(run.Snapshot)
 		if strings.Contains(string(snapshotJSON), "NEWPLATFORM_OPENFUYAO_") {
 			t.Fatalf("scenario %s snapshot retained a credential reference target", expectation.revisionID)
 		}
@@ -530,7 +532,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 		if err != nil || componentRun.Status != domain.RunAwaitingApproval {
 			t.Fatalf("component test %s run=%+v err=%v", releaseID, componentRun, err)
 		}
-		steps := componentRun.InputSnapshot["steps"].([]any)
+		steps := runfixture.StepMaps(componentRun.Snapshot.Plan.Steps)
 		variables := steps[0].(map[string]any)["variables"].(map[string]any)
 		defaults := componentDefaults[releaseID]
 		if variables["target_host_group"] != defaults.group {

@@ -58,13 +58,13 @@ construction = source[start:end]
 names = ['remote_artifact', 'checksum', 'remote_backup_artifact', 'backup_checksum',
          'remote_helper', 'remote_helper_checksum', 'allow_active_runs', 'rebuild_v1_db',
          'ui_index_checksum', 'ui_version_checksum', 'disable_catalog_backup',
-         'BUSINESS_RESET_DIR', 'remote_job_artifact', 'job_checksum', 'initialize_empty_db']
+         'BUSINESS_RESET_DIR', 'remote_job_artifact', 'job_checksum', 'initialize_empty_db', 'VERIFIED_RUN_MIGRATION']
 for reset in ['', '/path with spaces/reset']:
-    values = ['value-' + str(i) for i in range(1, 16)]
+    values = ['value-' + str(i) for i in range(1, 17)]
     values[0], values[11], values[14] = "/artifact with 'quotes'", reset, '1'
     setup = '\n'.join(name+'='+shlex.quote(value) for name, value in zip(names, values))
     body = setup+'\n'+construction+'\nbash -c "$activate_command" <<\'REMOTE_CHECK\'\n'
-    body += 'test "$#" -eq 15\n'
+    body += 'test "$#" -eq 16\n'
     for index, value in enumerate(values, 1):
         body += 'test "${'+str(index)+'}" = '+shlex.quote(value)+'\n'
     body += 'REMOTE_CHECK\n'
@@ -217,8 +217,8 @@ connection.execute("INSERT INTO component_release_lines(id,component_id,name,cre
 connection.execute("INSERT INTO component_releases(id,component_id,line_id,version,status,compatibility,created_at) VALUES('release','component','line','1.0.0','draft','not_applicable',?)", (stamp,))
 connection.execute("INSERT INTO environments(id,name,owner_id,created_at,updated_at) VALUES('environment','Environment','environment-owner',?,?)", (stamp, stamp))
 connection.execute("INSERT INTO environment_revisions(id,environment_id,revision,created_at) VALUES('revision','environment',1,?)", (stamp,))
-snapshot = json.dumps({'componentReleaseSpecDigest': 'contract', 'componentTestEvidence': 'install_verify'})
-connection.execute("INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,input_snapshot_json,created_at) VALUES('run','component_test','succeeded','owner','environment','revision','release',?,?)", (snapshot, stamp))
+snapshot = json.dumps({'contract':'clusterforge-run-v1','subject':{'componentReleaseSpecDigest': 'contract', 'componentTestEvidence': 'install_verify'},'plan':{'steps':[],'parentSteps':[],'runtime':{'ansibleCore':'2.8.8','python':'3.6.9'},'treeDigest':''},'inputs':{'credentialRefs':[]},'delivery':{}})
+connection.execute("INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,execution_snapshot_json,created_at) VALUES('run','component_test','succeeded','owner','environment','revision','release',?,?)", (snapshot, stamp))
 connection.commit()
 connection.close()
 PY_CURRENT

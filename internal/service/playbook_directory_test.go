@@ -16,7 +16,12 @@ import (
 
 func directoryDeletionFixture(t *testing.T) (*Platform, *store.Store, string, domain.User, domain.ComponentRelease) {
 	t.Helper()
-	p, db, root := componentImportRecoveryPlatform(t)
+	return directoryDeletionFixtureAt(t, ":memory:")
+}
+
+func directoryDeletionFixtureAt(t *testing.T, databasePath string) (*Platform, *store.Store, string, domain.User, domain.ComponentRelease) {
+	t.Helper()
+	p, db, root := componentImportRecoveryPlatformAt(t, databasePath)
 	ctx := context.Background()
 	owner := domain.User{ID: "component-import-owner", Role: domain.RoleComponentOwner}
 	now := time.Now().UTC()

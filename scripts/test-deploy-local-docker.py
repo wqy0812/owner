@@ -20,6 +20,20 @@ spec.loader.exec_module(deploy)
 
 
 class SourceTests(unittest.TestCase):
+    def test_isolated_source_index_preserves_inputs_and_excludes_later_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".gitignore").write_text("retained-input\noutput/\nweb/node_modules/\n")
+            (root / "retained-input").write_text("already tracked in original checkout")
+            (root / "new-source").write_text("uncommitted source")
+            deploy.index_source_copy(root)
+            before = deploy.source_files(root)
+            self.assertEqual(set(before), {Path(".gitignore"), Path("retained-input"), Path("new-source")})
+            (root / "output").mkdir()
+            (root / "output/log").write_text("test evidence")
+            self.assertEqual(deploy.source_files(root), before)
+            subprocess.run(["git", "diff", "--check"], cwd=root, check=True)
+
     def test_dirty_untracked_deleted_and_permissions_change_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -206,6 +220,38 @@ class RuntimeBuildTests(unittest.TestCase):
 
 
 class ActivationTests(unittest.TestCase):
+    def test_partial_configuration_copy_restores_original_files_and_image(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(deploy, "run", return_value="resolved configuration"):
+            task = FakeDeployment(Path(temporary))
+            task.config = Path(temporary) / "config"
+            task.build = Path(temporary) / "build"
+            task.manifest = {"uiVersion": "candidate"}
+            for directory in (task.config, task.build):
+                (directory / "bin").mkdir(parents=True)
+            names = ["Dockerfile", "Dockerfile.runtime", "entrypoint.sh", "healthcheck.sh", "inventory.ini", "smoke.yml", "verify.py", "deployment.json", "last-verified.txt"]
+            for name in names:
+                (task.config / name).write_text("original " + name)
+                (task.build / name).write_text("candidate " + name)
+            (task.build / "Dockerfile").write_text("FROM ${RUNTIME_IMAGE}\nRUN true\n")
+            (task.config / "bin/server").write_text("original binary")
+            (task.build / "bin/server").write_text("candidate binary")
+            before = {path.relative_to(task.config): path.read_bytes() for path in task.config.rglob("*") if path.is_file()}
+            copy = deploy.shutil.copy2
+            def failing_copy(source, target, *args, **kwargs):
+                if Path(source) == task.build / "healthcheck.sh":
+                    raise OSError("configuration copy interrupted")
+                return copy(source, target, *args, **kwargs)
+            with patch.object(task, "save_configuration", lambda: deploy.Deployment.save_configuration(task)), \
+                 patch.object(task, "sync_configuration", lambda: deploy.Deployment.sync_configuration(task)), \
+                 patch.object(deploy.shutil, "copy2", side_effect=failing_copy):
+                with self.assertRaisesRegex(OSError, "configuration copy interrupted"):
+                    task.activate()
+            self.assertTrue(task.config_changed)
+            task.rollback()
+            self.assertEqual(before, {path.relative_to(task.config): path.read_bytes() for path in task.config.rglob("*") if path.is_file()})
+            self.assertEqual(task.current_image, task.old_image)
+            self.assertFalse(json.loads((task.record / "result.json").read_text())["databaseRestored"])
+
     def test_active_work_or_changed_source_never_stops_service(self):
         for failure in ["active", "source"]:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary, patch.object(deploy, "run", return_value="resolved configuration"):

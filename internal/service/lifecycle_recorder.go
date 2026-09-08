@@ -10,7 +10,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (r *LifecycleRecorder) recordSuccessfulLifecycleStep(ctx context.Context, run domain.Run, step lockedStep, installedAt time.Time) error {
+func (r *LifecycleRecorder) recordSuccessfulLifecycleStep(ctx context.Context, run domain.Run, step domain.RunPlanStep, installedAt time.Time) error {
 	switch step.Action {
 	case domain.ActionInstall, domain.ActionConfigure, domain.ActionUpgrade:
 		if step.Backup == nil || step.BackupRef == "" {
@@ -65,7 +65,7 @@ func (r *LifecycleRecorder) finishRun(run domain.Run, status domain.RunStatus, c
 		_ = r.store.MarkScenarioBaselineUnverified(context.Background(), run)
 	}
 	if run.Kind == domain.RunComponentTest && run.Action != domain.ActionRollback && status == domain.RunSucceeded {
-		lockedDigest, _ := run.InputSnapshot["componentReleaseSpecDigest"].(string)
+		lockedDigest := run.Snapshot.Subject.ComponentReleaseSpecDigest
 		current, currentErr := r.store.GetComponentRelease(context.Background(), run.ComponentReleaseID)
 		if currentErr == nil && lockedDigest != "" && componentReleaseSpecDigest(current) == lockedDigest {
 			r.hub.Publish("release.readiness_updated", map[string]any{"releaseId": run.ComponentReleaseID, "runId": run.ID})

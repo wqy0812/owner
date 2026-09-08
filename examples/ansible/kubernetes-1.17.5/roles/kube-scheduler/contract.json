@@ -1,0 +1,153 @@
+{
+  "slug": "kube-scheduler",
+  "name": "kube-scheduler",
+  "description": "部署 Kubernetes 1.17.5 调度器及其静态 Pod 配置。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "pki_dir",
+      "description": "集群证书目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    },
+    {
+      "name": "admin_kubeconfig_path",
+      "description": "管理员 kubeconfig 路径；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "pki_dir",
+          "targetParameter": "pki_dir"
+        },
+        {
+          "upstreamParameter": "admin_kubeconfig_path",
+          "targetParameter": "admin_kubeconfig_path"
+        }
+      ]
+    },
+    {
+      "component": "kube-apiserver",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kubelet",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [
+    {
+      "logicalName": "kube_scheduler",
+      "digest": "sha256:60d50ba2115e7fbd85b3eace476a620192d6241620cdd4c168a4f44e36410ab9",
+      "sourceRef": "registry.example.invalid/components/kube-scheduler/kube_scheduler@sha256:60d50ba2115e7fbd85b3eace476a620192d6241620cdd4c168a4f44e36410ab9"
+    }
+  ],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

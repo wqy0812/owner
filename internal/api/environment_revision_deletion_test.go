@@ -1,6 +1,8 @@
 package api
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"errors"
 	"fmt"
@@ -72,7 +74,7 @@ func TestEnvironmentRevisionDeletionAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Another version's run must not prohibit cleaning this unused version.
-	if err := f.database.CreateRun(ctx, domain.Run{ID: "another-version-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[1], InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &now}, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "another-version-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[1], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}, nil); err != nil {
 		t.Fatal(err)
 	}
 	preview := f.request(http.MethodGet, path+"/deletion-impact", nil, owner)
@@ -144,7 +146,7 @@ func TestEnvironmentRevisionDeletionRetainsEveryRunStatus(t *testing.T) {
 			ctx := context.Background()
 			now := time.Now().UTC()
 			if status == "cleaned" {
-				_, err := f.database.DB().ExecContext(ctx, `INSERT INTO run_cleanup_history(id,kind,status,requested_by,environment_id,environment_revision_id,action_kind,created_at,finished_at,cleaned_at,actor_id,reason,identity_json) VALUES('cleaned','component_test','failed',?, ?,?,'install',?,?,?,?,'manual','{}')`, seed.EnvironmentOwnerID, id, ids[0], now, now, now, seed.EnvironmentOwnerID)
+				_, err := f.database.DB().ExecContext(ctx, `INSERT INTO run_cleanup_history(id,kind,status,requested_by,environment_id,environment_revision_id,action_kind,created_at,finished_at,cleaned_at,actor_id,reason,release_locks_json) VALUES('cleaned','component_test','failed',?, ?,?,'install',?,?,?,?,'manual','[]')`, seed.EnvironmentOwnerID, id, ids[0], now, now, now, seed.EnvironmentOwnerID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -153,7 +155,7 @@ func TestEnvironmentRevisionDeletionRetainsEveryRunStatus(t *testing.T) {
 				if status == "archived" {
 					runStatus = domain.RunFailed
 				}
-				if err := f.database.CreateRun(ctx, domain.Run{ID: "retained", Kind: domain.RunComponentTest, Status: runStatus, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[0], InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &now}, nil); err != nil {
+				if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "retained", Kind: domain.RunComponentTest, Status: runStatus, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[0], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}, nil); err != nil {
 					t.Fatal(err)
 				}
 				if status == "archived" {

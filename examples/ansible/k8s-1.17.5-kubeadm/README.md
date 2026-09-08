@@ -1,5 +1,7 @@
 # Kubernetes 1.17.5 kubeadm sample
 
+> 此目录保留为历史参考及旧测试夹具。当前已发布组件与场景参考见 [kubernetes-1.17.5](../kubernetes-1.17.5/README.md)；本目录的原门禁保留在 `make test-historical-reference-playbooks`。
+
 This is a fresh, self-contained sample for the manual platform workflow. It
 does not import or depend on any of the repository's seeded demo jobs.
 

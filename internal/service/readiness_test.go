@@ -68,24 +68,24 @@ func TestReleaseReadinessExplainsLifecycleContractAndEvidenceBlockers(t *testing
 }
 
 func TestComponentTestEvidenceRequiresAllBoundPhases(t *testing.T) {
-	main := lockedStep{ActionID: "rollback", ParentActionID: "rollback", Phase: "execute", Action: domain.ActionRollback, SourceNodeID: "node"}
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{main}); got != "incomplete" {
+	main := domain.RunPlanStep{ActionID: "rollback", ParentActionID: "rollback", Phase: "execute", Action: domain.ActionRollback, SourceNodeID: "node"}
+	if got := componentTestEvidence(domain.ActionRollback, []domain.RunPlanStep{main}); got != "incomplete" {
 		t.Fatalf("body alone gave evidence: %s", got)
 	}
 	main.Tags = []string{rollbackSelfVerifyTag}
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{main}); got != "incomplete" {
+	if got := componentTestEvidence(domain.ActionRollback, []domain.RunPlanStep{main}); got != "incomplete" {
 		t.Fatalf("tag gave evidence: %s", got)
 	}
-	pre := lockedStep{ParentActionID: "rollback", Phase: "pre", Action: domain.ActionCheck, SourceNodeID: "node"}
+	pre := domain.RunPlanStep{ParentActionID: "rollback", Phase: "pre", Action: domain.ActionCheck, SourceNodeID: "node"}
 	post := pre
 	post.Phase = "post"
-	if got := componentTestEvidence(domain.ActionRollback, []lockedStep{pre, main, post}); got != "rollback_verify" {
+	if got := componentTestEvidence(domain.ActionRollback, []domain.RunPlanStep{pre, main, post}); got != "rollback_verify" {
 		t.Fatalf("full flow evidence: %s", got)
 	}
 }
 
 func TestConfigureOnlyDoesNotProvideInstallEvidence(t *testing.T) {
-	steps := []lockedStep{
+	steps := []domain.RunPlanStep{
 		{ParentActionID: "configure", Phase: "pre", Action: domain.ActionCheck},
 		{ActionID: "configure", Phase: "execute", Action: domain.ActionConfigure},
 		{ParentActionID: "configure", Phase: "post", Action: domain.ActionCheck},

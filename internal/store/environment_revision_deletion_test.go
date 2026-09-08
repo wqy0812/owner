@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"errors"
@@ -102,7 +103,7 @@ func TestEnvironmentRevisionDeletionConcurrentRunReference(t *testing.T) {
 		go func() { <-start; deleted <- a.DeleteEnvironmentRevision(ctx, e.ID, r.ID, e.OwnerID, audit) }()
 		go func() {
 			<-start
-			created <- b.CreateRun(ctx, domain.Run{ID: e.ID + "-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: e.OwnerID, EnvironmentID: e.ID, EnvironmentRevisionID: r.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow, FinishedAt: &testNow}, nil)
+			created <- b.CreateRun(ctx, domain.Run{ID: e.ID + "-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: e.OwnerID, EnvironmentID: e.ID, EnvironmentRevisionID: r.ID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: testNow, FinishedAt: &testNow}, nil)
 		}()
 		close(start)
 		deleteErr, createErr := <-deleted, <-created

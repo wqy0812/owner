@@ -1,6 +1,8 @@
 package api
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -88,8 +90,8 @@ func readModelScaleFixture(t *testing.T) *Handler {
 		} else if i%9 == 0 {
 			status = domain.RunFailed
 		}
-		run := domain.Run{ID: fmt.Sprintf("perf-run-%03d", i), Kind: domain.RunComponentTest, Status: status, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: domain.ActionInstall, CreatedAt: at, FinishedAt: &at, InputSnapshot: map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(r), "componentTestEvidence": "install_verify", "payload": strings.Repeat("x", 16*1024)}}
-		if err := db.CreateRun(ctx, run, nil); err != nil {
+		run := domain.Run{ID: fmt.Sprintf("perf-run-%03d", i), Kind: domain.RunComponentTest, Status: status, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: domain.ActionInstall, CreatedAt: at, FinishedAt: &at, Snapshot: runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(r), "componentTestEvidence": "install_verify", "steps": []any{map[string]any{"variables": map[string]any{"payload": strings.Repeat("x", 16*1024)}}}})}
+		if err := testutil.InsertRunRecord(ctx, db.DB(), run, nil); err != nil {
 			t.Fatal(err)
 		}
 		for _, kind := range []string{"install", "verify"} {

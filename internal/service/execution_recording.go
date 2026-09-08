@@ -9,7 +9,6 @@ import (
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/store"
 )
 
 func (r *LifecycleRecorder) markMutation(ctx context.Context, run domain.Run) error {
@@ -18,7 +17,7 @@ func (r *LifecycleRecorder) markMutation(ctx context.Context, run domain.Run) er
 
 // beginStep returns the persisted step even when its receipt cannot be saved,
 // so the executor can still attribute the failed stage to that same step.
-func (r *LifecycleRecorder) beginStep(ctx context.Context, run domain.Run, locked lockedStep, result ansiblerunner.JobStepResult) (domain.RunStep, error) {
+func (r *LifecycleRecorder) beginStep(ctx context.Context, run domain.Run, locked domain.RunPlanStep, result ansiblerunner.JobStepResult) (domain.RunStep, error) {
 	if locked.Phase == "execute" || locked.MayMutate {
 		if err := r.markMutation(ctx, run); err != nil {
 			return domain.RunStep{}, err
@@ -37,7 +36,7 @@ func (r *LifecycleRecorder) beginStep(ctx context.Context, run domain.Run, locke
 	return step, nil
 }
 
-func (r *LifecycleRecorder) completeStep(ctx context.Context, run domain.Run, locked lockedStep, parents []lockedStep, step domain.RunStep, result ansiblerunner.JobStepResult) (domain.RunStep, error) {
+func (r *LifecycleRecorder) completeStep(ctx context.Context, run domain.Run, locked domain.RunPlanStep, parents []domain.RunPlanStep, step domain.RunStep, result ansiblerunner.JobStepResult) (domain.RunStep, error) {
 	step.Status, step.FinishedAt, step.Summary = domain.RunSucceeded, &result.FinishedAt, recapSummary(result.Hosts)
 	if locked.Phase == "execute" {
 		if err := r.recordBoundaryReceipt(ctx, run, locked, "execute", "end", result.StartedAt); err != nil {
@@ -104,14 +103,14 @@ func (r *LifecycleRecorder) recordFailedSteps(stages []ansiblerunner.JobStepResu
 	}
 }
 
-func (p *LifecycleRecorder) recordActionReceipt(ctx context.Context, run domain.Run, step lockedStep, status string, started time.Time) error {
+func (p *LifecycleRecorder) recordActionReceipt(ctx context.Context, run domain.Run, step domain.RunPlanStep, status string, started time.Time) error {
 	if step.Backup == nil {
 		return fmt.Errorf("execution is missing its recovery baseline")
 	}
-	return p.store.RecordActionExecution(ctx, store.ActionExecutionReceipt{RunID: run.ID, StepID: step.ID, EnvironmentID: run.EnvironmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ActionID: step.ActionID, SourceNodeID: step.SourceNodeID, Status: status, BackupRef: step.BackupRef, Backup: *step.Backup, StartedAt: started, UpdatedAt: time.Now().UTC()})
+	return p.store.RecordActionExecution(ctx, domain.ActionExecutionReceipt{RunID: run.ID, StepID: step.ID, EnvironmentID: run.EnvironmentID, ComponentID: step.ComponentID, ReleaseID: step.ReleaseID, ActionID: step.ActionID, SourceNodeID: step.SourceNodeID, Status: status, BackupRef: step.BackupRef, Backup: *step.Backup, StartedAt: started, UpdatedAt: time.Now().UTC()})
 }
 
-func (r *LifecycleRecorder) recordBoundaryReceipt(ctx context.Context, run domain.Run, step lockedStep, phase, boundary string, started time.Time) error {
+func (r *LifecycleRecorder) recordBoundaryReceipt(ctx context.Context, run domain.Run, step domain.RunPlanStep, phase, boundary string, started time.Time) error {
 	status, err := ansiblerunner.ActionBoundaryStatus(phase, boundary)
 	if err != nil {
 		return err

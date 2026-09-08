@@ -396,6 +396,6 @@ func (s *Store) ProtectedArchivePaths(ctx context.Context) (map[string]bool, err
 }
 func (s *Store) RunArchiveBytes(ctx context.Context, id string) (int64, error) {
 	var n int64
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(length(CAST(message AS BLOB))+512),0)+(SELECT length(input_snapshot_json) FROM runs WHERE id=?) FROM run_logs WHERE run_id=?`, id, id).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(length(CAST(message AS BLOB))+512),0)+(SELECT length(execution_snapshot_json) FROM runs WHERE id=?) FROM run_logs WHERE run_id=?`, id, id).Scan(&n)
 	return n, err
 }

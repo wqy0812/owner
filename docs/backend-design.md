@@ -202,7 +202,7 @@ Released Release 不可修改。创建 Draft 必须先预览并提交 `expectedP
 
 每个 Release 保存不可变的 `playbook_workspace_root` 和全树摘要。新目录由组件 slug、发布线业务名称和版本业务名称规范化生成，并在版本段追加完整、不可变的 Release ID；数据库唯一索引提供第二道碰撞防线。Draft 改版本号或发布线名称时先验证并移动目录，再提交数据库引用，失败时恢复原目录；Released/Deprecated 根目录保持冻结。已保存 Action 的 Kind 不可修改，平台把入口固定为 `<kind>.yml`。运行按 Release 验证并复制工作区；Verify/Inspect 可在同一 Run 内复用只读快照，其他动作使用隔离快照，每步后重新校验全树摘要。
 
-结构合同 `clusterforge-v1-20260907-no-resource-contract` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节或整目录文件快照（`kind=file/directory`，每个 Release 最多一条记录）。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期同样只维护当前合同，详见[场景生命周期](scenario-lifecycle.md)。
+当前结构合同 `clusterforge-v1-20260908-typed-run-snapshot` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节或整目录文件快照（`kind=file/directory`，每个 Release 最多一条记录）。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期同样只维护当前合同，详见[场景生命周期](scenario-lifecycle.md)。
 
 未发布 Draft 可随时废弃，即使已经产生或正在产生验证 Run；废弃只关闭编辑与候选共享，不删除合同或证据。未发布的 Deprecated Release 可恢复为 Draft，但同一发布线已有其他 Draft、或同一父版本已有其他有效后继时恢复失败关闭。永久删除仅接受从未发布且已废弃的 Release；事务内再次确认不存在组件/场景 Run、镜像构建、下游依赖、场景 Revision 引用、其他 Release/Action 合同引用或环境安装记录，然后删除 Release 自有合同数据及空发布线，并保留 `component_release.deleted` 审计。已发布版本永不物理删除。
 
@@ -337,7 +337,7 @@ SQLite 主要表如下：
 
 时间统一以 UTC RFC3339Nano 文本保存。JSON 结构存入 TEXT 字段，包括参数合同、映射、约束、DAG、Inventory、环境参数、环境变量、CredentialRefs 和运行快照。`component_releases.parameters_json` 与 `component_dependencies.parameter_mappings_json` 是组件合同，`environment_revisions.parameters_json` 保存环境 Owner 的结构化值；`environment_variable_definitions` 保存当前变量字段目录；旧全局参数两表只保留结构，不参与业务读写。
 
-Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`component_evidence_kind` 从 `input_snapshot_json` 派生，`evidence_at` 从完成时间或创建时间派生。JSON 是证据元数据的唯一写入来源，生成列不能独立修改；缺失或非字符串元数据保持 NULL。成功组件测试的部分索引按 Release、当前合同摘要和证据类型定位最新记录，不再按运行时标签筛选。回滚证据分别从 `rollback_verify`、`rollback_self_verify` 中取最新一条，再比较最多两条记录；`rollback_only` 不满足回滚验证门禁。时间相同时使用 Run ID 稳定排序。
+Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`component_evidence_kind` 从 `execution_snapshot_json.subject` 派生，`evidence_at` 从完成时间或创建时间派生。JSON 是证据元数据的唯一写入来源，生成列不能独立修改；缺失或非字符串元数据保持 NULL。成功组件测试的部分索引按 Release、当前合同摘要和证据类型定位最新记录，不再按运行时标签筛选。回滚证据分别从 `rollback_verify`、`rollback_self_verify` 中取最新一条，再比较最多两条记录；`rollback_only` 不满足回滚验证门禁。时间相同时使用 Run ID 稳定排序。
 
 活跃组件测试、Action 所属 Release、RunStep 所属 Run 也有对应索引，减少历史数据增长对引用检查和子项读取的影响。索引由 SQLite 随原始行维护，不增加应用层双写。虚拟列不重复存储完整快照，但索引占用额外空间，并增加写入维护成本。生成列要求所有数据库读写工具使用 [SQLite 3.31 或以上版本](https://www.sqlite.org/gencol.html)，部署脚本使用 `clusterforge-backup database` 内置的 Go SQLite 引擎完成检查和一致性文件备份，不依赖系统 Python SQLite；结构合同变更不自动迁移或重建已有数据库。
 
@@ -745,6 +745,7 @@ Release 返回 `definitionGeneration`；更新时使用 `expectedDefinitionGener
 - `GET /components` 返回摘要，不携带完整 Release、Action、参数和工作区。编排确需完整合同时显式使用 `view=contracts`。`GET /components/{id}` 返回选中组件及 `readContext`；`releaseLines` 用 `releaseIds` 引用版本，不重复序列化完整 Release。详情提供 `playbookFileCount`，文件清单单独从工作区接口读取。
 - 组件详情的 `canDelete` 表示当前用户是否可以删除组件；仅本人组件 Owner 且所有状态版本数为零、无依赖/环境安装/执行回执引用时为 true。前端仅在该值为 true 时显示删除入口，字段缺失时隐藏。删除接口在 Catalog 写事务内重新核对同一组条件，将组件、空发布线删除与 `component.deleted` 审计、目录纪元递增一并提交；提交后才发送同名 SSE。成功返回 `200 {data:{deleted:true}}`，无权限返回 403，不存在返回 404，状态或引用冲突返回可解释的 409。
 - `GET /runs` 接受 `page`（默认 1）、`pageSize`（默认 50，1–100）、`archive=unarchived|archived|all`、`filter=all|active|finished` 和 `environmentId`。返回 `{items, page, pageSize, total}`；摘要不包含执行快照、步骤和日志，详情独立请求。
+- `GET /runs/{id}` 在执行快照或交付结果损坏时返回带 `snapshotError` 的诊断详情，保留实际步骤及故障信息；日志诊断与下载仍可用。诊断投影不包含可执行输入，不能用于审批或续跑。失败记录的清理独立提取保留身份，继续校验期限和受保护引用。
 - `GET /component-releases/{id}/run-evidence` 使用不可变 Run 快照判断引用并返回摘要；批量审批从独立候选接口加载，不受当前列表分页限制。
 - 已按策略清理的 Run：原有查看权限用户访问详情返回 HTTP 410、错误码 `run.cleaned`；无权限用户仍返回 403。归档包缺失或校验不通过时下载报错，不能伪装成空日志。
 - JSON 响应支持协商 gzip 压缩；SSE、下载和请求体不采用该压缩包装。
@@ -803,7 +804,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_RUN_ARCHIVE_DIR` | 未配置 | 独立持久化归档目录的绝对路径；未配置时归档不可用，普通 Run 可执行 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260907-no-resource-contract` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。历史离线转换入口已删除，分支范围必须按当前规则声明。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅复制当前精确合同的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260908-typed-run-snapshot` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。Run 快照仅通过独立的 `database migrate-run-snapshot` 离线工具从精确的上一合同一次性转换，运行时不导入旧解析器；步骤、快照、结果及读取边界见 [Run 快照合同与离线迁移](design/run-snapshot-contract.md)。分支范围必须按当前规则声明。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅复制当前精确合同的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
 
 ### 11.1 发布目录灾备
 
@@ -823,14 +824,17 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 - 排队 Run 使用锁定的 Environment Revision，不切换到最新环境。
 - Playbook 摘要不匹配时阻断执行，不自动接受新内容。
 - 取消 Running Run 使用 context 取消并终止 Ansible 进程组；不保证撤销已经对目标主机完成的变更。
-- SQLite 事务保护 Run 抢占、审批决策和 Revision 指针更新等关键状态修改。
+- Run 领取使用单条条件 `UPDATE ... RETURNING`，在同一写入快照内选择最早的排队项并确认环境没有运行项，避免并发事务先读后写的锁升级冲突。审批决策和 Revision 指针更新继续使用 SQLite 事务。
+- 调度器仅对最后一次空领取后的入队窗口立即交接；存储错误由 watchdog 再次调度，避免持续失败时立即重建 worker。动作回执只允许相同环境、组件、Release、动作、节点及备份身份下的幂等或前向状态推进。
 - 组件发布、影响通知和审计目前不是一个跨表强事务：Release 状态先更新，后续通知失败时接口可能返回错误但 Release 已发布；进入生产环境前应把发布、通知 outbox 和审计纳入一致性设计。
 
 ## 13. 测试与构建门禁
 
 | 命令 | 覆盖范围 |
 | --- | --- |
-| `make test` | Go 单元/接口/存储测试、前端 Vitest、真实 localhost Ansible 生命周期 |
+| `make test-fast` | 脚本、夹具边界、证据摘要、Go 与普通前端测试 |
+| `make test-local` | 公共脚本及文档检查、Go、前端覆盖率、隔离 API 浏览器；部署入口共用 |
+| `make test` | 公共本地检查，加显式指定运行时的 Ansible Role 门禁 |
 | `make test-e2e` | Playwright 关键界面流程 |
 | `make build` | 构建前端并嵌入 Go 二进制 |
 | `go test -race ./...` | Go 数据竞争检查（独立执行） |

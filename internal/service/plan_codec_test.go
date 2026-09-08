@@ -12,7 +12,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func inventoryJSON(t *testing.T, hosts ...InventoryHost) json.RawMessage {
+func inventoryJSON(t *testing.T, hosts ...domain.RunInventoryHost) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(InventoryDocument{Hosts: hosts})
 	if err != nil {
@@ -45,7 +45,7 @@ func TestTopologicalNodesAreStableAndRejectCycles(t *testing.T) {
 }
 
 func TestLockedPlanMapRoundTripAndEmptyPlanRejection(t *testing.T) {
-	original := lockedPlan{Steps: []lockedStep{{ID: "step-1", Variables: map[string]any{"replicas": 3}}}, TreeDigest: "tree"}
+	original := domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step-1", Variables: map[string]any{"replicas": 3}}}, TreeDigest: "tree"}
 	mapped := structToMap(original)
 	decoded, err := mapToPlan(mapped)
 	if err != nil {
@@ -61,11 +61,11 @@ func TestLockedPlanMapRoundTripAndEmptyPlanRejection(t *testing.T) {
 
 func TestValidatePlanHostGroups(t *testing.T) {
 	raw := inventoryJSON(t,
-		InventoryHost{Name: "control-1", Address: "192.0.2.10", Groups: []string{"control_plane"}},
-		InventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"workers"}},
+		domain.RunInventoryHost{Name: "control-1", Address: "192.0.2.10", Groups: []string{"control_plane"}},
+		domain.RunInventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"workers"}},
 	)
 	for _, limit := range []string{"all", "control-1", "workers", "192.0.2.0/24"} {
-		err := validatePlanHostGroups(raw, []lockedStep{{Name: "install", Limit: limit}})
+		err := validatePlanHostGroups(raw, []domain.RunPlanStep{{Name: "install", Limit: limit}})
 		if limit == "192.0.2.0/24" {
 			if err != nil {
 				t.Fatalf("literal Ansible limit %q rejected: %v", limit, err)
@@ -74,7 +74,7 @@ func TestValidatePlanHostGroups(t *testing.T) {
 			t.Fatalf("known inventory target %q rejected: %v", limit, err)
 		}
 	}
-	if err := validatePlanHostGroups(raw, []lockedStep{{Name: "install", Limit: "missing_group"}}); !errors.Is(err, domain.ErrInvalid) {
+	if err := validatePlanHostGroups(raw, []domain.RunPlanStep{{Name: "install", Limit: "missing_group"}}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("missing group error=%v", err)
 	}
 	if err := validatePlanHostGroups(json.RawMessage(`{"hosts":`), nil); !errors.Is(err, domain.ErrInvalid) {
@@ -84,8 +84,8 @@ func TestValidatePlanHostGroups(t *testing.T) {
 
 func TestRenderInventorySortsGroupsAndProtectsTokens(t *testing.T) {
 	raw := inventoryJSON(t,
-		InventoryHost{Name: "local", Address: "127.0.0.1", Groups: []string{"zeta", "all"}},
-		InventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"alpha"}, User: "deploy", Port: 2222},
+		domain.RunInventoryHost{Name: "local", Address: "127.0.0.1", Groups: []string{"zeta", "all"}},
+		domain.RunInventoryHost{Name: "worker-1", Address: "192.0.2.20", Groups: []string{"alpha"}, User: "deploy", Port: 2222},
 	)
 	got, err := renderInventory(raw)
 	if err != nil {
@@ -97,10 +97,10 @@ func TestRenderInventorySortsGroupsAndProtectsTokens(t *testing.T) {
 	}
 	for name, document := range map[string]json.RawMessage{
 		"empty":   inventoryJSON(t),
-		"host":    inventoryJSON(t, InventoryHost{Name: "bad host", Address: "192.0.2.1"}),
-		"user":    inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1", User: "bad user"}),
-		"group":   inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1", Groups: []string{"bad group"}}),
-		"address": inventoryJSON(t, InventoryHost{Name: "host", Address: "192.0.2.1;touch"}),
+		"host":    inventoryJSON(t, domain.RunInventoryHost{Name: "bad host", Address: "192.0.2.1"}),
+		"user":    inventoryJSON(t, domain.RunInventoryHost{Name: "host", Address: "192.0.2.1", User: "bad user"}),
+		"group":   inventoryJSON(t, domain.RunInventoryHost{Name: "host", Address: "192.0.2.1", Groups: []string{"bad group"}}),
+		"address": inventoryJSON(t, domain.RunInventoryHost{Name: "host", Address: "192.0.2.1;touch"}),
 	} {
 		if _, err := renderInventory(document); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("%s unsafe inventory error=%v", name, err)
@@ -143,4 +143,20 @@ func TestRecapSummaryAggregatesHosts(t *testing.T) {
 	if got != "recap: ok=8 changed=3 hosts=2" {
 		t.Fatalf("recap=%q", got)
 	}
+}
+
+// Flat Native metadata round trip used only by serialization regression tests.
+func mapToPlan(value map[string]any) (domain.RunExecutionPlan, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return domain.RunExecutionPlan{}, err
+	}
+	var plan domain.RunExecutionPlan
+	if err := json.Unmarshal(encoded, &plan); err != nil {
+		return plan, err
+	}
+	if len(plan.Steps) == 0 {
+		return plan, errors.New("locked run plan contains no steps")
+	}
+	return plan, nil
 }

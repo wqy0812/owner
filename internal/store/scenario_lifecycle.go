@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"codex/platform-demo/internal/domain"
 )
@@ -96,7 +95,7 @@ func successfulScenarioSourceRun(ctx context.Context, q queryer, revision domain
 	if revision.Status != domain.RevisionReleased || len(revision.Graph.Nodes) == 0 || len(revision.AcceptanceJobs) == 0 {
 		return domain.Run{}, fmt.Errorf("%w: source needs a released version with business acceptance", domain.ErrConflict)
 	}
-	query := strings.Replace(runSelect, "FROM runs", "FROM retained_run_history runs", 1) + ` WHERE scenario_revision_id=? AND kind='scenario_run' AND status='succeeded' AND json_extract(input_snapshot_json,'$.executionMode') IN ('install','upgrade') AND json_extract(input_snapshot_json,'$.scenarioRevisionSpecDigest')=? AND json_array_length(input_snapshot_json,'$.acceptanceJobIds')=?`
+	query := runSelect + ` WHERE scenario_revision_id=? AND kind='scenario_run' AND status='succeeded' AND json_extract(execution_snapshot_json,` + runSnapshotScenarioModePath + `) IN ('install','upgrade') AND json_extract(execution_snapshot_json,` + runSnapshotScenarioDigestPath + `)=? AND json_array_length(execution_snapshot_json,` + runSnapshotAcceptanceJobsPath + `)=?`
 	args := []any{revision.ID, domain.ScenarioRevisionSpecDigest(revision), len(revision.AcceptanceJobs)}
 	if runID != "" {
 		query += ` AND id=?`
@@ -110,6 +109,9 @@ func successfulScenarioSourceRun(ctx context.Context, q queryer, revision domain
 	var candidates []domain.Run
 	for rows.Next() {
 		run, scanErr := scanRun(rows)
+		if errors.Is(scanErr, domain.ErrInvalid) {
+			continue
+		}
 		if scanErr != nil {
 			rows.Close()
 			return domain.Run{}, scanErr
@@ -122,12 +124,10 @@ func successfulScenarioSourceRun(ctx context.Context, q queryer, revision domain
 		return domain.Run{}, err
 	}
 	for _, run := range candidates {
-		ids, _ := run.InputSnapshot["acceptanceJobIds"].([]any)
+		ids := run.Snapshot.ScenarioExecution.AcceptanceJobIDs
 		locked := map[string]bool{}
 		for _, id := range ids {
-			if value, ok := id.(string); ok {
-				locked[value] = true
-			}
+			locked[id] = true
 		}
 		complete := len(locked) == len(revision.AcceptanceJobs)
 		for _, job := range revision.AcceptanceJobs {
@@ -156,7 +156,7 @@ func validateScenarioSourceEvidence(ctx context.Context, q queryer, run domain.R
 	if err := validateScenarioAcceptanceEvidence(ctx, q, run, revision); err != nil {
 		return err
 	}
-	locks, err := releaseLocksFromRunSnapshot(run.InputSnapshot)
+	locks, err := run.Snapshot.ReleaseLocks()
 	if err != nil {
 		return err
 	}
@@ -178,15 +178,14 @@ func validateScenarioSourceEvidence(ctx context.Context, q queryer, run domain.R
 		}
 		nodes[node.ID] = node
 	}
-	steps, _ := run.InputSnapshot["steps"].([]any)
-	for _, raw := range steps {
-		step := raw.(map[string]any) // validated by validateScenarioAcceptanceEvidence
-		if step["stage"] != "target_verify" {
+	steps := run.Snapshot.Plan.Steps
+	for _, step := range steps {
+		if step.Stage != "target_verify" {
 			continue
 		}
-		nodeID, _ := step["sourceNodeId"].(string)
+		nodeID := step.SourceNodeID
 		node, exists := nodes[nodeID]
-		if !exists || step["sourceType"] == "scenario_acceptance" || step["releaseId"] != node.ReleaseID || step["componentId"] != releases[node.ReleaseID].ComponentID {
+		if !exists || step.SourceType == "scenario_acceptance" || step.ReleaseID != node.ReleaseID || step.ComponentID != releases[node.ReleaseID].ComponentID {
 			return fmt.Errorf("%w: source Run target check does not match node %s", domain.ErrConflict, nodeID)
 		}
 	}

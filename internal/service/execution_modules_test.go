@@ -9,7 +9,6 @@ import (
 
 	ansiblerunner "codex/platform-demo/internal/ansible"
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/store"
 	"codex/platform-demo/internal/testutil"
 )
 
@@ -32,7 +31,7 @@ func (s *recordingStore) MarkScenarioMutation(context.Context, domain.Run) error
 func (s *recordingStore) CreateRunStep(context.Context, domain.RunStep) error {
 	return s.record("step")
 }
-func (s *recordingStore) RecordActionExecution(_ context.Context, r store.ActionExecutionReceipt) error {
+func (s *recordingStore) RecordActionExecution(_ context.Context, r domain.ActionExecutionReceipt) error {
 	return s.record(r.Status)
 }
 func (s *recordingStore) UpsertEnvironmentComponentInstallation(context.Context, domain.EnvironmentComponentInstallation) error {
@@ -61,7 +60,7 @@ func TestRecorderStopsAtFailedMutationStepOrReceipt(t *testing.T) {
 			events, unsubscribe := hub.Subscribe()
 			defer unsubscribe()
 			recorder := &LifecycleRecorder{store: data, hub: hub}
-			step, err := recorder.beginStep(context.Background(), domain.Run{ID: "run-one"}, lockedStep{Phase: "execute", Backup: &domain.BackupMetadata{}}, ansiblerunner.JobStepResult{StartedAt: time.Now()})
+			step, err := recorder.beginStep(context.Background(), domain.Run{ID: "run-one"}, domain.RunPlanStep{Phase: "execute", Backup: &domain.BackupMetadata{}}, ansiblerunner.JobStepResult{StartedAt: time.Now()})
 			if (err != nil) != (tc.fail != "") || (step.ID != "") != tc.stepSaved || !reflect.DeepEqual(data.calls, tc.calls) {
 				t.Fatalf("step=%+v err=%v calls=%v", step, err, data.calls)
 			}
@@ -73,8 +72,8 @@ func TestRecorderStopsAtFailedMutationStepOrReceipt(t *testing.T) {
 }
 
 func TestRecorderPostcheckRequiresBaselineAndVerifiedReceipt(t *testing.T) {
-	parent := lockedStep{ID: "main", ActionID: "install", SourceNodeID: "node-one", Phase: "execute", Action: domain.ActionInstall, BackupRef: "backup-one", Backup: &domain.BackupMetadata{InstallRunID: "run-one"}}
-	post := lockedStep{ParentActionID: parent.ActionID, SourceNodeID: parent.SourceNodeID, Phase: "post"}
+	parent := domain.RunPlanStep{ID: "main", ActionID: "install", SourceNodeID: "node-one", Phase: "execute", Action: domain.ActionInstall, BackupRef: "backup-one", Backup: &domain.BackupMetadata{InstallRunID: "run-one"}}
+	post := domain.RunPlanStep{ParentActionID: parent.ActionID, SourceNodeID: parent.SourceNodeID, Phase: "post"}
 	for _, tc := range []struct {
 		fail  string
 		calls []string
@@ -89,7 +88,7 @@ func TestRecorderPostcheckRequiresBaselineAndVerifiedReceipt(t *testing.T) {
 			events, unsubscribe := hub.Subscribe()
 			defer unsubscribe()
 			recorder := &LifecycleRecorder{store: data, hub: hub}
-			_, err := recorder.completeStep(context.Background(), domain.Run{ID: "run-one"}, post, []lockedStep{parent}, domain.RunStep{ID: "post-one"}, ansiblerunner.JobStepResult{FinishedAt: time.Now()})
+			_, err := recorder.completeStep(context.Background(), domain.Run{ID: "run-one"}, post, []domain.RunPlanStep{parent}, domain.RunStep{ID: "post-one"}, ansiblerunner.JobStepResult{FinishedAt: time.Now()})
 			if (err != nil) != (tc.fail != "") || !reflect.DeepEqual(data.calls, tc.calls) {
 				t.Fatalf("err=%v calls=%v", err, data.calls)
 			}
@@ -145,7 +144,7 @@ func TestRunCreatorPersistsBeforeSchedulingAndHonorsApproval(t *testing.T) {
 	for _, tc := range []struct{ destructive, fail bool }{{false, false}, {true, false}, {false, true}} {
 		data, scheduler, audit := &runCreationStore{fail: tc.fail}, &recordingScheduler{}, &creationAudit{}
 		creator := &RunCreator{store: data, scheduler: scheduler, audit: audit, hub: NewEventHub()}
-		prepared := lockedRunPreparation{ID: "locked-run", CapturedAt: time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC), Plan: lockedPlan{TreeDigest: "locked-tree"}, Destructive: tc.destructive}
+		prepared := lockedRunPreparation{ID: "locked-run", CapturedAt: time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC), Plan: domain.RunExecutionPlan{TreeDigest: "locked-tree"}, Destructive: tc.destructive}
 		run, err := creator.createRun(context.Background(), domain.User{ID: "owner-one"}, domain.Environment{ID: "environment-one", CurrentRevisionID: "revision-one"}, domain.RunComponentTest, "", "", domain.ActionCheck, prepared, nil)
 		if (err != nil) != tc.fail {
 			t.Fatal(err)
@@ -160,7 +159,7 @@ func TestRunCreatorPersistsBeforeSchedulingAndHonorsApproval(t *testing.T) {
 		if tc.fail && len(audit.actions) != 0 {
 			t.Fatal("failed creation emitted audit")
 		}
-		if run.ID != prepared.ID || run.ArtifactDigest != "locked-tree" || run.InputSnapshot["environmentRevisionId"] != "revision-one" || !run.CreatedAt.Equal(prepared.CapturedAt) {
+		if run.ID != prepared.ID || run.ArtifactDigest != "locked-tree" || run.EnvironmentRevisionID != "revision-one" || !run.CreatedAt.Equal(prepared.CapturedAt) {
 			t.Fatalf("prepared snapshot changed: %+v", run)
 		}
 	}
@@ -178,7 +177,7 @@ func (s *rejectedJobStore) SaveRunJob(context.Context, string, string, []byte) e
 
 type noRecoverySteps struct{ rollbackPort }
 
-func (noRecoverySteps) addRecoverySteps(context.Context, *ansiblerunner.JobPlan, lockedPlan) error {
+func (noRecoverySteps) addRecoverySteps(context.Context, *ansiblerunner.JobPlan, domain.RunExecutionPlan) error {
 	return nil
 }
 
@@ -190,7 +189,7 @@ func TestExecutorNeverRunsAnUnpersistedBundle(t *testing.T) {
 		return ansiblerunner.JobResult{}, nil
 	}}
 	executor := &RunExecutor{jobs: runner, store: data, rollback: noRecoverySteps{}}
-	_, err := executor.executeLockedJob(context.Background(), domain.Run{ID: "run-one"}, ansiblerunner.JobRequest{Plan: ansiblerunner.JobPlan{Contract: ansiblerunner.JobContract}})
+	_, err := executor.executeLockedJob(context.Background(), domain.Run{ID: "run-one"}, domain.RunExecutionPlan{}, ansiblerunner.JobRequest{Plan: ansiblerunner.JobPlan{Contract: ansiblerunner.JobContract}})
 	if err == nil || err.Error() != "archive write failed" || !data.attempted {
 		t.Fatalf("bundle persistence was not required: %v", err)
 	}

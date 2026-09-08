@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/tar"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
+	"codex/platform-demo/internal/testutil"
 )
 
 func runLogFixture(t *testing.T, status domain.RunStatus) (*Platform, *store.Store, domain.User, domain.Run) {
@@ -31,7 +33,7 @@ func runLogFixture(t *testing.T, status domain.RunStatus) (*Platform, *store.Sto
 	if e != nil {
 		t.Fatal(e)
 	}
-	run := domain.Run{ID: "diagnostic-run", Kind: domain.RunScenario, Status: status, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, InputSnapshot: map[string]any{"password": "NEVER-EXPORT", "steps": []any{map[string]any{"nodeId": "locked-check", "componentName": "CoreDNS", "phase": "post"}}}}
+	run := domain.Run{ID: "diagnostic-run", Kind: domain.RunScenario, Status: status, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: now, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"variables": map[string]any{"password": "NEVER-EXPORT"}, "nodeId": "locked-check", "componentName": "CoreDNS", "phase": "post"}}})}
 	if status != domain.RunRunning {
 		run.FinishedAt = &now
 	}
@@ -39,7 +41,7 @@ func runLogFixture(t *testing.T, status domain.RunStatus) (*Platform, *store.Sto
 	if status == domain.RunRunning {
 		storedRun.Status = domain.RunFailed
 	}
-	if e = db.CreateRun(ctx, storedRun, nil); e != nil {
+	if e = testutil.InsertRunRecord(ctx, db.DB(), storedRun); e != nil {
 		t.Fatal(e)
 	}
 	if status == domain.RunRunning {
@@ -97,7 +99,7 @@ func TestRunDiagnosticTextFallbackAndProtectedOutput(t *testing.T) {
 			var c diagnosticCollector
 			c.add(cleanRunLog(domain.RunLog{ID: 1, Stream: tt.stream, Message: tt.line}))
 			c.add(domain.RunLog{ID: 2, Stream: "stdout", Message: "host : ok=0 unreachable=0 failed=1"})
-			items := c.finish(domain.Run{Status: domain.RunFailed})
+			items := c.finish(domain.RunReadModel{Status: domain.RunFailed})
 			data, _ := json.Marshal(items)
 			if len(items) != 1 || !strings.Contains(items[0].Message, tt.want) || strings.Contains(string(data), "SECRET-") {
 				t.Fatal(string(data))
@@ -106,13 +108,13 @@ func TestRunDiagnosticTextFallbackAndProtectedOutput(t *testing.T) {
 	}
 	var c diagnosticCollector
 	c.add(domain.RunLog{ID: 1, Stream: "stderr", Message: "ERROR! " + strings.Repeat("long ", 20000) + "final cause"})
-	items := c.finish(domain.Run{Status: domain.RunFailed})
+	items := c.finish(domain.RunReadModel{Status: domain.RunFailed})
 	if !items[0].Truncated || !strings.Contains(items[0].Message, "final cause") {
 		t.Fatal("long error lost its cause")
 	}
 	for _, status := range []domain.RunStatus{domain.RunInterrupted, domain.RunFailed} {
 		var empty diagnosticCollector
-		items := empty.finish(domain.Run{Status: status, Error: "executor stopped unexpectedly"})
+		items := empty.finish(domain.RunReadModel{Status: status, Error: "executor stopped unexpectedly"})
 		if len(items) != 1 || items[0].Message != "executor stopped unexpectedly" {
 			t.Fatal(items)
 		}
@@ -134,7 +136,7 @@ func TestRunDiagnosticMultilineTextAndLaterTasks(t *testing.T) {
 	for i, line := range lines {
 		c.add(domain.RunLog{ID: int64(i + 1), StepID: "step", Stream: "stdout", Message: line})
 	}
-	items := c.finish(domain.Run{Status: domain.RunFailed})
+	items := c.finish(domain.RunReadModel{Status: domain.RunFailed})
 	if len(items) != 1 || items[0].LogID != 2 || items[0].Task != "Check Kubernetes API" || !strings.Contains(items[0].Message, "6443 was refused") || items[0].ExitCode == nil || *items[0].ExitCode != 1 {
 		t.Fatalf("multiline text diagnostic: %+v", items)
 	}
@@ -144,7 +146,7 @@ func TestRunDiagnosticMultilineTextAndLaterTasks(t *testing.T) {
 		events.add(domain.RunLog{ID: int64(i + 1), Stream: "event", Message: string(data)})
 	}
 	events.add(domain.RunLog{ID: 3, Stream: "stdout", Message: `fatal: [master-4]: FAILED! => {"msg":"connection refused"}`})
-	if items := events.finish(domain.Run{Status: domain.RunFailed}); len(items) != 2 {
+	if items := events.finish(domain.RunReadModel{Status: domain.RunFailed}); len(items) != 2 {
 		t.Fatalf("later task lost or duplicate text retained: %+v", items)
 	}
 }
@@ -198,6 +200,13 @@ func TestRunLogBundleCompleteSnapshotAndCleanup(t *testing.T) {
 				if strings.Contains(content, "NEVER-EXPORT") {
 					t.Fatal("secret in", name)
 				}
+			}
+			var summary map[string]json.RawMessage
+			if e := json.Unmarshal([]byte(files["run.json"]), &summary); e != nil {
+				t.Fatal(e)
+			}
+			if summary["snapshot"] != nil || summary["inputSnapshot"] != nil || summary["steps"] != nil || summary["deliveryResults"] != nil || summary["id"] == nil {
+				t.Fatal("log export contains execution data", files["run.json"])
 			}
 			var manifest struct {
 				LogCount, LastLogID int64

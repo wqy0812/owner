@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"codex/platform-demo/internal/domain"
 	"context"
 	"errors"
 	"fmt"
@@ -49,9 +50,9 @@ func TestPrepareWithDockerImageDelivery(t *testing.T) {
 				t.Setenv("DELIVERY_TEST_AFTER_DIGEST", tc.afterDigest)
 			}
 			plan := Plan{
-				ImageTransfers:       []PlannedImageTransfer{{RequirementID: "image", SourceDigest: source, TargetRef: tag, TargetDigest: target}},
-				DeliveryRequirements: []Requirement{{ID: "image", Kind: "image", Source: source, Target: target, Identity: digest}},
-				DeliveryDecisions:    []Decision{{RequirementID: "image", Mode: "transfer"}},
+				ImageTransfers:       []domain.RunImageTransfer{{RequirementID: "image", SourceDigest: source, TargetRef: tag, TargetDigest: target}},
+				DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "image", Kind: "image", Source: source, Target: target, Identity: digest}},
+				DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "image", Mode: "transfer"}},
 			}
 			err := Prepare(context.Background(), plan, nil, adapter)
 			if (err != nil) != tc.wantError || errors.Is(err, ErrDeliveryTargetMissing) {

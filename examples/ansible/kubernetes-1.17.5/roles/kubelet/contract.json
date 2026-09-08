@@ -1,0 +1,166 @@
+{
+  "slug": "kubelet",
+  "name": "kubelet",
+  "description": "在六节点配置 kubelet，提供静态 Pod 运行和节点容器管理能力。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "kubelet_data_dir",
+      "description": "kubelet 数据目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "suggestedValue": "/var/lib/kubelet",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    },
+    {
+      "name": "cluster_dns_ip",
+      "description": "集群 DNS 地址；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "suggestedValue": "10.96.0.10",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    },
+    {
+      "name": "pki_dir",
+      "description": "集群证书目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "pki_dir",
+          "targetParameter": "pki_dir"
+        }
+      ]
+    },
+    {
+      "component": "docker-runtime",
+      "version": "20.10.21-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kubernetes-distribution",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [
+    {
+      "logicalName": "pause",
+      "digest": "sha256:fcaff905397ba63fd376d0c3019f1f1cb6e7506131389edbcb3d22719f1ae54d",
+      "sourceRef": "registry.example.invalid/components/kubelet/pause@sha256:fcaff905397ba63fd376d0c3019f1f1cb6e7506131389edbcb3d22719f1ae54d"
+    }
+  ],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

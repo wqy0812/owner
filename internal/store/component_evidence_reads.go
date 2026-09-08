@@ -4,11 +4,10 @@ import (
 	"codex/platform-demo/internal/domain"
 	"context"
 	"database/sql"
-	"strings"
 )
 
 // Scoped, batched read: work items need the digest but not the full Run snapshot.
-func (s *Store) ComponentEvidenceReads(ctx context.Context, user domain.User, componentID string) ([]domain.Run, map[string]string, error) {
+func (s *Store) ComponentEvidenceReads(ctx context.Context, user domain.User, componentID string) ([]domain.RunReadModel, map[string]string, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, nil, err
@@ -17,26 +16,15 @@ func (s *Store) ComponentEvidenceReads(ctx context.Context, user domain.User, co
 	where, args := runVisibility(user)
 	where += ` AND runs.kind='component_test' AND runs.component_release_id IN (SELECT id FROM component_releases WHERE component_id=?)`
 	args = append(args, componentID)
-	selection := strings.Replace(runSelect, "input_snapshot_json", `json_object(
-  'componentReleaseSpecDigest',component_spec_digest,
-  'componentTestEvidence',component_evidence_kind,
-  'parentSteps',json((SELECT json_group_array(json_object(
-    'actionId',json_extract(value,'$.actionId'),'sourceNodeId',json_extract(value,'$.sourceNodeId'),
-    'action',json_extract(value,'$.action'),'phase',json_extract(value,'$.phase')
-  )) FROM json_each(runs.input_snapshot_json,'$.parentSteps'))),
-  'steps',json((SELECT json_group_array(json_object(
-    'parentActionId',json_extract(value,'$.parentActionId'),'sourceNodeId',json_extract(value,'$.sourceNodeId'),
-    'phase',json_extract(value,'$.phase')
-  )) FROM json_each(runs.input_snapshot_json,'$.steps')))
-)`, 1)
+	selection := runReadSelect
 	rows, err := tx.QueryContext(ctx, selection+` WHERE `+where+` ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC,id DESC`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
-	runs := []domain.Run{}
+	runs := []domain.RunReadModel{}
 	byID := map[string]int{}
 	for rows.Next() {
-		run, e := scanRun(rows)
+		run, e := scanRunReadModel(rows)
 		if e != nil {
 			rows.Close()
 			return nil, nil, e

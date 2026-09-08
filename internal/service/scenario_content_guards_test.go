@@ -36,11 +36,11 @@ func TestScenarioSnapshotsAllEffectiveEnvironmentValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := runScenarioProtocol(t, p, owner, revision.ID, env.ID, domain.ScenarioExecutionInstall, domain.RunScenarioTest)
-	nodes, err := scenarioSnapshotNodes(run.InputSnapshot)
+	nodes, err := scenarioSnapshotNodes(run.Snapshot)
 	if err != nil || len(nodes) != 1 || nodes[0].Variables["site_setting"] != "frozen-old-value" {
 		t.Fatalf("snapshot dropped effective environment values: %+v %v", nodes, err)
 	}
-	steps := []lockedStep{{SourceType: "component_action", Stage: "source_verify", Action: domain.ActionCheck, Variables: cloneMap(nodes[0].Variables)}, {SourceType: "component_action", Stage: "change", Action: domain.ActionUninstall, Variables: cloneMap(nodes[0].Variables)}}
+	steps := []domain.RunPlanStep{{SourceType: "component_action", Stage: "source_verify", Action: domain.ActionCheck, Variables: cloneMap(nodes[0].Variables)}, {SourceType: "component_action", Stage: "change", Action: domain.ActionUninstall, Variables: cloneMap(nodes[0].Variables)}}
 	if err = injectEnvironmentVariables(domain.EnvironmentRevision{Variables: map[string]string{"site_setting": "new-target-value"}}, steps); err != nil {
 		t.Fatal(err)
 	}

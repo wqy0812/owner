@@ -78,9 +78,10 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 		return run, actionableExistingError(base, "approval.already_decided", "审批状态已由另一请求消费，当前页面数据已过期", "刷新运行详情", "/runs?selected="+run.ID)
 	}
 	now := time.Now().UTC()
-	var snapshot map[string]any
+	var snapshot *domain.RunSnapshot
+	var results []domain.RunDeliveryResult
 	if decision == "approved" {
-		plan, planErr := mapToPlan(run.InputSnapshot)
+		plan, planErr := planFromRun(run)
 		if planErr != nil {
 			return run, planErr
 		}
@@ -88,20 +89,25 @@ func (a *ApprovalService) DecideApproval(ctx context.Context, user domain.User, 
 		if planErr != nil {
 			return run, planErr
 		}
-		snapshot = cloneMap(run.InputSnapshot)
-		for key, value := range structToMap(plan) {
-			snapshot[key] = value
+		updated, err := run.Snapshot.Clone()
+		if err != nil {
+			return run, err
 		}
+		finalized := domain.SnapshotFromExecutionPlan(plan)
+		updated.Plan, updated.Delivery, updated.Recovery = finalized.Plan, finalized.Delivery, finalized.Recovery
+		snapshot = &updated
+		results = plan.DeliveryResults
 	} else if len(deliveryDecisions) > 0 {
 		return run, fmt.Errorf("%w: rejected approvals must not include delivery decisions", domain.ErrInvalid)
 	}
-	if err := a.store.DecideApprovalWithSnapshot(ctx, approvalID, user.ID, decision, reason, snapshot, now); err != nil {
+	if err := a.store.DecideApprovalWithSnapshot(ctx, approvalID, user.ID, decision, reason, snapshot, results, now); err != nil {
 		return run, err
 	}
 	if decision == "approved" {
 		run.Status = domain.RunQueued
 		if snapshot != nil {
-			run.InputSnapshot = snapshot
+			run.Snapshot = *snapshot
+			run.DeliveryResults = results
 		}
 		a.scheduler.schedule(run.EnvironmentID)
 	} else {
@@ -133,7 +139,7 @@ func (a *ApprovalService) BatchDecideApprovals(ctx context.Context, user domain.
 			if runErr != nil {
 				return nil, runErr
 			}
-			plan, planErr := mapToPlan(run.InputSnapshot)
+			plan, planErr := planFromRun(run)
 			if planErr != nil {
 				return nil, planErr
 			}

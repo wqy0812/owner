@@ -13,6 +13,7 @@ import (
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/store"
 	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 )
 
 type scenarioOrderedMediaRunner struct {
@@ -138,14 +139,16 @@ func queueScenarioWithMedia(t *testing.T, p *Platform, owner domain.User, revisi
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.InputSnapshot["imageTransfers"] = []mediadelivery.PlannedImageTransfer{{RequirementID: "image", SourceRegistry: "source", TargetRegistry: "target", SourceDigest: "source/image@sha256:abc", TargetRef: "target/image:version", TargetDigest: "target/image@sha256:abc"}}
-	run.InputSnapshot["artifactTransfers"] = []mediadelivery.PlannedArtifactTransfer{{RequirementID: "artifact", Alias: "installer", SourceURL: "http://source/package", TargetStation: "target", RelativePath: "package.tar", SHA256: "abc", SizeBytes: 1}}
-	run.InputSnapshot["deliveryResults"] = []mediadelivery.Result{{RequirementID: "image", Mode: "transfer", Status: "pending"}, {RequirementID: "artifact", Mode: "transfer", Status: "pending"}}
-	encoded, err := json.Marshal(run.InputSnapshot)
+	run.Snapshot.Delivery.Requirements = []domain.RunDeliveryRequirement{{ID: "image", Kind: "image"}, {ID: "artifact", Kind: "artifact"}}
+	run.Snapshot.Delivery.Decisions = []domain.RunDeliveryDecision{{RequirementID: "image", Mode: "transfer", DecidedBy: owner.ID}, {RequirementID: "artifact", Mode: "transfer", DecidedBy: owner.ID}}
+	run.Snapshot.Delivery.ImageTransfers = []domain.RunImageTransfer{{RequirementID: "image", SourceRegistry: "source", TargetRegistry: "target", SourceDigest: "source/image@sha256:abc", TargetRef: "target/image:version", TargetDigest: "target/image@sha256:abc"}}
+	run.Snapshot.Delivery.ArtifactTransfers = []domain.RunArtifactTransfer{{RequirementID: "artifact", Alias: "installer", SourceURL: "http://source/package", TargetStation: "target", RelativePath: "package.tar", SHA256: "abc", SizeBytes: 1}}
+	run.DeliveryResults = []domain.RunDeliveryResult{{RequirementID: "image", Mode: "transfer", Status: "pending"}, {RequirementID: "artifact", Mode: "transfer", Status: "pending"}}
+	encoded, err := json.Marshal(run.Snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testDatabase(p).DB().Exec(`UPDATE runs SET input_snapshot_json=? WHERE id=?`, string(encoded), run.ID); err != nil {
+	if _, err := runfixture.CorruptSnapshot(ctx, testDatabase(p).DB(), `UPDATE runs SET execution_snapshot_json=?,delivery_results_json=? WHERE id=?`, string(encoded), string(mustJSON(run.DeliveryResults)), run.ID); err != nil {
 		t.Fatal(err)
 	}
 	run, err = testDatabase(p).GetRun(ctx, run.ID)
@@ -263,4 +266,12 @@ func TestScenarioBaselineVerificationNeverTransfersMedia(t *testing.T) {
 	if err != nil || baseline.State == "partial" || !baseline.TestOnly {
 		t.Fatalf("blocked media changed baseline identity: %+v %v", baseline, err)
 	}
+}
+
+func mustJSON(value any) []byte {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }

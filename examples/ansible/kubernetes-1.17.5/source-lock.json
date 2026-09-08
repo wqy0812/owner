@@ -1,0 +1,1373 @@
+{
+  "capturedOn": "2026-09-08",
+  "source": "http://192.168.88.55:8080",
+  "readMethod": "Authenticated catalog and workspace GET; every downloaded file verified against API SHA-256.",
+  "components": [
+    {
+      "slug": "cluster-pki",
+      "componentId": "component-f7dad15ab76bae326a36b633",
+      "releaseId": "release-9bca662ee850d3c12bb9da57",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "f204fc9fc413c023b540d6e43eb725bd62b306a84ffcecefd0828e9728772758",
+      "actionIds": {
+        "precheck": "action-4ade1efdacdb6fcaaed74637",
+        "postcheck": "action-1a8f61032c768565f095d710",
+        "rollback-postcheck": "action-385d36f1b1f82c7bb2246a1a",
+        "install": "action-5ab4bf0f57154c1e5cbb6043",
+        "rollback": "action-95980ea788c0d8edc0e2896c"
+      }
+    },
+    {
+      "slug": "coredns",
+      "componentId": "component-3ac7e68db3b9af1126897571",
+      "releaseId": "release-08e6d6cf49bf0a1d346feb37",
+      "version": "1.6.5-env2.1",
+      "status": "released",
+      "treeSha256": "8c1576b6871b118c77df56bd36067561ecab6ca5d6217967773dab500d4f0584",
+      "actionIds": {
+        "precheck": "action-fd7b2018264238983fa7ea50",
+        "postcheck": "action-fca0c1cfec267e33fe809584",
+        "rollback-postcheck": "action-6cbad3497b52c303e87c8600",
+        "install": "action-3ccc6c49d0be566d067e0a22",
+        "rollback": "action-5d2cf952b7a6a607e21d15ac"
+      }
+    },
+    {
+      "slug": "docker-runtime",
+      "componentId": "component-c3daf685d954f5ba94f20d77",
+      "releaseId": "release-341fcb0541c398fe6d0ae283",
+      "version": "20.10.21-env2.1",
+      "status": "released",
+      "treeSha256": "31e13f0f4d72235a60fa2584c6b757cf719d6e7e2b43e77715e627eaabfc99b6",
+      "actionIds": {
+        "precheck": "action-cce74d0aaf90af4e6bc93584",
+        "postcheck": "action-223a4f3584ded44e108b05f3",
+        "rollback-postcheck": "action-b1711a96d1b08baf8c1e396d",
+        "install": "action-8eba54a2e99c3a4796a8662f",
+        "rollback": "action-50bcf23a26112e5a4f7a18ec"
+      }
+    },
+    {
+      "slug": "etcd-state-store",
+      "componentId": "component-185263a4721a042c3dd3844c",
+      "releaseId": "release-66c9245d34d32b4b5b933a9c",
+      "version": "3.4.3-env2.1",
+      "status": "released",
+      "treeSha256": "74bc897b9c730a3dd6e559ce5bda827e2d16f99bb6dc34c265d0c9496ad34f9a",
+      "actionIds": {
+        "precheck": "action-4c1275e96cc0cbceac57e006",
+        "postcheck": "action-c8342fb804d6899b2144a187",
+        "rollback-postcheck": "action-9144474360478886c4838059",
+        "install": "action-5d6b016118f498dc3746df44",
+        "rollback": "action-7f6bca6ad2facf55a990b99f"
+      }
+    },
+    {
+      "slug": "flannel",
+      "componentId": "component-b6e3117db9a6681ee5ca6a08",
+      "releaseId": "release-65a928c07047ed6eccea06f7",
+      "version": "0.22.3-env2.1",
+      "status": "released",
+      "treeSha256": "affce2ae648e888369d629d73bbee0e0e8dcb316e362ee34d88ea0453320aae2",
+      "actionIds": {
+        "precheck": "action-ced0deda7812684757849091",
+        "postcheck": "action-9ca0651fe51d86ed9d838c42",
+        "rollback-postcheck": "action-477f06160bab3313f7dd3ebb",
+        "install": "action-8b2397f505afc39d2a26120e",
+        "rollback": "action-3ce90d1b09a8a2937611c87d"
+      }
+    },
+    {
+      "slug": "host-bootstrap",
+      "componentId": "component-a7c8f9290e3930bb68df9829",
+      "releaseId": "release-035c1d5e7ecdaaa16b1823df",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "07821ef8c45e17916a8ba24912e06b0788149ffa3bf45d0c90492774e301d960",
+      "actionIds": {
+        "precheck": "action-5ae758c323becde19bd38079",
+        "postcheck": "action-e567809136887619ecb1c3e4",
+        "rollback-postcheck": "action-6acade5f6ab6cc5298cee0a3",
+        "install": "action-bdf09241f19616663dba3dcc",
+        "rollback": "action-5ae550373757ac363925cb01"
+      }
+    },
+    {
+      "slug": "host-preflight",
+      "componentId": "component-2f9b038f720626cf8e817564",
+      "releaseId": "release-8c9323d5efb0458e87138dc9",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "39c9836e388b7406231c1efebe20126553f5baabb3ad63feffb3d10b40869676",
+      "actionIds": {
+        "precheck": "action-4c8329407a3ba49449c2c9f7",
+        "postcheck": "action-97eb8e02fd0df8706d96f068",
+        "rollback-postcheck": "action-7408383929edb0b3598ab45b",
+        "install": "action-6a330ad192dca3ce1521f778",
+        "rollback": "action-4f0929c8e18b96595cbc6927"
+      }
+    },
+    {
+      "slug": "kube-apiserver",
+      "componentId": "component-0beea479e9a7b9851725d407",
+      "releaseId": "release-350ba3cf4aced81bb0e37c2e",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "146fd49def97f59c23da433f191fdf1f33d3a29bc266ef26c08989141178b097",
+      "actionIds": {
+        "precheck": "action-00b6ec829953842b3bb34e05",
+        "postcheck": "action-732e7d8706851b300fb3beef",
+        "rollback-postcheck": "action-e54130079f6233b6cbc5df9e",
+        "install": "action-188c2196d0f5af892fce3c7e",
+        "rollback": "action-8b1fba7fdc249965c7c6992a"
+      }
+    },
+    {
+      "slug": "kube-controller-manager",
+      "componentId": "component-6e98aca174fafa73585ccd04",
+      "releaseId": "release-506f093dbcdef5dedd0d5c3e",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "6b6c9a1e7535b293ee5e322b025678b1eba7f9a65e5cc81d3e2e4375553a2a60",
+      "actionIds": {
+        "precheck": "action-c52d5ff858492d916ff89ec2",
+        "postcheck": "action-f36a95e732f5308bb6ce6c8a",
+        "rollback-postcheck": "action-fc306aa216bcf622bbfc4d4a",
+        "install": "action-c7dc571316e5057f7450cac5",
+        "rollback": "action-162e0349fdd78cca2feda60f"
+      }
+    },
+    {
+      "slug": "kube-proxy",
+      "componentId": "component-2ab748a5278c8d0b3ca17070",
+      "releaseId": "release-8862d380ae62ded45bbc42a3",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "b4c1a61a6b7145d171447fa3f92f3feb02031985342a43b53968970cabc98490",
+      "actionIds": {
+        "precheck": "action-336c4fcfe94ef94fb09fe617",
+        "postcheck": "action-b039572d235f30e5a8cd51ed",
+        "rollback-postcheck": "action-e2048688134db3669d501b98",
+        "install": "action-0c9d5a95e95f30dc121841ac",
+        "rollback": "action-2f6e1a0661dd23309175f0af"
+      }
+    },
+    {
+      "slug": "kube-scheduler",
+      "componentId": "component-c01004f6a7f49ee6f3779246",
+      "releaseId": "release-f2d2f7cd17685f856e422f24",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "226b74e718e54f70f6de1e5023994a2638f7b5a66a00561e5a51682e72b5e595",
+      "actionIds": {
+        "precheck": "action-674916abc3199d38c9e25c4d",
+        "postcheck": "action-d6cc3513557d74088eff0997",
+        "rollback-postcheck": "action-f733d90e0580d26185721e8a",
+        "install": "action-892fabaafa52971fbc21b66e",
+        "rollback": "action-70f6641ed9b5ade82a2cbda6"
+      }
+    },
+    {
+      "slug": "kubelet",
+      "componentId": "component-6a401307a59c5ad0e482412e",
+      "releaseId": "release-81f8e97e8c9a3ab1f953f24e",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "36017aeef86181e7d9f08213b4b256e64a5acc9a20246e49f70af912a84a04a9",
+      "actionIds": {
+        "precheck": "action-3dcc690b30df2abe71379dd4",
+        "postcheck": "action-855eeec7ed310f06ef8e38af",
+        "rollback-postcheck": "action-f4d1d636d157480cb0225302",
+        "install": "action-b76aa5f285aa888afe24ef13",
+        "rollback": "action-96e75044532376ed46f6489b"
+      }
+    },
+    {
+      "slug": "kubernetes-bootstrap-rbac",
+      "componentId": "component-eb6b50716b480ea7428bcda4",
+      "releaseId": "release-07efeaaf7dc57a559f19e580",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "570577f79c59b841d63597eae9d7109b9d0510f9baa1d7d1c82a1d117664ae62",
+      "actionIds": {
+        "precheck": "action-c440090a9c1f53d2a1a6c048",
+        "postcheck": "action-bac9f8111c5e34ce00354652",
+        "rollback-postcheck": "action-3cded4f9ae9c882f40c13b70",
+        "install": "action-010a834da0057c88510203a8",
+        "rollback": "action-aecb0a059b4487564f1b6ecf"
+      }
+    },
+    {
+      "slug": "kubernetes-distribution",
+      "componentId": "component-b4a5fab494e38a2435b173cc",
+      "releaseId": "release-3e6a771b5a0f3c09521d7c7e",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "70c26c454f92a86e5d33eeed6d7a0b2c43b9c88aa8272b5993f57cda4e1a1f74",
+      "actionIds": {
+        "precheck": "action-7ae63d4f094d5e273fbca8a0",
+        "postcheck": "action-c93c60293b7484dd6cf8dc09",
+        "rollback-postcheck": "action-13bb2869f18366933cf8f8e8",
+        "install": "action-10a1dec17ca3882b512cede4",
+        "rollback": "action-56edd98bc7e544161dae7acb"
+      }
+    },
+    {
+      "slug": "kubernetes-encryption-configuration",
+      "componentId": "component-d70e25cebcdf20bfb658edbd",
+      "releaseId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "version": "1.17.5-env2.1",
+      "status": "released",
+      "treeSha256": "df46239b1021799a9359f40134543112e5b3c00a8db4b74891997130a6466bd9",
+      "actionIds": {
+        "precheck": "action-7c33a01eb52a42d9002917cb",
+        "postcheck": "action-0e158b23cdf3c8d429c35643",
+        "rollback-postcheck": "action-18d5c368682ead6a597a2e2d",
+        "install": "action-1d0d230445d9e25323a95a0f",
+        "rollback": "action-733171d13a413ae052aabd04"
+      }
+    }
+  ],
+  "files": [
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "tasks/checks/action-4ade1efdacdb6fcaaed74637.yml",
+      "sourceSha256": "e2268583702f47fd39169e097025ef652447128f60f7dfee3c137c6df00bff5d",
+      "path": "roles/cluster-pki/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fe305ed232ef7fc8eeadd47e3354f97fd4a47fcffa2f230d20db5bf4f419e27a"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "tasks/checks/action-1a8f61032c768565f095d710.yml",
+      "sourceSha256": "9ae3cede02be798e055b791ffe5a160661cb6f342b01cf239d3232d5016ac6b6",
+      "path": "roles/cluster-pki/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "20ded63f98437ce28255d45db1fc6f92d9ed1e2052c37d65c8732961edc1ee89"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "tasks/checks/action-385d36f1b1f82c7bb2246a1a.yml",
+      "sourceSha256": "50fcb254bb3f61a23cba182bb871d527c141159a0b80924d1f2ccffdd8a9b5ac",
+      "path": "roles/cluster-pki/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "40691726911b5b381b5f42b2b5fa2d0585b997dcb10e44f3fa7214d9d9d22f34"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "00a0d7132a6f752198e47ddea7d31b0866d50f9c726c98ac2f1de96e2fe18164",
+      "path": "roles/cluster-pki/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "39da28120e85edf335c31c31f677a4dc2892d4c4253cb6b66f46e6b033f03380"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "26e6b9b5457127bd0acbe164310db6460213451c499c96e63a603dbaa69a846b",
+      "path": "roles/cluster-pki/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "a78acbd3031a6308704c43a368e3b5ff92dea05e4b7c0bf6884feb3e6443df2c"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "files/distribute.py",
+      "sourceSha256": "521a51a50d76c850d831dd70aa17bbb88739c898b55d35a6f3cd6329a8b42acc",
+      "path": "roles/cluster-pki/files/distribute.py",
+      "transformation": [],
+      "referenceSha256": "521a51a50d76c850d831dd70aa17bbb88739c898b55d35a6f3cd6329a8b42acc"
+    },
+    {
+      "sourceId": "release-9bca662ee850d3c12bb9da57",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "a601dfa0cc3de1cba2e317efef55ad3f964112ab47ecd388a6681500155afe0d",
+      "path": "roles/cluster-pki/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "a601dfa0cc3de1cba2e317efef55ad3f964112ab47ecd388a6681500155afe0d"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "tasks/checks/action-fd7b2018264238983fa7ea50.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/coredns/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "tasks/checks/action-fca0c1cfec267e33fe809584.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/coredns/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "tasks/checks/action-6cbad3497b52c303e87c8600.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/coredns/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/coredns/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/coredns/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-08e6d6cf49bf0a1d346feb37",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "9949974cb868a7dc467cc67f7ef169e167ce61cbf8678366925e11fc22a999f9",
+      "path": "roles/coredns/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "9949974cb868a7dc467cc67f7ef169e167ce61cbf8678366925e11fc22a999f9"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "tasks/checks/action-cce74d0aaf90af4e6bc93584.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/docker-runtime/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "tasks/checks/action-223a4f3584ded44e108b05f3.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/docker-runtime/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "tasks/checks/action-b1711a96d1b08baf8c1e396d.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/docker-runtime/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/docker-runtime/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/docker-runtime/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-341fcb0541c398fe6d0ae283",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "f20e58cfb8643750c06de56baeaf82650830c2d53bb4fe86062dd0cb6c5470f8",
+      "path": "roles/docker-runtime/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "f20e58cfb8643750c06de56baeaf82650830c2d53bb4fe86062dd0cb6c5470f8"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "tasks/checks/action-4c1275e96cc0cbceac57e006.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/etcd-state-store/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "tasks/checks/action-c8342fb804d6899b2144a187.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/etcd-state-store/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "tasks/checks/action-9144474360478886c4838059.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/etcd-state-store/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/etcd-state-store/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/etcd-state-store/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-66c9245d34d32b4b5b933a9c",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "2de205fc07d1a960d296def553919bf118931c9b660ac3f2caf990c043bd48e8",
+      "path": "roles/etcd-state-store/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "2de205fc07d1a960d296def553919bf118931c9b660ac3f2caf990c043bd48e8"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "tasks/checks/action-ced0deda7812684757849091.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/flannel/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "tasks/checks/action-9ca0651fe51d86ed9d838c42.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/flannel/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "tasks/checks/action-477f06160bab3313f7dd3ebb.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/flannel/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/flannel/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/flannel/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-65a928c07047ed6eccea06f7",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "f74b78437561960437ef21a74c2603ded1d9e77e460a5dc8ee7cf37e35548abe",
+      "path": "roles/flannel/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "f74b78437561960437ef21a74c2603ded1d9e77e460a5dc8ee7cf37e35548abe"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "tasks/checks/action-5ae758c323becde19bd38079.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/host-bootstrap/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "tasks/checks/action-e567809136887619ecb1c3e4.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/host-bootstrap/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "tasks/checks/action-6acade5f6ab6cc5298cee0a3.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/host-bootstrap/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/host-bootstrap/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/host-bootstrap/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-035c1d5e7ecdaaa16b1823df",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "e5aeadebe7b7991fa0dc7aed2acfa855268084d32916c8450ea2cae10c07240b",
+      "path": "roles/host-bootstrap/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "e5aeadebe7b7991fa0dc7aed2acfa855268084d32916c8450ea2cae10c07240b"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "tasks/checks/action-4c8329407a3ba49449c2c9f7.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/host-preflight/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "tasks/checks/action-97eb8e02fd0df8706d96f068.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/host-preflight/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "tasks/checks/action-7408383929edb0b3598ab45b.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/host-preflight/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/host-preflight/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/host-preflight/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-8c9323d5efb0458e87138dc9",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "66fd7b1afc5e76117d980da58787b003538343066c4795f54ac95516f56b6462",
+      "path": "roles/host-preflight/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "66fd7b1afc5e76117d980da58787b003538343066c4795f54ac95516f56b6462"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "tasks/checks/action-00b6ec829953842b3bb34e05.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kube-apiserver/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "tasks/checks/action-732e7d8706851b300fb3beef.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kube-apiserver/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "tasks/checks/action-e54130079f6233b6cbc5df9e.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kube-apiserver/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kube-apiserver/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kube-apiserver/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-350ba3cf4aced81bb0e37c2e",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "3e1a393e631d638ebcb286ebacfcc65bf790afc34a2366196e152f5ff9ade8d9",
+      "path": "roles/kube-apiserver/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "3e1a393e631d638ebcb286ebacfcc65bf790afc34a2366196e152f5ff9ade8d9"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "tasks/checks/action-c52d5ff858492d916ff89ec2.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kube-controller-manager/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "tasks/checks/action-f36a95e732f5308bb6ce6c8a.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kube-controller-manager/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "tasks/checks/action-fc306aa216bcf622bbfc4d4a.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kube-controller-manager/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kube-controller-manager/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kube-controller-manager/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-506f093dbcdef5dedd0d5c3e",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "42617fe0336dc292bc97742ae87fdb763fc27926ce4c55e9f3598f52a39cb065",
+      "path": "roles/kube-controller-manager/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "42617fe0336dc292bc97742ae87fdb763fc27926ce4c55e9f3598f52a39cb065"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "tasks/checks/action-336c4fcfe94ef94fb09fe617.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kube-proxy/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "tasks/checks/action-b039572d235f30e5a8cd51ed.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kube-proxy/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "tasks/checks/action-e2048688134db3669d501b98.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kube-proxy/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kube-proxy/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kube-proxy/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-8862d380ae62ded45bbc42a3",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "1dc662866e1ccd3cc86744bc160f8b5097d5b666b8ea7776f6ca5ff86b441e48",
+      "path": "roles/kube-proxy/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "1dc662866e1ccd3cc86744bc160f8b5097d5b666b8ea7776f6ca5ff86b441e48"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "tasks/checks/action-674916abc3199d38c9e25c4d.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kube-scheduler/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "tasks/checks/action-d6cc3513557d74088eff0997.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kube-scheduler/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "tasks/checks/action-f733d90e0580d26185721e8a.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kube-scheduler/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kube-scheduler/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kube-scheduler/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-f2d2f7cd17685f856e422f24",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "659be7911baca6d6b6eb22c7ee8812e3c5557d53ba31b82d794abd8981b9697e",
+      "path": "roles/kube-scheduler/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "659be7911baca6d6b6eb22c7ee8812e3c5557d53ba31b82d794abd8981b9697e"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "tasks/checks/action-3dcc690b30df2abe71379dd4.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kubelet/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "tasks/checks/action-855eeec7ed310f06ef8e38af.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kubelet/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "tasks/checks/action-f4d1d636d157480cb0225302.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kubelet/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kubelet/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kubelet/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-81f8e97e8c9a3ab1f953f24e",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "583c61ee5d372e87dcc3e969b6efb0ba4bb9606350e6f2489eebec8017695a21",
+      "path": "roles/kubelet/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "583c61ee5d372e87dcc3e969b6efb0ba4bb9606350e6f2489eebec8017695a21"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "tasks/checks/action-c440090a9c1f53d2a1a6c048.yml",
+      "sourceSha256": "54b0701edc0536b534bfdfa417156e2ae84553f9fa3a13c5e82086a6e0863ae8",
+      "path": "roles/kubernetes-bootstrap-rbac/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fdbd31779aa89091fe06758be17a4c2cc0e837213e94d5d1f801f1f2aa1b16e9"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "tasks/checks/action-bac9f8111c5e34ce00354652.yml",
+      "sourceSha256": "7063a3287ab2e7ff40c3e40895c724c1a76414a50638e33ff518e8a9f8967b59",
+      "path": "roles/kubernetes-bootstrap-rbac/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f6dd53271769214ac21b988a486d3d26c79bb118c2f3fe1c4a2320f66a66762b"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "tasks/checks/action-3cded4f9ae9c882f40c13b70.yml",
+      "sourceSha256": "d4cf141c09b36d066e2077a4c16e8be22039f84b644afee6c53201595f308151",
+      "path": "roles/kubernetes-bootstrap-rbac/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "e6dc57dd4fb6dc43d4646516eec3c11feb199ac8e77f9d9f053f65cfaaec1bfc"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "241e47587f6c785b500411c7ae2e7aef0846dc7ead00d224ac7410339d72c181",
+      "path": "roles/kubernetes-bootstrap-rbac/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "cfcf6bf410ba7ae0ceaf5c873c55721f27ba96d16fdcb2f276bd4dd4fd3515cf"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "24403c05f0bbba253c1c7835f72d1ae309298efb914db3f3fbabbccc5dcaacd4",
+      "path": "roles/kubernetes-bootstrap-rbac/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "abcb83f69ddacadf5f6c5565a13e94e4bc18121685d5c774686125e35fbd6515"
+    },
+    {
+      "sourceId": "release-07efeaaf7dc57a559f19e580",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "27fd0e2bece6c9a9aca0fdc30795b8eb3bf64d5ac1392eff2a0972781fcd193e",
+      "path": "roles/kubernetes-bootstrap-rbac/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "27fd0e2bece6c9a9aca0fdc30795b8eb3bf64d5ac1392eff2a0972781fcd193e"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "tasks/checks/action-7ae63d4f094d5e273fbca8a0.yml",
+      "sourceSha256": "2033b5c076e675476a7e4bc02a9ebfcba2cf4be8971dd10c924ea558f01ab3c3",
+      "path": "roles/kubernetes-distribution/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "f1ad2ad98fc4a65af92cdedbf68893304cf395087c3d4f8168f5a88a09b6e5ab"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "tasks/checks/action-c93c60293b7484dd6cf8dc09.yml",
+      "sourceSha256": "f42a6771066dc1ea90e3303fab76090340694d518f1a2a6058aa88194f1d6f87",
+      "path": "roles/kubernetes-distribution/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "62a23f2180d581e745000dc1c18cbb55c1cc82e568a67b8600367bf90e9d85d9"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "tasks/checks/action-13bb2869f18366933cf8f8e8.yml",
+      "sourceSha256": "5d25d9ebca8da82dc7b4bbe99bc2e4964ae9fa82cdf436e5d05ddf1ea1470d33",
+      "path": "roles/kubernetes-distribution/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "593d04b0f44078dd5e4be88032ffdf6ebc89542c1a2dc80e591e169412a6d704"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "d739b7e623c2cf174255828fffac7ebd16338332609dbdc0a9b83893f46e0aa6",
+      "path": "roles/kubernetes-distribution/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "2df9c75bfb8701f42b4c69eaa7091424ef76713ad2badd74b5f8656086ed3fa2"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "be391c554b961447ac6c1c8e9a601b2f0654569648a64afc91f0990cd159a0cb",
+      "path": "roles/kubernetes-distribution/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "6044bff83cc5b088c98581d0c0d870fc5195b8203d6e9cbbd4401647fa3e44b0"
+    },
+    {
+      "sourceId": "release-3e6a771b5a0f3c09521d7c7e",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "fd736e706f39a42de0f27cea89e5174dd918c83123f7ec1627012b801eae4855",
+      "path": "roles/kubernetes-distribution/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "fd736e706f39a42de0f27cea89e5174dd918c83123f7ec1627012b801eae4855"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "tasks/checks/action-7c33a01eb52a42d9002917cb.yml",
+      "sourceSha256": "11b3145cf61a30aee85dd801f64ebbdb864eb1712184681ac1a6aff813396891",
+      "path": "roles/kubernetes-encryption-configuration/tasks/precheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "1ab074d0f9dc75b3a781b22f46c60f65aae48b56d9ef7e4612abfe361c7d2c19"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "tasks/checks/action-0e158b23cdf3c8d429c35643.yml",
+      "sourceSha256": "a305d5aa4be99edac4d0fa958dcf7327a3ac741367fefad4f824cfe36e0b0a3b",
+      "path": "roles/kubernetes-encryption-configuration/tasks/postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "11896a7f7086a0af4ff73b595dd25942de6f36cee45973d28361ffc474fc7f79"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "tasks/checks/action-18d5c368682ead6a597a2e2d.yml",
+      "sourceSha256": "9f93bb74e5f953f3cc32d3bbc263602b3bdc0527f62f6b186d3761f196f949ca",
+      "path": "roles/kubernetes-encryption-configuration/tasks/rollback-postcheck.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "fea08f49228ce21132808120185fab3af17e35bd176e842588ff2e08342371e3"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "tasks/install.yml",
+      "sourceSha256": "70c00d74c9855c95f7eead53ecff4265aeba41eeaff1eb3dbf3e7e8887c93741",
+      "path": "roles/kubernetes-encryption-configuration/tasks/install.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "4ab50bbfb6d31e9b736279069d723bf3df0dc0022cd2a2bfa0de5028a67e4b6e"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "tasks/rollback.yml",
+      "sourceSha256": "61eb9c45c31794916276d1cf1aa3b0cbd5be4f7e29e3f5710813cb0fa9eb5e7c",
+      "path": "roles/kubernetes-encryption-configuration/tasks/rollback.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "YAML-format"
+      ],
+      "referenceSha256": "2910c374cda5b883b17d95c16e6b22c233e4630fdd1ac4549be4deccfcdec526"
+    },
+    {
+      "sourceId": "release-e9a5a3b6d56da4896a1f1a7e",
+      "sourcePath": "files/runtime.py",
+      "sourceSha256": "100a484b7db4fe29165cdad0f11bd6013cbd5187bb33b6aa5b98414e6e833df2",
+      "path": "roles/kubernetes-encryption-configuration/files/runtime.py",
+      "transformation": [],
+      "referenceSha256": "100a484b7db4fe29165cdad0f11bd6013cbd5187bb33b6aa5b98414e6e833df2"
+    },
+    {
+      "sourceId": "scenario-revision-9b009fb77c170e7f22b88c0d",
+      "sourcePath": "tasks/acceptance/k8s1175-acceptance.yml",
+      "sourceSha256": "2f24e8c17572a40f5dad87725c8c334698bc56437eecbc90ede8491bb6655e5b",
+      "path": "acceptance/tasks/acceptance.yml",
+      "transformation": [
+        "semantic-entry-name",
+        "symbolic-inventory-groups",
+        "topology-precondition",
+        "delivered-probe-image-with-pinned-digest",
+        "YAML-format"
+      ],
+      "referenceSha256": "90af1513c751075be17894df19d19e8edf77f5cb0d6e9e06ae0f3a4c34874d69"
+    },
+    {
+      "sourceId": "scenario-revision-9b009fb77c170e7f22b88c0d",
+      "sourcePath": "files/acceptance.py",
+      "sourceSha256": "56fc479f5833add433f8be447d8d0c8d4fb18af2ed812cbda8504206e2c7712d",
+      "path": "acceptance/files/acceptance.py",
+      "transformation": [],
+      "referenceSha256": "56fc479f5833add433f8be447d8d0c8d4fb18af2ed812cbda8504206e2c7712d"
+    }
+  ],
+  "scenario": {
+    "id": "scenario-ebd668c20c1c9b4555239ee1",
+    "name": "Kubernetes 1.17.5 测试环境 2",
+    "revisionId": "scenario-revision-9b009fb77c170e7f22b88c0d",
+    "revision": 1,
+    "state": "released",
+    "revisionDigest": "72aae80d58ceb872031f4adb9c60b3a66a863394a39e019c7457f95bacb00ed3",
+    "acceptanceTreeSha256": "93ba8dd67e66049b7b4597347a945c47b90818b1b36c8f30b4ad2d41a94d9000",
+    "recordedInstallationTest": {
+      "runId": "run-668ba67cf18c2da70085d809",
+      "valid": true
+    },
+    "recordedEvidenceAppliesTo": "Original published source only; it does not validate the refactored reference."
+  }
+}

@@ -63,6 +63,10 @@ func (s *ExecutionService) GetRun(ctx context.Context, id string) (domain.Run, e
 	return s.store.GetRun(ctx, id)
 }
 
+func (s *ExecutionService) GetRunDiagnosticRecord(ctx context.Context, id string) (domain.RunReadModel, error) {
+	return s.store.GetRunDiagnosticRecord(ctx, id)
+}
+
 func (s *ExecutionService) CanViewRun(ctx context.Context, user domain.User, id string) (bool, error) {
 	return s.store.CanViewRun(ctx, user, id)
 }

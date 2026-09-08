@@ -1,9 +1,9 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,21 +12,17 @@ import (
 )
 
 func TestCreateScenarioRunRejectsMissingAndHistoricalExecutionContracts(t *testing.T) {
-	for _, version := range []any{nil, 0, 1, 3} {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
+	for _, version := range []string{"", "2", "clusterforge-run-v0", "clusterforge-run-v2"} {
+		t.Run(version, func(t *testing.T) {
 			db, _, revision := scenarioLifecycleFixture(t)
 			ctx := context.Background()
-			snapshot := map[string]any{}
-			if version != nil {
-				snapshot["scenarioContractVersion"] = version
-			}
-			run := domain.Run{ID: "unsupported-contract", Kind: domain.RunScenarioTest, Status: domain.RunQueued, RequestedBy: "owner", EnvironmentID: "env", EnvironmentRevisionID: "env-rev", ScenarioRevisionID: revision.ID, InputSnapshot: snapshot, CreatedAt: time.Now().UTC()}
+			run := domain.Run{ID: "unsupported-contract", Kind: domain.RunScenarioTest, Status: domain.RunQueued, RequestedBy: "owner", EnvironmentID: "env", EnvironmentRevisionID: "env-rev", ScenarioRevisionID: revision.ID, Snapshot: domain.RunSnapshot{Contract: version}, CreatedAt: time.Now().UTC()}
 			err := db.CreateRun(ctx, run, nil)
-			if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "unsupported scenario execution contract") {
-				t.Fatalf("unsupported execution contract accepted: %v", err)
+			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unsupported contract") {
+				t.Fatalf("unsupported contract: %v", err)
 			}
 			if _, err := db.GetRun(ctx, run.ID); !errors.Is(err, domain.ErrNotFound) {
-				t.Fatalf("rejected request persisted a Run: %v", err)
+				t.Fatalf("rejected request persisted: %v", err)
 			}
 		})
 	}
@@ -60,8 +56,8 @@ func scenarioLifecycleFixture(t *testing.T) (*Store, domain.Scenario, domain.Sce
 }
 func insertScenarioSourceRun(t *testing.T, db *Store, revision domain.ScenarioRevision, id, kind, status, mode string) {
 	t.Helper()
-	snapshot := map[string]any{"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "executionMode": mode, "acceptanceJobIds": []string{"business"}}
-	_, err := db.db.Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,input_snapshot_json,created_at) VALUES(?,?,?,'owner','env','env-rev',?,?,?)`, id, kind, status, revision.ID, jsonText(snapshot), timeText(time.Now().UTC()))
+	snapshot := map[string]any{"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "executionMode": mode, "targetNodes": []domain.ScenarioTargetNode{}, "acceptanceJobIds": []string{"business"}}
+	_, err := db.db.Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,execution_snapshot_json,created_at) VALUES(?,?,?,'owner','env','env-rev',?,?,?)`, id, kind, status, revision.ID, jsonText(runfixture.Snapshot(snapshot)), timeText(time.Now().UTC()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +112,8 @@ func insertCompleteScenarioSourceRun(t *testing.T, db *Store, revision domain.Sc
 		steps = append(steps, map[string]any{"nodeId": step.nodeID, "sourceNodeId": "node", "sourceType": "component_action", "componentId": release.ComponentID, "releaseId": release.ID, "releaseSpecDigest": domain.ComponentReleaseSpecDigest(release), "actionId": step.actionID, "action": step.action, "stage": step.stage})
 	}
 	steps = append(steps, map[string]any{"nodeId": "acceptance:business", "sourceType": "scenario_acceptance", "scenarioRevisionId": revision.ID, "acceptanceJobId": "business", "stage": "acceptance"})
-	snapshot := map[string]any{"scenarioContractVersion": 2, "scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "executionMode": mode, "acceptanceJobIds": []string{"business"}, "steps": steps}
-	if _, err = db.DB().Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,input_snapshot_json,created_at) VALUES(?,?,?,'owner','env','env-rev',?,?,?)`, id, kind, status, revision.ID, jsonText(snapshot), timeText(time.Now().UTC())); err != nil {
+	snapshot := map[string]any{"scenarioContractVersion": 2, "scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "executionMode": mode, "targetNodes": []domain.ScenarioTargetNode{}, "acceptanceJobIds": []string{"business"}, "steps": steps}
+	if _, err = db.DB().Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,execution_snapshot_json,created_at) VALUES(?,?,?,'owner','env','env-rev',?,?,?)`, id, kind, status, revision.ID, jsonText(runfixture.Snapshot(snapshot)), timeText(time.Now().UTC())); err != nil {
 		t.Fatal(err)
 	}
 	for _, step := range steps {
@@ -198,15 +194,15 @@ func TestScenarioSourceRequiresSuccessfulFormalAcceptance(t *testing.T) {
 
 func TestScenarioSourceRejectsIncompleteOrStaleFormalEvidence(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
-		{"missing whole target verification", `UPDATE runs SET input_snapshot_json=json_remove(input_snapshot_json,'$.steps[3]') WHERE id='formal'`},
+		{"missing whole target verification", `UPDATE runs SET execution_snapshot_json=json_remove(execution_snapshot_json,'$.plan.steps[3]') WHERE id='formal'`},
 		{"failed component step", `UPDATE run_steps SET status='failed',exit_code=1 WHERE node_id='node'`},
 		{"missing acceptance result", `DELETE FROM run_steps WHERE node_id='acceptance:business'`},
-		{"missing contract version", `UPDATE runs SET input_snapshot_json=json_remove(input_snapshot_json,'$.scenarioContractVersion') WHERE id='formal'`},
-		{"missing release digest", `UPDATE runs SET input_snapshot_json=json_remove(input_snapshot_json,'$.steps[0].releaseSpecDigest') WHERE id='formal'`},
+		{"missing contract version", `UPDATE runs SET execution_snapshot_json=json_remove(execution_snapshot_json,'$.contract') WHERE id='formal'`},
+		{"missing release digest", `UPDATE runs SET execution_snapshot_json=json_remove(execution_snapshot_json,'$.plan.steps[0].releaseSpecDigest') WHERE id='formal'`},
 		{"stale release contract", `UPDATE action_definitions SET timeout_seconds=timeout_seconds+1 WHERE id='check'`},
-		{"wrong target component", `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.steps[3].componentId','unrelated') WHERE id='formal'`},
-		{"wrong target node", `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.steps[3].sourceNodeId','unrelated') WHERE id='formal'`},
-		{"graph release uncovered", `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.steps[0].releaseId','missing','$.steps[1].releaseId','missing','$.steps[2].releaseId','missing','$.steps[3].releaseId','missing') WHERE id='formal'`},
+		{"wrong target component", `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.plan.steps[3].componentId','unrelated') WHERE id='formal'`},
+		{"wrong target node", `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.plan.steps[3].sourceNodeId','unrelated') WHERE id='formal'`},
+		{"graph release uncovered", `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.plan.steps[0].releaseId','missing','$.plan.steps[1].releaseId','missing','$.plan.steps[2].releaseId','missing','$.plan.steps[3].releaseId','missing') WHERE id='formal'`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, revision := scenarioSourceEvidenceFixture(t)
@@ -214,7 +210,7 @@ func TestScenarioSourceRejectsIncompleteOrStaleFormalEvidence(t *testing.T) {
 			if _, err := db.SuccessfulScenarioSourceRun(context.Background(), revision, "formal"); err != nil {
 				t.Fatalf("complete formal evidence rejected: %v", err)
 			}
-			if _, err := db.DB().Exec(tc.sql); err != nil {
+			if _, err := runfixture.CorruptSnapshot(context.Background(), db.DB(), tc.sql); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.SuccessfulScenarioSourceRun(context.Background(), revision, "formal"); !errors.Is(err, domain.ErrConflict) {

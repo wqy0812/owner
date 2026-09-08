@@ -18,9 +18,9 @@ func TestRunnerWithTemporaryLocalPlaybook(t *testing.T) {
 	if os.Getenv("NEWPLATFORM_ANSIBLE_INTEGRATION") != "1" {
 		t.Skip("set NEWPLATFORM_ANSIBLE_INTEGRATION=1 to run the real localhost runner test")
 	}
-	binary, err := exec.LookPath("ansible-playbook")
+	binary, err := exec.LookPath(os.Getenv("ANSIBLE_PLAYBOOK"))
 	if err != nil {
-		t.Skip("ansible-playbook is not installed")
+		t.Fatal("set ANSIBLE_PLAYBOOK to the required Ansible executable: ", err)
 	}
 	root := t.TempDir()
 	inventory := []byte("[runner_test]\nlocalhost ansible_connection=local\n")
@@ -30,21 +30,21 @@ func TestRunnerWithTemporaryLocalPlaybook(t *testing.T) {
   gather_facts: false
   tasks:
     - name: Create isolated target directory
-      ansible.builtin.file:
+      file:
         path: "{{ target_root }}"
         state: directory
         mode: "0700"
     - name: Write test marker
-      ansible.builtin.copy:
+      copy:
         dest: "{{ target_root }}/VERSION"
         content: "{{ expected_version }}\n"
         mode: "0600"
     - name: Read test marker
-      ansible.builtin.slurp:
+      slurp:
         src: "{{ target_root }}/VERSION"
       register: marker
     - name: Verify test marker
-      ansible.builtin.assert:
+      assert:
         that:
           - (marker.content | b64decode | trim) == expected_version
 `)

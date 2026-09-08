@@ -1,0 +1,147 @@
+{
+  "slug": "etcd-state-store",
+  "name": "etcd",
+  "description": "在三控制节点部署 etcd 3.4.3 静态 Pod，检查 TLS、成员和仲裁并恢复原始数据目录。",
+  "referenceVersion": "3.4.3-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "etcd_data_dir",
+      "description": "etcd 数据目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "suggestedValue": "/var/lib/etcd",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    },
+    {
+      "name": "pki_dir",
+      "description": "集群证书目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "pki_dir",
+          "targetParameter": "pki_dir"
+        }
+      ]
+    },
+    {
+      "component": "kubelet",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [
+    {
+      "logicalName": "etcd",
+      "digest": "sha256:4198ba6f82f642dfd18ecf840ee37afb9df4b596f06eef20e44d0aec4ea27216",
+      "sourceRef": "registry.example.invalid/components/etcd-state-store/etcd@sha256:4198ba6f82f642dfd18ecf840ee37afb9df4b596f06eef20e44d0aec4ea27216"
+    }
+  ],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "control_plane",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

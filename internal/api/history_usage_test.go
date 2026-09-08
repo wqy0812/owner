@@ -3,6 +3,8 @@ package api
 import (
 	"codex/platform-demo/internal/domain"
 	"codex/platform-demo/internal/seed"
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"net/http"
 	"strings"
@@ -52,8 +54,8 @@ func TestCleanedRunLinkPreservesOriginalPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := domain.Run{ID: "cleaned-http", Kind: domain.RunComponentTest, Status: domain.RunFailed, ComponentReleaseID: "release-test-runtime-1.0.0", EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.ComponentOwnerRuntimeID, Action: domain.ActionInstall, CreatedAt: now, FinishedAt: &now, InputSnapshot: map[string]any{}}
-	if err = f.database.CreateRun(ctx, run, nil); err != nil {
+	run := domain.Run{ID: "cleaned-http", Kind: domain.RunComponentTest, Status: domain.RunFailed, ComponentReleaseID: "release-test-runtime-1.0.0", EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.ComponentOwnerRuntimeID, Action: domain.ActionInstall, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{})}
+	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run, nil); err != nil {
 		t.Fatal(err)
 	}
 	response := f.request(http.MethodPost, "/api/v1/runs/cleanup", map[string]any{"runIds": []string{run.ID}}, f.session(seed.PlatformAdminID))

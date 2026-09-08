@@ -13,6 +13,7 @@
 - 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，执行整集群回滚预览并单条或批量审批高风险作业。
 - 平台 Owner：维护平台目录、在工作台审核当前组件合同并管理 Run 归档与保留策略。
 - 共享测试环境：单环境 FIFO 执行、日志搜索/流筛选/复制/下载、取消、审计和站内通知。
+- 当前参考 Playbook：[Kubernetes 1.17.5 原生组件与场景](examples/ansible/kubernetes-1.17.5/README.md)，依据 2026-09-08 测试平台发布的 15 个组件与一个场景整理；固定 Ansible 2.8.8，来源证据与重构后验证分开记录。
 - 测试目录历史快照（2026-08-30）：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；使用前需重新核对，精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
 
@@ -58,12 +59,16 @@ make seed
 
 ```bash
 make check-docs
-make test ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook
+make test-fast
+make test-local
+make test-deploy  # make test is an alias; uses the pinned Docker runtime
 make test-e2e
 make build
 ```
 
 `make build` 先构建前端，再生成嵌入静态资源的 `bin/newplatform`、备份工具 `bin/clusterforge-backup` 和独立作业工具 `bin/clusterforge-job`。
+
+`test-fast` 运行快速检查；`test-local` 运行部署脚本、夹具、证据、文档、Go、前端覆盖率及隔离 API 浏览器检查。统一部署门禁为 **`make test-deploy`（`make test` 同义）**：公共检查通过后，在隔离 Docker 中执行原生 Role、SSH 镜像前置探针、当前参考 Playbook 和真实 SSH 冒烟。88.55 与本地 Docker 部署均调用此入口，任一阶段失败、缺少固定运行时、Role 用例跳过或源码变化均阻断部署。命令、日志、镜像 ID 和源码摘要保存在 `output/deployment-gate/<时间-标识>/`。
 
 本轮交付与验证边界见 [2026-09-07 分批审核记录](docs/records/2026-09-07-batched-code-review.md)。
 
@@ -115,11 +120,13 @@ make test-deploy-local-docker                 # 脚本的隔离门禁测试
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260907-no-resource-contract`。服务、业务导出和基础目录重置只接受该精确合同；旧字段、全局参数存储、旧摘要算法和离线转换入口已删除。不同合同的测试库须先备份，再经明确授权重建。`database foundation-snapshot` 只把当前合同的账号与基础目录复制到新库，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎。
+当前合同为 `clusterforge-v1-20260908-typed-run-snapshot`。服务、业务导出和基础目录重置只接受该精确合同；运行时不兼容旧 Run 快照。上一合同的数据通过 `database migrate-run-snapshot` 一次性离线转换到独立新库并验证，完整流程及受保护切换见 [Run 快照合同与离线迁移](docs/design/run-snapshot-contract.md)。转换保留 Run、基线、证据与归档，不需要清空业务库。`database foundation-snapshot` 只把当前合同的账号与基础目录复制到新库，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎。
 
 只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并生成经过完整性与外键检查的一致 SQLite 备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
-`make test` 会执行部署脚本门禁、夹具边界和 Go/React 测试，并用明确指定的 `ANSIBLE_PLAYBOOK` 运行原生 Role 作业门禁。可单独执行 `make test-role-job ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook`。该夹具只写入测试专用临时目录，不作为平台业务目录保存。
+`make test-deploy` 要求本机 Docker 已具有 `clusterforge-test-ubuntu:18.04-ansible2.8.8` 镜像，并核验 Ansible 2.8.8 / Python 3.6.9。独立运行和 88.55 部署创建一次性容器，只复用 Go 缓存；本地部署复用本次隔离候选容器。门禁不挂载平台业务数据，不执行上传或激活。定点诊断仍可在固定容器中执行 `make test-role-job ANSIBLE_PLAYBOOK=/opt/ansible/bin/ansible-playbook`；它检查四个包的真实用例，拒绝跳过或空选择。现有 `--skip-tests` 显式跳过整个回归门禁，不能当作门禁通过，源码、数据、产物与激活检查仍保留。
+
+门禁中的浏览器证据保存在同次门禁的 `browser/` 子目录。本地 Docker 部署将整个门禁证据写入 `output/local-docker-deploy/<标识>/gate/`，临时源码副本清理后日志、API 结果、截图及失败 trace 仍保留。
 
 
 ## 组件分层

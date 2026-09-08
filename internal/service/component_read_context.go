@@ -45,7 +45,7 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 	if err != nil {
 		return result, err
 	}
-	byID := map[string]domain.Run{}
+	byID := map[string]domain.RunReadModel{}
 	for _, run := range runs {
 		byID[run.ID] = run
 	}
@@ -56,7 +56,7 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 			if !ok {
 				return nil
 			}
-			return &EvidenceSummary{ID: run.ID, Status: run.Status, EnvironmentID: run.EnvironmentID, EnvironmentName: names[run.EnvironmentID], CreatedAt: run.CreatedAt, FinishedAt: run.FinishedAt, MatchesContract: snapshotString(run, "componentReleaseSpecDigest") == digest}
+			return &EvidenceSummary{ID: run.ID, Status: run.Status, EnvironmentID: run.EnvironmentID, EnvironmentName: names[run.EnvironmentID], CreatedAt: run.CreatedAt, FinishedAt: run.FinishedAt, MatchesContract: run.Subject.ComponentReleaseSpecDigest == digest}
 		}
 		evidence := ReleaseEvidenceSummary{CurrentInstall: summary(release.Readiness.InstallEvidenceRunID), CurrentRollback: summary(release.Readiness.RollbackEvidenceRunID), CurrentTransition: summary(release.Readiness.TransitionEvidenceRunID), CurrentByID: map[string]EvidenceSummary{}}
 		for _, id := range []string{release.Readiness.InstallEvidenceRunID, release.Readiness.RollbackEvidenceRunID, release.Readiness.TransitionEvidenceRunID} {
@@ -120,18 +120,21 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 	return result, nil
 }
 
-func orderedEvidenceActions(run domain.Run) (bool, bool) {
+func orderedEvidenceActions(run domain.RunReadModel) (bool, bool) {
 	// Evidence is classified by the locked parent actions and explicit postchecks.
-	plan, err := mapToPlan(run.InputSnapshot)
-	if err != nil {
-		return false, false
-	}
 	install, rollback := false, false
-	for _, step := range plan.Steps {
+	for _, step := range run.LockedSteps {
 		if step.Phase != "post" {
 			continue
 		}
-		parent := parentExecutionStep(plan.ParentSteps, step)
+		var parent *domain.RunReadStep
+		for i := range run.ParentSteps {
+			p := &run.ParentSteps[i]
+			if p.SourceNodeID == step.SourceNodeID && p.ActionID == step.ParentActionID && p.Phase == "execute" {
+				parent = p
+				break
+			}
+		}
 		if parent == nil {
 			continue
 		}

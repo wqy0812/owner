@@ -251,7 +251,7 @@ func (s *PreparationService) run(ctx context.Context, cancel context.CancelFunc,
 		}
 	}
 	ctx = withMediaObservation(ctx, report)
-	ctx = context.WithValue(ctx, preparationProbeKey{}, preparationProbeObserver(func(ctx context.Context, environment domain.Environment, plan lockedPlan) error {
+	ctx = context.WithValue(ctx, preparationProbeKey{}, preparationProbeObserver(func(ctx context.Context, environment domain.Environment, plan domain.RunExecutionPlan) error {
 		return s.environments.probeForPreparation(ctx, environment, plan, report)
 	}))
 	var plan any

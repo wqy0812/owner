@@ -16,16 +16,8 @@ import (
 	"codex/platform-demo/internal/store"
 )
 
-type InventoryHost struct {
-	Name    string   `json:"name"`
-	Address string   `json:"address"`
-	Groups  []string `json:"groups"`
-	Port    int      `json:"port,omitempty"`
-	User    string   `json:"user,omitempty"`
-}
-
 type InventoryDocument struct {
-	Hosts []InventoryHost `json:"hosts"`
+	Hosts []domain.RunInventoryHost `json:"hosts"`
 }
 
 type EnvironmentLifecycle struct {
@@ -58,7 +50,7 @@ func (p *EnvironmentService) Create(ctx context.Context, user domain.User, envir
 	}
 	now := time.Now().UTC()
 	environment.ID, environment.OwnerID, environment.CreatedAt, environment.UpdatedAt = newID("environment"), user.ID, now, now
-	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{}})
+	inventory, _ := json.Marshal(InventoryDocument{Hosts: []domain.RunInventoryHost{}})
 	revision := domain.EnvironmentRevision{
 		ID: newID("environment-revision"), EnvironmentID: environment.ID, Revision: 1,
 		Facts: facts, Inventory: inventory, Variables: map[string]string{}, Parameters: map[string]any{}, CredentialRefs: []domain.CredentialRef{},
@@ -231,7 +223,7 @@ func archivedEnvironmentError(environmentID string) error {
 	return actionableExistingError(fmt.Errorf("%w: environment is archived", domain.ErrConflict), "environment.archived", "该环境已归档，不能再创建版本、健康检查、构建或 Run", "恢复环境", "/environments?selected="+environmentID)
 }
 
-func (p *EnvironmentService) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []InventoryHost, changeReason ...string) (domain.Environment, error) {
+func (p *EnvironmentService) UpdateInventory(ctx context.Context, user domain.User, environmentID string, hosts []domain.RunInventoryHost, changeReason ...string) (domain.Environment, error) {
 	if len(hosts) > 256 {
 		return domain.Environment{}, fmt.Errorf("%w: inventory supports at most 256 hosts", domain.ErrInvalid)
 	}
@@ -570,7 +562,7 @@ func (p *EnvironmentService) checkEnvironmentSSH(ctx context.Context, user domai
 		return p.saveEnvironmentSSHCheck(ctx, user, environment, started, []domain.EnvironmentSSHHostCheck{{Kind: "configuration", Name: "Inventory", Address: "—", Status: "failed", ErrorCode: "inventory_empty", Message: "尚未配置可检查的 Inventory 主机"}})
 	}
 
-	remoteHosts := make([]InventoryHost, 0, len(inventory.Hosts))
+	remoteHosts := make([]domain.RunInventoryHost, 0, len(inventory.Hosts))
 	for _, host := range inventory.Hosts {
 		if localInventoryAddress(host.Address) {
 			continue
@@ -636,7 +628,7 @@ func localInventoryAddress(address string) bool {
 	return address == "localhost" || address == "127.0.0.1" || address == "::1"
 }
 
-func sshCheckTarget(host InventoryHost, status, code, message string) domain.EnvironmentSSHHostCheck {
+func sshCheckTarget(host domain.RunInventoryHost, status, code, message string) domain.EnvironmentSSHHostCheck {
 	port := host.Port
 	if port == 0 {
 		port = 22

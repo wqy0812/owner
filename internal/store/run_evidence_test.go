@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,7 +15,7 @@ import (
 )
 
 func evidenceRun(id, digest, evidence, runtime, version string, at time.Time) domain.Run {
-	return domain.Run{ID: id, Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: "component-owner-a", EnvironmentID: "history-environment", EnvironmentRevisionID: "history-environment-r1", ComponentReleaseID: "history-release", Action: domain.ActionInstall, InputSnapshot: map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence, "runtimeCompatibility": map[string]any{"runtime": runtime, "version": version}}, CreatedAt: at, FinishedAt: &at}
+	return domain.Run{ID: id, Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: "component-owner-a", EnvironmentID: "history-environment", EnvironmentRevisionID: "history-environment-r1", ComponentReleaseID: "history-release", Action: domain.ActionInstall, Snapshot: domain.RunSnapshot{Contract: domain.RunSnapshotContract, Subject: domain.RunSubject{ComponentReleaseSpecDigest: digest, ComponentTestEvidence: evidence}, Plan: domain.RunPlan{Runtime: domain.RunRuntime{AnsibleCore: runtime, Python: version}, Steps: []domain.RunPlanStep{{ID: "history-step", NodeID: "history-step", ReleaseID: "history-release", ReleaseSpecDigest: ""}}}}, CreatedAt: at, FinishedAt: &at}
 }
 
 func TestIndexedEvidenceMatchesSnapshotQueries(t *testing.T) {
@@ -49,9 +50,9 @@ func TestIndexedEvidenceMatchesSnapshotQueries(t *testing.T) {
 			for _, evidence := range []string{"install_verify", "rollback_verify", "evolution_round_trip"} {
 				var expected string
 				err := s.DB().QueryRowContext(ctx, `SELECT id FROM runs WHERE kind='component_test' AND status='succeeded' AND component_release_id=?
-AND json_extract(input_snapshot_json,'$.componentReleaseSpecDigest')=?
-AND (?='' OR (json_extract(input_snapshot_json,'$.runtimeCompatibility.runtime')=? AND json_extract(input_snapshot_json,'$.runtimeCompatibility.version')=?))
-AND CASE WHEN ?='rollback_verify' THEN json_extract(input_snapshot_json,'$.componentTestEvidence') IN ('rollback_verify') ELSE json_extract(input_snapshot_json,'$.componentTestEvidence')=? END
+AND json_extract(execution_snapshot_json,'$.subject.componentReleaseSpecDigest')=?
+AND (?='' OR (json_extract(execution_snapshot_json,'$.plan.runtime.ansibleCore')=? AND json_extract(execution_snapshot_json,'$.plan.runtime.python')=?))
+AND CASE WHEN ?='rollback_verify' THEN json_extract(execution_snapshot_json,'$.subject.componentTestEvidence') IN ('rollback_verify') ELSE json_extract(execution_snapshot_json,'$.subject.componentTestEvidence')=? END
 ORDER BY COALESCE(finished_at,created_at) DESC,created_at DESC,id DESC LIMIT 1`, "history-release", digest, runtime, runtime, "version-a", evidence, evidence).Scan(&expected)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					t.Fatal(err)
@@ -76,7 +77,7 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "install_verify"); err != nil || id != "" {
 		t.Fatalf("running evidence=%q %v", id, err)
 	}
-	if err := s.UpdateRunDeliveryResults(ctx, run.ID, []string{"delivered"}); err != nil {
+	if err := s.UpdateRunDeliveryResults(ctx, run.ID, []domain.RunDeliveryResult{{Status: "delivered"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{domain.RunRunning}, domain.RunSucceeded, "", testNow.Add(time.Minute)); err != nil {
@@ -90,8 +91,8 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 	}
 	// Only modify synthetic records: prove malformed metadata cannot be coerced
 	// into a valid string key, and absence remains NULL rather than an empty key.
-	for _, snapshot := range []string{`{}`, `{"componentReleaseSpecDigest":123,"componentTestEvidence":true,"runtimeCompatibility":{"runtime":[],"version":{}}}`} {
-		if _, err := s.DB().ExecContext(ctx, `UPDATE runs SET input_snapshot_json=? WHERE id=?`, snapshot, run.ID); err != nil {
+	for _, snapshot := range []string{`{}`, `{"subject":{"componentReleaseSpecDigest":123,"componentTestEvidence":true},"plan":{"runtime":{"ansibleCore":[],"python":{}}}}`} {
+		if _, err := runfixture.CorruptSnapshot(ctx, s.DB(), `UPDATE runs SET execution_snapshot_json=? WHERE id=?`, snapshot, run.ID); err != nil {
 			t.Fatal(err)
 		}
 		var digest, evidence sql.NullString
@@ -166,7 +167,7 @@ func evidenceHistoryStore(t testing.TB, count int) *Store {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	insert, err := tx.PrepareContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,action_kind,input_snapshot_json,created_at,finished_at) VALUES(?,'component_test','succeeded','component-owner-a','history-environment','history-environment-r1','history-release',?,?,?,?)`)
+	insert, err := tx.PrepareContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,action_kind,execution_snapshot_json,created_at,finished_at) VALUES(?,'component_test','succeeded','component-owner-a','history-environment','history-environment-r1','history-release',?,?,?,?)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,9 +180,9 @@ func evidenceHistoryStore(t testing.TB, count int) *Store {
 		if i >= count-2 {
 			digest = "current-contract"
 		}
-		snapshot := map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence, "runtimeCompatibility": map[string]any{"runtime": "runtime-a", "version": "version-a"}, "steps": []any{map[string]any{"releaseId": "history-release"}}}
+		snapshot := map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence, "runtime": map[string]any{"ansibleCore": "runtime-a", "python": "version-a"}, "steps": []any{map[string]any{"releaseId": "history-release"}}}
 		at := timeText(testNow.Add(time.Duration(i) * time.Second))
-		if _, err := insert.ExecContext(ctx, fmt.Sprintf("history-%06d", i), action, jsonText(snapshot), at, at); err != nil {
+		if _, err := insert.ExecContext(ctx, fmt.Sprintf("history-%06d", i), action, jsonText(runfixture.Snapshot(snapshot)), at, at); err != nil {
 			t.Fatal(err)
 		}
 	}

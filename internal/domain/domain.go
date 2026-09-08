@@ -835,28 +835,29 @@ const (
 )
 
 type Run struct {
-	ID                    string         `json:"id"`
-	Kind                  RunKind        `json:"kind"`
-	Status                RunStatus      `json:"status"`
-	RequestedBy           string         `json:"requestedBy"`
-	EnvironmentID         string         `json:"environmentId"`
-	EnvironmentRevisionID string         `json:"environmentRevisionId"`
-	ComponentReleaseID    string         `json:"componentReleaseId,omitempty"`
-	ScenarioRevisionID    string         `json:"scenarioRevisionId,omitempty"`
-	Action                ActionKind     `json:"action,omitempty"`
-	Destructive           bool           `json:"destructive"`
-	InputSnapshot         map[string]any `json:"inputSnapshot"`
-	ArtifactDigest        string         `json:"artifactDigest"`
-	RetryOfRunID          string         `json:"retryOfRunId,omitempty"`
-	RetryRootRunID        string         `json:"retryRootRunId,omitempty"`
-	RetryAttempt          int            `json:"retryAttempt,omitempty"`
-	RetryStartStep        int            `json:"retryStartStep,omitempty"`
-	Error                 string         `json:"error,omitempty"`
-	CreatedAt             time.Time      `json:"createdAt"`
-	StartedAt             *time.Time     `json:"startedAt,omitempty"`
-	FinishedAt            *time.Time     `json:"finishedAt,omitempty"`
-	Steps                 []RunStep      `json:"steps,omitempty"`
-	Approval              *Approval      `json:"approval,omitempty"`
+	ID                    string              `json:"id"`
+	Kind                  RunKind             `json:"kind"`
+	Status                RunStatus           `json:"status"`
+	RequestedBy           string              `json:"requestedBy"`
+	EnvironmentID         string              `json:"environmentId"`
+	EnvironmentRevisionID string              `json:"environmentRevisionId"`
+	ComponentReleaseID    string              `json:"componentReleaseId,omitempty"`
+	ScenarioRevisionID    string              `json:"scenarioRevisionId,omitempty"`
+	Action                ActionKind          `json:"action,omitempty"`
+	Destructive           bool                `json:"destructive"`
+	Snapshot              RunSnapshot         `json:"snapshot"`
+	DeliveryResults       []RunDeliveryResult `json:"deliveryResults,omitempty"`
+	ArtifactDigest        string              `json:"artifactDigest"`
+	RetryOfRunID          string              `json:"retryOfRunId,omitempty"`
+	RetryRootRunID        string              `json:"retryRootRunId,omitempty"`
+	RetryAttempt          int                 `json:"retryAttempt,omitempty"`
+	RetryStartStep        int                 `json:"retryStartStep,omitempty"`
+	Error                 string              `json:"error,omitempty"`
+	CreatedAt             time.Time           `json:"createdAt"`
+	StartedAt             *time.Time          `json:"startedAt,omitempty"`
+	FinishedAt            *time.Time          `json:"finishedAt,omitempty"`
+	Steps                 []RunStep           `json:"steps,omitempty"`
+	Approval              *Approval           `json:"approval,omitempty"`
 }
 
 type RunStep struct {

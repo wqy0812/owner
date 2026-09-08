@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,7 +9,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func validateRequiredCredentials(refs []domain.CredentialRef, steps []lockedStep) error {
+func validateRequiredCredentials(refs []domain.CredentialRef, steps []domain.RunPlanStep) error {
 	configured := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
 		configured[ref.Name] = struct{}{}
@@ -34,7 +33,7 @@ func validateRequiredCredentials(refs []domain.CredentialRef, steps []lockedStep
 	return fmt.Errorf("%w: environment is missing required CredentialRefs: %s", domain.ErrInvalid, strings.Join(names, ", "))
 }
 
-func validatePlanHostGroups(raw json.RawMessage, steps []lockedStep) error {
+func validatePlanHostGroups(raw json.RawMessage, steps []domain.RunPlanStep) error {
 	var document InventoryDocument
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return fmt.Errorf("%w: invalid environment inventory: %v", domain.ErrInvalid, err)
@@ -59,21 +58,6 @@ func structToMap(value any) map[string]any {
 	var output map[string]any
 	_ = json.Unmarshal(encoded, &output)
 	return output
-}
-
-func mapToPlan(value map[string]any) (lockedPlan, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return lockedPlan{}, err
-	}
-	var plan lockedPlan
-	if err := json.Unmarshal(encoded, &plan); err != nil {
-		return plan, err
-	}
-	if len(plan.Steps) == 0 {
-		return plan, errors.New("locked run plan contains no steps")
-	}
-	return plan, nil
 }
 
 func topologicalNodes(graph domain.ScenarioGraph) ([]domain.ScenarioNode, error) {
@@ -113,4 +97,11 @@ func topologicalNodes(graph domain.ScenarioGraph) ([]domain.ScenarioNode, error)
 		return nil, fmt.Errorf("%w: scenario graph contains a cycle", domain.ErrInvalid)
 	}
 	return result, nil
+}
+
+func planFromRun(run domain.Run) (domain.RunExecutionPlan, error) {
+	if err := domain.ValidateRunSnapshot(run); err != nil {
+		return domain.RunExecutionPlan{}, err
+	}
+	return run.Snapshot.ExecutionPlan(run.DeliveryResults), nil
 }

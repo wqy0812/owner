@@ -61,7 +61,7 @@ export function RunDiagnosticsPanel({ run, retryBusy, onRetryRun, onLocateStep }
         notify('error', '复制失败', displayError(error));
     } }} htmlType={"button"} type="default"><Copy size={14}/> 复制诊断</Button>
         {primary.stepId && <Button className="button button--quiet" onClick={() => onLocateStep(primary.stepId!)} htmlType={"button"} type="default">定位失败步骤</Button>}
-        {run.createdBy === user.id && ['failed', 'interrupted'].includes(run.status) && <Button className="button button--primary" disabled={retryBusy} onClick={onRetryRun} htmlType={"button"} type="primary">{retryBusy ? '正在校验…' : '预览安全续跑'}</Button>}
+        {!run.snapshotError && run.createdBy === user.id && ['failed', 'interrupted'].includes(run.status) && <Button className="button button--primary" disabled={retryBusy} onClick={onRetryRun} htmlType={"button"} type="primary">{retryBusy ? '正在校验…' : '预览安全续跑'}</Button>}
       </div>
     </div>
   </article>;

@@ -12,11 +12,11 @@ import (
 type lockedRunPreparation struct {
 	ID          string
 	CapturedAt  time.Time
-	Plan        lockedPlan
+	Plan        domain.RunExecutionPlan
 	Destructive bool
 }
 
-func (c *ExecutionService) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []lockedStep, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedPlanDigest string, expectedScenarioDigest ...string) (domain.Run, error) {
+func (c *ExecutionService) createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, steps []domain.RunPlanStep, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedPlanDigest string, expectedScenarioDigest ...string) (domain.Run, error) {
 	now := time.Now().UTC()
 	runID := newID("run")
 	plan, planDigest, destructive, err := c.planner.prepareLockedPlan(ctx, environment, kind, runID, now, steps)
@@ -33,32 +33,32 @@ func (c *ExecutionService) createRun(ctx context.Context, user domain.User, envi
 
 func (p *RunCreator) createScenarioRun(ctx context.Context, user domain.User, id string, input ScenarioExecutionRequest, kind domain.RunKind, runID string, at time.Time, x scenarioExecution, requestDigest string) (domain.Run, error) {
 	mode := input.ExecutionMode
-	snapshot := structToMap(x.plan)
-	snapshot["scenarioContractVersion"] = 2
-	snapshot["executionMode"] = string(mode)
-	snapshot["scenarioId"] = x.prepared.revision.ScenarioID
-	snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(x.prepared.revision)
-	snapshot["targetNodes"] = x.target
-	snapshot["sourceRevisionId"] = x.prepared.revision.SourceRevisionID
-	snapshot["baselineRunId"] = x.baseline.RunID
-	snapshot["baselineGeneration"] = x.baseline.Generation
-	snapshot["baselineInstallationDigest"] = x.installationDigest
-	snapshot["baselineTestOnly"] = x.baseline.TestOnly
+	snapshot := domain.SnapshotFromExecutionPlan(x.plan)
+
+	snapshot.ScenarioExecution.Mode = mode
+	snapshot.Subject.ScenarioID = x.prepared.revision.ScenarioID
+	snapshot.Subject.ScenarioRevisionSpecDigest = scenarioRevisionSpecDigest(x.prepared.revision)
+	snapshot.ScenarioExecution.TargetNodes = x.target
+	snapshot.ScenarioExecution.SourceRevisionID = x.prepared.revision.SourceRevisionID
+	snapshot.ScenarioExecution.Baseline.RunID = x.baseline.RunID
+	snapshot.ScenarioExecution.Baseline.Generation = x.baseline.Generation
+	snapshot.ScenarioExecution.Baseline.InstallationDigest = x.installationDigest
+	snapshot.ScenarioExecution.Baseline.TestOnly = x.baseline.TestOnly
 	if mode == domain.ScenarioExecutionBaselineVerify {
-		snapshot["recoveredReceipts"] = x.recoveredReceipts
+		snapshot.ScenarioExecution.RecoveredReceipts = x.recoveredReceipts
 	}
-	snapshot["environmentRevisionId"] = x.prepared.environment.CurrentRevisionID
-	snapshot["planDigest"] = x.preview.PlanDigest
-	snapshot["submissionKey"] = input.IdempotencyKey
-	snapshot["submissionDigest"] = requestDigest
+
+	snapshot.Submission.PlanDigest = x.preview.PlanDigest
+	snapshot.Submission.Key = input.IdempotencyKey
+	snapshot.Submission.Digest = requestDigest
 	jobIDs := []string{}
 	for _, job := range x.prepared.revision.AcceptanceJobs {
 		jobIDs = append(jobIDs, job.ID)
 	}
-	snapshot["acceptanceJobIds"] = jobIDs
-	snapshot["resolvedParametersByNode"] = provenanceSnapshot(x.prepared.provenance)
-	snapshot["credentialRefs"] = domain.RedactCredentialRefs(x.prepared.environment.Revision.CredentialRefs, false)
-	run := domain.Run{ID: runID, Kind: kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: input.EnvironmentID, EnvironmentRevisionID: x.prepared.environment.CurrentRevisionID, ScenarioRevisionID: id, InputSnapshot: snapshot, ArtifactDigest: x.plan.TreeDigest, Destructive: x.preview.NeedsApproval, CreatedAt: at}
+	snapshot.ScenarioExecution.AcceptanceJobIDs = jobIDs
+	snapshot.Inputs.ResolvedParametersByNode = provenanceSnapshot(x.prepared.provenance)
+	snapshot.Inputs.CredentialRefs = domain.RedactCredentialRefs(x.prepared.environment.Revision.CredentialRefs, false)
+	run := domain.Run{ID: runID, Kind: kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: input.EnvironmentID, EnvironmentRevisionID: x.prepared.environment.CurrentRevisionID, ScenarioRevisionID: id, Snapshot: snapshot, DeliveryResults: x.plan.DeliveryResults, ArtifactDigest: x.plan.TreeDigest, Destructive: x.preview.NeedsApproval, CreatedAt: at}
 	var approval *domain.Approval
 	if run.Destructive {
 		run.Status = domain.RunAwaitingApproval
@@ -79,34 +79,35 @@ func (p *RunCreator) createScenarioRun(ctx context.Context, user domain.User, id
 	return run, nil
 }
 
-func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, source domain.Run, locked lockedPlan, preview RunRetryPlan, runID string, now time.Time) (domain.Run, error) {
+func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, source domain.Run, locked domain.RunExecutionPlan, preview RunRetryPlan, runID string, now time.Time) (domain.Run, error) {
 	retryAttempt, err := p.store.NextRetryAttempt(ctx, preview.RetryRootRunID)
 	if err != nil {
 		return domain.Run{}, err
 	}
-	snapshot := structToMap(locked)
-	for key, value := range source.InputSnapshot {
-		if key != "steps" && key != "artifactTransfers" && key != "imageTransfers" && key != "treeDigest" && key != "installationBaseline" && key != "installationBaselineDigest" {
-			snapshot[key] = value
-		}
+	frozen, err := source.Snapshot.Clone()
+	if err != nil {
+		return domain.Run{}, err
 	}
-	snapshot["retryRecoveryStateDigest"] = preview.RecoveryStateDigest
-	run := domain.Run{ID: runID, Kind: source.Kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: source.EnvironmentID, EnvironmentRevisionID: source.EnvironmentRevisionID, ComponentReleaseID: source.ComponentReleaseID, ScenarioRevisionID: source.ScenarioRevisionID, Action: source.Action, Destructive: preview.RequiresApproval, InputSnapshot: snapshot, ArtifactDigest: source.ArtifactDigest, RetryOfRunID: source.ID, RetryRootRunID: preview.RetryRootRunID, RetryAttempt: retryAttempt, RetryStartStep: source.RetryStartStep + preview.StartStep, CreatedAt: now}
+	refreshed := domain.SnapshotFromExecutionPlan(locked)
+	snapshot := domain.RunSnapshot{Contract: domain.RunSnapshotContract, Subject: frozen.Subject, Inputs: frozen.Inputs, ScenarioExecution: frozen.ScenarioExecution, Plan: refreshed.Plan, Delivery: refreshed.Delivery, Recovery: refreshed.Recovery, Retry: domain.RunRetryContext{RecoveryStateDigest: preview.RecoveryStateDigest}}
+	results := retryDeliveryResults(locked.DeliveryDecisions)
+	run := domain.Run{ID: runID, Kind: source.Kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: source.EnvironmentID, EnvironmentRevisionID: source.EnvironmentRevisionID, ComponentReleaseID: source.ComponentReleaseID, ScenarioRevisionID: source.ScenarioRevisionID, Action: source.Action, Destructive: preview.RequiresApproval, Snapshot: snapshot, DeliveryResults: results, ArtifactDigest: source.ArtifactDigest, RetryOfRunID: source.ID, RetryRootRunID: preview.RetryRootRunID, RetryAttempt: retryAttempt, RetryStartStep: source.RetryStartStep + preview.StartStep, CreatedAt: now}
 	var approval *domain.Approval
 	if preview.RequiresApproval {
 		run.Status = domain.RunAwaitingApproval
 		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: now}
 		run.Approval = approval
 	}
-	if source.ScenarioRevisionID != "" {
-		baseline, err := p.store.GetScenarioInstallation(ctx, source.EnvironmentID, fmt.Sprint(source.InputSnapshot["scenarioId"]))
+	if source.Kind == domain.RunScenario || source.Kind == domain.RunScenarioTest {
+		baseline, err := p.store.GetScenarioInstallation(ctx, source.EnvironmentID, source.Snapshot.Subject.ScenarioID)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return run, err
 		}
-		run.InputSnapshot["retryBaselineGeneration"] = baseline.Generation
-		run.InputSnapshot["retryBaselineMutatingRunId"] = baseline.MutatingRunID
-		run.InputSnapshot["submissionKey"] = "retry-" + run.ID
-		run.InputSnapshot["submissionDigest"] = preview.PlanDigest
+		run.Snapshot.Retry.BaselineGeneration = baseline.Generation
+		run.Snapshot.Retry.BaselineMutatingRunID = baseline.MutatingRunID
+		run.Snapshot.Submission.Key = "retry-" + run.ID
+		run.Snapshot.Submission.Digest = preview.PlanDigest
+		run.Snapshot.Submission.PlanDigest = preview.PlanDigest
 	}
 	if err := p.store.CreateRun(ctx, run, approval); err != nil {
 		return run, err
@@ -158,4 +159,14 @@ func (p *ExecutionService) startScenario(ctx context.Context, user domain.User, 
 	}
 	input.ExpectedPlanDigest = preview.PlanDigest
 	return p.StartScenarioExecution(ctx, user, revisionID, input, kind)
+}
+
+// A new attempt starts without observations from an earlier Run. Approved
+// choices remain in the frozen delivery plan and are verified before execution.
+func retryDeliveryResults(decisions []domain.RunDeliveryDecision) []domain.RunDeliveryResult {
+	out := make([]domain.RunDeliveryResult, 0, len(decisions))
+	for _, d := range decisions {
+		out = append(out, domain.RunDeliveryResult{RequirementID: d.RequirementID, Mode: d.Mode, Status: "pending"})
+	}
+	return out
 }

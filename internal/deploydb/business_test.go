@@ -31,7 +31,7 @@ func businessFixture(t *testing.T) string {
  INSERT INTO component_releases(id,component_id,line_id,version,status,compatibility,created_at) VALUES('release','component','line','1','draft','not_applicable','2026-09-05');
  INSERT INTO environments(id,name,owner_id,created_at,updated_at) VALUES('env','Env','owner','2026-09-05','2026-09-05');
  INSERT INTO environment_revisions(id,environment_id,revision,created_at) VALUES('env-r1','env',1,'2026-09-05');
- INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,input_snapshot_json,created_at) VALUES('run-history-secret','component_test','succeeded','owner','env','env-r1','release','{"history":"must-not-be-copied"}','2026-09-05');
+ INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,execution_snapshot_json,created_at) VALUES('run-history-secret','component_test','succeeded','owner','env','env-r1','release','{"history":"must-not-be-copied"}','2026-09-05');
  INSERT INTO audit_events VALUES('audit-platform-catalog-bootstrapped','system','platform_option_catalog.bootstrapped','platform','platform-option-catalog','{}','2026-09-05');
  INSERT INTO audit_events VALUES('old-audit','owner','run.completed','run','run-history-secret','{}','2026-09-05');
  INSERT INTO notifications(id,user_id,type,title,body,created_at) VALUES('note','owner','run','history','must-not-be-copied','2026-09-05');

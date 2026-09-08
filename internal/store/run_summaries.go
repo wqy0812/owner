@@ -55,7 +55,7 @@ func runVisibility(viewer domain.User) (string, []any) {
 	case domain.RoleEnvironmentOwner:
 		return `EXISTS (SELECT 1 FROM environments e WHERE e.id=runs.environment_id AND e.owner_id=?)`, []any{viewer.ID}
 	case domain.RoleComponentOwner:
-		return `(requested_by=? OR EXISTS (SELECT 1 FROM component_releases cr JOIN components c ON c.id=cr.component_id WHERE cr.id=runs.component_release_id AND c.owner_id=?) OR EXISTS (SELECT 1 FROM json_each(runs.input_snapshot_json,'$.steps') step JOIN component_releases cr ON cr.id=json_extract(step.value,'$.releaseId') JOIN components c ON c.id=cr.component_id WHERE c.owner_id=?))`, []any{viewer.ID, viewer.ID, viewer.ID}
+		return `(requested_by=? OR EXISTS (SELECT 1 FROM component_releases cr JOIN components c ON c.id=cr.component_id WHERE cr.id=runs.component_release_id AND c.owner_id=?) OR EXISTS (SELECT 1 FROM run_release_visibility step JOIN component_releases cr ON cr.id=step.release_id JOIN components c ON c.id=cr.component_id WHERE step.run_id=runs.id AND c.owner_id=?))`, []any{viewer.ID, viewer.ID, viewer.ID}
 	case domain.RoleScenarioOwner:
 		return `(requested_by=? OR EXISTS (SELECT 1 FROM scenario_revisions sr JOIN scenarios s ON s.id=sr.scenario_id WHERE sr.id=runs.scenario_revision_id AND s.owner_id=?))`, []any{viewer.ID, viewer.ID}
 	case domain.RolePlatformAdmin:
@@ -114,13 +114,13 @@ func (s *Store) BatchApprovalCandidates(ctx context.Context, viewer domain.User)
 		return nil, domain.ErrForbidden
 	}
 	where, args := runVisibility(viewer)
-	where += ` AND runs.status='awaiting_approval' AND EXISTS (SELECT 1 FROM approvals a WHERE a.run_id=runs.id AND a.status='pending') AND COALESCE(json_array_length(runs.input_snapshot_json,'$.deliveryRequirements'),0)=0`
+	where += ` AND runs.status='awaiting_approval' AND EXISTS (SELECT 1 FROM approvals a WHERE a.run_id=runs.id AND a.status='pending') AND COALESCE(json_array_length(runs.execution_snapshot_json,` + runSnapshotRequirementsPath + `),0)=0`
 	return readRunSummaries(ctx, s.db, where, args, 0, 0)
 }
 
 func (s *Store) ReleaseRunSummaries(ctx context.Context, viewer domain.User, releaseID string) ([]RunSummary, error) {
 	where, args := runVisibility(viewer)
-	where += ` AND ((runs.kind='component_test' AND runs.component_release_id=?) OR (runs.kind IN ('scenario_test','scenario_run') AND EXISTS (SELECT 1 FROM json_each(runs.input_snapshot_json,'$.steps') locked_step WHERE json_extract(locked_step.value,'$.releaseId')=?)))`
+	where += ` AND ((runs.kind='component_test' AND runs.component_release_id=?) OR (runs.kind IN ('scenario_test','scenario_run') AND EXISTS (SELECT 1 FROM json_each(runs.execution_snapshot_json,` + runSnapshotStepsPath + `) locked_step WHERE json_extract(locked_step.value,'$.releaseId')=?)))`
 	args = append(args, releaseID, releaseID)
 	return readRunSummaries(ctx, s.db, where, args, 0, 0)
 }

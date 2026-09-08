@@ -20,6 +20,7 @@ export function ReleaseContractEditor({ release: initialRelease, components, foc
     const [release] = useState(initialRelease);
     const { notify } = useApp();
     const [busy, setBusy] = useState(false);
+    const [parametersValid, setParametersValid] = useState(true);
     const [parameters, setParameters] = useState<ParameterDefinition[]>(release.parameters ?? []);
     const [dependencies, setDependencies] = useState<ComponentDependency[]>(release.dependencies ?? []);
     const [targetName, setTargetName] = useState('');
@@ -28,7 +29,7 @@ export function ReleaseContractEditor({ release: initialRelease, components, foc
     const [source, setSource] = useState('');
     const editorRef = useRef<HTMLDivElement>(null);
     const contractErrors = parameterContractErrors(parameters, dependencies, components.flatMap(item => item.releases ?? []));
-    const dirty = JSON.stringify(parameters) !== JSON.stringify(release.parameters ?? []) || JSON.stringify(dependencies) !== JSON.stringify(release.dependencies ?? []);
+    const dirty = !parametersValid || JSON.stringify(parameters) !== JSON.stringify(release.parameters ?? []) || JSON.stringify(dependencies) !== JSON.stringify(release.dependencies ?? []);
     useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
     const mappedTargets = new Set(dependencies.flatMap(dependency => dependency.parameterMappings ?? []).map(mapping => mapping.targetParameter));
     const orphaned = parameters.filter(parameter => parameter.valueProvider === 'upstream_mapping' && !mappedTargets.has(parameter.name));
@@ -57,6 +58,7 @@ export function ReleaseContractEditor({ release: initialRelease, components, foc
         setSource('');
     }
     async function save() {
+        if (busy || !parametersValid) return;
         if (contractErrors.length) {
             notify('error', '合同存在未处理引用', contractErrors.join('；'));
             return;
@@ -87,8 +89,8 @@ export function ReleaseContractEditor({ release: initialRelease, components, foc
                             setParameters(items => items.filter(item => item.name !== parameter.name));
                     }} htmlType={"button"} type="text">移除引用参数</Button></p>)}</div></div>}</> : <DependencyContractList dependencies={release.dependencies ?? []} components={components}/>}
     </article>
-    <article className="panel" id="contract-parameters"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><Shield size={18}/></span><div><h2>参数合同</h2><p>{release.version} · {focusSection === 'parameters' ? '编辑参数定义与可见性；上游引用请在直接依赖中配置' : '当前参数，仅供参考'}</p></div></div></header>{focusSection === 'parameters' ? <div className="contract-editor"><ParameterTable parameters={parameters} onChange={setParameters}/></div> : <ParameterContractList release={{ ...release, parameters }} components={components}/>}</article>
+    <article className="panel" id="contract-parameters"><header className="panel__header"><div><span className="panel__icon panel__icon--amber"><Shield size={18}/></span><div><h2>参数合同</h2><p>{release.version} · {focusSection === 'parameters' ? '编辑参数定义与可见性；上游引用请在直接依赖中配置' : '当前参数，仅供参考'}</p></div></div></header>{focusSection === 'parameters' ? <div className="contract-editor"><ParameterTable disabled={busy} parameters={parameters} onChange={setParameters} onValidationChange={setParametersValid}/></div> : <ParameterContractList release={{ ...release, parameters }} components={components}/>}</article>
     {contractErrors.length > 0 && <div className="form-validation">{contractErrors.map(error => <span key={error}>{error}</span>)}</div>}
-    <div className="contract-editor-actions"><Button className="button button--quiet" disabled={busy} onClick={cancel} htmlType={"button"} type="default">取消</Button><Button className="button button--primary" disabled={busy || !!contractErrors.length} onClick={() => void save()} htmlType={"button"} type="primary">{busy ? '保存中…' : focusSection === 'parameters' ? '保存参数合同' : '保存直接依赖'}</Button></div>
+    <div className="contract-editor-actions"><Button className="button button--quiet" disabled={busy} onClick={cancel} htmlType={"button"} type="default">取消</Button><Button className="button button--primary" disabled={busy || !parametersValid || !!contractErrors.length} onClick={() => void save()} htmlType={"button"} type="primary">{busy ? '保存中…' : focusSection === 'parameters' ? '保存参数合同' : '保存直接依赖'}</Button></div>
   </div>;
 }

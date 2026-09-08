@@ -235,7 +235,7 @@ func valueOrTime(value *time.Time, fallback time.Time) time.Time {
 
 // Components carry the Readiness evaluated by ListComponents in this same
 // request. Formatting work items must not repeat filesystem or evidence reads.
-func componentOwnerWork(user domain.User, components []domain.Component, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+func componentOwnerWork(user domain.User, components []domain.Component, runs []domain.RunReadModel) ([]domain.WorkItem, map[string]bool, error) {
 	items := []domain.WorkItem{}
 	embedded := map[string]bool{}
 	for _, component := range components {
@@ -248,8 +248,8 @@ func componentOwnerWork(user domain.User, components []domain.Component, runs []
 			}
 			digest := componentReleaseSpecDigest(release)
 			componentHref := fmt.Sprintf("/components?selected=%s&release=%s", component.ID, release.ID)
-			latest := latestMatchingRun(runs, func(run domain.Run) bool {
-				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && snapshotString(run, "componentReleaseSpecDigest") == digest
+			latest := latestMatchingRun(runs, func(run domain.RunReadModel) bool {
+				return run.Kind == domain.RunComponentTest && run.ComponentReleaseID == release.ID && run.Subject.ComponentReleaseSpecDigest == digest
 			})
 			reasons := []domain.WorkReason{}
 			readiness := release.Readiness
@@ -279,7 +279,7 @@ func componentOwnerWork(user domain.User, components []domain.Component, runs []
 				reasons = append(reasons, domain.WorkReason{Code: "release.validation_in_progress", Message: runStatusMessage(latest.Status), EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看运行", "/runs?selected="+latest.ID)})
 				title = fmt.Sprintf("%s %s 正在验证", component.Name, release.Version)
 				action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
-			} else if latest != nil && latest.InputSnapshot["cleaned"] != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+			} else if latest != nil && latest.Cleaned != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 				embedded[latest.ID] = true
 				priority = domain.WorkPriorityCritical
 				reasons = append(reasons, domain.WorkReason{Code: "release.validation_failed", Message: "当前合同最近一次环境验证失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
@@ -301,7 +301,7 @@ func componentOwnerWork(user domain.User, components []domain.Component, runs []
 	return items, embedded, nil
 }
 
-func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.User, scenarios []domain.Scenario, runs []domain.Run) ([]domain.WorkItem, map[string]bool, error) {
+func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.User, scenarios []domain.Scenario, runs []domain.RunReadModel) ([]domain.WorkItem, map[string]bool, error) {
 	items := []domain.WorkItem{}
 	embedded := map[string]bool{}
 	for _, scenario := range scenarios {
@@ -326,13 +326,13 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 			}
 			matchesCurrentDefinition[run.ID] = matches
 		}
-		latest := latestMatchingRun(runs, func(run domain.Run) bool {
+		latest := latestMatchingRun(runs, func(run domain.RunReadModel) bool {
 			return matchesCurrentDefinition[run.ID]
 		})
-		latestSuccessfulCurrent := latestMatchingRun(runs, func(run domain.Run) bool {
+		latestSuccessfulCurrent := latestMatchingRun(runs, func(run domain.RunReadModel) bool {
 			return matchesCurrentDefinition[run.ID] && run.Status == domain.RunSucceeded
 		})
-		latestSuccessfulTest := latestMatchingRun(runs, func(run domain.Run) bool {
+		latestSuccessfulTest := latestMatchingRun(runs, func(run domain.RunReadModel) bool {
 			return run.Kind == domain.RunScenarioTest && run.ScenarioRevisionID == revision.ID && run.Status == domain.RunSucceeded
 		})
 		reasons := []domain.WorkReason{}
@@ -393,7 +393,7 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 		if latest != nil && activeWorkRunStatuses[latest.Status] {
 			embedded[latest.ID] = true
 			action = domain.WorkAction{Label: "查看运行", Href: "/runs?selected=" + latest.ID}
-		} else if latest != nil && latest.InputSnapshot["cleaned"] != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
+		} else if latest != nil && latest.Cleaned != true && (latest.Status == domain.RunFailed || latest.Status == domain.RunInterrupted) {
 			embedded[latest.ID] = true
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
 			reasons = append(reasons, domain.WorkReason{Code: "scenario.test_failed", Message: "当前版本最近一次完整测试失败", EvidenceRunID: latest.ID, Cause: runCause(*latest), NextAction: workAction("查看失败运行", "/runs?selected="+latest.ID)})
@@ -519,8 +519,8 @@ func impactWork(user domain.User, notifications []domain.Notification, scenarios
 	return items
 }
 
-func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs []domain.Run, embedded map[string]bool, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) ([]domain.WorkItem, error) {
-	latestByKey := map[string]domain.Run{}
+func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs []domain.RunReadModel, embedded map[string]bool, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) ([]domain.WorkItem, error) {
+	latestByKey := map[string]domain.RunReadModel{}
 	for _, run := range runs {
 		key := runWorkloadKey(run)
 		if current, ok := latestByKey[key]; !ok || run.CreatedAt.After(current.CreatedAt) {
@@ -529,7 +529,7 @@ func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs [
 	}
 	items := []domain.WorkItem{}
 	for _, run := range runs {
-		if run.InputSnapshot["cleaned"] == true || embedded[run.ID] {
+		if run.Cleaned == true || embedded[run.ID] {
 			continue
 		}
 		active := activeWorkRunStatuses[run.Status]
@@ -578,13 +578,13 @@ func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs [
 	return items, nil
 }
 
-func (p *ReadModelService) runMatchesCurrentDefinition(ctx context.Context, run domain.Run) (bool, error) {
+func (p *ReadModelService) runMatchesCurrentDefinition(ctx context.Context, run domain.RunReadModel) (bool, error) {
 	if run.ComponentReleaseID != "" {
 		release, err := p.store.GetComponentRelease(ctx, run.ComponentReleaseID)
 		if err != nil {
 			return false, nil
 		}
-		return snapshotString(run, "componentReleaseSpecDigest") == componentReleaseSpecDigest(release), nil
+		return run.Subject.ComponentReleaseSpecDigest == componentReleaseSpecDigest(release), nil
 	}
 	if run.ScenarioRevisionID != "" {
 		revision, err := p.store.GetScenarioRevision(ctx, run.ScenarioRevisionID)
@@ -596,7 +596,7 @@ func (p *ReadModelService) runMatchesCurrentDefinition(ctx context.Context, run 
 	return true, nil
 }
 
-func (p *ReadModelService) failedStepOwnedBy(ctx context.Context, run domain.Run, ownerID string, components map[string]domain.Component) (bool, error) {
+func (p *ReadModelService) failedStepOwnedBy(ctx context.Context, run domain.RunReadModel, ownerID string, components map[string]domain.Component) (bool, error) {
 	steps, err := p.store.ListRunSteps(ctx, run.ID)
 	if err != nil {
 		return false, err
@@ -608,13 +608,12 @@ func (p *ReadModelService) failedStepOwnedBy(ctx context.Context, run domain.Run
 			break
 		}
 	}
-	lockedSteps, _ := run.InputSnapshot["steps"].([]any)
-	for _, raw := range lockedSteps {
-		locked, _ := raw.(map[string]any)
-		if nodeID, _ := locked["nodeId"].(string); nodeID != failedNodeID {
+	lockedSteps := run.LockedSteps
+	for _, locked := range lockedSteps {
+		if nodeID := locked.NodeID; nodeID != failedNodeID {
 			continue
 		}
-		componentID, _ := locked["componentId"].(string)
+		componentID := locked.ComponentID
 		component, ok := components[componentID]
 		if !ok {
 			loaded, loadErr := p.store.GetComponent(ctx, componentID, false)
@@ -637,8 +636,8 @@ func currentScenarioRevision(scenario domain.Scenario) (domain.ScenarioRevision,
 	return domain.ScenarioRevision{}, false
 }
 
-func latestMatchingRun(runs []domain.Run, predicate func(domain.Run) bool) *domain.Run {
-	var latest *domain.Run
+func latestMatchingRun(runs []domain.RunReadModel, predicate func(domain.RunReadModel) bool) *domain.RunReadModel {
+	var latest *domain.RunReadModel
 	for i := range runs {
 		if predicate(runs[i]) && (latest == nil || runs[i].CreatedAt.After(latest.CreatedAt)) {
 			candidate := runs[i]
@@ -646,11 +645,6 @@ func latestMatchingRun(runs []domain.Run, predicate func(domain.Run) bool) *doma
 		}
 	}
 	return latest
-}
-
-func snapshotString(run domain.Run, key string) string {
-	value, _ := run.InputSnapshot[key].(string)
-	return value
 }
 
 func payloadStrings(payload map[string]any, key string) []string {
@@ -664,7 +658,7 @@ func payloadStrings(payload map[string]any, key string) []string {
 	return values
 }
 
-func runWorkloadKey(run domain.Run) string {
+func runWorkloadKey(run domain.RunReadModel) string {
 	if run.ComponentReleaseID != "" {
 		return fmt.Sprintf("%s:%s:%s:%s", run.Kind, run.ComponentReleaseID, run.Action, run.EnvironmentID)
 	}
@@ -674,7 +668,7 @@ func runWorkloadKey(run domain.Run) string {
 	return fmt.Sprintf("%s:%s", run.Kind, run.EnvironmentID)
 }
 
-func runDisplayName(run domain.Run, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) string {
+func runDisplayName(run domain.RunReadModel, components map[string]domain.Component, releases map[string]domain.ComponentRelease, scenarios map[string]domain.Scenario, revisions map[string]domain.ScenarioRevision, environments map[string]domain.Environment) string {
 	if release, ok := releases[run.ComponentReleaseID]; ok {
 		if component, found := components[release.ComponentID]; found {
 			return component.Name + " " + release.Version
@@ -736,7 +730,7 @@ func ruleCause(summary string) *domain.WorkCause {
 	return &domain.WorkCause{Kind: "platform_rule", Summary: summary}
 }
 
-func runCause(run domain.Run) *domain.WorkCause {
+func runCause(run domain.RunReadModel) *domain.WorkCause {
 	at := run.CreatedAt
 	if run.FinishedAt != nil {
 		at = *run.FinishedAt
@@ -746,7 +740,7 @@ func runCause(run domain.Run) *domain.WorkCause {
 	return &domain.WorkCause{Kind: "run", Summary: runStatusMessage(run.Status), At: &at}
 }
 
-func (p *ReadModelService) evidenceInvalidationCause(ctx context.Context, resourceType, resourceID string, evidence *domain.Run) *domain.WorkCause {
+func (p *ReadModelService) evidenceInvalidationCause(ctx context.Context, resourceType, resourceID string, evidence *domain.RunReadModel) *domain.WorkCause {
 	after := evidence.CreatedAt
 	if evidence.FinishedAt != nil {
 		after = *evidence.FinishedAt

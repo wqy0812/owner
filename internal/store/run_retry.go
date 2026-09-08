@@ -19,7 +19,7 @@ func retryRecoveryStateDigest(ctx context.Context, q queryer, environmentID stri
 		return "", err
 	}
 	raw, err := json.Marshal(struct {
-		Receipts      []ActionExecutionReceipt
+		Receipts      []domain.ActionExecutionReceipt
 		Installations string
 	}{receipts, ScenarioComponentInstallationDigest(installed)})
 	if err != nil {
@@ -54,7 +54,7 @@ func validateRetryState(ctx context.Context, q queryer, run domain.Run) error {
 	if err != nil {
 		return err
 	}
-	if current != run.InputSnapshot["retryRecoveryStateDigest"] {
+	if current != run.Snapshot.Retry.RecoveryStateDigest {
 		return fmt.Errorf("%w: recovery state changed after retry preview", domain.ErrConflict)
 	}
 	source, err := getRunRecord(ctx, q, run.RetryOfRunID)
@@ -89,7 +89,7 @@ func (s *Store) ValidateRetryState(ctx context.Context, run domain.Run) error {
 
 type scenarioStageEvidence struct {
 	runID string
-	step  map[string]any
+	step  domain.RunPlanStep
 }
 
 // A continuation has its own actual stages. Complete scenario evidence joins
@@ -102,7 +102,7 @@ func scenarioRetryEvidence(ctx context.Context, q queryer, run domain.Run) ([]sc
 		if err != nil {
 			return nil, err
 		}
-		if seen[source.ID] || source.ScenarioRevisionID != run.ScenarioRevisionID || source.EnvironmentRevisionID != run.EnvironmentRevisionID || source.ArtifactDigest != run.ArtifactDigest || source.InputSnapshot["scenarioRevisionSpecDigest"] != run.InputSnapshot["scenarioRevisionSpecDigest"] || source.RetryAttempt+1 != current.RetryAttempt {
+		if seen[source.ID] || source.ScenarioRevisionID != run.ScenarioRevisionID || source.EnvironmentRevisionID != run.EnvironmentRevisionID || source.ArtifactDigest != run.ArtifactDigest || source.Snapshot.Subject.ScenarioRevisionSpecDigest != run.Snapshot.Subject.ScenarioRevisionSpecDigest || source.RetryAttempt+1 != current.RetryAttempt {
 			return nil, fmt.Errorf("%w: scenario retry evidence differs from its source", domain.ErrConflict)
 		}
 		seen[source.ID] = true
@@ -112,16 +112,12 @@ func scenarioRetryEvidence(ctx context.Context, q queryer, run domain.Run) ([]sc
 	stages := []scenarioStageEvidence{}
 	index := map[string]int{}
 	for i := len(chain) - 1; i >= 0; i-- {
-		steps, ok := chain[i].InputSnapshot["steps"].([]any)
-		if !ok || len(steps) == 0 {
+		steps := chain[i].Snapshot.Plan.Steps
+		if len(steps) == 0 {
 			return nil, domain.ErrInvalid
 		}
-		for _, raw := range steps {
-			step, ok := raw.(map[string]any)
-			if !ok {
-				return nil, domain.ErrInvalid
-			}
-			id, _ := step["nodeId"].(string)
+		for _, step := range steps {
+			id := step.NodeID
 			if id == "" {
 				return nil, domain.ErrInvalid
 			}

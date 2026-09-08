@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { sourceManifest } from './source-manifest.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,19 +17,7 @@ const runs = [
   { name: 'coverage-shuffled', args: ['--coverage', '--sequence.shuffle', `--sequence.seed=${seed}`] },
 ];
 function sourceHash() {
-  const files = [];
-  function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(filename);
-      else files.push(filename);
-    }
-  }
-  visit(path.join(web, 'src'));
-  files.push(...['vitest.config.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/test-stability.mjs'].map(file => path.join(web, file)));
-  const hash = createHash('sha256');
-  for (const file of files.sort()) hash.update(path.relative(web, file)).update('\0').update(readFileSync(file)).update('\0');
-  return hash.digest('hex');
+  return sourceManifest(root).sourceSha256;
 }
 const manifest = {
   startedAt: new Date().toISOString(), sourceSha256: sourceHash(), node: process.version,

@@ -79,7 +79,7 @@ Ubuntu 18.04。无需在 macOS 创建 Ansible 虚拟环境。
 原工作区在复制、构建或验证期间改变时，脚本停止并要求重新执行。
 
 候选容器仅复用 Go 缓存，使用临时数据库和本地测试对象，不挂载正式平台数据。
-默认执行部署脚本门禁、Go/前端测试、`make test-role-job` 及真实 SSH 冒烟检查。
+默认调用统一 `make test-deploy`：公共检查后，在本次隔离候选容器中运行原生 Role、SSH 镜像前置探针、当前参考 Playbook 与真实 SSH 冒烟。任何失败都会阻止激活。
 每次部署都从当前的 [固定版本 Dockerfile](../deploy/local-docker/Dockerfile.runtime) 构建源运行时镜像，未变化的层由 Docker 缓存复用；修改运行时定义后不会继续沿用旧镜像。
 
 切换前检查活动工作和数据库合同，停止空闲容器后再次检查，通过仓库备份工具
@@ -102,7 +102,7 @@ Ubuntu 18.04。无需在 macOS 创建 Ansible 虚拟环境。
 2. 沿 Domain → Store → Service → API → Client/前端类型 → 页面查找读写链；业务规则在 Service，事务一致性在 Store，前端隐藏不是权限控制。
 3. 新增字段同步请求、响应、持久化、摘要、导入导出、Catalog 与测试夹具；影响执行的字段必须检查旧审核、测试证据和计划失效。
 4. 保持已发布 Release、场景 Revision、环境历史 Revision 和 Run 快照不可变。依赖锁定精确 Release，手工顺序边不能代替依赖，Secret 只走 CredentialRef。
-5. 变更数据库时同步完整 `schema.sql` 和唯一 `schemaContract`。V1 运行时不提供历史迁移或旧字段兼容；普通启动应拒绝不匹配合同。重建有数据的测试库另需明确授权和备份；`foundation-snapshot` 只把当前精确合同的账号和基础目录复制到新库，不恢复旧业务或 Run。
+5. 变更数据库时同步完整 `schema.sql` 和唯一 `schemaContract`。V1 运行时不提供历史迁移或旧字段兼容；普通启动应拒绝不匹配合同。Run 的上一合同仅由独立离线工具一次性转换，见 [Run 快照合同与切换](design/run-snapshot-contract.md)。重建有数据的测试库另需明确授权和备份；`foundation-snapshot` 只把当前精确合同的账号和基础目录复制到新库，不恢复旧业务或 Run。
 6. 根据实际改动范围选择验证，再更新下表文档。提交、推送、部署和真实验收分别说明，不能从本地绿灯推断环境已更新。
 
 ## 验证怎么选
@@ -113,7 +113,7 @@ Ubuntu 18.04。无需在 macOS 创建 Ansible 虚拟环境。
 | --- | --- |
 | 文档 | `make check-docs`、`git diff --check`；人工核对功能语义 |
 | 前端逻辑、类型、布局或共享功能说明 | `pnpm --dir web test`、`pnpm --dir web build`；桌面浏览器验证导航、表单、弹窗和滚动 |
-| Go 业务或 API | 先运行目标包/用例，跨模块后运行 `go test ./...` 与 `go vet ./...` |
+| Go 业务或 API | 先运行目标包/用例，跨模块后运行 `go test ./cmd/... ./internal/...` 与 `go vet ./cmd/... ./internal/...` |
 | 发布、调度、归档、引用并发 | 针对变更运行相关 `go test -race`；验证并发漂移和失败关闭行为 |
 | Playbook/Runner | `make test-ansible`；缺少 Ansible 时写明未验证 |
 | 部署脚本 | `make test-deploy-script`，实际部署必须另外授权和验证 |
@@ -121,7 +121,21 @@ Ubuntu 18.04。无需在 macOS 创建 Ansible 虚拟环境。
 
 桌面布局至少检查 1280×800、1440×900 与 1920×1080 CSS 像素：导航可达、侧栏可收起、表格可滚动、DAG 和检查器可用、弹窗按钮可见。不需要移动端断点、底部导航或触屏专用页面。
 
-`make test` 包含部署脚本、夹具边界、Go、前端与 Ansible 门禁；`make build` 还会更新嵌入式 UI 产物。根据变更选择门禁，缺少依赖、失败、未执行要分别记录。
+| 验证层级 | 命令 | 范围 |
+| --- | --- | --- |
+| 快速开发检查 | `make test-fast` | 部署脚本、夹具边界、证据摘要、Go、普通前端 |
+| 完整本地公共检查 | `make test-local` | 脚本、夹具边界、证据摘要、文档、Go、前端覆盖率、隔离 API 浏览器 |
+| 统一部署门禁 | `make test-deploy` 或 `make test` | 公共检查、固定 Docker Role/SSH 前置探针、当前参考 Playbook、SSH 冒烟，以及源码绑定与失败留证 |
+
+远端测试部署和本地 Docker 部署都只调用 `test-deploy`。独立门禁和远端部署使用固定镜像创建一次性本地容器；本地部署通过 `CLUSTERFORGE_GATE_CONTAINER` 与 `CLUSTERFORGE_GATE_DOCKER_CONTEXT` 传入本次隔离候选容器。这两个变量用于绑定候选运行时，容器挂载业务数据或工作区会被拒绝。门禁验证宿主与容器副本源码一致，每阶段后复核摘要；结果与日志位于 `output/deployment-gate/<时间-标识>/`，异常和失败也留证。`test-deploy-runtime` 是容器内的共享阶段，依次执行 `test-role-job`、`test-reference-playbooks` 和源码中的 SSH 冒烟，不应替代完整部署门禁。Role 测试收集 Go JSON 结果，非零退出、任意跳过、缺少包或缺少 SSH 镜像前置用例均失败。`test-local` 成功不能代表真实 Ansible 已执行。
+
+当前[组件与场景参考](../examples/ansible/kubernetes-1.17.5/README.md)也可单独使用 `make test-reference-playbooks ANSIBLE_PLAYBOOK=/opt/ansible/bin/ansible-playbook`，在固定 Docker 中验证 15 个 Role、场景验收和恢复边界。旧 SUSE/kubeadm/OpenFuyao 快照的检查保留在 `make test-historical-reference-playbooks ANSIBLE_PLAYBOOK=...`；它们在 2.8.8 上的已知兼容失败没有被新参考通过结果覆盖。本地参考门禁不执行六节点集群安装与回退。
+
+本地 Docker 部署通过 `CLUSTERFORGE_GATE_EVIDENCE_ROOT` 将门禁证据放在持久的部署记录下；门禁再通过 `CLUSTERFORGE_TEST_EVIDENCE_ROOT` 将浏览器证据写入自己的 `browser/` 子目录。两个路径都不依赖临时源码目录，因此结束部署时仍可查看完整证据。单独运行浏览器检查时默认位置不变。
+
+浏览器每次运行在 `output/playwright/live-api-<时间>.<唯一后缀>/` 保存源码摘要、工具版本、命令、API 日志、JSON 结果和截图；首次失败保留 trace。清理只移除临时服务和数据库，证据留存。源码摘要包含 Git 管理及未忽略的新文件，因此实际导入的文档和示例 JSON 也受漂移检查。`output/go.mod` 将历史 Go 工具与产品模块隔离，Go 产品测试明确使用 `./cmd/... ./internal/...`。
+
+`make build` 还会更新嵌入式 UI 产物。根据变更选择门禁，缺少依赖、失败、跳过、未执行要分别记录；跨包覆盖使用 `go test ./cmd/... ./internal/... -count=1 -coverpkg=./cmd/...,./internal/... -coverprofile=<证据目录>/go.out`。
 
 ## 文档维护约定
 

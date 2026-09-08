@@ -9,8 +9,6 @@ import (
 	"sort"
 	"time"
 
-	ansiblerunner "codex/platform-demo/internal/ansible"
-	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -67,7 +65,7 @@ func (p *PlanBuilder) prepareComponentTest(ctx context.Context, user domain.User
 		if err != nil {
 			return preparedComponentTest{}, err
 		}
-		return preparedComponentTest{release: release, environment: environment, action: action.Kind, steps: []lockedStep{step}, provenance: map[string]map[string]resolvedParameter{step.NodeID: provenance}}, nil
+		return preparedComponentTest{release: release, environment: environment, action: action.Kind, steps: []domain.RunPlanStep{step}, provenance: map[string]map[string]resolvedParameter{step.NodeID: provenance}}, nil
 	}
 	if input.Mode == "" {
 		if release.ParentReleaseID != "" {
@@ -104,7 +102,7 @@ func (p *PlanBuilder) prepareComponentTest(ctx context.Context, user domain.User
 	if err := validateResolvedParameters(release.Parameters, variables); err != nil {
 		return preparedComponentTest{}, err
 	}
-	steps := make([]lockedStep, 0, 2)
+	steps := make([]domain.RunPlanStep, 0, 2)
 	nodeID := "component-" + component.ID
 	step, err := p.actions.lockAction(component, nodeID, release, selected, variables)
 	if err != nil {
@@ -164,7 +162,7 @@ func (p *PlanBuilder) prepareEvolutionRoundTrip(ctx context.Context, component d
 	}
 
 	parentNodeID, targetNodeID := "component-"+component.ID+"-parent", "component-"+component.ID+"-target"
-	steps := make([]lockedStep, 0, 6)
+	steps := make([]domain.RunPlanStep, 0, 6)
 	appendStep := func(nodeID string, item domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) error {
 		step, stepErr := p.actions.lockAction(component, nodeID, item, action, variables)
 		if stepErr == nil {
@@ -205,7 +203,7 @@ func primaryActionForComponentTest(release domain.ComponentRelease) (domain.Acti
 type preparedScenario struct {
 	environment domain.Environment
 	revision    domain.ScenarioRevision
-	steps       []lockedStep
+	steps       []domain.RunPlanStep
 	provenance  map[string]map[string]resolvedParameter
 }
 
@@ -281,7 +279,7 @@ func (p *PlanBuilder) prepareScenarioExecution(ctx context.Context, user domain.
 	if err != nil {
 		return preparedScenario{}, err
 	}
-	steps := make([]lockedStep, 0, len(ordered))
+	steps := make([]domain.RunPlanStep, 0, len(ordered))
 	for _, node := range ordered {
 		release := releaseByNode[node.ID]
 		if constraintErr := validateEnvironmentConstraints(release.EnvironmentConstraints, environment.Revision.Facts); constraintErr != nil {
@@ -328,32 +326,33 @@ func validateEnvironmentConstraints(constraints, facts map[string]any) error {
 	return domain.MatchEnvironment(constraints, facts)
 }
 
-func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []lockedStep) (lockedPlan, string, bool, error) {
+func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []domain.RunPlanStep) (domain.RunExecutionPlan, string, bool, error) {
 	if environment.Revision == nil {
-		return lockedPlan{}, "", false, fmt.Errorf("%w: environment revision is required", domain.ErrInvalid)
+		return domain.RunExecutionPlan{}, "", false, fmt.Errorf("%w: environment revision is required", domain.ErrInvalid)
 	}
 	if err := b.catalogRules.validateEnvironmentFactsCatalog(ctx, environment.Revision.Facts, true); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	if err := b.catalogRules.validateEnvironmentInventoryCatalog(ctx, environment.Revision.Inventory); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	if err := b.rollback.bindRollbackCheckSources(ctx, environment.ID, steps); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	expanded, err := b.actions.expandActionSteps(ctx, steps)
 	if err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
-	plan := lockedPlan{Steps: expanded}
-	plan.Runtime, err = b.runtime.RuntimeIdentity(ctx)
+	plan := domain.RunExecutionPlan{Steps: expanded}
+	runtime, err := b.runtime.RuntimeIdentity(ctx)
+	plan.Runtime = domain.RunRuntime{AnsibleCore: runtime.AnsibleCore, Python: runtime.Python}
 	if err == nil {
 		err = b.runtime.CheckRuntime(ctx)
 	}
 	if err != nil {
 		reference := newID("executor-check")
 		log.Printf("executor check %s failed: %s", reference, safePreparationError(err))
-		return lockedPlan{}, "", false, &domain.CodedError{Code: "ansible.runtime_unavailable", Message: "无法识别或启动 Ansible 运行时：" + safePreparationError(err) + "；请检查平台控制机运行时与插件。关联编号：" + reference, Cause: domain.ErrConflict}
+		return domain.RunExecutionPlan{}, "", false, &domain.CodedError{Code: "ansible.runtime_unavailable", Message: "无法识别或启动 Ansible 运行时：" + safePreparationError(err) + "；请检查平台控制机运行时与插件。关联编号：" + reference, Cause: domain.ErrConflict}
 	}
 
 	for index := range plan.Steps {
@@ -361,7 +360,7 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		if step.Phase == "execute" && step.RetrySafe {
 			verified, err := b.store.HasSuccessfulActionTest(ctx, step.ReleaseID, step.ReleaseSpecDigest, step.ActionID, plan.Runtime.AnsibleCore, plan.Runtime.Python)
 			if err != nil {
-				return lockedPlan{}, "", false, err
+				return domain.RunExecutionPlan{}, "", false, err
 			}
 			step.RetrySafe = verified
 		}
@@ -370,24 +369,24 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		plan.Steps[index].Variables = cloneMap(plan.Steps[index].Variables)
 	}
 	if err := b.delivery.bindComponentArtifacts(ctx, *environment.Revision, &plan); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	if err := b.delivery.bindComponentImages(ctx, *environment.Revision, &plan); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	if err := injectEnvironmentVariables(*environment.Revision, plan.Steps); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	if err := observePreparationPlan(ctx, environment, plan); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	for _, step := range plan.Steps {
 		if err := rejectSensitiveMap(step.Variables, "run parameter"); err != nil {
-			return lockedPlan{}, "", false, err
+			return domain.RunExecutionPlan{}, "", false, err
 		}
 	}
 	if err := validateRequiredCredentials(environment.Revision.CredentialRefs, plan.Steps); err != nil {
-		return lockedPlan{}, "", false, actionableExistingError(
+		return domain.RunExecutionPlan{}, "", false, actionableExistingError(
 			err,
 			"environment.credentials_missing",
 			"目标环境版本缺少执行计划要求的 CredentialRef",
@@ -396,11 +395,11 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		)
 	}
 	if err := validatePlanHostGroups(environment.Revision.Inventory, plan.Steps); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 
 	if err := b.workspaceVerifier.bindVerifiedWorkspaceDigests(ctx, plan.Steps); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	tree := sha256.New()
 	releaseTrees := map[string]string{}
@@ -421,7 +420,7 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	}
 	plan.TreeDigest = fmt.Sprintf("%x", tree.Sum(nil))
 	if err := b.rollback.bindBackupPlan(ctx, environment.ID, runID, kind, capturedAt, &plan); err != nil {
-		return lockedPlan{}, "", false, err
+		return domain.RunExecutionPlan{}, "", false, err
 	}
 	syncActionCheckContext(plan.Steps)
 	for _, step := range plan.Steps {
@@ -432,15 +431,15 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 	if kind == domain.RunEnvironmentRollback {
 		state, err := b.rollback.environmentResetState(ctx, *environment.Revision)
 		if err != nil {
-			return lockedPlan{}, "", false, err
+			return domain.RunExecutionPlan{}, "", false, err
 		}
 		plan.ResetTargets = state.targetHosts
 		plan.ResetBoundaryDigest, err = resetBoundaryDigest(ctx, *environment.Revision, plan.ResetTargets)
 		if err != nil {
-			return lockedPlan{}, "", false, err
+			return domain.RunExecutionPlan{}, "", false, err
 		}
 		if err := b.rollback.validateEnvironmentReset(ctx, *environment.Revision, plan, false); err != nil {
-			return lockedPlan{}, "", false, err
+			return domain.RunExecutionPlan{}, "", false, err
 		}
 		plan.RecoveryEnvironmentDigest = digestValue(state.installations)
 		plan.InstallationBaseline = installationBaselineFromSteps(plan.Steps)
@@ -461,7 +460,7 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 // persisted manifest, and the current executable bytes. It deliberately groups
 // steps by Release so a plan scans each workspace once.
 
-func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) string {
+func componentTestPlanDigest(environmentRevisionID string, plan domain.RunExecutionPlan) string {
 	type digestStep struct {
 		SourceParametersFrozen        bool   `json:",omitempty"`
 		RollbackSourceActionID        string `json:",omitempty"`
@@ -527,18 +526,18 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 			BackupPlaybookSHA: backupPlaybookSHA, BackupCapturedAt: backupCapturedAt,
 		})
 	}
-	digestRequirements := append([]mediadelivery.Requirement(nil), plan.DeliveryRequirements...)
+	digestRequirements := append([]domain.RunDeliveryRequirement(nil), plan.DeliveryRequirements...)
 	for index := range digestRequirements {
 		digestRequirements[index].StepIDs = nil
 	}
 	encoded, _ := json.Marshal(struct {
-		Runtime                    ansiblerunner.JobRuntime
+		Runtime                    domain.RunRuntime
 		EnvironmentRevisionID      string
 		TreeDigest                 string
 		Steps                      []digestStep
-		ArtifactTransfers          []mediadelivery.PlannedArtifactTransfer
-		ImageTransfers             []mediadelivery.PlannedImageTransfer
-		DeliveryRequirements       []mediadelivery.Requirement
+		ArtifactTransfers          []domain.RunArtifactTransfer
+		ImageTransfers             []domain.RunImageTransfer
+		DeliveryRequirements       []domain.RunDeliveryRequirement
 		InstallationBaselineDigest string
 		RecoveryEnvironmentDigest  string
 		ResetBoundaryDigest        string `json:",omitempty"`
@@ -547,7 +546,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan lockedPlan) stri
 	return fmt.Sprintf("%x", digest[:])
 }
 
-func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan lockedPlan, digest string, destructive bool) ComponentTestPlan {
+func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan domain.RunExecutionPlan, digest string, destructive bool) ComponentTestPlan {
 	versions := map[string]string{}
 	version := func(releaseID string) string {
 		if releaseID == "" {
@@ -586,6 +585,6 @@ func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment doma
 	return ComponentTestPlan{
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		Destructive: destructive, RequiresApproval: destructive, PlanDigest: digest, Steps: steps,
-		DeliveryRequirements: append([]mediadelivery.Requirement{}, plan.DeliveryRequirements...),
+		DeliveryRequirements: append([]domain.RunDeliveryRequirement{}, plan.DeliveryRequirements...),
 	}
 }

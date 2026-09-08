@@ -10,7 +10,7 @@ import (
 
 // Resolve before action expansion: backup binding happens later and must not
 // make a default rollback check accidentally refer to an unrelated action.
-func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environmentID string, steps []lockedStep) error {
+func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environmentID string, steps []domain.RunPlanStep) error {
 	for i := range steps {
 		step := &steps[i]
 		if step.Action != domain.ActionRollback || step.Phase != "" {
@@ -62,7 +62,7 @@ func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environm
 			if err != nil {
 				return err
 			}
-			original, err := mapToPlan(run.InputSnapshot)
+			original, err := planFromRun(run)
 			if err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ func (r *RollbackPlanner) bindRollbackCheckSources(ctx context.Context, environm
 }
 
 // stepSourceNodeID identifies the original Scenario node across expanded phases.
-func stepSourceNodeID(step lockedStep) string {
+func stepSourceNodeID(step domain.RunPlanStep) string {
 	if step.SourceNodeID != "" {
 		return step.SourceNodeID
 	}

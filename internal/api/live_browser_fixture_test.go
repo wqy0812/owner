@@ -1,6 +1,8 @@
 package api
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -86,11 +88,11 @@ func TestLiveAPIComponentFixture(t *testing.T) {
 	}
 	for index, status := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed} {
 		id := fmt.Sprintf("browser-run-%d", index)
-		run := domain.Run{ID: id, Kind: domain.RunComponentTest, Status: status, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: env.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: upstream.ID, Action: domain.ActionInstall, CreatedAt: now, StartedAt: &now, FinishedAt: &now, InputSnapshot: map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(upstream)}}
+		run := domain.Run{ID: id, Kind: domain.RunComponentTest, Status: status, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: env.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: upstream.ID, Action: domain.ActionInstall, CreatedAt: now, StartedAt: &now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(upstream)})}
 		if status == domain.RunFailed {
 			run.Error = "浏览器测试数据：后置检查未通过，请检查完整日志和诊断信息。"
 		}
-		if err := db.CreateRun(ctx, run, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, db.DB(), run, nil); err != nil {
 			t.Fatal(err)
 		}
 		for j := 0; j < 3; j++ {

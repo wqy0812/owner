@@ -7,7 +7,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *WorkspaceVerifier) bindVerifiedWorkspaceDigests(ctx context.Context, steps []lockedStep) error {
+func (p *WorkspaceVerifier) bindVerifiedWorkspaceDigests(ctx context.Context, steps []domain.RunPlanStep) error {
 	byRelease := map[string][]int{}
 	for index := range steps {
 		if steps[index].SourceType == "scenario_acceptance" {
@@ -63,8 +63,8 @@ func (p *WorkspaceVerifier) bindVerifiedWorkspaceDigests(ctx context.Context, st
 	return nil
 }
 
-func (p *WorkspaceVerifier) verifyLockedWorkspaceDigests(ctx context.Context, locked []lockedStep) error {
-	current := append([]lockedStep(nil), locked...)
+func (p *WorkspaceVerifier) verifyLockedWorkspaceDigests(ctx context.Context, locked []domain.RunPlanStep) error {
+	current := append([]domain.RunPlanStep(nil), locked...)
 	if err := p.bindVerifiedWorkspaceDigests(ctx, current); err != nil {
 		return err
 	}

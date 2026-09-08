@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/domain"
 	"encoding/json"
 	"os"
 	"testing"
@@ -15,7 +16,7 @@ func TestLockedMediaPlanJSONRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var plan lockedPlan
+			var plan domain.RunExecutionPlan
 			if err := json.Unmarshal(data, &plan); err != nil {
 				t.Fatal(err)
 			}

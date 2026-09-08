@@ -1,5 +1,7 @@
 # Kubernetes 1.17.5 最小组件快照
 
+> 此目录保留为历史参考及旧测试夹具。当前已发布组件与场景参考见 [kubernetes-1.17.5](../kubernetes-1.17.5/README.md)；本目录的原门禁保留在 `make test-historical-reference-playbooks`。
+
 ## 来源与边界
 
 本目录来自 `paasinstallationserver/paas_installation_server/ansible/project/k8s_cluster` 的提交 `6909da3eb238b76989403f033941158ab35fdf07`，经过面向 Demo 的安全适配。源 Inventory、`group_vars`、私钥、既有 CA、静态加密配置、清理作业和安装介质均未复制。

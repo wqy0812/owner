@@ -1,0 +1,75 @@
+- name: Validate six-node inventory before running this entry
+  assert:
+    that:
+    - groups.get('control_plane', []) | length == 3
+    - groups.get('worker_nodes', []) | length == 3
+    - groups['control_plane'] | intersect(groups['worker_nodes']) | length == 0
+    - (groups['control_plane'] + groups['worker_nodes']) | sort == groups['all'] | sort
+    - inventory_hostname in (groups['control_plane'] + groups['worker_nodes'])
+    - (groups['control_plane'] + groups['worker_nodes']) | map('extract', hostvars, 'ansible_host') | unique | list
+      | length == 6
+    fail_msg: Bind exactly three control_plane and three worker_nodes hosts with unique ansible_host values.
+- name: 检查验收工具 python3
+  command:
+    argv:
+    - /bin/sh
+    - -c
+    - command -v python3
+  changed_when: false
+- name: 检查验收工具 kubectl
+  command:
+    argv:
+    - /bin/sh
+    - -c
+    - command -v kubectl
+  changed_when: false
+- name: 检查验收工具 docker
+  command:
+    argv:
+    - /bin/sh
+    - -c
+    - command -v docker
+  changed_when: false
+- name: Read the delivered Flannel image for acceptance probes
+  command:
+    argv:
+    - kubectl
+    - --kubeconfig={{ cf.inputs.admin_kubeconfig_path }}
+    - get
+    - daemonset
+    - clusterforge-flannel
+    - -n
+    - kube-flannel
+    - -o
+    - json
+  register: reference_flannel
+  changed_when: false
+- name: Require the released probe image digest
+  assert:
+    that:
+    - ((reference_flannel.stdout | from_json).spec.template.spec.containers[0].image).endswith('@sha256:b2bba065c46f3a54db41cd5181b87baa0fca64eda8b511838cdc147dfc59e76d')
+    fail_msg: The delivered Flannel image differs from this reference.
+- name: 检查已交付探针镜像中的工具
+  command:
+    argv:
+    - docker
+    - run
+    - --rm
+    - --network
+    - none
+    - --entrypoint
+    - /bin/sh
+    - '{{ (reference_flannel.stdout | from_json).spec.template.spec.containers[0].image }}'
+    - -ec
+    - for tool in sh nc wget nslookup chmod; do command -v "$tool"; done
+  changed_when: false
+- name: 验证集群、业务网络与加密，成功后清理探针
+  script: '{{ role_path }}/files/acceptance.py'
+  args:
+    executable: /usr/bin/python3
+  environment:
+    CF_INPUTS: '{{ cf.inputs | to_json }}'
+    CF_NAMES: '{{ (groups[''control_plane''] + groups[''worker_nodes'']) | to_json }}'
+    CF_IPS: '{{ (groups[''control_plane''] + groups[''worker_nodes'']) | map(''extract'', hostvars, ''ansible_host'')
+      | list | to_json }}'
+    CF_MASTERS: '{{ groups[''control_plane''] | to_json }}'

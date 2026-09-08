@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -165,10 +166,10 @@ func createSuccessfulScenarioTestEvidence(t *testing.T, s *Store, revision *doma
 		ID: runID, Kind: domain.RunScenarioTest, Status: domain.RunSucceeded,
 		RequestedBy: "scenario-owner-a", EnvironmentID: environmentID, EnvironmentRevisionID: environmentRevision.ID,
 		ScenarioRevisionID: revision.ID, CreatedAt: testNow,
-		InputSnapshot: map[string]any{
+		Snapshot: runfixture.Snapshot(map[string]any{
 			"scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(*revision),
-			"steps":                      steps, "scenarioContractVersion": 2, "executionMode": "install", "acceptanceJobIds": []string{"business"},
-		},
+			"steps":                      steps, "scenarioContractVersion": 2, "executionMode": "install", "targetNodes": []domain.ScenarioTargetNode{}, "acceptanceJobIds": []string{"business"},
+		}),
 	}
 	if err := insertStoredRunForTest(ctx, s, run); err != nil {
 		t.Fatal(err)
@@ -219,24 +220,24 @@ func TestListRunsForComponentReleaseUsesImmutableRunEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	base := domain.Run{RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+	base := domain.Run{RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: testNow}
 	componentRun := base
 	componentRun.ID, componentRun.Kind, componentRun.Status, componentRun.ComponentReleaseID = "evidence-component", domain.RunComponentTest, domain.RunSucceeded, release.ID
 	create(componentRun)
 	scenarioTest := base
 	scenarioTest.ID, scenarioTest.Kind, scenarioTest.Status, scenarioTest.RequestedBy, scenarioTest.ScenarioRevisionID, scenarioTest.CreatedAt = "evidence-scenario-test", domain.RunScenarioTest, domain.RunFailed, "scenario-owner-a", revision.ID, testNow.Add(time.Minute)
-	scenarioTest.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": otherRelease.ID}}}
+	scenarioTest.Snapshot = runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": release.ID}, map[string]any{"releaseId": otherRelease.ID}}})
 	create(scenarioTest)
 	scenarioRun := base
 	scenarioRun.ID, scenarioRun.Kind, scenarioRun.Status, scenarioRun.RequestedBy, scenarioRun.ScenarioRevisionID, scenarioRun.CreatedAt = "evidence-scenario-run", domain.RunScenario, domain.RunCancelled, "scenario-owner-a", revision.ID, testNow.Add(2*time.Minute)
-	scenarioRun.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}
+	scenarioRun.Snapshot = runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}})
 	create(scenarioRun)
 	unrelated := base
 	unrelated.ID, unrelated.Kind, unrelated.Status, unrelated.ComponentReleaseID, unrelated.CreatedAt = "evidence-unrelated", domain.RunComponentTest, domain.RunSucceeded, otherRelease.ID, testNow.Add(3*time.Minute)
 	create(unrelated)
 	rollback := base
 	rollback.ID, rollback.Kind, rollback.Status, rollback.ComponentReleaseID, rollback.CreatedAt = "evidence-rollback", domain.RunEnvironmentRollback, domain.RunSucceeded, release.ID, testNow.Add(4*time.Minute)
-	rollback.InputSnapshot = map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}
+	rollback.Snapshot = runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}})
 	create(rollback)
 
 	runs, err := s.ListRunsForComponentRelease(ctx, release.ID)
@@ -639,7 +640,7 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 		return revision
 	}
 	active := func(id string, kind domain.RunKind, revision domain.EnvironmentRevision) domain.Run {
-		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-owner-a", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}
+		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-owner-a", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow}
 	}
 
 	t.Run("rollback blocks another active run", func(t *testing.T) {
@@ -656,7 +657,7 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 	t.Run("active run blocks rollback", func(t *testing.T) {
 		s := newTestStore(t)
 		revision := newEnvironment(t, s, "rollback-fence-second")
-		if err := s.CreateRun(ctx, active("other-first", domain.RunScenario, revision), nil); err != nil {
+		if err := s.CreateRun(ctx, active("other-first", domain.RunComponentTest, revision), nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.CreateRun(ctx, active("rollback-second", domain.RunEnvironmentRollback, revision), nil); !errors.Is(err, domain.ErrConflict) {
@@ -675,7 +676,7 @@ func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 2; index++ {
-		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
+		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
 		approval := domain.Approval{ID: fmt.Sprintf("batch-approval-%d", index), RunID: run.ID, Status: "pending", RequestedAt: run.CreatedAt}
 		if err := s.CreateRun(ctx, run, &approval); err != nil {
 			t.Fatal(err)
@@ -690,7 +691,7 @@ func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
 		t.Fatalf("batch FIFO claim=%+v err=%v", claimed, err)
 	}
 
-	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunScenario, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(3 * time.Minute)}
+	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow.Add(3 * time.Minute)}
 	staleApproval := domain.Approval{ID: "batch-stale-approval", RunID: stale.ID, Status: "pending", RequestedAt: stale.CreatedAt}
 	if err := s.CreateRun(ctx, stale, &staleApproval); err != nil {
 		t.Fatal(err)
@@ -860,7 +861,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	}
 
 	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
-	run1 := domain.Run{ID: "run-1", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ComponentReleaseID: "runtime-1", Destructive: true, InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "runtime-1"}}}, CreatedAt: testNow}
+	run1 := domain.Run{ID: "run-1", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ComponentReleaseID: "runtime-1", Destructive: true, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "runtime-1"}}}), CreatedAt: testNow}
 	if err := s.CreateRun(ctx, run1, &approval); err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +943,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 	componentTest := domain.Run{
 		ID: "component-test-active", Kind: domain.RunComponentTest, Status: domain.RunQueued,
 		RequestedBy: "component-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID,
-		ComponentReleaseID: "runtime-1", InputSnapshot: map[string]any{}, CreatedAt: testNow.Add(20 * time.Minute),
+		ComponentReleaseID: "runtime-1", Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node", ReleaseID: "runtime-1"}}}), CreatedAt: testNow.Add(20 * time.Minute),
 	}
 	if err := s.CreateRun(ctx, componentTest, nil); err != nil {
 		t.Fatal(err)
@@ -984,8 +985,8 @@ func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
 		t.Fatal(err)
 	}
-	plan := map[string]any{"steps": []any{map[string]any{"releaseId": "reconcile-release"}}}
-	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, InputSnapshot: plan, CreatedAt: testNow}
+	plan := map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "reconcile-release"}}}
+	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, Snapshot: runfixture.Snapshot(plan), CreatedAt: testNow}
 	if err := s.CreateRun(ctx, invalid, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1031,7 +1032,7 @@ func TestRestartInterruptsRunAndReleasesScenarioTestingState(t *testing.T) {
 	if err := s.CreateEnvironment(ctx, environment, environmentRevision); err != nil {
 		t.Fatal(err)
 	}
-	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}, CreatedAt: testNow}
+	run := domain.Run{ID: "restart-run", Kind: domain.RunScenarioTest, Status: domain.RunRunning, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID, ScenarioRevisionID: revision.ID, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "step", "releaseId": release.ID}}}), CreatedAt: testNow}
 	if err := insertStoredRunForTest(ctx, s, run); err != nil {
 		t.Fatal(err)
 	}
@@ -1296,6 +1297,6 @@ func TestResetClearsPendingActionFileMutations(t *testing.T) {
 
 // Arrange persisted rows for read and restart tests; this is not a Run submission.
 func insertStoredRunForTest(ctx context.Context, s *Store, r domain.Run) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.InputSnapshot), r.ArtifactDigest, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,scenario_revision_id,action_kind,destructive,execution_snapshot_json,artifact_digest,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.Kind, r.Status, r.RequestedBy, r.EnvironmentID, r.EnvironmentRevisionID, nullString(r.ComponentReleaseID), nullString(r.ScenarioRevisionID), r.Action, r.Destructive, jsonText(r.Snapshot), r.ArtifactDigest, timeText(r.CreatedAt), ptrTimeText(r.StartedAt), ptrTimeText(r.FinishedAt))
 	return err
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +57,7 @@ func TestRunLogsBrowserFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run := domain.Run{ID: "run-browser-diagnostics", Kind: domain.RunScenario, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, ScenarioRevisionID: revision.ID, CreatedAt: now, FinishedAt: &now, InputSnapshot: map[string]any{"steps": []any{map[string]any{"nodeId": "locked-check", "componentName": "CoreDNS", "phase": "post"}}}}
+	run := domain.Run{ID: "run-browser-diagnostics", Kind: domain.RunScenario, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, ScenarioRevisionID: revision.ID, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"nodeId": "locked-check", "componentName": "CoreDNS", "phase": "post"}}})}
 	if err := db.CreateRun(ctx, run, nil); err != nil {
 		t.Fatal(err)
 	}

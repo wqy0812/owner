@@ -44,7 +44,7 @@ owner/
 │   ├── package.json                  # 前端依赖和命令
 │   └── pnpm-lock.yaml                # 前端依赖锁文件
 ├── examples/
-│   ├── ansible/                      # 保留的历史 Playbook 参考源码
+│   ├── ansible/                      # 当前组件与场景参考，以及历史 Playbook 源码
 │   ├── components/                   # 可导入的当前 Role 合同样板
 │   └── images/                       # 示例镜像构建资源
 ├── deploy/                           # systemd 和 Docker 部署配置
@@ -224,7 +224,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260907-no-resource-contract`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260908-typed-run-snapshot`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
 
 分支范围由 `branch_scope.go` 统一规范化，在发布线及场景父对象创建时固定；Store 对版本写入复核范围，SQLite 触发器保护父对象范围。`contract_patch.go` 按编辑分区提交，`environment_credential_sources.go` 聚合有权限的凭据声明来源。`scripts/inspect-branch-scopes.py` 只读盘点旧数据；`examples/components/host-foundation-example.json` 与 `scripts/test-host-foundation-example.py` 提供目录归属样板及隔离验证。
 
@@ -309,8 +309,9 @@ web/src/
 
 | 目录 | 内容 |
 | --- | --- |
-| `k8s-1.17.5-cluster` | 细粒度 Kubernetes 1.17.5 组件、验证入口和来源 Role |
-| `k8s-1.17.5-kubeadm` | 较小的 kubeadm 示例 |
+| `kubernetes-1.17.5` | 当前已发布组件整理的 Ubuntu 18.04 六节点参考：15 个独立 Role、参数与来源锁定、场景验收；固定 Ansible 2.8.8 |
+| `k8s-1.17.5-cluster` | 历史 SUSE 来源的 Kubernetes 1.17.5 组件与验证入口 |
+| `k8s-1.17.5-kubeadm` | 历史 kubeadm 示例与归属夹具 |
 | `openfuyao` | OpenFuyao/BKE 作业的脱敏快照、适配合同和只读预检样例；不代表当前测试目录或真实环境验收 |
 | `managed` | 前台上传或在线编辑的 Draft Playbook，运行时按配置产生 |
 
@@ -329,8 +330,11 @@ web/src/
 | 脚本 | 用途 |
 | --- | --- |
 | `deploy-test-88-55.sh` | 构建并部署主平台测试环境，包含备份、就绪检查和失败回退 |
+| `deployment-gate.py`、`deployment_source.py` | 两个部署脚本共用的回归入口、宿主/容器源码绑定及失败留证；不执行激活 |
+| `test-role-job.py` | 四包真实 Ansible 用例选择及结果检查，拒绝跳过或空选择 |
 | `deploy-fss-88-57.sh` | 构建并部署文件介质站 |
-| `test-k8s1175-components.sh` | Kubernetes 1.17.5 组件作业门禁 |
+| `test-published-reference.sh`、`test-published-reference.py` | 当前组件/场景参考的 Ansible 2.8.8 解析、参数/来源及隔离恢复行为门禁 |
+| `test-k8s1175-components.sh` | 历史 SUSE Kubernetes 1.17.5 来源快照门禁 |
 | `test-openfuyao-components.sh` | OpenFuyao/BKE 脱敏快照的语法、任务清单和失败关闭合同门禁 |
 | `check-docs.py` | 离线核对文档链接、API/页面覆盖、API 文件索引和数据库合同 |
 
@@ -362,7 +366,10 @@ make dev-web
 make seed
 make reset-demo
 
-# Go、React 和 Ansible 门禁
+# 公共检查：Go、React 覆盖率、隔离 API 浏览器与工具检查
+make test-local
+
+# 公共检查加显式 Ansible Role 门禁
 make test ANSIBLE_PLAYBOOK=/absolute/path/to/ansible-playbook
 
 # Playwright 端到端测试
@@ -386,7 +393,7 @@ make build
 | 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；首版测试库在备份后显式重建，不保留历史迁移代码 |
 | 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
-| 新增组件示例 | `examples/components`、导入合同与本地隔离验证；历史 `examples/ansible` 不自动进入业务目录 |
+| 新增组件示例 | `examples/components`、导入合同与本地隔离验证；`examples/ansible` 参考不会自动进入业务目录 |
 | 新增前端页面 | `web/src/pages`、`App.tsx`、API Client、类型和测试 |
 | 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`internal/delivery/`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
 | 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、`internal/imagebuild/`、`internal/delivery/`、Store/API 和组件页 |
@@ -431,3 +438,5 @@ Run 列表从 `run_summaries.go` 分页查询摘要，详情才读取步骤及�
 Catalog 与 Delivery 共享一个包装实例。底层 Probe 自带三分钟上限，Transfer 保留父 context。
 `internal/jobcli/media.go` 只读取现有 Metadata 的介质投影，不回写或重新构造完整元数据。
 完整 JobPlan 摘要统一由 `ansible.PlanDigest` 计算；CLI 依赖图不再包含 service、store、api 或 SQLite。
+
+Run 执行合同与最小读取类型位于 `internal/domain/run_*.go`，离线转换位于 `internal/runmigration`（旧解析器不进入服务器依赖图）。切换设计见 [Run 快照合同](design/run-snapshot-contract.md)。

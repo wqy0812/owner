@@ -14,9 +14,9 @@ import (
 
 func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
 	platform := &DeliveryService{}
-	plan := lockedPlan{
-		DeliveryRequirements: []mediadelivery.Requirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
-		DeliveryDecisions:    []mediadelivery.Decision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
+	plan := domain.RunExecutionPlan{
+		DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
+		DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
 	}
 	approvedAt := time.Now().UTC()
 	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, nil, domain.User{ID: "environment-owner"}, approvedAt)
@@ -42,9 +42,9 @@ func (presentArtifactDelivery) Transfer(context.Context, mediadelivery.ArtifactT
 
 func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
 	platform := &DeliveryService{artifactDelivery: presentArtifactDelivery{}}
-	plan := lockedPlan{
-		Steps: []lockedStep{{ID: "step-1", Variables: map[string]any{}}},
-		DeliveryRequirements: []mediadelivery.Requirement{{
+	plan := domain.RunExecutionPlan{
+		Steps: []domain.RunPlanStep{{ID: "step-1", Variables: map[string]any{}}},
+		DeliveryRequirements: []domain.RunDeliveryRequirement{{
 			ID: "artifact:runtime", Kind: "artifact", Name: "runtime", Identity: "sha256:" + strings.Repeat("a", 64),
 			Source: "https://source.test/runtime.tgz", Target: "http://target.test/components/runtime.tgz",
 			TransferAvailable: true, TargetStation: "target.test", RelativePath: "components/runtime.tgz", StepIDs: []string{"step-1"},
@@ -82,7 +82,7 @@ func TestResolveParametersOwnerLayers(t *testing.T) {
 }
 
 func TestRequiredCredentialsAreCheckedByDeclaredName(t *testing.T) {
-	steps := []lockedStep{{RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}}}
+	steps := []domain.RunPlanStep{{RequiredCredentials: []string{"ansible_ssh_pass", "registry_user"}}}
 	refs := []domain.CredentialRef{{Name: "ansible_ssh_pass"}}
 	err := validateRequiredCredentials(refs, steps)
 	if err == nil || !strings.Contains(err.Error(), "registry_user") || strings.Contains(err.Error(), "secret-value") {

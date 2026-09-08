@@ -65,7 +65,7 @@ func (s *Store) UpsertEnvironmentComponentInstallation(ctx context.Context, inst
 		return err
 	}
 	defer tx.Rollback()
-	if err := validateNewRunReferences(ctx, tx, domain.Run{RetryOfRunID: installation.InstallRunID, InputSnapshot: map[string]any{"backup": installation.Backup}}); err != nil {
+	if err := validateNewRunReferences(ctx, tx, domain.Run{RetryOfRunID: installation.InstallRunID, Snapshot: domain.RunSnapshot{Plan: domain.RunPlan{Steps: []domain.RunPlanStep{{Backup: &installation.Backup}}}}}); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `

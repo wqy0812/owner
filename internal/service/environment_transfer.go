@@ -21,11 +21,11 @@ type EnvironmentExportSource struct {
 }
 
 type EnvironmentTransferSnapshot struct {
-	Facts          map[string]any         `json:"facts"`
-	Hosts          []InventoryHost        `json:"hosts"`
-	Variables      map[string]string      `json:"variables"`
-	Parameters     map[string]any         `json:"parameters"`
-	CredentialRefs []domain.CredentialRef `json:"credentialRefs"`
+	Facts          map[string]any            `json:"facts"`
+	Hosts          []domain.RunInventoryHost `json:"hosts"`
+	Variables      map[string]string         `json:"variables"`
+	Parameters     map[string]any            `json:"parameters"`
+	CredentialRefs []domain.CredentialRef    `json:"credentialRefs"`
 }
 
 type EnvironmentExportDocument struct {

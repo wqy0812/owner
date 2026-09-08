@@ -93,7 +93,7 @@ func TestScenarioAcceptanceAPIRejectsNonOwnerAndActiveRunEdits(t *testing.T) {
 	if denied := f.request(http.MethodPut, base, input, f.session(seed.PlatformAdminID)); denied.Code != http.StatusForbidden {
 		t.Fatalf("admin mutation=%d %s", denied.Code, denied.Body)
 	}
-	if _, err := f.database.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,action_kind,destructive,input_snapshot_json,artifact_digest,error_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, "acceptance-active", "scenario_test", "awaiting_approval", user.ID, "environment-test", "environment-test-r1", id, "install", false, `{}`, "", "", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := f.database.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,action_kind,destructive,execution_snapshot_json,artifact_digest,error_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, "acceptance-active", "scenario_test", "awaiting_approval", user.ID, "environment-test", "environment-test-r1", id, "install", false, `{}`, "", "", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if blocked := f.request(http.MethodPut, base, input, owner); blocked.Code != http.StatusConflict {

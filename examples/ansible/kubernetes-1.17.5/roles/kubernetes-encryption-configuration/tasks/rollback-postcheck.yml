@@ -1,0 +1,33 @@
+- name: Validate six-node inventory before running this entry
+  assert:
+    that:
+    - groups.get('control_plane', []) | length == 3
+    - groups.get('worker_nodes', []) | length == 3
+    - groups['control_plane'] | intersect(groups['worker_nodes']) | length == 0
+    - (groups['control_plane'] + groups['worker_nodes']) | sort == groups['all'] | sort
+    - inventory_hostname in (groups['control_plane'] + groups['worker_nodes'])
+    - (groups['control_plane'] + groups['worker_nodes']) | map('extract', hostvars, 'ansible_host') | unique | list
+      | length == 6
+    fail_msg: Bind exactly three control_plane and three worker_nodes hosts with unique ansible_host values.
+- name: 检查所需工具 python3
+  command:
+    argv:
+    - /bin/sh
+    - -c
+    - command -v python3
+  changed_when: false
+- name: rollback-post：核验或管理组件真实资源
+  script: '{{ role_path }}/files/runtime.py rollback-post'
+  args:
+    executable: /usr/bin/python3
+  environment:
+    CF_INPUTS: '{{ cf.inputs | to_json }}'
+    CF_NODE: '{{ inventory_hostname }}'
+    CF_IP: '{{ ansible_host }}'
+    CF_NAMES: '{{ (groups[''control_plane''] + groups[''worker_nodes'']) | to_json }}'
+    CF_IPS: '{{ (groups[''control_plane''] + groups[''worker_nodes'']) | map(''extract'', hostvars, ''ansible_host'')
+      | list | to_json }}'
+    CF_MASTERS: '{{ groups[''control_plane''] | to_json }}'
+    CF_ENCRYPTION_KEY: '{{ cf.credentials.K8S_ENCRYPTION_KEY }}'
+  changed_when: false
+  no_log: true

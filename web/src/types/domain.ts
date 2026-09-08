@@ -850,6 +850,7 @@ export interface RunActivity {
 }
 
 export interface Run {
+  snapshotError?: string;
  executionMode?: ScenarioExecutionMode; sourceRevisionId?: string; baselineRunId?: string;
  jobDigest?: string;
  exitCode?: number;

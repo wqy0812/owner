@@ -35,24 +35,28 @@ func (s *RunScheduler) queueWatchdog() {
 		case <-s.rootCtx.Done():
 			return
 		case now := <-ticker.C:
-			if count, err := s.store.FailInvalidActiveRuns(s.rootCtx, now.UTC()); err != nil {
-				s.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
-			} else if count > 0 {
-				s.hub.Publish("run.updated", map[string]any{"status": domain.RunFailed, "reconciled": count})
-			}
-			environments, err := s.store.ListQueuedEnvironmentIDs(s.rootCtx)
-			if err != nil {
-				s.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
-				continue
-			}
-			for _, environmentID := range environments {
-				running, runErr := s.store.HasRunningRun(s.rootCtx, environmentID)
-				if runErr != nil || running {
-					continue
-				}
-				s.recoverEnvironmentWorker(environmentID, now.Add(-queueWorkerStaleAfter))
-			}
+			s.reconcileQueue(now)
 		}
+	}
+}
+
+func (s *RunScheduler) reconcileQueue(now time.Time) {
+	if count, err := s.store.FailInvalidActiveRuns(s.rootCtx, now.UTC()); err != nil {
+		s.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
+	} else if count > 0 {
+		s.hub.Publish("run.updated", map[string]any{"status": domain.RunFailed, "reconciled": count})
+	}
+	environments, err := s.store.ListQueuedEnvironmentIDs(s.rootCtx)
+	if err != nil {
+		s.hub.Publish("run.worker_error", map[string]any{"error": err.Error()})
+		return
+	}
+	for _, environmentID := range environments {
+		running, runErr := s.store.HasRunningRun(s.rootCtx, environmentID)
+		if runErr != nil || running {
+			continue
+		}
+		s.recoverEnvironmentWorker(environmentID, now.Add(-queueWorkerStaleAfter))
 	}
 }
 
@@ -80,6 +84,7 @@ func (s *RunScheduler) touchEnvironmentWorker(environmentID string, token uint64
 }
 
 func (s *RunScheduler) environmentWorker(environmentID string, token uint64) {
+	emptyClaim := false
 	defer func() {
 		s.mu.Lock()
 		if state, ok := s.workers[environmentID]; ok && state.token == token {
@@ -90,7 +95,7 @@ func (s *RunScheduler) environmentWorker(environmentID string, token uint64) {
 		// worker's final empty claim but before it removes itself. Any enqueue
 		// after the removal schedules its own worker; an enqueue before removal
 		// is discovered here.
-		if s.rootCtx.Err() == nil {
+		if emptyClaim && s.rootCtx.Err() == nil {
 			running, err := s.store.HasRunningRun(context.Background(), environmentID)
 			if err != nil || running {
 				return
@@ -113,10 +118,12 @@ func (s *RunScheduler) environmentWorker(environmentID string, token uint64) {
 		s.touchEnvironmentWorker(environmentID, token)
 		run, err := s.store.ClaimNextRun(s.rootCtx, environmentID, time.Now().UTC())
 		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrConflict) {
+			emptyClaim = errors.Is(err, domain.ErrNotFound)
 			return
 		}
 		if err != nil {
 			s.hub.Publish("run.worker_error", map[string]any{"environmentId": environmentID, "error": err.Error()})
+			// The watchdog retries storage failures; immediate rescheduling can spin.
 			return
 		}
 		s.executor.executeRun(run)

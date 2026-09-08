@@ -212,7 +212,7 @@ func (c *diagnosticCollector) addComplete(log domain.RunLog, task string) {
 	}
 	*target = append(*target, d)
 }
-func (c *diagnosticCollector) finish(run domain.Run) []RunDiagnostic {
+func (c *diagnosticCollector) finish(run domain.RunReadModel) []RunDiagnostic {
 	for key, log := range c.textPending {
 		c.addComplete(log, c.textTasks[key])
 		delete(c.textPending, key)
@@ -220,14 +220,11 @@ func (c *diagnosticCollector) finish(run domain.Run) []RunDiagnostic {
 	items := []RunDiagnostic{}
 	seen := map[string]bool{}
 	structuredSeen := map[string]bool{}
-	metadata := map[string]map[string]any{}
-	if locked, ok := run.InputSnapshot["steps"].([]any); ok {
-		for _, v := range locked {
-			if m, ok := v.(map[string]any); ok {
-				metadata[diagnosticString(m["nodeId"])] = m
-				metadata[diagnosticString(m["id"])] = m
-			}
-		}
+	metadata := map[string]*domain.RunReadStep{}
+	for i := range run.LockedSteps {
+		step := &run.LockedSteps[i]
+		metadata[step.NodeID] = step
+		metadata[step.ID] = step
 	}
 	failed := map[string]bool{}
 	steps := map[string]domain.RunStep{}
@@ -253,10 +250,10 @@ func (c *diagnosticCollector) finish(run domain.Run) []RunDiagnostic {
 		if step, ok := steps[d.StepID]; ok {
 			d.Component = step.Name
 			if m := metadata[step.NodeID]; m != nil {
-				if name := diagnosticString(m["componentName"]); name != "" {
+				if name := m.ComponentName; name != "" {
 					d.Component = name
 				}
-				d.Phase = diagnosticString(m["phase"])
+				d.Phase = m.Phase
 			}
 		}
 		items = append(items, d)

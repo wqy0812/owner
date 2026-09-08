@@ -18,7 +18,7 @@ import (
 // members. Shared service endpoints identify protected hosts, not extra targets.
 type environmentResetState struct {
 	installations []domain.EnvironmentComponentInstallation
-	targetHosts   []InventoryHost
+	targetHosts   []domain.RunInventoryHost
 	baselineHosts map[string]map[string]bool
 	boundary      *resetBoundary
 }
@@ -87,11 +87,11 @@ func (b *resetBoundary) resolve(ctx context.Context, host string) ([]string, err
 	return addresses, nil
 }
 
-func resetGroupHosts(inventory InventoryDocument, group string) ([]InventoryHost, error) {
+func resetGroupHosts(inventory InventoryDocument, group string) ([]domain.RunInventoryHost, error) {
 	if group == "" || !inventoryToken(group) {
 		return nil, fmt.Errorf("%w: 来源 Run 未锁定明确主机组 %q", domain.ErrConflict, group)
 	}
-	hosts := []InventoryHost{}
+	hosts := []domain.RunInventoryHost{}
 	for _, host := range inventory.Hosts {
 		include := group == "all" || group == host.Name
 		for _, g := range host.Groups {
@@ -108,7 +108,7 @@ func resetGroupHosts(inventory InventoryDocument, group string) ([]InventoryHost
 	return hosts, nil
 }
 
-func resetHostIdentity(host InventoryHost) string {
+func resetHostIdentity(host domain.RunInventoryHost) string {
 	port := host.Port
 	if port == 0 {
 		port = 22
@@ -118,7 +118,7 @@ func resetHostIdentity(host InventoryHost) string {
 
 // A mixed group cannot be narrowed without changing the original restoration
 // contract. An exclusively shared-service group is retained in its entirety.
-func (b *resetBoundary) classify(ctx context.Context, hosts []InventoryHost) (bool, error) {
+func (b *resetBoundary) classify(ctx context.Context, hosts []domain.RunInventoryHost) (bool, error) {
 	shared, cluster := false, false
 	for _, host := range hosts {
 		addresses, err := b.resolve(ctx, host.Address)
@@ -140,7 +140,7 @@ func (b *resetBoundary) classify(ctx context.Context, hosts []InventoryHost) (bo
 }
 
 func (r *RollbackPlanner) environmentResetState(ctx context.Context, revision domain.EnvironmentRevision) (environmentResetState, error) {
-	state := environmentResetState{installations: []domain.EnvironmentComponentInstallation{}, targetHosts: []InventoryHost{}, baselineHosts: map[string]map[string]bool{}}
+	state := environmentResetState{installations: []domain.EnvironmentComponentInstallation{}, targetHosts: []domain.RunInventoryHost{}, baselineHosts: map[string]map[string]bool{}}
 	installations, err := r.recoveryBaselines(ctx, revision.EnvironmentID)
 	if err != nil {
 		return state, err
@@ -153,13 +153,13 @@ func (r *RollbackPlanner) environmentResetState(ctx context.Context, revision do
 	if err != nil {
 		return state, err
 	}
-	targets := map[string]InventoryHost{}
+	targets := map[string]domain.RunInventoryHost{}
 	for _, installation := range installations {
 		source, err := r.store.GetRun(ctx, installation.InstallRunID)
 		if err != nil || source.EnvironmentID != revision.EnvironmentID {
 			return state, fmt.Errorf("%w: 无法确认组件 %s 的来源 Run", domain.ErrConflict, installation.ComponentID)
 		}
-		plan, err := mapToPlan(source.InputSnapshot)
+		plan, err := planFromRun(source)
 		if err != nil {
 			return state, fmt.Errorf("%w: 来源 Run %s 缺少锁定计划", domain.ErrConflict, source.ID)
 		}
@@ -228,8 +228,8 @@ func (r *RollbackPlanner) environmentResetState(ctx context.Context, revision do
 
 // A continuation consisting only of an unfinished postcheck still owns its
 // parent's recovery baseline, until that check has completed successfully.
-func resetRecoverySteps(plan lockedPlan) []lockedStep {
-	steps := append([]lockedStep{}, plan.Steps...)
+func resetRecoverySteps(plan domain.RunExecutionPlan) []domain.RunPlanStep {
+	steps := append([]domain.RunPlanStep{}, plan.Steps...)
 	for _, step := range plan.Steps {
 		if step.Phase == "post" || step.Phase == "pre" {
 			if parent := parentExecutionStep(plan.ParentSteps, step); parent != nil {
@@ -240,7 +240,7 @@ func resetRecoverySteps(plan lockedPlan) []lockedStep {
 	return steps
 }
 
-func resetBoundaryDigest(ctx context.Context, revision domain.EnvironmentRevision, targets []InventoryHost) (string, error) {
+func resetBoundaryDigest(ctx context.Context, revision domain.EnvironmentRevision, targets []domain.RunInventoryHost) (string, error) {
 	b, err := newResetBoundary(ctx, revision)
 	if err != nil {
 		return "", err
@@ -253,7 +253,7 @@ func resetBoundaryDigest(ctx context.Context, revision domain.EnvironmentRevisio
 		if !found {
 			return "", fmt.Errorf("%w: 重置目标 %s 已改变，请重新预览", domain.ErrConflict, target.Name)
 		}
-		shared, err := b.classify(ctx, []InventoryHost{target})
+		shared, err := b.classify(ctx, []domain.RunInventoryHost{target})
 		if err != nil {
 			return "", err
 		}
@@ -262,14 +262,14 @@ func resetBoundaryDigest(ctx context.Context, revision domain.EnvironmentRevisio
 		}
 	}
 	return digestValue(struct {
-		Targets   []InventoryHost
+		Targets   []domain.RunInventoryHost
 		Inventory InventoryDocument
 		Addresses map[string][]string
 		Protected map[string]bool
 	}{targets, b.inventory, b.addresses, b.protected}), nil
 }
 
-func resetTaskTargetScope(targets []InventoryHost) ansible.TaskTargetScope {
+func resetTaskTargetScope(targets []domain.RunInventoryHost) ansible.TaskTargetScope {
 	scope := ansible.TaskTargetScope{Hosts: []string{}, Groups: map[string][]string{}}
 	for _, host := range targets {
 		scope.Hosts = append(scope.Hosts, host.Name)
@@ -277,7 +277,7 @@ func resetTaskTargetScope(targets []InventoryHost) ansible.TaskTargetScope {
 	return scope
 }
 
-func resetTaskTargetScopeWithInventory(targets []InventoryHost, inventory InventoryDocument) ansible.TaskTargetScope {
+func resetTaskTargetScopeWithInventory(targets []domain.RunInventoryHost, inventory InventoryDocument) ansible.TaskTargetScope {
 	scope := resetTaskTargetScope(targets)
 	for _, host := range inventory.Hosts {
 		scope.Groups["all"] = append(scope.Groups["all"], host.Name)
@@ -290,7 +290,7 @@ func resetTaskTargetScopeWithInventory(targets []InventoryHost, inventory Invent
 	return scope
 }
 
-func (r *RollbackPlanner) validateEnvironmentReset(ctx context.Context, revision domain.EnvironmentRevision, plan lockedPlan, complete bool) error {
+func (r *RollbackPlanner) validateEnvironmentReset(ctx context.Context, revision domain.EnvironmentRevision, plan domain.RunExecutionPlan, complete bool) error {
 	boundaryDigest, err := resetBoundaryDigest(ctx, revision, plan.ResetTargets)
 	if err != nil {
 		return err
@@ -315,12 +315,12 @@ func (r *RollbackPlanner) validateEnvironmentReset(ctx context.Context, revision
 	if len(expected) == 0 || len(expected) != len(state.installations) {
 		return fmt.Errorf("%w: 重置计划未覆盖全部待恢复的集群组件，请重新预览", domain.ErrConflict)
 	}
-	actual := make([]lockedInstallationBaseline, 0, len(state.installations))
+	actual := make([]domain.RunInstallationBaseline, 0, len(state.installations))
 	for _, installation := range state.installations {
 		if installation.Backup.Previous != nil {
 			return fmt.Errorf("%w: 集群存在多层恢复基线，无法直接重置", domain.ErrConflict)
 		}
-		actual = append(actual, lockedInstallationBaseline{NodeID: installation.NodeID, ComponentID: installation.ComponentID, ReleaseID: installation.ReleaseID, InstallRunID: installation.InstallRunID, BackupRef: installation.BackupRef, PlaybookSHA256: installation.Backup.PlaybookSHA256})
+		actual = append(actual, domain.RunInstallationBaseline{NodeID: installation.NodeID, ComponentID: installation.ComponentID, ReleaseID: installation.ReleaseID, InstallRunID: installation.InstallRunID, BackupRef: installation.BackupRef, PlaybookSHA256: installation.Backup.PlaybookSHA256})
 	}
 	if installationBaselineDigest(actual) != installationBaselineDigest(expected) {
 		return fmt.Errorf("%w: 集群恢复基线与锁定计划不一致，请重新预览", domain.ErrConflict)

@@ -344,7 +344,7 @@ func acceptanceConditionAlwaysFalse(value *yaml.Node) bool {
 	return text == "false" || text == "0" || text == "" || text == "{{ false }}" || text == "{{false}}"
 }
 
-func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision domain.ScenarioRevision, environment domain.EnvironmentRevision, resolvedByNode map[string]map[string]any) ([]lockedStep, error) {
+func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision domain.ScenarioRevision, environment domain.EnvironmentRevision, resolvedByNode map[string]map[string]any) ([]domain.RunPlanStep, error) {
 	if len(revision.AcceptanceJobs) == 0 {
 		return nil, fmt.Errorf("%w: scenario requires at least one business acceptance job", domain.ErrInvalid)
 	}
@@ -360,7 +360,7 @@ func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision 
 	if err != nil {
 		return nil, err
 	}
-	steps := make([]lockedStep, 0, len(revision.AcceptanceJobs))
+	steps := make([]domain.RunPlanStep, 0, len(revision.AcceptanceJobs))
 	for _, job := range revision.AcceptanceJobs {
 		for _, name := range job.RequiredCredentials {
 			found := false
@@ -373,7 +373,7 @@ func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision 
 				return nil, fmt.Errorf("%w: acceptance job %s requires CredentialRef %s", domain.ErrInvalid, job.Name, name)
 			}
 		}
-		steps = append(steps, lockedStep{ID: "acceptance-" + job.ID, NodeID: "acceptance:" + job.ID, Name: job.Name, SourceType: "scenario_acceptance", ScenarioRevisionID: revision.ID, AcceptanceJobID: job.ID, Stage: "acceptance", Phase: "acceptance", Action: domain.ActionKind("acceptance"), ActionID: job.ID, Playbook: job.Playbook, PlaybookDigest: job.PlaybookSHA256, WorkspaceDigest: revision.AcceptanceTreeSHA256, Variables: variables, RequiredCredentials: job.RequiredCredentials, Limit: job.HostGroup, TimeoutSeconds: job.TimeoutSeconds, Become: job.Become, MayMutate: job.MayMutate, NeedsApproval: job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive, RetrySafe: !job.MayMutate})
+		steps = append(steps, domain.RunPlanStep{ID: "acceptance-" + job.ID, NodeID: "acceptance:" + job.ID, Name: job.Name, SourceType: "scenario_acceptance", ScenarioRevisionID: revision.ID, AcceptanceJobID: job.ID, Stage: "acceptance", Phase: "acceptance", Action: domain.ActionKind("acceptance"), ActionID: job.ID, Playbook: job.Playbook, PlaybookDigest: job.PlaybookSHA256, WorkspaceDigest: revision.AcceptanceTreeSHA256, Variables: variables, RequiredCredentials: job.RequiredCredentials, Limit: job.HostGroup, TimeoutSeconds: job.TimeoutSeconds, Become: job.Become, MayMutate: job.MayMutate, NeedsApproval: job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive, RetrySafe: !job.MayMutate})
 	}
 	return steps, nil
 }

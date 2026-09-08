@@ -1,5 +1,7 @@
 # OpenFuyao Ansible snapshot
 
+> 此目录保留为历史参考及旧测试夹具。当前已发布组件与场景参考见 [kubernetes-1.17.5](../kubernetes-1.17.5/README.md)；本目录的原门禁保留在 `make test-historical-reference-playbooks`。
+
 This directory is a read-only demo snapshot of an existing cluster build job.
 It is intentionally not wired to a production inventory or credentials.
 

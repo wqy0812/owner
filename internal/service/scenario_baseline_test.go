@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"errors"
 	"testing"
@@ -54,7 +55,7 @@ func TestScenarioBaselineVerificationPreservesTestIdentityAndEvidence(t *testing
 	if _, err = db.SuccessfulScenarioSourceRun(ctx, revision, verified.ID); err == nil {
 		t.Fatal("baseline verification became formal source evidence")
 	}
-	for _, step := range verified.InputSnapshot["steps"].([]any) {
+	for _, step := range runfixture.StepMaps(verified.Snapshot.Plan.Steps) {
 		locked := step.(map[string]any)
 		if locked["phase"] == "execute" || locked["stage"] == "source_verify" {
 			t.Fatalf("baseline verification executes component changes: %+v", locked)

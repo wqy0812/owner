@@ -8,12 +8,11 @@ import (
 	"path"
 	"strings"
 
-	"codex/platform-demo/internal/ansible"
 	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *DeliveryService) bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+func (p *DeliveryService) bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error {
 	targetStation := strings.TrimSpace(revision.Variables[fileStationVariable])
 	if targetStation != "" {
 		var err error
@@ -60,7 +59,7 @@ func (p *DeliveryService) bindComponentArtifacts(ctx context.Context, revision d
 			if err := p.artifactDelivery.Probe(ctx, mediadelivery.ArtifactLocation{URL: artifact.SourceURL}, mediadelivery.ArtifactIdentity{SHA256: artifact.SHA256, SizeBytes: artifact.SizeBytes}); err != nil {
 				return deliverySourceError(component, release, "介质 "+artifact.Alias, artifact.SourceURL, "/components?selected="+component.ID, err)
 			}
-			appendDeliveryRequirement(plan, mediadelivery.Requirement{
+			appendDeliveryRequirement(plan, domain.RunDeliveryRequirement{
 				ID: "artifact:" + release.ID + ":" + artifact.Alias, Kind: "artifact", Name: artifact.Alias,
 				Identity: "sha256:" + artifact.SHA256, Source: artifact.SourceURL, Target: targetURL,
 				SourceReadable: true, TargetPresent: false, TransferAvailable: targetStation != "",
@@ -79,7 +78,7 @@ func artifactURL(station, relativePath string) string {
 	return (&url.URL{Scheme: "http", Host: station, Path: "/" + strings.TrimPrefix(relativePath, "/")}).String()
 }
 
-func (p *DeliveryService) bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error {
+func (p *DeliveryService) bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error {
 	targetRegistry := strings.TrimSpace(revision.Variables[imageRegistryVariable])
 	if targetRegistry != "" {
 		var err error
@@ -131,7 +130,7 @@ func (p *DeliveryService) bindComponentImages(ctx context.Context, revision doma
 				}
 				return deliverySourceError(component, release, "镜像 "+image.LogicalName, image.SourceRef, "/components?selected="+component.ID, err)
 			}
-			appendDeliveryRequirement(plan, mediadelivery.Requirement{
+			appendDeliveryRequirement(plan, domain.RunDeliveryRequirement{
 				ID: "image:" + release.ID + ":" + image.LogicalName, Kind: "image", Name: image.LogicalName,
 				Identity: image.Digest, Source: sourceDigest, Target: targetDigest,
 				SourceReadable: true, TargetPresent: false, TransferAvailable: targetRegistry != "",
@@ -146,7 +145,7 @@ func (p *DeliveryService) bindComponentImages(ctx context.Context, revision doma
 	return nil
 }
 
-func bindArtifactVariables(step *lockedStep, artifact domain.ComponentArtifact, relativePath, location string) error {
+func bindArtifactVariables(step *domain.RunPlanStep, artifact domain.ComponentArtifact, relativePath, location string) error {
 	for suffix, value := range map[string]any{"_path": relativePath, "_url": location, "_sha256": artifact.SHA256} {
 		name := artifact.Alias + suffix
 		if _, exists := step.Variables[name]; exists {
@@ -154,11 +153,11 @@ func bindArtifactVariables(step *lockedStep, artifact domain.ComponentArtifact, 
 		}
 		step.Variables[name] = value
 	}
-	step.Media = append(step.Media, ansible.JobMedia{Kind: "artifact", Location: location, Identity: artifact.SHA256, SizeBytes: artifact.SizeBytes})
+	step.Media = append(step.Media, domain.RunMedia{Kind: "artifact", Location: location, Identity: artifact.SHA256, SizeBytes: artifact.SizeBytes})
 	return nil
 }
 
-func bindImageVariables(step *lockedStep, logicalName, location, digest string) error {
+func bindImageVariables(step *domain.RunPlanStep, logicalName, location, digest string) error {
 	variables := map[string]any{logicalName + "_image_ref": location, logicalName + "_image_digest": digest}
 	if logicalName == "main" {
 		variables["component_image_ref"], variables["component_image_digest"] = location, digest
@@ -169,11 +168,11 @@ func bindImageVariables(step *lockedStep, logicalName, location, digest string) 
 		}
 		step.Variables[name] = value
 	}
-	step.Media = append(step.Media, ansible.JobMedia{Kind: "image", Location: location, Identity: digest})
+	step.Media = append(step.Media, domain.RunMedia{Kind: "image", Location: location, Identity: digest})
 	return nil
 }
 
-func appendDeliveryRequirement(plan *lockedPlan, requirement mediadelivery.Requirement) {
+func appendDeliveryRequirement(plan *domain.RunExecutionPlan, requirement domain.RunDeliveryRequirement) {
 	for index := range plan.DeliveryRequirements {
 		if plan.DeliveryRequirements[index].ID == requirement.ID {
 			plan.DeliveryRequirements[index].StepIDs = append(plan.DeliveryRequirements[index].StepIDs, requirement.StepIDs...)

@@ -1,0 +1,365 @@
+{
+  "name": "Kubernetes 1.17.5 六节点参考",
+  "description": "组件及顺序来自已发布 Revision；工作区、组名和地址已整理，必须经新的 Owner 合同与测试流程后使用。",
+  "nodes": [
+    {
+      "id": "host-preflight",
+      "component": "host-preflight",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "host-bootstrap",
+      "component": "host-bootstrap",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "docker-runtime",
+      "component": "docker-runtime",
+      "version": "20.10.21-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "kubernetes-distribution",
+      "component": "kubernetes-distribution",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "cluster-pki",
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "kubernetes-encryption-configuration",
+      "component": "kubernetes-encryption-configuration",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kubelet",
+      "component": "kubelet",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "etcd-state-store",
+      "component": "etcd-state-store",
+      "version": "3.4.3-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kube-apiserver",
+      "component": "kube-apiserver",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kube-controller-manager",
+      "component": "kube-controller-manager",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kube-scheduler",
+      "component": "kube-scheduler",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kubernetes-bootstrap-rbac",
+      "component": "kubernetes-bootstrap-rbac",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    },
+    {
+      "id": "kube-proxy",
+      "component": "kube-proxy",
+      "version": "1.17.5-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "flannel",
+      "component": "flannel",
+      "version": "0.22.3-env2.1",
+      "action": "install",
+      "hostGroup": "all",
+      "parameterValues": {}
+    },
+    {
+      "id": "coredns",
+      "component": "coredns",
+      "version": "1.6.5-env2.1",
+      "action": "install",
+      "hostGroup": "control_plane",
+      "parameterValues": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": "cluster-pki",
+      "target": "etcd-state-store",
+      "kind": "dependency"
+    },
+    {
+      "source": "cluster-pki",
+      "target": "kube-controller-manager",
+      "kind": "dependency"
+    },
+    {
+      "source": "cluster-pki",
+      "target": "kube-scheduler",
+      "kind": "dependency"
+    },
+    {
+      "source": "cluster-pki",
+      "target": "kubelet",
+      "kind": "dependency"
+    },
+    {
+      "source": "cluster-pki",
+      "target": "kubernetes-encryption-configuration",
+      "kind": "dependency"
+    },
+    {
+      "source": "docker-runtime",
+      "target": "kubelet",
+      "kind": "dependency"
+    },
+    {
+      "source": "etcd-state-store",
+      "target": "kube-apiserver",
+      "kind": "dependency"
+    },
+    {
+      "source": "flannel",
+      "target": "coredns",
+      "kind": "dependency"
+    },
+    {
+      "source": "host-bootstrap",
+      "target": "docker-runtime",
+      "kind": "dependency"
+    },
+    {
+      "source": "host-bootstrap",
+      "target": "kubernetes-distribution",
+      "kind": "dependency"
+    },
+    {
+      "source": "host-preflight",
+      "target": "host-bootstrap",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-apiserver",
+      "target": "kube-controller-manager",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-apiserver",
+      "target": "kube-proxy",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-apiserver",
+      "target": "kube-scheduler",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-controller-manager",
+      "target": "flannel",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-controller-manager",
+      "target": "kubernetes-bootstrap-rbac",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-proxy",
+      "target": "coredns",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-proxy",
+      "target": "flannel",
+      "kind": "dependency"
+    },
+    {
+      "source": "kube-scheduler",
+      "target": "coredns",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "etcd-state-store",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "flannel",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "kube-apiserver",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "kube-controller-manager",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "kube-proxy",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubelet",
+      "target": "kube-scheduler",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubernetes-bootstrap-rbac",
+      "target": "kube-proxy",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubernetes-distribution",
+      "target": "cluster-pki",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubernetes-distribution",
+      "target": "flannel",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubernetes-distribution",
+      "target": "kubelet",
+      "kind": "dependency"
+    },
+    {
+      "source": "kubernetes-encryption-configuration",
+      "target": "kube-apiserver",
+      "kind": "dependency"
+    },
+    {
+      "source": "docker-runtime",
+      "target": "kubernetes-distribution",
+      "kind": "sequence"
+    },
+    {
+      "source": "kube-controller-manager",
+      "target": "kube-scheduler",
+      "kind": "sequence"
+    },
+    {
+      "source": "kube-scheduler",
+      "target": "kubernetes-bootstrap-rbac",
+      "kind": "sequence"
+    },
+    {
+      "source": "kubernetes-encryption-configuration",
+      "target": "kubelet",
+      "kind": "sequence"
+    }
+  ],
+  "installOrder": [
+    "host-preflight",
+    "host-bootstrap",
+    "docker-runtime",
+    "kubernetes-distribution",
+    "cluster-pki",
+    "kubernetes-encryption-configuration",
+    "kubelet",
+    "etcd-state-store",
+    "kube-apiserver",
+    "kube-controller-manager",
+    "kube-scheduler",
+    "kubernetes-bootstrap-rbac",
+    "kube-proxy",
+    "flannel",
+    "coredns"
+  ],
+  "rollbackOrder": [
+    "coredns",
+    "flannel",
+    "kube-proxy",
+    "kubernetes-bootstrap-rbac",
+    "kube-scheduler",
+    "kube-controller-manager",
+    "kube-apiserver",
+    "etcd-state-store",
+    "kubelet",
+    "kubernetes-encryption-configuration",
+    "cluster-pki",
+    "kubernetes-distribution",
+    "docker-runtime",
+    "host-bootstrap",
+    "host-preflight"
+  ],
+  "acceptance": {
+    "job": {
+      "id": "k8s1175-acceptance",
+      "name": "六节点 Kubernetes 1.17.5 业务验收",
+      "purpose": "三个控制节点分别验证六节点 Ready、三个 API、etcd 仲裁、控制组件、36 对 Pod 通信、Service/DNS 与 Secret 实际加密；成功后清理各自的临时探针。",
+      "hostGroup": "control_plane",
+      "timeoutSeconds": 1800,
+      "riskLevel": "high",
+      "become": true,
+      "mayMutate": true,
+      "entry": "acceptance/tasks/acceptance.yml"
+    },
+    "parameters": [
+      {
+        "name": "admin_kubeconfig_path",
+        "description": "引用 Cluster PKI 的管理员 kubeconfig 路径",
+        "type": "string",
+        "required": true,
+        "visibility": "internal",
+        "modifiable": false,
+        "valueProvider": "upstream_mapping"
+      }
+    ],
+    "values": {},
+    "bindings": [
+      {
+        "parameter": "admin_kubeconfig_path",
+        "source": "node",
+        "nodeId": "cluster-pki",
+        "sourceParameter": "admin_kubeconfig_path"
+      }
+    ]
+  }
+}

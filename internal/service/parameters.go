@@ -292,18 +292,12 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func provenanceSnapshot(values map[string]map[string]resolvedParameter) map[string]any {
-	out := make(map[string]any, len(values))
+func provenanceSnapshot(values map[string]map[string]resolvedParameter) map[string]map[string]domain.RunParameterSource {
+	out := make(map[string]map[string]domain.RunParameterSource, len(values))
 	for nodeID, parameters := range values {
-		node := make(map[string]any, len(parameters))
-		for name, parameter := range parameters {
-			node[name] = map[string]any{
-				"value":             parameter.Value,
-				"source":            parameter.Source,
-				"sourceNodeId":      parameter.SourceNodeID,
-				"upstreamParameter": parameter.UpstreamParameter,
-				"targetParameter":   parameter.TargetParameter,
-			}
+		node := make(map[string]domain.RunParameterSource, len(parameters))
+		for name, p := range parameters {
+			node[name] = domain.RunParameterSource{Value: p.Value, Source: p.Source, SourceNodeID: p.SourceNodeID, UpstreamParameter: p.UpstreamParameter, TargetParameter: p.TargetParameter}
 		}
 		out[nodeID] = node
 	}

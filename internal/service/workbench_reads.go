@@ -37,7 +37,7 @@ func (s *workbenchReadStore) WorkbenchSubjects(ctx context.Context, user domain.
 	return out, err
 }
 
-func (s *workbenchReadStore) prefetch(ctx context.Context, runs []domain.Run) error {
+func (s *workbenchReadStore) prefetch(ctx context.Context, runs []domain.RunReadModel) error {
 	releases, revisions := map[string]bool{}, map[string]bool{}
 	for _, run := range runs {
 		if id := run.ComponentReleaseID; id != "" {
@@ -50,10 +50,9 @@ func (s *workbenchReadStore) prefetch(ctx context.Context, runs []domain.Run) er
 				revisions[id] = true
 			}
 		}
-		steps, _ := run.InputSnapshot["steps"].([]any)
-		for _, step := range steps {
-			locked, _ := step.(map[string]any)
-			if id, ok := locked["releaseId"].(string); ok && id != "" {
+		steps := run.LockedSteps
+		for _, locked := range steps {
+			if id := locked.ReleaseID; id != "" {
 				if _, exists := s.releases[id]; !exists {
 					releases[id] = true
 				}
@@ -76,15 +75,15 @@ func (s *workbenchReadStore) prefetch(ctx context.Context, runs []domain.Run) er
 	return nil
 }
 
-func (s *workbenchReadStore) WorkbenchRuns(ctx context.Context, user domain.User) ([]domain.Run, error) {
+func (s *workbenchReadStore) WorkbenchRuns(ctx context.Context, user domain.User) ([]domain.RunReadModel, error) {
 	runs, err := s.readModelStore.WorkbenchRuns(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	failed := []domain.Run{}
+	failed := []domain.RunReadModel{}
 	ids := map[string]bool{}
 	for _, r := range runs {
-		if (r.Status == domain.RunFailed || r.Status == domain.RunInterrupted) && r.InputSnapshot["cleaned"] != true {
+		if (r.Status == domain.RunFailed || r.Status == domain.RunInterrupted) && r.Cleaned != true {
 			failed = append(failed, r)
 			ids[r.ID] = true
 		}
@@ -98,7 +97,7 @@ func (s *workbenchReadStore) WorkbenchRuns(ctx context.Context, user domain.User
 	return runs, err
 }
 
-func (s *workbenchReadStore) WorkbenchScenarioRuns(ctx context.Context, user domain.User, id, digest string, success bool, before time.Time, beforeID string) ([]domain.Run, error) {
+func (s *workbenchReadStore) WorkbenchScenarioRuns(ctx context.Context, user domain.User, id, digest string, success bool, before time.Time, beforeID string) ([]domain.RunReadModel, error) {
 	runs, err := s.readModelStore.WorkbenchScenarioRuns(ctx, user, id, digest, success, before, beforeID)
 	if err == nil {
 		err = s.prefetch(ctx, runs)
@@ -136,16 +135,16 @@ func (s *workbenchReadStore) GetScenarioRevision(ctx context.Context, id string)
 	return r, err
 }
 
-func (p *ReadModelService) workbenchRuns(ctx context.Context, user domain.User, components []domain.Component, scenarios []domain.Scenario) ([]domain.Run, error) {
+func (p *ReadModelService) workbenchRuns(ctx context.Context, user domain.User, components []domain.Component, scenarios []domain.Scenario) ([]domain.RunReadModel, error) {
 	runs, err := p.store.WorkbenchRuns(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	byID := map[string]domain.Run{}
+	byID := map[string]domain.RunReadModel{}
 	for _, r := range runs {
 		byID[r.ID] = r
 	}
-	add := func(items []domain.Run) {
+	add := func(items []domain.RunReadModel) {
 		for _, r := range items {
 			byID[r.ID] = r
 		}
@@ -190,11 +189,11 @@ func (p *ReadModelService) workbenchRuns(ctx context.Context, user domain.User, 
 				}
 				if matches {
 					if !foundCurrent {
-						add([]domain.Run{run})
+						add([]domain.RunReadModel{run})
 						foundCurrent = true
 					}
 					if run.Status == domain.RunSucceeded {
-						add([]domain.Run{run})
+						add([]domain.RunReadModel{run})
 						foundSuccess = true
 						break
 					}
@@ -204,7 +203,7 @@ func (p *ReadModelService) workbenchRuns(ctx context.Context, user domain.User, 
 			before, beforeID = last.CreatedAt, last.ID
 		}
 	}
-	out := make([]domain.Run, 0, len(byID))
+	out := make([]domain.RunReadModel, 0, len(byID))
 	for _, r := range byID {
 		out = append(out, r)
 	}

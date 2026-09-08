@@ -14,8 +14,13 @@ import (
 
 func componentImportRecoveryPlatform(t *testing.T) (*Platform, *store.Store, string) {
 	t.Helper()
+	return componentImportRecoveryPlatformAt(t, ":memory:")
+}
+
+func componentImportRecoveryPlatformAt(t *testing.T, databasePath string) (*Platform, *store.Store, string) {
+	t.Helper()
 	ctx := context.Background()
-	database, err := store.Open(ctx, ":memory:")
+	database, err := store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}

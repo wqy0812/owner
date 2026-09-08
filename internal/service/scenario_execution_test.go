@@ -164,7 +164,7 @@ func TestScenarioExecutionAcceptanceControlsSuccessAndPartialState(t *testing.T)
 
 func TestScenarioOperationOrderingRejectsAmbiguityAndCycles(t *testing.T) {
 	nodes := map[string]bool{"old": true, "new": true, "unchanged": true}
-	actions := map[string]lockedStep{"old": {}, "new": {}}
+	actions := map[string]domain.RunPlanStep{"old": {}, "new": {}}
 	if _, err := uniqueScenarioOperationOrder(nodes, map[string]map[string]bool{}, actions); err == nil {
 		t.Fatal("ambiguous ordering accepted")
 	}

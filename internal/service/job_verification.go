@@ -56,7 +56,7 @@ func (s *ExecutionService) verifiedRunJob(ctx context.Context, user domain.User,
 	if last.Status != domain.RunSucceeded || last.ScenarioRevisionID == "" || (last.Kind != domain.RunScenario && last.Kind != domain.RunScenarioTest) {
 		return fmt.Errorf("%w: 完整集群作业要求场景及业务验收成功", domain.ErrConflict)
 	}
-	if last.InputSnapshot["executionMode"] != "install" {
+	if last.Snapshot.ScenarioExecution.Mode != "install" {
 		return fmt.Errorf("%w: 完整集群搭建作业要求安装场景；升级或基线检查请下载本次作业包", domain.ErrConflict)
 	}
 	chain := []domain.Run{}
@@ -66,7 +66,7 @@ func (s *ExecutionService) verifiedRunJob(ctx context.Context, user domain.User,
 			return fmt.Errorf("%w: retry lineage is cyclic", domain.ErrConflict)
 		}
 		seen[current.ID] = true
-		if current.EnvironmentID != last.EnvironmentID || current.EnvironmentRevisionID != last.EnvironmentRevisionID || current.ScenarioRevisionID != last.ScenarioRevisionID || current.Kind != last.Kind || current.InputSnapshot["executionMode"] != "install" {
+		if current.EnvironmentID != last.EnvironmentID || current.EnvironmentRevisionID != last.EnvironmentRevisionID || current.ScenarioRevisionID != last.ScenarioRevisionID || current.Kind != last.Kind || current.Snapshot.ScenarioExecution.Mode != "install" {
 			return fmt.Errorf("%w: retry lineage changes the locked target", domain.ErrConflict)
 		}
 		chain = append(chain, current)
@@ -97,7 +97,7 @@ func (s *ExecutionService) verifiedRunJob(ctx context.Context, user domain.User,
 	if bundle.Manifest.Plan.EnvironmentID != rootRun.EnvironmentID {
 		return fmt.Errorf("%w: job environment identity mismatch", domain.ErrConflict)
 	}
-	rootPlan, err := mapToPlan(rootRun.InputSnapshot)
+	rootPlan, err := planFromRun(rootRun)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (s *ExecutionService) verifiedRunJob(ctx context.Context, user domain.User,
 	if err != nil {
 		return err
 	}
-	if locked, _ := rootRun.InputSnapshot["scenarioRevisionSpecDigest"].(string); locked == "" || locked != scenarioRevisionSpecDigest(revision) {
+	if locked := rootRun.Snapshot.Subject.ScenarioRevisionSpecDigest; locked == "" || locked != scenarioRevisionSpecDigest(revision) {
 		return fmt.Errorf("%w: 场景内容已变化，原验证不能用于当前交付", domain.ErrConflict)
 	}
 	if err := s.workspaceVerifier.verifyLockedWorkspaceDigests(ctx, rootPlan.Steps); err != nil {
@@ -136,11 +136,11 @@ func (s *ExecutionService) verifiedRunJob(ctx context.Context, user domain.User,
 	evidence := ansible.JobVerification{ScenarioRevisionID: last.ScenarioRevisionID, RootBundleDigest: bundle.Manifest.Digest, FullPlanDigest: bundle.Manifest.FullPlanDigest}
 	for index := len(chain) - 1; index >= 0; index-- {
 		run := chain[index]
-		locked, err := mapToPlan(run.InputSnapshot)
+		locked, err := planFromRun(run)
 		if err != nil {
 			return err
 		}
-		if locked.Runtime != bundle.Manifest.Plan.Runtime {
+		if nativeRuntime(locked.Runtime) != bundle.Manifest.Plan.Runtime {
 			return fmt.Errorf("%w: retry runtime differs from full job", domain.ErrConflict)
 		}
 		steps := jobPlanFromLocked(run.EnvironmentID, locked, nil).Steps

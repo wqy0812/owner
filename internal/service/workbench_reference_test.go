@@ -23,7 +23,11 @@ func (p *ReadModelService) legacyWorkbench(ctx context.Context, user domain.User
 	if err != nil {
 		return domain.Workbench{}, err
 	}
-	runs, err := p.store.ListRuns(ctx, user)
+	fullRuns, err := p.store.ListRuns(ctx, user)
+	runs := make([]domain.RunReadModel, 0, len(fullRuns))
+	for _, run := range fullRuns {
+		runs = append(runs, domain.ReadModelFromRun(run))
+	}
 	if err != nil {
 		return domain.Workbench{}, err
 	}

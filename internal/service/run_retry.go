@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/ansible"
-	mediadelivery "codex/platform-demo/internal/delivery"
 	"codex/platform-demo/internal/domain"
 )
 
@@ -27,7 +26,7 @@ type RunRetryRequest struct {
 	ExpectedPlanDigest string `json:"expectedPlanDigest"`
 }
 
-func retryStartIndex(run domain.Run, plan lockedPlan) int {
+func retryStartIndex(run domain.Run, plan domain.RunExecutionPlan) int {
 	succeeded := map[string]bool{}
 	for _, step := range run.Steps {
 		if step.Status == domain.RunSucceeded {
@@ -85,7 +84,7 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 	if environment.CurrentRevisionID != source.EnvironmentRevisionID {
 		return RunRetryPlan{}, fmt.Errorf("%w: environment revision changed; run a full preview", domain.ErrConflict)
 	}
-	locked, err := mapToPlan(source.InputSnapshot)
+	locked, err := planFromRun(source)
 	if err != nil {
 		return RunRetryPlan{}, fmt.Errorf("%w: historical run has no retryable locked plan", domain.ErrConflict)
 	}
@@ -119,7 +118,7 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 		if getErr != nil {
 			return RunRetryPlan{}, getErr
 		}
-		lockedDigest, _ := source.InputSnapshot["scenarioRevisionSpecDigest"].(string)
+		lockedDigest := source.Snapshot.Subject.ScenarioRevisionSpecDigest
 		if lockedDigest == "" || scenarioRevisionSpecDigest(revision) != lockedDigest {
 			return RunRetryPlan{}, fmt.Errorf("%w: scenario revision definition changed", domain.ErrConflict)
 		}
@@ -163,11 +162,11 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 	result.PlanDigest = digestValue(struct {
 		SourceID, Status, EnvironmentRevisionID, ArtifactDigest, RecoveryStateDigest string
 		Start                                                                        int
-		Steps                                                                        []lockedStep
-		DeliveryRequirements                                                         []mediadelivery.Requirement
-		DeliveryDecisions                                                            []mediadelivery.Decision
-		ArtifactTransfers                                                            []mediadelivery.PlannedArtifactTransfer
-		ImageTransfers                                                               []mediadelivery.PlannedImageTransfer
+		Steps                                                                        []domain.RunPlanStep
+		DeliveryRequirements                                                         []domain.RunDeliveryRequirement
+		DeliveryDecisions                                                            []domain.RunDeliveryDecision
+		ArtifactTransfers                                                            []domain.RunArtifactTransfer
+		ImageTransfers                                                               []domain.RunImageTransfer
 	}{source.ID, string(source.Status), source.EnvironmentRevisionID, source.ArtifactDigest, result.RecoveryStateDigest, start, remaining, locked.DeliveryRequirements, locked.DeliveryDecisions, locked.ArtifactTransfers, locked.ImageTransfers})
 	return result, nil
 }
@@ -184,7 +183,7 @@ func (p *ExecutionService) Retry(ctx context.Context, user domain.User, sourceRu
 	if err != nil {
 		return domain.Run{}, err
 	}
-	locked, err := mapToPlan(source.InputSnapshot)
+	locked, err := planFromRun(source)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -204,12 +203,12 @@ func (p *ExecutionService) Retry(ctx context.Context, user domain.User, sourceRu
 	return p.creator.createRetryRun(ctx, user, source, locked, preview, runID, now)
 }
 
-func retryLockedSteps(plan lockedPlan, start int) ([]lockedStep, error) {
+func retryLockedSteps(plan domain.RunExecutionPlan, start int) ([]domain.RunPlanStep, error) {
 	selected, err := ansible.ContinuationSteps(jobPlanFromLocked("", plan, nil), start)
 	if err != nil {
 		return nil, err
 	}
-	steps := make([]lockedStep, 0, len(selected))
+	steps := make([]domain.RunPlanStep, 0, len(selected))
 	for _, item := range selected {
 		source := lockedStepByID(plan.Steps, item.ID)
 		if source == nil {
@@ -228,7 +227,7 @@ func retryLockedSteps(plan lockedPlan, start int) ([]lockedStep, error) {
 	return steps, nil
 }
 
-func (p *ExecutionService) validateRetryRecoveryIdentity(ctx context.Context, source domain.Run, plan lockedPlan, root string) error {
+func (p *ExecutionService) validateRetryRecoveryIdentity(ctx context.Context, source domain.Run, plan domain.RunExecutionPlan, root string) error {
 	rootRun, err := p.store.GetRun(ctx, root)
 	if err != nil {
 		return err

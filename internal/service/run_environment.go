@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-func (b *PlanBuilder) verifyRunEnvironment(ctx context.Context, run domain.Run, plan lockedPlan) error {
+func (b *PlanBuilder) verifyRunEnvironment(ctx context.Context, run domain.Run, plan domain.RunExecutionPlan) error {
 	if run.Kind == domain.RunEnvironmentRollback {
 		return nil // The rollback planner validates its frozen installation boundary.
 	}

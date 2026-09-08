@@ -895,6 +895,7 @@ function normalizeRun(raw: LooseRecord): Run {
   const deliveryResults = optionalRecords(source, 'deliveryResults')?.map(normalizeDeliveryResult);
   return {
     purposeCounts,
+    snapshotError: optionalString(source, 'snapshotError'),
     executionMode: optionalEnum(source, ['install', 'upgrade', 'baseline_verify'] as const, 'executionMode'), sourceRevisionId: optionalString(source, 'sourceRevisionId'), baselineRunId: optionalString(source, 'baselineRunId'), jobDigest: optionalString(source,'jobDigest'), exitCode: typeof source.exitCode === 'number' ? source.exitCode : undefined,
     archive: optionalObject(raw,'archive') as unknown as ArchiveInfo | undefined,
     id: requireString(source, 'id'),

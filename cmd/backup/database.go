@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,17 +10,21 @@ import (
 
 	"codex/platform-demo/internal/backup"
 	"codex/platform-demo/internal/deploydb"
+	"codex/platform-demo/internal/runmigration"
 )
 
 func runDatabase(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("database requires contract, active-runs, active-work, snapshot, business-snapshot, foundation-snapshot, business-export, verify, verify-business, verify-foundation, history-snapshot, history-verify, or history-restore")
+		return errors.New("database requires contract, active-runs, active-work, snapshot, business-snapshot, foundation-snapshot, business-export, verify, verify-business, verify-foundation, history-snapshot, history-verify, history-restore, migrate-run-snapshot, or verify-run-migration")
 	}
 	set := flag.NewFlagSet("database "+args[0], flag.ContinueOnError)
 	archiveRoot := set.String("archive-dir", "", "persistent Run archive root")
 	path := set.String("db", "", "existing SQLite database path")
 	target := set.String("target", "", "new snapshot destination")
 	expected := set.String("expected-contract", "", "exact required schema contract")
+	reportPath := set.String("report", "", "new migration verification report")
+	expectedSource := set.String("expected-source-digest", "", "source fingerprint returned by migration preflight")
+	dryRun := set.Bool("dry-run", false, "validate complete migration without publishing a target database")
 	if err := set.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -27,6 +32,18 @@ func runDatabase(ctx context.Context, args []string) error {
 		return errors.New("--db is required; positional arguments are not accepted")
 	}
 	switch args[0] {
+	case "migrate-run-snapshot":
+		report, err := runmigration.Migrate(ctx, runmigration.Options{Source: *path, Target: *target, ArchiveRoot: *archiveRoot, ReportPath: *reportPath, ExpectedSourceDigest: *expectedSource, DryRun: *dryRun})
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(report)
+		if err == nil {
+			fmt.Println(string(raw))
+		}
+		return err
+	case "verify-run-migration":
+		return runmigration.VerifyReady(ctx, *path, *target, *reportPath)
 	case "history-snapshot":
 		return backup.SnapshotRunHistory(ctx, *path, *archiveRoot, *target)
 	case "history-verify":

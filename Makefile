@@ -6,8 +6,10 @@ APP := bin/newplatform
 BACKUP_APP := bin/clusterforge-backup
 JOB_APP := bin/clusterforge-job
 EMBED_DIR := internal/ui/dist
+export ANSIBLE_PLAYBOOK
 
-.PHONY: bootstrap dev dev-api dev-web seed reset-demo test check-docs test-deploy-script test-deploy-local-docker deploy-local-docker test-fixture-boundary test-ansible test-role-job test-reference-playbooks test-e2e test-e2e-live build build-web
+.PHONY: bootstrap dev dev-api dev-web seed reset-demo test test-fast test-local test-go test-evidence check-docs test-deploy-script test-deploy-local-docker deploy-local-docker test-fixture-boundary test-ansible test-role-job test-reference-playbooks test-historical-reference-playbooks test-e2e test-e2e-live build build-web
+.PHONY: test-deploy test-deploy-runtime test-deploy-gate
 
 check-docs:
 	python3 scripts/check-docs.py
@@ -31,15 +33,46 @@ seed:
 reset-demo:
 	$(GO) run ./cmd/server --reset-demo
 
-test:
+test-fast:
 	$(MAKE) test-deploy-script
 	$(MAKE) test-fixture-boundary
-	$(GO) test ./...
+	$(MAKE) test-evidence
+	$(MAKE) test-go
 	$(PNPM) --dir web test
-	$(MAKE) test-ansible
+
+# Shared host checks; the deployment entry also requires the isolated runtime gate.
+test-local:
+	$(MAKE) test-deploy-script test-fixture-boundary test-evidence check-docs
+	$(MAKE) test-go
+	$(PNPM) --dir web test:coverage
+	$(MAKE) test-e2e-live
+	git diff --check
+
+test: test-deploy
+
+# Both deployment scripts use this entry. It never uploads or activates a build.
+test-deploy:
+	python3 scripts/deployment-gate.py
+
+# Internal container stage, also callable for focused runtime diagnosis.
+test-deploy-runtime:
+	$(MAKE) test-role-job
+	$(MAKE) test-reference-playbooks
+	$(ANSIBLE_PLAYBOOK) -i /etc/ansible/inventory.ini deploy/local-docker/smoke.yml
+
+test-deploy-gate:
+	python3 scripts/test-deployment-gate.py
+
+test-go:
+	$(GO) test ./cmd/... ./internal/...
+
+test-evidence:
+	node --test web/scripts/source-manifest.test.mjs
 
 test-deploy-script:
+	$(MAKE) test-deploy-gate
 	./scripts/test-deploy-test-88-55.sh
+	python3 scripts/test-deploy-activation.py
 	$(MAKE) test-deploy-local-docker
 
 test-deploy-local-docker:
@@ -54,12 +87,20 @@ test-fixture-boundary:
 test-role-job:
 	@test -n "$(ANSIBLE_PLAYBOOK)" || { echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable"; exit 1; }
 	$(GO) build -o $(JOB_APP) ./cmd/clusterforge-job
-	CLUSTERFORGE_JOB_CLI="$(CURDIR)/$(JOB_APP)" CLUSTERFORGE_JOB_TEST_ANSIBLE="$(ANSIBLE_PLAYBOOK)" $(GO) test ./internal/ansible ./internal/service ./internal/jobcli -run 'TestNativeJobReal|TestRoleJobRealAnsible|TestRoleJobAcceptance|TestScenarioBusinessAcceptanceRealAnsible|TestScenarioAcceptanceCredentialIsolationRealAnsible|TestScenarioRoleJobContinuationRealAnsible|TestStandaloneReal|TestYAMLTwoStepRollbackRealAnsible|TestNativeRollbackResumeAfterProviderRemoval|TestResetTaskTargetsRealAnsible|TestExecutorHealthRealRuntimePlugins' -count=1 -v
+	CLUSTERFORGE_JOB_CLI="$(abspath $(JOB_APP))" GO="$(GO)" python3 scripts/test-role-job.py
 
 test-ansible: test-role-job
 
-# Retained source examples are separate from the native Role execution gate.
+# Current published-component reference; pinned runtime and offline behavior checks.
 test-reference-playbooks:
+	@test -n "$(ANSIBLE_PLAYBOOK)" || { echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable"; exit 1; }
+	$(GO) test ./internal/ansible -run TestPublishedReferenceRoleEntries -count=1 -v
+	./scripts/test-published-reference.sh
+
+# Historical SUSE/kubeadm/OpenFuyao snapshots retain their original checks.
+# Their compatibility failures are independent of the current reference gate.
+test-historical-reference-playbooks:
+	@test -n "$(ANSIBLE_PLAYBOOK)" || { echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable"; exit 1; }
 	NEWPLATFORM_ANSIBLE_INTEGRATION=1 $(GO) test ./internal/ansible -run TestRunnerWithTemporaryLocalPlaybook -count=1 -v
 	./scripts/test-k8s1175-components.sh
 	./scripts/test-flannel-ownership.sh

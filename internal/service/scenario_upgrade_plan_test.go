@@ -53,8 +53,8 @@ func TestScenarioUpgradePlanDependencyMigrationAndOldParameterUninstall(t *testi
 	c2 := scenarioPlannerRelease(t, p, "consumer-v2", "component-1", c1.ID, domain.ActionInstall, domain.ActionUpgrade)
 	source := domain.ScenarioRevision{Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "a", ReleaseID: a.ID}, {ID: "c", ReleaseID: c1.ID}}, Edges: []domain.ScenarioEdge{{Source: "a", Target: "c"}}}}
 	target := domain.ScenarioRevision{Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "b", ReleaseID: b.ID}, {ID: "c", ReleaseID: c2.ID}}, Edges: []domain.ScenarioEdge{{Source: "b", Target: "c"}}}}
-	old := []scenarioTargetNode{{NodeID: "a", ComponentID: a.ComponentID, ReleaseID: a.ID, Variables: map[string]any{"endpoint": "actual-old-environment"}}, {NodeID: "c", ComponentID: c1.ComponentID, ReleaseID: c1.ID}}
-	next := []scenarioTargetNode{{NodeID: "b", ComponentID: b.ComponentID, ReleaseID: b.ID}, {NodeID: "c", ComponentID: c2.ComponentID, ReleaseID: c2.ID, Variables: map[string]any{"endpoint": "mapped-new-environment"}}}
+	old := []domain.ScenarioTargetNode{{NodeID: "a", ComponentID: a.ComponentID, ReleaseID: a.ID, Variables: map[string]any{"endpoint": "actual-old-environment"}}, {NodeID: "c", ComponentID: c1.ComponentID, ReleaseID: c1.ID}}
+	next := []domain.ScenarioTargetNode{{NodeID: "b", ComponentID: b.ComponentID, ReleaseID: b.ID}, {NodeID: "c", ComponentID: c2.ComponentID, ReleaseID: c2.ID, Variables: map[string]any{"endpoint": "mapped-new-environment"}}}
 	steps, ops, err := p.planner.scenarioUpgradeSteps(context.Background(), source, target, old, next)
 	if err != nil {
 		t.Fatal(err)
@@ -74,8 +74,8 @@ func TestScenarioUpgradePlanEffectiveParametersAndUnchangedNodes(t *testing.T) {
 	p, _, _, _, _, _ := scenarioExecutionFixture(t)
 	r := scenarioPlannerRelease(t, p, "configured", "component-1", "", domain.ActionInstall, domain.ActionConfigure)
 	revision := domain.ScenarioRevision{Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node", ReleaseID: r.ID}}}}
-	old := []scenarioTargetNode{{NodeID: "node", ComponentID: r.ComponentID, ReleaseID: r.ID, Variables: map[string]any{"mapped": "old"}}}
-	next := []scenarioTargetNode{{NodeID: "node", ComponentID: r.ComponentID, ReleaseID: r.ID, Variables: map[string]any{"mapped": "new"}}}
+	old := []domain.ScenarioTargetNode{{NodeID: "node", ComponentID: r.ComponentID, ReleaseID: r.ID, Variables: map[string]any{"mapped": "old"}}}
+	next := []domain.ScenarioTargetNode{{NodeID: "node", ComponentID: r.ComponentID, ReleaseID: r.ID, Variables: map[string]any{"mapped": "new"}}}
 	steps, _, err := p.planner.scenarioUpgradeSteps(context.Background(), revision, revision, old, next)
 	if err != nil || len(steps) != 1 || steps[0].Action != domain.ActionConfigure || steps[0].Variables["mapped"] != "new" {
 		t.Fatalf("configure=%+v err=%v", steps, err)
@@ -111,7 +111,7 @@ func TestScenarioUpgradePlanIdempotentReuseRequiresExactEvolutionContract(t *tes
 			}
 			source := domain.ScenarioRevision{Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node", ReleaseID: old.ID}}}}
 			target := domain.ScenarioRevision{Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node", ReleaseID: next.ID}}}}
-			steps, ops, err := p.planner.scenarioUpgradeSteps(ctx, source, target, []scenarioTargetNode{{NodeID: "node", ComponentID: old.ComponentID, ReleaseID: old.ID}}, []scenarioTargetNode{{NodeID: "node", ComponentID: next.ComponentID, ReleaseID: next.ID}})
+			steps, ops, err := p.planner.scenarioUpgradeSteps(ctx, source, target, []domain.ScenarioTargetNode{{NodeID: "node", ComponentID: old.ComponentID, ReleaseID: old.ID}}, []domain.ScenarioTargetNode{{NodeID: "node", ComponentID: next.ComponentID, ReleaseID: next.ID}})
 			if variant != "valid" {
 				if err == nil {
 					t.Fatal("inexact evolution accepted")

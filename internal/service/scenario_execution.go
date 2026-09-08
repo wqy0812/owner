@@ -32,12 +32,6 @@ type ScenarioOperation struct {
 	FromReleaseID string `json:"fromReleaseId,omitempty"`
 	ToReleaseID   string `json:"toReleaseId,omitempty"`
 }
-type scenarioTargetNode struct {
-	NodeID      string         `json:"nodeId"`
-	ComponentID string         `json:"componentId"`
-	ReleaseID   string         `json:"releaseId"`
-	Variables   map[string]any `json:"variables"`
-}
 type ScenarioExecutionPreview struct {
 	ScenarioRevisionID string                       `json:"scenarioRevisionId"`
 	EnvironmentID      string                       `json:"environmentId"`
@@ -46,7 +40,7 @@ type ScenarioExecutionPreview struct {
 	SourceRevisionID   string                       `json:"sourceRevisionId,omitempty"`
 	BaselineRunID      string                       `json:"baselineRunId,omitempty"`
 	Operations         []ScenarioOperation          `json:"operations"`
-	Steps              []lockedStep                 `json:"steps"`
+	Steps              []domain.RunPlanStep         `json:"steps"`
 	Issues             []domain.ValidationIssue     `json:"issues"`
 	Ready              bool                         `json:"ready"`
 	NeedsApproval      bool                         `json:"needsApproval"`
@@ -54,11 +48,11 @@ type ScenarioExecutionPreview struct {
 type scenarioExecution struct {
 	preview            ScenarioExecutionPreview
 	prepared           preparedScenario
-	plan               lockedPlan
-	target             []scenarioTargetNode
+	plan               domain.RunExecutionPlan
+	target             []domain.ScenarioTargetNode
 	baseline           domain.ScenarioInstallation
 	installationDigest string
-	recoveredReceipts  []store.ActionExecutionReceipt
+	recoveredReceipts  []domain.ActionExecutionReceipt
 }
 
 func normalizeScenarioMode(mode domain.ScenarioExecutionMode) (domain.ScenarioExecutionMode, error) {
@@ -97,7 +91,7 @@ func (p *ExecutionService) PreviewScenarioExecution(ctx context.Context, user do
 
 func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.User, id string, input ScenarioExecutionRequest, kind domain.RunKind, runID string, at time.Time) (scenarioExecution, error) {
 	mode, err := normalizeScenarioMode(input.ExecutionMode)
-	x := scenarioExecution{preview: ScenarioExecutionPreview{ScenarioRevisionID: id, EnvironmentID: input.EnvironmentID, ExecutionMode: mode, Operations: []ScenarioOperation{}, Steps: []lockedStep{}, Issues: []domain.ValidationIssue{}}}
+	x := scenarioExecution{preview: ScenarioExecutionPreview{ScenarioRevisionID: id, EnvironmentID: input.EnvironmentID, ExecutionMode: mode, Operations: []ScenarioOperation{}, Steps: []domain.RunPlanStep{}, Issues: []domain.ValidationIssue{}}}
 	if err != nil {
 		return x, err
 	}
@@ -174,9 +168,9 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 			values[key] = value
 		}
 		resolved[node.ID] = values
-		x.target = append(x.target, scenarioTargetNode{NodeID: node.ID, ComponentID: release.ComponentID, ReleaseID: release.ID, Variables: values})
+		x.target = append(x.target, domain.ScenarioTargetNode{NodeID: node.ID, ComponentID: release.ComponentID, ReleaseID: release.ID, Variables: values})
 	}
-	var steps []lockedStep
+	var steps []domain.RunPlanStep
 	if mode == domain.ScenarioExecutionInstall {
 		count, e := p.store.ScenarioEnvironmentStateCount(ctx, input.EnvironmentID)
 		if e != nil {
@@ -235,10 +229,10 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		if baseRun.Status != domain.RunSucceeded || baseRun.ScenarioRevisionID != source.ID || baseRun.EnvironmentID != input.EnvironmentID {
 			return x, fmt.Errorf("%w: 基线正式运行身份不匹配", domain.ErrConflict)
 		}
-		if baseRun.InputSnapshot["scenarioRevisionSpecDigest"] != scenarioRevisionSpecDigest(source) {
+		if baseRun.Snapshot.Subject.ScenarioRevisionSpecDigest != scenarioRevisionSpecDigest(source) {
 			return x, fmt.Errorf("%w: 原始基线的版本内容已变化，不能把编辑后的版本视作已恢复", domain.ErrConflict)
 		}
-		if mode == domain.ScenarioExecutionUpgrade && (baseRun.Kind != domain.RunScenario || (baseRun.InputSnapshot["executionMode"] != "install" && baseRun.InputSnapshot["executionMode"] != "upgrade")) {
+		if mode == domain.ScenarioExecutionUpgrade && (baseRun.Kind != domain.RunScenario || (baseRun.Snapshot.ScenarioExecution.Mode != "install" && baseRun.Snapshot.ScenarioExecution.Mode != "upgrade")) {
 			return x, fmt.Errorf("%w: 基线不属于正式安装或升级", domain.ErrConflict)
 		}
 		baseEnvironment, err := p.store.GetEnvironmentRevision(ctx, baseRun.EnvironmentRevisionID)
@@ -251,7 +245,7 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		if mode == domain.ScenarioExecutionBaselineVerify {
 			acceptanceEnvironment = baseEnvironment
 		}
-		old, err := scenarioSnapshotNodes(baseRun.InputSnapshot)
+		old, err := scenarioSnapshotNodes(baseRun.Snapshot)
 		if err != nil {
 			return x, err
 		}
@@ -339,7 +333,7 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		Mode                          domain.ScenarioExecutionMode
 		Revision, Plan, Installations string
 		Baseline                      domain.ScenarioInstallation
-		RecoveredReceipts             []store.ActionExecutionReceipt
+		RecoveredReceipts             []domain.ActionExecutionReceipt
 	}{2, mode, scenarioRevisionSpecDigest(revision), componentTestPlanDigest(prepared.environment.CurrentRevisionID, plan), x.installationDigest, baseline, x.recoveredReceipts})
 	x.preview.Ready = true
 	return x, nil
@@ -362,7 +356,7 @@ func sameScenarioHostInventory(left, right json.RawMessage) bool {
 
 // Whole-cluster checks receive the same recovery context as the corresponding
 // installed state. Source checks must never observe the target capture.
-func bindScenarioStateCheckBackups(steps []lockedStep, installed []domain.EnvironmentComponentInstallation) {
+func bindScenarioStateCheckBackups(steps []domain.RunPlanStep, installed []domain.EnvironmentComponentInstallation) {
 	for i := range steps {
 		step := &steps[i]
 		if step.Stage != "source_verify" && step.Stage != "target_verify" {
@@ -392,14 +386,14 @@ func bindScenarioStateCheckBackups(steps []lockedStep, installed []domain.Enviro
 	}
 }
 
-func (p *PlanBuilder) scenarioActionStep(ctx context.Context, node domain.ScenarioNode, release domain.ComponentRelease, kind domain.ActionKind, values map[string]any, stage string) (lockedStep, error) {
+func (p *PlanBuilder) scenarioActionStep(ctx context.Context, node domain.ScenarioNode, release domain.ComponentRelease, kind domain.ActionKind, values map[string]any, stage string) (domain.RunPlanStep, error) {
 	action, ok := findAction(release, kind)
 	if !ok {
-		return lockedStep{}, fmt.Errorf("%w: %s 缺少 %s 动作", domain.ErrConflict, node.Name, kind)
+		return domain.RunPlanStep{}, fmt.Errorf("%w: %s 缺少 %s 动作", domain.ErrConflict, node.Name, kind)
 	}
 	component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 	if err != nil {
-		return lockedStep{}, err
+		return domain.RunPlanStep{}, err
 	}
 	step, err := p.actions.lockAction(component, node.ID, release, action, values)
 	step.SourceNodeID = node.ID
@@ -412,8 +406,8 @@ func (p *PlanBuilder) scenarioActionStep(ctx context.Context, node domain.Scenar
 	return step, err
 }
 
-func (p *PlanBuilder) scenarioStateChecks(ctx context.Context, revision domain.ScenarioRevision, nodes []scenarioTargetNode, stage string) ([]lockedStep, error) {
-	byID := map[string]scenarioTargetNode{}
+func (p *PlanBuilder) scenarioStateChecks(ctx context.Context, revision domain.ScenarioRevision, nodes []domain.ScenarioTargetNode, stage string) ([]domain.RunPlanStep, error) {
+	byID := map[string]domain.ScenarioTargetNode{}
 	for _, node := range nodes {
 		byID[node.NodeID] = node
 	}
@@ -421,7 +415,7 @@ func (p *PlanBuilder) scenarioStateChecks(ctx context.Context, revision domain.S
 	if err != nil {
 		return nil, err
 	}
-	steps := []lockedStep{}
+	steps := []domain.RunPlanStep{}
 	for _, node := range ordered {
 		snapshot, ok := byID[node.ID]
 		if !ok || snapshot.ReleaseID != node.ReleaseID {
@@ -458,27 +452,22 @@ func (p *PlanBuilder) scenarioStateChecks(ctx context.Context, revision domain.S
 	return steps, nil
 }
 
-func scenarioSnapshotNodes(snapshot map[string]any) ([]scenarioTargetNode, error) {
-	data, err := json.Marshal(snapshot["targetNodes"])
-	if err != nil {
-		return nil, err
-	}
-	var nodes []scenarioTargetNode
-	if err = json.Unmarshal(data, &nodes); err != nil || len(nodes) == 0 {
+func scenarioSnapshotNodes(snapshot domain.RunSnapshot) ([]domain.ScenarioTargetNode, error) {
+	if len(snapshot.ScenarioExecution.TargetNodes) == 0 {
 		return nil, fmt.Errorf("%w: 来源 Run 缺少完整的目标组件和参数快照", domain.ErrConflict)
 	}
-	return nodes, nil
+	return snapshot.ScenarioExecution.TargetNodes, nil
 }
 
 // A baseline's final checks contain the actual approved delivery locations and
 // complete execution values. Keep these for source checks and deletion; compare
 // governed targetNodes separately so incidental recovery metadata is not a change.
-func scenarioFrozenExecutionNodes(run domain.Run, nodes []scenarioTargetNode) ([]scenarioTargetNode, error) {
-	plan, err := mapToPlan(run.InputSnapshot)
+func scenarioFrozenExecutionNodes(run domain.Run, nodes []domain.ScenarioTargetNode) ([]domain.ScenarioTargetNode, error) {
+	plan, err := planFromRun(run)
 	if err != nil {
 		return nil, err
 	}
-	frozen := append([]scenarioTargetNode(nil), nodes...)
+	frozen := append([]domain.ScenarioTargetNode(nil), nodes...)
 	for i := range frozen {
 		found := false
 		for _, step := range plan.Steps {
@@ -490,13 +479,13 @@ func scenarioFrozenExecutionNodes(run domain.Run, nodes []scenarioTargetNode) ([
 				found = true
 			}
 		}
-		if !found && run.InputSnapshot["targetNodes"] != nil {
+		if !found && run.Snapshot.ScenarioExecution.TargetNodes != nil {
 			return nil, fmt.Errorf("%w: 来源节点缺少最终执行参数", domain.ErrConflict)
 		}
 	}
 	return frozen, nil
 }
-func matchScenarioInstallations(nodes []scenarioTargetNode, installed []domain.EnvironmentComponentInstallation) error {
+func matchScenarioInstallations(nodes []domain.ScenarioTargetNode, installed []domain.EnvironmentComponentInstallation) error {
 	if len(nodes) != len(installed) {
 		return fmt.Errorf("%w: 当前组件数量与场景基线不符", domain.ErrConflict)
 	}
@@ -514,9 +503,9 @@ func matchScenarioInstallations(nodes []scenarioTargetNode, installed []domain.E
 	return nil
 }
 
-func (p *PlanBuilder) scenarioUpgradeSteps(ctx context.Context, source, target domain.ScenarioRevision, old, next []scenarioTargetNode, frozenSource ...[]scenarioTargetNode) ([]lockedStep, []ScenarioOperation, error) {
-	oldByID := map[string]scenarioTargetNode{}
-	nextByID := map[string]scenarioTargetNode{}
+func (p *PlanBuilder) scenarioUpgradeSteps(ctx context.Context, source, target domain.ScenarioRevision, old, next []domain.ScenarioTargetNode, frozenSource ...[]domain.ScenarioTargetNode) ([]domain.RunPlanStep, []ScenarioOperation, error) {
+	oldByID := map[string]domain.ScenarioTargetNode{}
+	nextByID := map[string]domain.ScenarioTargetNode{}
 	sourceNodes := map[string]domain.ScenarioNode{}
 	targetNodes := map[string]domain.ScenarioNode{}
 	for _, n := range old {
@@ -532,7 +521,7 @@ func (p *PlanBuilder) scenarioUpgradeSteps(ctx context.Context, source, target d
 		targetNodes[n.ID] = n
 	}
 	operations := []ScenarioOperation{}
-	actions := map[string]lockedStep{}
+	actions := map[string]domain.RunPlanStep{}
 	for _, n := range target.Graph.Nodes {
 		t := nextByID[n.ID]
 		before, exists := oldByID[n.ID]
@@ -658,7 +647,7 @@ func (p *PlanBuilder) scenarioUpgradeSteps(ctx context.Context, source, target d
 	if err != nil {
 		return nil, nil, err
 	}
-	steps := []lockedStep{}
+	steps := []domain.RunPlanStep{}
 	for _, id := range order {
 		if step, ok := actions[id]; ok {
 			steps = append(steps, step)
@@ -667,7 +656,7 @@ func (p *PlanBuilder) scenarioUpgradeSteps(ctx context.Context, source, target d
 	return steps, operations, nil
 }
 
-func uniqueScenarioOperationOrder(nodes map[string]bool, edges map[string]map[string]bool, actions map[string]lockedStep) ([]string, error) {
+func uniqueScenarioOperationOrder(nodes map[string]bool, edges map[string]map[string]bool, actions map[string]domain.RunPlanStep) ([]string, error) {
 	degree := map[string]int{}
 	for id := range nodes {
 		degree[id] = 0

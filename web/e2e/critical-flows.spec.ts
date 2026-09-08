@@ -1,5 +1,32 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 
+const unexpected = new WeakMap<Page, string[]>();
+test.beforeEach(({ page }) => { unexpected.set(page, []); });
+test.afterEach(({ page }) => { expect(unexpected.get(page), 'all mocked API requests must be declared').toEqual([]); });
+async function reply(page: Page, route: Route, data: unknown, status = 200) {
+  const request = route.request();
+  const pathname = new URL(request.url()).pathname;
+  if (request.method() === 'GET' && pathname === '/api/v1/events') {
+    await route.fulfill({ status: 204 }); // Explicitly close the fixture event stream.
+    return;
+  }
+  if (data === undefined && request.method() === 'GET') {
+    const reads: Record<string, unknown> = {
+      '/api/v1/platform-option-categories': [], '/api/v1/environments': [], '/api/v1/scenarios': [],
+      '/api/v1/workbench': { generatedAt: '', role: 'scenario_owner', summary: {}, assets: {}, items: [] },
+      ...Object.fromEntries(['safe-upgrade-r2', 'auto-r1'].map(revisionId => [`/api/v1/scenario-revisions/${revisionId}/acceptance`, {
+        revisionId, revisionDigest: 'fixture-digest', editable: true, jobs: [], parameters: [], values: {}, bindings: [], workspace: { root: 'scenario/', treeSha256: '', files: [] },
+      }])),
+    };
+    data = reads[pathname];
+  }
+  if (data === undefined) {
+    unexpected.get(page)!.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+    await route.fulfill({ status: 501, json: { error: 'Undeclared browser test request' } });
+    return;
+  }
+  await route.fulfill({ status, json: Array.isArray(data) ? { items: data } : { data } });
+}
 const users = {
   'component-owner-a': { id: 'component-owner-a', name: 'Component Owner A', role: 'component_owner' },
   'component-owner-b': { id: 'component-owner-b', name: 'Component Owner B', role: 'component_owner' },
@@ -12,15 +39,15 @@ test('identity switch changes owner-specific component controls', async ({ page 
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    let data: unknown = [];
-    if (path.endsWith('/session/users')) data = Object.values(users);
-    else if (path.endsWith('/session/me')) data = current;
-    else if (path.endsWith('/session/switch')) {
+    let data: unknown;
+    if (path === '/api/v1/session/users' && request.method() === 'GET') data = Object.values(users);
+    else if (path === '/api/v1/session/me' && request.method() === 'GET') data = current;
+    else if (path === '/api/v1/session/switch' && request.method() === 'POST') {
       const id = (request.postDataJSON() as { userId: keyof typeof users }).userId;
       current = users[id];
       data = current;
-    } else if (path.endsWith('/components')) data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'], latestRelease: { id: 'containerd-2', componentId: 'containerd', lineId: 'line-containerd', lineName: 'containerd', compatibility: 'not_applicable', version: 'v2.1.1', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [] }, releases: [] }];
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
+    } else if (path === '/api/v1/components' && request.method() === 'GET') data = [{ id: 'containerd', name: 'containerd', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'], latestRelease: { id: 'containerd-2', componentId: 'containerd', lineId: 'line-containerd', lineName: 'containerd', compatibility: 'not_applicable', version: 'v2.1.1', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [] }, releases: [] }];
+    await reply(page, route, data);
   });
 
   await page.goto('/components');
@@ -38,10 +65,10 @@ test('scenario parameters stay in the graph and test submission binds the execut
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    let data: unknown = [];
-    if (path.endsWith('/session/users')) data = Object.values(users);
-    else if (path.endsWith('/session/me')) data = users['scenario-owner-a'];
-    else if (path.endsWith('/components')) data = [{
+    let data: unknown;
+    if (path === '/api/v1/session/users' && request.method() === 'GET') data = Object.values(users);
+    else if (path === '/api/v1/session/me' && request.method() === 'GET') data = users['scenario-owner-a'];
+    else if (path === '/api/v1/components' && request.method() === 'GET') data = [{
       id: 'test-runtime', name: 'Test Runtime', ownerId: 'component-owner-a', layer: 'runtime_state', tags: ['runtime'],
       latestRelease: {
         id: 'test-runtime-1.1', componentId: 'test-runtime', lineId: 'line-runtime', lineName: 'Runtime', compatibility: 'not_applicable', version: 'v1.1.0', status: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] },
@@ -54,20 +81,20 @@ test('scenario parameters stay in the graph and test submission binds the execut
         actions: [{ kind: 'install', playbook: 'upgrade.yml', hostGroup: 'test_nodes' }, { kind: 'verify', playbook: 'verify.yml', hostGroup: 'test_nodes' }, { kind: 'rollback', playbook: 'rollback.yml', hostGroup: 'test_nodes' }],
       }],
     }];
-    else if (path.endsWith('/scenarios')) data = [{
+    else if (path === '/api/v1/scenarios' && request.method() === 'GET') data = [{
       id: 'safe-upgrade', slug: 'safe-upgrade', name: 'Safe upgrade', ownerId: 'scenario-owner-a', currentRevisionId: 'safe-upgrade-r2',
       currentRevision: { id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Runtime node', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'install', hostGroup: 'test_nodes', parameterValues: { runtime_version: '1.0.0' }, dependencySources: {} } }], edges: [] },
       revisions: [{ id: 'safe-upgrade-r2', scenarioId: 'safe-upgrade', revision: 2, state: 'draft', nodes: [{ id: 'runtime', type: 'component', position: { x: 80, y: 80 }, data: { label: 'Runtime node', componentId: 'test-runtime', releaseId: 'test-runtime-1.1', action: 'install', hostGroup: 'test_nodes', parameterValues: { runtime_version: '1.0.0' }, dependencySources: {} } }], edges: [] }],
     }];
-    else if (path.endsWith('/environments')) data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-owner-a', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], parameters: {}, variables: {}, credentialRefs: [] } }];
-    else if (path.endsWith('/platform-option-categories')) data = [{id:'host-groups',key:'hostGroup',label:'主机组',kind:'host_group',options:[{id:'test-group',categoryId:'host-groups',value:'test_nodes',label:'测试节点'}]}];
-    else if (path.endsWith('/execution-preparations')) data = {id:'prepared-ui-plan',status:'succeeded',input:request.postDataJSON(),output:{checks:[],plan:{scenarioRevisionId:'safe-upgrade-r2',environmentId:'test',executionMode:'install',planDigest:'locked-ui-plan',ready:true,operations:[],steps:[],issues:[]}}};
-    else if (path.endsWith('/execution-plan')) data = { scenarioRevisionId: 'safe-upgrade-r2', environmentId: 'test', executionMode: 'install', planDigest: 'locked-ui-plan', ready: true, operations: [], steps: [], issues: [] };
-    else if (path.endsWith('/test-runs')) {
+    else if (path === '/api/v1/environments' && request.method() === 'GET') data = [{ id: 'test', name: 'Test Environment', ownerId: 'environment-owner-a', currentRevision: { id: 'test-r1', environmentId: 'test', revision: 1, facts: {}, hosts: [], parameters: {}, variables: {}, credentialRefs: [] } }];
+    else if (path === '/api/v1/platform-option-categories' && request.method() === 'GET') data = [{id:'host-groups',key:'hostGroup',label:'主机组',kind:'host_group',options:[{id:'test-group',categoryId:'host-groups',value:'test_nodes',label:'测试节点'}]}];
+    else if (path === '/api/v1/execution-preparations' && request.method() === 'POST') data = {id:'prepared-ui-plan',status:'succeeded',input:request.postDataJSON(),output:{checks:[],plan:{scenarioRevisionId:'safe-upgrade-r2',environmentId:'test',executionMode:'install',planDigest:'locked-ui-plan',ready:true,operations:[],steps:[],issues:[]}}};
+    else if (path === '/api/v1/scenario-revisions/safe-upgrade-r2/execution-plan' && request.method() === 'POST') data = { scenarioRevisionId: 'safe-upgrade-r2', environmentId: 'test', executionMode: 'install', planDigest: 'locked-ui-plan', ready: true, operations: [], steps: [], issues: [] };
+    else if (path === '/api/v1/scenario-revisions/safe-upgrade-r2/test-runs' && request.method() === 'POST') {
       submitted = request.postDataJSON();
       data = { id: 'run-1', status: 'queued', environmentId: 'test' };
     }
-    await route.fulfill({ status: path.endsWith('/test-runs') ? 202 : 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
+    await reply(page, route, data, path.endsWith('/test-runs') ? 202 : 200);
   });
 
   await page.goto('/scenarios');
@@ -116,21 +143,21 @@ test('scenario dependencies are generated and an ambiguous exact Release source 
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    let data: unknown = [];
-    if (path.endsWith('/session/users')) data = Object.values(users);
-    else if (path.endsWith('/session/me')) data = users['scenario-owner-a'];
-    else if (path.endsWith('/components')) data = [
+    let data: unknown;
+    if (path === '/api/v1/session/users' && request.method() === 'GET') data = Object.values(users);
+    else if (path === '/api/v1/session/me' && request.method() === 'GET') data = users['scenario-owner-a'];
+    else if (path === '/api/v1/components' && request.method() === 'GET') data = [
       { id: 'runtime-component', name: 'Runtime', ownerId: 'component-owner-a', layer: 'runtime_state', tags: [], latestRelease: runtimeRelease, releases: [runtimeRelease] },
       { id: 'control-component', name: 'Control', ownerId: 'component-owner-a', layer: 'orchestration_core', tags: [], latestRelease: controlRelease, releases: [controlRelease] },
     ];
-    else if (path.endsWith('/scenarios')) data = [{ id: 'auto', slug: 'auto', name: 'Automatic dependencies', ownerId: 'scenario-owner-a', currentRevisionId: revision.id, currentRevision: revision, revisions: [revision] }];
+    else if (path === '/api/v1/scenarios' && request.method() === 'GET') data = [{ id: 'auto', slug: 'auto', name: 'Automatic dependencies', ownerId: 'scenario-owner-a', currentRevisionId: revision.id, currentRevision: revision, revisions: [revision] }];
     else if (path.endsWith('/scenario-revisions/auto-r1/graph') && request.method() === 'PUT') {
       savedGraph = request.postDataJSON().graph;
       // The API enriches submitted nodes with the locked component identity.
       Object.assign(revision, { nodes: savedGraph.nodes.map((node: any) => ({ ...node, data: { ...revision.nodes.find(item => item.id === node.id)?.data, ...node.data } })), edges: savedGraph.edges, revisionDigest: `saved-${Date.now()}` });
       data = revision;
-    } else if (path.endsWith('/workbench')) data = { generatedAt: '', role: 'scenario_owner', summary: {}, assets: {}, items: [] };
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Array.isArray(data) ? { items: data } : { data }) });
+    } else if (path === '/api/v1/workbench' && request.method() === 'GET') data = { generatedAt: '', role: 'scenario_owner', summary: {}, assets: {}, items: [] };
+    await reply(page, route, data);
   });
 
   await page.goto('/scenarios');

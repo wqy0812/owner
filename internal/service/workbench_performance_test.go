@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,7 @@ func workbenchPerformanceFixture(t testing.TB, runCount int) (*Platform, *store.
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,action_kind,input_snapshot_json,created_at,finished_at) VALUES(?,'component_test',?,?,?,?,?,'install',?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,component_release_id,action_kind,execution_snapshot_json,created_at,finished_at) VALUES(?,'component_test',?,?,?,?,?,'install',?,?,?)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func workbenchPerformanceFixture(t testing.TB, runCount int) (*Platform, *store.
 		if i%17 == 0 {
 			status = "failed"
 		}
-		payload, _ := json.Marshal(map[string]any{"componentReleaseSpecDigest": componentReleaseSpecDigest(r), "componentTestEvidence": "install_verify", "steps": []any{map[string]any{"nodeId": "node", "releaseId": r.ID, "componentId": r.ComponentID, "releaseSpecDigest": componentReleaseSpecDigest(r), "variables": map[string]any{"payload": strings.Repeat("locked execution data ", 512)}}}})
+		payload, _ := json.Marshal(runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": componentReleaseSpecDigest(r), "componentTestEvidence": "install_verify", "steps": []any{map[string]any{"nodeId": "node", "releaseId": r.ID, "componentId": r.ComponentID, "releaseSpecDigest": componentReleaseSpecDigest(r), "variables": map[string]any{"payload": strings.Repeat("locked execution data ", 512)}}}}))
 		at := now.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
 		if _, err = stmt.ExecContext(ctx, fmt.Sprintf("history-%05d", i), status, users[0].ID, env.ID, env.CurrentRevisionID, r.ID, string(payload), at, at); err != nil {
 			t.Fatal(err)
@@ -154,19 +155,19 @@ func TestWorkbenchScenarioEvidenceSearchBeyondBatch(t *testing.T) {
 		stale := valid
 		stale.ID = fmt.Sprintf("stale-success-%03d", i)
 		stale.CreatedAt = valid.CreatedAt.Add(time.Duration(i+1) * time.Second)
-		raw, _ := json.Marshal(valid.InputSnapshot)
-		stale.InputSnapshot = nil
-		if err := json.Unmarshal(raw, &stale.InputSnapshot); err != nil {
+		raw, _ := json.Marshal(valid.Snapshot)
+		stale.Snapshot = domain.RunSnapshot{}
+		if err := json.Unmarshal(raw, &stale.Snapshot); err != nil {
 			t.Fatal(err)
 		}
-		for _, raw := range stale.InputSnapshot["steps"].([]any) {
-			step := raw.(map[string]any)
-			if step["sourceType"] != "scenario_acceptance" {
-				step["releaseSpecDigest"] = "stale-locked-release"
+		for i := range stale.Snapshot.Plan.Steps {
+			step := &stale.Snapshot.Plan.Steps[i]
+			if step.SourceType != "scenario_acceptance" {
+				step.ReleaseSpecDigest = "stale-locked-release"
 			}
 		}
-		raw, _ = json.Marshal(stale.InputSnapshot)
-		if _, err := db.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,input_snapshot_json,created_at,finished_at) VALUES(?,'scenario_test','succeeded',?,?,?,?,?,?,?)`, stale.ID, owner.ID, env.ID, env.CurrentRevisionID, revision.ID, string(raw), stale.CreatedAt.Format(time.RFC3339Nano), stale.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+		raw, _ = json.Marshal(stale.Snapshot)
+		if _, err := db.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,execution_snapshot_json,created_at,finished_at) VALUES(?,'scenario_test','succeeded',?,?,?,?,?,?,?)`, stale.ID, owner.ID, env.ID, env.CurrentRevisionID, revision.ID, string(raw), stale.CreatedAt.Format(time.RFC3339Nano), stale.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -195,10 +196,10 @@ func TestWorkbenchScenarioEvidenceSearchBeyondBatch(t *testing.T) {
 	}
 	// Cleanup retains Release identities, not the acceptance job's empty Release
 	// ID. The newer tombstone must still suppress the older current failure.
-	raw, _ := json.Marshal(valid.InputSnapshot)
+	raw, _ := json.Marshal(valid.Snapshot)
 	for i, id := range []string{"scene-older-failure", "scene-newest-failure"} {
 		at := valid.CreatedAt.Add(time.Duration(200+i) * time.Second).Format(time.RFC3339Nano)
-		if _, err = db.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,input_snapshot_json,created_at,finished_at) VALUES(?,'scenario_test','failed',?,?,?,?,?,?,?)`, id, owner.ID, env.ID, env.CurrentRevisionID, revision.ID, string(raw), at, at); err != nil {
+		if _, err = db.DB().ExecContext(ctx, `INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,execution_snapshot_json,created_at,finished_at) VALUES(?,'scenario_test','failed',?,?,?,?,?,?,?)`, id, owner.ID, env.ID, env.CurrentRevisionID, revision.ID, string(raw), at, at); err != nil {
 			t.Fatal(err)
 		}
 	}

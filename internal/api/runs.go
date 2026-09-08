@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -66,6 +67,15 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := h.platform.Execution().GetRun(r.Context(), r.PathValue("id"))
+	if errors.Is(err, domain.ErrInvalid) {
+		diagnostic, readErr := h.platform.Execution().GetRunDiagnosticRecord(r.Context(), r.PathValue("id"))
+		if readErr != nil {
+			writeError(w, readErr)
+			return
+		}
+		writeData(w, http.StatusOK, h.runDiagnosticDTO(r, diagnostic))
+		return
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -159,7 +169,7 @@ func (h *Handler) canViewRun(r *http.Request, user domain.User, runID string) bo
 	return err == nil && visible
 }
 
-func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
+func (h *Handler) runIdentityDTO(r *http.Request, run domain.RunReadModel) map[string]any {
 	output := map[string]any{
 		"id": run.ID, "kind": run.Kind, "status": run.Status, "environmentId": run.EnvironmentID,
 		"environmentRevisionId": run.EnvironmentRevisionID, "componentReleaseId": run.ComponentReleaseID,
@@ -168,11 +178,6 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		"retryOfRunId": run.RetryOfRunID, "retryRootRunId": run.RetryRootRunID,
 		"retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep,
 		"error": run.Error, "createdAt": run.CreatedAt, "startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
-	}
-	for _, key := range []string{"executionMode", "sourceRevisionId", "baselineRunId"} {
-		if value, ok := run.InputSnapshot[key].(string); ok && value != "" {
-			output[key] = value
-		}
 	}
 	if digest, code := h.platform.Execution().RunJobSummary(r.Context(), run.ID); digest != "" {
 		output["jobDigest"] = digest
@@ -205,37 +210,67 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	if run.Kind == domain.RunEnvironmentRollback {
 		name, _ := output["environmentName"].(string)
 		output["name"] = name + " · 按备份恢复组件"
-		if digest, _ := run.InputSnapshot["resetBoundaryDigest"].(string); digest != "" {
-			output["name"] = name + " · 重置环境"
+	}
+	return output
+}
+
+func (h *Handler) runDiagnosticDTO(r *http.Request, run domain.RunReadModel) map[string]any {
+	output := h.runIdentityDTO(r, run)
+	output["snapshotError"] = "执行快照不可用，仅显示诊断信息；此记录不能作为执行或续跑来源。"
+	if run.Error == "" {
+		output["error"] = output["snapshotError"]
+	}
+	steps := make([]map[string]any, 0, len(run.Steps))
+	for _, step := range run.Steps {
+		steps = append(steps, runStepDTO(step))
+	}
+	output["steps"] = steps
+	if run.Approval != nil {
+		output["approval"] = run.Approval
+	}
+	return output
+}
+
+func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
+	output := h.runIdentityDTO(r, domain.ReadModelFromRun(run))
+	for key, value := range map[string]string{"executionMode": string(run.Snapshot.ScenarioExecution.Mode), "sourceRevisionId": run.Snapshot.ScenarioExecution.SourceRevisionID, "baselineRunId": run.Snapshot.ScenarioExecution.Baseline.RunID} {
+		if value != "" {
+			output[key] = value
 		}
 	}
-	locked := lockedStepMetadata(run.InputSnapshot)
+	if run.Kind == domain.RunEnvironmentRollback && run.Snapshot.Recovery.ResetBoundaryDigest != "" {
+		name, _ := output["environmentName"].(string)
+		output["name"] = name + " · 重置环境"
+	}
+	locked := lockedStepMetadata(run.Snapshot)
 	steps := make([]map[string]any, 0, len(run.Steps))
 	succeeded := 0
 	for _, step := range run.Steps {
-		item := map[string]any{
-			"id": step.ID, "runId": step.RunID, "nodeId": step.NodeID, "name": step.Name,
-			"status": step.Status, "exitCode": step.ExitCode, "summary": step.Summary,
-			"startedAt": step.StartedAt, "finishedAt": step.FinishedAt,
-		}
+		item := runStepDTO(step)
 		if metadata := locked[step.NodeID]; metadata != nil {
-			item["componentName"], item["action"] = metadata["componentName"], metadata["action"]
-			if parents, ok := run.InputSnapshot["parentSteps"].([]any); ok {
-				for _, raw := range parents {
-					parent, ok := raw.(map[string]any)
-					if ok && parent["actionId"] == metadata["parentActionId"] && parent["sourceNodeId"] == metadata["sourceNodeId"] {
-						item["parentAction"] = parent["action"]
-						break
-					}
+			item["componentName"], item["action"] = metadata.ComponentName, metadata.Action
+			for _, parent := range run.Snapshot.Plan.ParentSteps {
+				if parent.ActionID == metadata.ParentActionID && parent.SourceNodeID == metadata.SourceNodeID {
+					item["parentAction"] = parent.Action
+					break
 				}
 			}
-			if releaseID, ok := metadata["releaseId"].(string); ok {
-				item["role"] = ansible.RoleName(releaseID)
+			if metadata.ReleaseID != "" {
+				item["role"] = ansible.RoleName(metadata.ReleaseID)
 			}
-			item["contentDigest"] = metadata["workspaceDigest"]
-			for _, key := range []string{"limit", "sourceType", "stage", "acceptanceJobId", "scenarioRevisionId", "phase", "parentActionId", "actionId", "sourceNodeId", "releaseId", "playbookDigest", "workspaceDigest"} {
-				item[key] = metadata[key]
-			}
+			item["contentDigest"] = metadata.WorkspaceDigest
+			item["limit"] = metadata.Limit
+			item["sourceType"] = metadata.SourceType
+			item["stage"] = metadata.Stage
+			item["acceptanceJobId"] = metadata.AcceptanceJobID
+			item["scenarioRevisionId"] = metadata.ScenarioRevisionID
+			item["phase"] = metadata.Phase
+			item["parentActionId"] = metadata.ParentActionID
+			item["actionId"] = metadata.ActionID
+			item["sourceNodeId"] = metadata.SourceNodeID
+			item["releaseId"] = metadata.ReleaseID
+			item["playbookDigest"] = metadata.PlaybookDigest
+			item["workspaceDigest"] = metadata.WorkspaceDigest
 		}
 
 		if step.Status == domain.RunSucceeded {
@@ -247,10 +282,10 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	purposeCounts := map[string]int{"components": 0, "finalVerification": 0, "acceptance": 0, "total": len(locked)}
 	for _, step := range locked {
 		purpose := "components"
-		if step["stage"] == "target_verify" {
+		if step.Stage == "target_verify" {
 			purpose = "finalVerification"
 		}
-		if step["sourceType"] == "scenario_acceptance" || step["phase"] == "acceptance" {
+		if step.SourceType == "scenario_acceptance" || step.Phase == "acceptance" {
 			purpose = "acceptance"
 		}
 		purposeCounts[purpose]++
@@ -263,12 +298,12 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	}
 	if run.Approval != nil {
 		riskReason := "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。"
-		artifactTransfers, _ := run.InputSnapshot["artifactTransfers"].([]any)
-		imageTransfers, _ := run.InputSnapshot["imageTransfers"].([]any)
-		deliveryRequirements, _ := run.InputSnapshot["deliveryRequirements"].([]any)
+		artifactTransfers := run.Snapshot.Delivery.ArtifactTransfers
+		imageTransfers := run.Snapshot.Delivery.ImageTransfers
+		deliveryRequirements := run.Snapshot.Delivery.Requirements
 		if run.Kind == domain.RunEnvironmentRollback {
 			riskReason = "按依赖逆序回滚所选组件，恢复后检查通过才确认完成；原始备份与恢复记录保留。"
-			if digest, _ := run.InputSnapshot["resetBoundaryDigest"].(string); digest != "" {
+			if digest := run.Snapshot.Recovery.ResetBoundaryDigest; digest != "" {
 				riskReason = "根据来源 Run 恢复全部待恢复的集群组件，保留 File Station 和镜像仓库；恢复检查通过且无剩余待恢复项后才确认完成。"
 			}
 		} else if len(deliveryRequirements) > 0 {
@@ -283,21 +318,25 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 			"decidedBy": run.Approval.DecidedBy, "decision": run.Approval.Decision, "reason": run.Approval.Reason,
 		}
 	}
-	if value, ok := run.InputSnapshot["artifactTransfers"]; ok {
-		output["artifactTransfers"] = value
+	if v := run.Snapshot.Delivery.ArtifactTransfers; v != nil {
+		output["artifactTransfers"] = v
 	}
-	if value, ok := run.InputSnapshot["imageTransfers"]; ok {
-		output["imageTransfers"] = value
+	if v := run.Snapshot.Delivery.ImageTransfers; v != nil {
+		output["imageTransfers"] = v
 	}
-	for _, key := range []string{"deliveryRequirements", "deliveryDecisions", "deliveryResults"} {
-		if value, ok := run.InputSnapshot[key]; ok {
-			output[key] = value
-		}
+	if v := run.Snapshot.Delivery.Requirements; v != nil {
+		output["deliveryRequirements"] = v
 	}
-	if resolved, ok := run.InputSnapshot["resolvedParametersByNode"]; ok {
-		output["resolvedParametersByNode"] = resolved
+	if v := run.Snapshot.Delivery.Decisions; v != nil {
+		output["deliveryDecisions"] = v
 	}
-	if backups := lockedBackupMetadata(run.InputSnapshot); len(backups) > 0 {
+	if v := run.DeliveryResults; len(v) > 0 {
+		output["deliveryResults"] = v
+	}
+	if v := run.Snapshot.Inputs.ResolvedParametersByNode; v != nil {
+		output["resolvedParametersByNode"] = v
+	}
+	if backups := lockedBackupMetadata(run.Snapshot); len(backups) > 0 {
 		output["backups"] = backups
 	}
 	if run.Status == domain.RunQueued {
@@ -308,38 +347,26 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 	return output
 }
 
-func lockedBackupMetadata(snapshot map[string]any) []map[string]any {
-	output := make([]map[string]any, 0)
-	steps, _ := snapshot["steps"].([]any)
-	for _, raw := range steps {
-		step, _ := raw.(map[string]any)
-		backup, _ := step["backup"].(map[string]any)
-		backupRef, _ := step["backupRef"].(string)
-		if backupRef == "" || backup == nil {
+func lockedBackupMetadata(snapshot domain.RunSnapshot) []map[string]any {
+	out := []map[string]any{}
+	for _, step := range snapshot.Plan.Steps {
+		if step.BackupRef == "" || step.Backup == nil {
 			continue
 		}
-		item := map[string]any{
-			"nodeId": step["nodeId"], "componentId": step["componentId"], "componentName": step["componentName"],
-			"releaseId": step["releaseId"], "action": step["action"], "backupRef": backupRef,
-			"installRunId": backup["installRunId"], "capturedAt": backup["capturedAt"],
-			"playbookSha256": backup["playbookSha256"],
-		}
-		output = append(output, item)
+		b := step.Backup
+		out = append(out, map[string]any{"nodeId": step.NodeID, "componentId": step.ComponentID, "componentName": step.ComponentName, "releaseId": step.ReleaseID, "action": step.Action, "backupRef": step.BackupRef, "installRunId": b.InstallRunID, "capturedAt": b.CapturedAt, "playbookSha256": b.PlaybookSHA256})
 	}
-	return output
+	return out
 }
-
-func lockedStepMetadata(snapshot map[string]any) map[string]map[string]any {
-	output := map[string]map[string]any{}
-	steps, _ := snapshot["steps"].([]any)
-	for _, raw := range steps {
-		step, _ := raw.(map[string]any)
-		nodeID, _ := step["nodeId"].(string)
-		if nodeID != "" {
-			output[nodeID] = step
+func lockedStepMetadata(snapshot domain.RunSnapshot) map[string]*domain.RunPlanStep {
+	out := map[string]*domain.RunPlanStep{}
+	for i := range snapshot.Plan.Steps {
+		step := &snapshot.Plan.Steps[i]
+		if step.NodeID != "" {
+			out[step.NodeID] = step
 		}
 	}
-	return output
+	return out
 }
 
 func (h *Handler) verifiedJobEligibility(w http.ResponseWriter, r *http.Request) {
@@ -349,4 +376,12 @@ func (h *Handler) verifiedJobEligibility(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeData(w, 200, value)
+}
+
+func runStepDTO(step domain.RunStep) map[string]any {
+	return map[string]any{
+		"id": step.ID, "runId": step.RunID, "nodeId": step.NodeID, "name": step.Name,
+		"status": step.Status, "exitCode": step.ExitCode, "summary": step.Summary,
+		"startedAt": step.StartedAt, "finishedAt": step.FinishedAt,
+	}
 }

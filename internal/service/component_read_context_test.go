@@ -1,6 +1,8 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -43,13 +45,14 @@ func TestComponentReadContextPreservesExactReadinessAndHistoricalEvidence(t *tes
 		{"stale-rollback", "rollback_verify", "old-contract", domain.RunSucceeded, domain.ActionRollback},
 	} {
 		at := now.Add(time.Duration(i) * time.Minute)
-		snapshot := structToMap(lockedPlan{
-			ParentSteps: []lockedStep{{ActionID: "main-action", SourceNodeID: "node", Action: tc.action, Phase: "execute"}},
-			Steps:       []lockedStep{{ParentActionID: "main-action", SourceNodeID: "node", Phase: "post"}},
+		snapshot := structToMap(domain.RunExecutionPlan{
+			ParentSteps: []domain.RunPlanStep{{ActionID: "main-action", SourceNodeID: "node", Action: tc.action, Phase: "execute"}},
+			Steps:       []domain.RunPlanStep{{ParentActionID: "main-action", SourceNodeID: "node", Phase: "post"}},
 		})
-		snapshot["componentReleaseSpecDigest"], snapshot["componentTestEvidence"], snapshot["secretLargeSnapshot"] = tc.digest, tc.kind, strings.Repeat("x", 10000)
-		run := domain.Run{ID: tc.id, Kind: domain.RunComponentTest, Status: tc.status, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: tc.action, CreatedAt: at, FinishedAt: &at, InputSnapshot: snapshot}
-		if err := db.CreateRun(ctx, run, nil); err != nil {
+		snapshot["componentReleaseSpecDigest"], snapshot["componentTestEvidence"] = tc.digest, tc.kind
+		snapshot["steps"].([]any)[0].(map[string]any)["variables"] = map[string]any{"secretLargeSnapshot": strings.Repeat("x", 10000)}
+		run := domain.Run{ID: tc.id, Kind: domain.RunComponentTest, Status: tc.status, RequestedBy: "component-owner", EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: tc.action, CreatedAt: at, FinishedAt: &at, Snapshot: runfixture.Snapshot(snapshot)}
+		if err := testutil.InsertRunRecord(ctx, db.DB(), run); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -14,15 +14,15 @@ import (
 )
 
 type preparationProbeKey struct{}
-type preparationProbeObserver func(context.Context, domain.Environment, lockedPlan) error
+type preparationProbeObserver func(context.Context, domain.Environment, domain.RunExecutionPlan) error
 
-func observePreparationPlan(ctx context.Context, environment domain.Environment, plan lockedPlan) error {
+func observePreparationPlan(ctx context.Context, environment domain.Environment, plan domain.RunExecutionPlan) error {
 	if observer, ok := ctx.Value(preparationProbeKey{}).(preparationProbeObserver); ok {
 		return observer(ctx, environment, plan)
 	}
 	return nil
 }
-func (s *EnvironmentService) probeForPreparation(ctx context.Context, environment domain.Environment, plan lockedPlan, report func(PreparationCheck)) error {
+func (s *EnvironmentService) probeForPreparation(ctx context.Context, environment domain.Environment, plan domain.RunExecutionPlan, report func(PreparationCheck)) error {
 	var inventory InventoryDocument
 	if err := json.Unmarshal(environment.Revision.Inventory, &inventory); err != nil {
 		return err
@@ -30,7 +30,7 @@ func (s *EnvironmentService) probeForPreparation(ctx context.Context, environmen
 	credentials, _, credentialError := resolveEnvironmentSSHCredentials(environment.Revision.CredentialRefs)
 	seen := map[string]bool{}
 	failed := false
-	probe := func(host InventoryHost, id, category string, check sshcheck.Probe) {
+	probe := func(host domain.RunInventoryHost, id, category string, check sshcheck.Probe) {
 		key := host.Name + ":" + check.Kind + ":" + check.Target
 		if seen[key] {
 			return

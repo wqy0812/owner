@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"testing"
 	"time"
@@ -34,8 +35,8 @@ func TestScenarioRestartQueueAcceptsOnlyValidTypedAcceptanceSteps(t *testing.T) 
 				tc.change(step)
 			}
 			insertScenarioSourceRun(t, db, revision, "queued", "scenario_test", "queued", "install")
-			snapshot := map[string]any{"scenarioContractVersion": 2, "scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "steps": []any{step}}
-			if _, err := db.db.Exec(`UPDATE runs SET input_snapshot_json=? WHERE id='queued'`, jsonText(snapshot)); err != nil {
+			snapshot := map[string]any{"executionMode": "install", "scenarioId": revision.ScenarioID, "targetNodes": []domain.ScenarioTargetNode{}, "baselineInstallationDigest": "empty", "acceptanceJobIds": []string{"business"}, "submissionKey": "request", "submissionDigest": "request-digest", "planDigest": "preview", "scenarioContractVersion": 2, "scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "steps": []any{step}}
+			if _, err := runfixture.CorruptSnapshot(context.Background(), db.db, `UPDATE runs SET execution_snapshot_json=? WHERE id='queued'`, jsonText(runfixture.Snapshot(snapshot))); err != nil {
 				t.Fatal(err)
 			}
 			count, err := db.FailInvalidActiveRuns(ctx, time.Now().UTC())
@@ -67,7 +68,7 @@ func TestScenarioRestartPreservesPartialAndInvalidatesUnmutatedBaseline(t *testi
 			db, scenario, revision := scenarioLifecycleFixture(t)
 			insertScenarioSourceRun(t, db, revision, "baseline", "scenario_run", "succeeded", "install")
 			insertScenarioSourceRun(t, db, revision, "running", "scenario_test", "running", "upgrade")
-			if _, err := db.db.Exec(`UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.scenarioContractVersion',2) WHERE id='running'`); err != nil {
+			if _, err := runfixture.CorruptSnapshot(context.Background(), db.db, `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.contract','clusterforge-run-v1') WHERE id='running'`); err != nil {
 				t.Fatal(err)
 			}
 			mutating := ""

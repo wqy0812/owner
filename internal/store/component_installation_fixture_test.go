@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func componentInstallationFixture(t *testing.T, testOnly bool) (*Store, domain.S
 	}
 	backup := domain.BackupMetadata{NodeID: "node", EnvironmentID: "env", ComponentID: "component", ReleaseID: "release", ActionID: "install", InstallRunID: "historical", CapturedAt: now, PlaybookSHA256: "locked-sha"}
 	snapshot := map[string]any{"scenarioContractVersion": 2, "executionMode": "install", "scenarioRevisionSpecDigest": domain.ScenarioRevisionSpecDigest(revision), "steps": []any{map[string]any{"nodeId": "node", "sourceNodeId": "node", "componentId": "component", "releaseId": "release", "action": "install", "variables": map[string]any{"port": 8080}, "backupRef": "backup-identity", "backup": backup}}}
-	if _, err := db.DB().Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,input_snapshot_json,created_at) VALUES('historical',?,'succeeded','owner','env','env-rev',?,?,'2026-09-05')`, kind, revision.ID, jsonText(snapshot)); err != nil {
+	if _, err := db.DB().Exec(`INSERT INTO runs(id,kind,status,requested_by,environment_id,environment_revision_id,scenario_revision_id,execution_snapshot_json,created_at) VALUES('historical',?,'succeeded','owner','env','env-rev',?,?,'2026-09-05')`, kind, revision.ID, jsonText(runfixture.Snapshot(snapshot))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB().Exec(`INSERT INTO run_steps(id,run_id,node_id,name,status,exit_code) VALUES('historical-step','historical','node','Install','succeeded',0)`); err != nil {

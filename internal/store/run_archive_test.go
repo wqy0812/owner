@@ -234,18 +234,18 @@ func TestCleanupAtomicHistoryAndReferences(t *testing.T) {
 	if _, err := s.GetRun(ctx, old.ID); err != nil {
 		t.Fatal(err)
 	}
-	child := create("child", now)
-	child.RetryOfRunID = old.ID
-	_, err := s.db.ExecContext(ctx, `UPDATE runs SET input_snapshot_json=json_set(input_snapshot_json,'$.steps',json(?)) WHERE id=?`, `[{"backup":{"installRunId":"old"}}]`, child.ID)
-	if err != nil {
+	child := evidenceRun("child", "digest", "install_verify", "", "", now.Add(-91*24*time.Hour))
+	child.Status = domain.RunFailed
+	child.Snapshot.Plan.Steps[0].Backup = &domain.BackupMetadata{InstallRunID: old.ID}
+	if err := s.CreateRun(ctx, child, nil); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := s.PreviewRunCleanup(ctx, []string{old.ID}, now)
 	if err != nil || preview[0].Eligible {
 		t.Fatal(preview, err)
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE runs SET input_snapshot_json='{}' WHERE id=?`, child.ID)
-	if err != nil {
+	// A frozen reference is removed only when its owning Run is cleaned.
+	if err = s.CleanupRuns(ctx, []string{child.ID}, "component-owner-a", "manual", now); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.CleanupRuns(ctx, []string{old.ID}, "component-owner-a", "manual", now); err != nil {
@@ -264,6 +264,7 @@ func TestCleanupAtomicHistoryAndReferences(t *testing.T) {
 	retry := create("retry-prepared", now)
 	retry.ID = "retry-new"
 	retry.RetryOfRunID = old.ID
+	retry.Snapshot.Retry.RecoveryStateDigest = "state"
 	if err = s.CreateRun(ctx, retry, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatal("dangling retry accepted", err)
 	}
@@ -279,12 +280,12 @@ func TestRunReferencesDoNotInterpretBusinessParameterNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := evidenceRun("business-parameters", "digest", "install_verify", "", "", now)
-	r.InputSnapshot["steps"] = []any{map[string]any{"variables": map[string]any{
+	r.Snapshot.Plan.Steps = []domain.RunPlanStep{{ID: "parameter-step", NodeID: "parameter-step", Variables: map[string]any{
 		"runId": "external-job-42", "config": map[string]any{"installRunId": old.ID},
 	}}}
-	r.InputSnapshot["resolvedParametersByNode"] = map[string]any{"node": map[string]any{
-		"runId":  map[string]any{"value": "external-job-42"},
-		"config": map[string]any{"value": map[string]any{"sourceRunId": old.ID}},
+	r.Snapshot.Inputs.ResolvedParametersByNode = map[string]map[string]domain.RunParameterSource{"node": {
+		"runId":  {Value: "external-job-42"},
+		"config": {Value: map[string]any{"sourceRunId": old.ID}},
 	}}
 	if err := s.CreateRun(ctx, r, nil); err != nil {
 		t.Fatalf("ordinary business parameters treated as platform Run references: %v", err)

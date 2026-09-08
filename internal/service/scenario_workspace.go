@@ -417,7 +417,7 @@ func (p *ScenarioService) validateScenarioAcceptanceWorkspace(revision domain.Sc
 	return nil
 }
 
-func (p *WorkspaceVerifier) verifyScenarioAcceptanceStep(ctx context.Context, step *lockedStep) error {
+func (p *WorkspaceVerifier) verifyScenarioAcceptanceStep(ctx context.Context, step *domain.RunPlanStep) error {
 	if step.SourceType != "scenario_acceptance" || step.ScenarioRevisionID == "" || step.AcceptanceJobID == "" || step.ReleaseID != "" {
 		return fmt.Errorf("%w: invalid scenario acceptance step identity", domain.ErrConflict)
 	}

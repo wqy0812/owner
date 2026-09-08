@@ -1,0 +1,171 @@
+{
+  "slug": "flannel",
+  "name": "Flannel",
+  "description": "管理 Flannel 0.22.3 Pod 网络、配置及专属 CNI 插件；基础 CNI 插件由 Kubernetes Distribution 提供。",
+  "referenceVersion": "0.22.3-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "pod_network_cidr",
+      "description": "Pod 网络 CIDR；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    },
+    {
+      "name": "admin_kubeconfig_path",
+      "description": "管理员 kubeconfig 路径；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "internal",
+      "modifiable": false,
+      "valueProvider": "upstream_mapping"
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "cluster-pki",
+      "version": "1.17.5-env2.1",
+      "kind": "configuration",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "admin_kubeconfig_path",
+          "targetParameter": "admin_kubeconfig_path"
+        }
+      ]
+    },
+    {
+      "component": "kubernetes-distribution",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kube-controller-manager",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": [
+        {
+          "upstreamParameter": "pod_network_cidr",
+          "targetParameter": "pod_network_cidr"
+        }
+      ]
+    },
+    {
+      "component": "kube-proxy",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    },
+    {
+      "component": "kubelet",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [
+    {
+      "logicalName": "flannel",
+      "digest": "sha256:b2bba065c46f3a54db41cd5181b87baa0fca64eda8b511838cdc147dfc59e76d",
+      "sourceRef": "registry.example.invalid/components/flannel/flannel@sha256:b2bba065c46f3a54db41cd5181b87baa0fca64eda8b511838cdc147dfc59e76d"
+    },
+    {
+      "logicalName": "flannel_cni_plugin",
+      "digest": "sha256:2180bb74f60bea56da2e9be2004271baa6dccc0960b7aeaf43a97fc4de9b1ae0",
+      "sourceRef": "registry.example.invalid/components/flannel/flannel_cni_plugin@sha256:2180bb74f60bea56da2e9be2004271baa6dccc0960b7aeaf43a97fc4de9b1ae0"
+    }
+  ],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 600,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

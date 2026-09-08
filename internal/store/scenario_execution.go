@@ -53,29 +53,8 @@ func scenarioInstallationsTx(ctx context.Context, q queryer, environmentID strin
 	return items, rows.Err()
 }
 
-type scenarioTargetNode struct {
-	NodeID      string         `json:"nodeId"`
-	ComponentID string         `json:"componentId"`
-	ReleaseID   string         `json:"releaseId"`
-	Variables   map[string]any `json:"variables"`
-}
-
-func scenarioSnapshotNumber(snapshot map[string]any, key string) int64 {
-	switch v := snapshot[key].(type) {
-	case float64:
-		return int64(v)
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case json.Number:
-		n, _ := v.Int64()
-		return n
-	}
-	return 0
-}
 func isScenarioLifecycleRun(run domain.Run) bool {
-	return run.ScenarioRevisionID != ""
+	return run.Kind == domain.RunScenario || run.Kind == domain.RunScenarioTest
 }
 func (s *Store) GetScenarioSubmission(ctx context.Context, userID, key, digest string) (domain.Run, error) {
 	var id, current string
@@ -98,14 +77,14 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 	if !isScenarioLifecycleRun(run) {
 		return nil
 	}
-	if scenarioSnapshotNumber(run.InputSnapshot, "scenarioContractVersion") != 2 {
+	if run.Snapshot.Contract != domain.RunSnapshotContract {
 		return fmt.Errorf("%w: unsupported scenario execution contract", domain.ErrConflict)
 	}
 	revision, err := getScenarioRevision(ctx, q, run.ScenarioRevisionID)
 	if err != nil {
 		return err
 	}
-	if run.InputSnapshot["scenarioRevisionSpecDigest"] != domain.ScenarioRevisionSpecDigest(revision) {
+	if run.Snapshot.Subject.ScenarioRevisionSpecDigest != domain.ScenarioRevisionSpecDigest(revision) {
 		return fmt.Errorf("%w: 场景定义已变化", domain.ErrConflict)
 	}
 	var currentEnvironment string
@@ -120,7 +99,7 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 		return err
 	}
 	if run.RetryOfRunID != "" {
-		if baseline.Generation != scenarioSnapshotNumber(run.InputSnapshot, "retryBaselineGeneration") || baseline.MutatingRunID != run.InputSnapshot["retryBaselineMutatingRunId"] {
+		if baseline.Generation != run.Snapshot.Retry.BaselineGeneration || baseline.MutatingRunID != run.Snapshot.Retry.BaselineMutatingRunID {
 			return fmt.Errorf("%w: 场景续跑基线已变化", domain.ErrConflict)
 		}
 		if baseline.MutatingRunID != "" {
@@ -134,17 +113,17 @@ func validateScenarioExecutionBaselineTx(ctx context.Context, q queryer, run dom
 		}
 		return validateRetryState(ctx, q, run)
 	}
-	if baseline.Generation != scenarioSnapshotNumber(run.InputSnapshot, "baselineGeneration") || baseline.RunID != run.InputSnapshot["baselineRunId"] {
+	if baseline.Generation != run.Snapshot.ScenarioExecution.Baseline.Generation || baseline.RunID != run.Snapshot.ScenarioExecution.Baseline.RunID {
 		return fmt.Errorf("%w: 场景安装基线已变化", domain.ErrConflict)
 	}
 	installed, err := scenarioInstallationsTx(ctx, q, run.EnvironmentID)
 	if err != nil {
 		return err
 	}
-	if ScenarioComponentInstallationDigest(installed) != run.InputSnapshot["baselineInstallationDigest"] {
+	if ScenarioComponentInstallationDigest(installed) != run.Snapshot.ScenarioExecution.Baseline.InstallationDigest {
 		return fmt.Errorf("%w: 当前组件安装与预览不一致", domain.ErrConflict)
 	}
-	mode, _ := run.InputSnapshot["executionMode"].(string)
+	mode := run.Snapshot.ScenarioExecution.Mode
 	switch mode {
 	case "install":
 		var count int
@@ -210,7 +189,7 @@ func validateScenarioRunCreationTx(ctx context.Context, tx *sql.Tx, run domain.R
 	if err != nil {
 		return err
 	}
-	if len(revision.AcceptanceJobs) == 0 && run.InputSnapshot["executionMode"] != "baseline_verify" {
+	if len(revision.AcceptanceJobs) == 0 && run.Snapshot.ScenarioExecution.Mode != "baseline_verify" {
 		return fmt.Errorf("%w: 业务验收作业必填", domain.ErrConflict)
 	}
 	var active int
@@ -227,11 +206,11 @@ func validateScenarioRunCreationTx(ctx context.Context, tx *sql.Tx, run domain.R
 		if _, err = tx.ExecContext(ctx, `UPDATE scenario_revisions SET status='testing' WHERE id=?`, revision.ID); err != nil {
 			return err
 		}
-	} else if revision.Status != domain.RevisionReleased && run.InputSnapshot["executionMode"] != "baseline_verify" {
+	} else if revision.Status != domain.RevisionReleased && run.Snapshot.ScenarioExecution.Mode != "baseline_verify" {
 		return fmt.Errorf("%w: 正式运行要求已发布版本", domain.ErrConflict)
 	}
-	key, _ := run.InputSnapshot["submissionKey"].(string)
-	digest, _ := run.InputSnapshot["submissionDigest"].(string)
+	key := run.Snapshot.Submission.Key
+	digest := run.Snapshot.Submission.Digest
 	if key == "" || digest == "" {
 		return domain.ErrInvalid
 	}
@@ -276,10 +255,10 @@ func (s *Store) MarkScenarioMutation(ctx context.Context, run domain.Run) error 
 }
 
 func validateScenarioAcceptanceEvidence(ctx context.Context, q queryer, run domain.Run, revision domain.ScenarioRevision) error {
-	if (len(revision.AcceptanceJobs) == 0 && run.InputSnapshot["executionMode"] != "baseline_verify") || !isScenarioLifecycleRun(run) || scenarioSnapshotNumber(run.InputSnapshot, "scenarioContractVersion") != 2 {
+	if (len(revision.AcceptanceJobs) == 0 && run.Snapshot.ScenarioExecution.Mode != "baseline_verify") || !isScenarioLifecycleRun(run) || run.Snapshot.Contract != domain.RunSnapshotContract {
 		return fmt.Errorf("%w: 缺少场景业务验收证据", domain.ErrConflict)
 	}
-	if run.InputSnapshot["scenarioRevisionSpecDigest"] != domain.ScenarioRevisionSpecDigest(revision) {
+	if run.Snapshot.Subject.ScenarioRevisionSpecDigest != domain.ScenarioRevisionSpecDigest(revision) {
 		return fmt.Errorf("%w: 业务验收对应其他版本定义", domain.ErrConflict)
 	}
 	steps, err := scenarioRetryEvidence(ctx, q, run)
@@ -290,7 +269,7 @@ func validateScenarioAcceptanceEvidence(ctx context.Context, q queryer, run doma
 	targetChecks := map[string]bool{}
 	for _, evidence := range steps {
 		step := evidence.step
-		nodeID, _ := step["nodeId"].(string)
+		nodeID := step.NodeID
 		var count int
 		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_steps WHERE run_id=? AND node_id=? AND status='succeeded'`, evidence.runID, nodeID).Scan(&count); err != nil {
 			return err
@@ -298,15 +277,15 @@ func validateScenarioAcceptanceEvidence(ctx context.Context, q queryer, run doma
 		if count != 1 {
 			return fmt.Errorf("%w: 执行步骤 %s 缺少完整成功证据", domain.ErrConflict, nodeID)
 		}
-		if step["sourceType"] == "scenario_acceptance" {
-			id, _ := step["acceptanceJobId"].(string)
-			if step["scenarioRevisionId"] != revision.ID || jobs[id] {
+		if step.SourceType == "scenario_acceptance" {
+			id := step.AcceptanceJobID
+			if step.ScenarioRevisionID != revision.ID || jobs[id] {
 				return domain.ErrConflict
 			}
 			jobs[id] = true
 		}
-		if step["stage"] == "target_verify" {
-			id, _ := step["sourceNodeId"].(string)
+		if step.Stage == "target_verify" {
+			id := step.SourceNodeID
 			targetChecks[id] = true
 		}
 	}
@@ -341,15 +320,7 @@ func finishScenarioLifecycleTx(ctx context.Context, tx *sql.Tx, run domain.Run, 
 	if err != nil {
 		return err
 	}
-	var target []struct {
-		NodeID      string `json:"nodeId"`
-		ComponentID string `json:"componentId"`
-		ReleaseID   string `json:"releaseId"`
-	}
-	raw, _ := json.Marshal(run.InputSnapshot["targetNodes"])
-	if err = json.Unmarshal(raw, &target); err != nil {
-		return err
-	}
+	target := run.Snapshot.ScenarioExecution.TargetNodes
 	if len(target) == 0 || len(target) != len(installed) || len(target) != len(revision.Graph.Nodes) {
 		return fmt.Errorf("%w: 目标集群组件数量不完整", domain.ErrConflict)
 	}
@@ -374,7 +345,7 @@ func finishScenarioLifecycleTx(ctx context.Context, tx *sql.Tx, run domain.Run, 
 	testOnly := run.Kind == domain.RunScenarioTest
 	state := "complete"
 	baseRunID := run.ID
-	if run.InputSnapshot["executionMode"] == "baseline_verify" {
+	if run.Snapshot.ScenarioExecution.Mode == "baseline_verify" {
 		if err := validateScenarioRecoveryReceipts(ctx, tx, run); err != nil {
 			return err
 		}
@@ -390,20 +361,20 @@ func finishScenarioLifecycleTx(ctx context.Context, tx *sql.Tx, run domain.Run, 
 
 func scenarioExpectedGeneration(run domain.Run) int64 {
 	if run.RetryOfRunID != "" {
-		return scenarioSnapshotNumber(run.InputSnapshot, "retryBaselineGeneration")
+		return run.Snapshot.Retry.BaselineGeneration
 	}
-	return scenarioSnapshotNumber(run.InputSnapshot, "baselineGeneration")
+	return run.Snapshot.ScenarioExecution.Baseline.Generation
 }
 
-func scenarioRecoveryReceiptsTx(ctx context.Context, q queryer, environmentID string) ([]ActionExecutionReceipt, error) {
+func scenarioRecoveryReceiptsTx(ctx context.Context, q queryer, environmentID string) ([]domain.ActionExecutionReceipt, error) {
 	rows, err := q.QueryContext(ctx, `SELECT run_id,step_id,environment_id,component_id,release_id,action_id,source_node_id,status,backup_ref,backup_json,started_at,updated_at FROM action_execution_receipts r WHERE environment_id=? AND status<>'verified' AND NOT EXISTS (SELECT 1 FROM action_execution_receipts newer WHERE newer.environment_id=r.environment_id AND newer.component_id=r.component_id AND newer.source_node_id=r.source_node_id AND (newer.updated_at>r.updated_at OR (newer.updated_at=r.updated_at AND newer.rowid>r.rowid))) ORDER BY component_id,source_node_id`, environmentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var receipts []ActionExecutionReceipt
+	var receipts []domain.ActionExecutionReceipt
 	for rows.Next() {
-		var receipt ActionExecutionReceipt
+		var receipt domain.ActionExecutionReceipt
 		var backup, started, updated string
 		if err := rows.Scan(&receipt.RunID, &receipt.StepID, &receipt.EnvironmentID, &receipt.ComponentID, &receipt.ReleaseID, &receipt.ActionID, &receipt.SourceNodeID, &receipt.Status, &receipt.BackupRef, &backup, &started, &updated); err != nil {
 			return nil, err
@@ -421,27 +392,13 @@ func validateScenarioRecoveryReceipts(ctx context.Context, q queryer, run domain
 	if err != nil {
 		return err
 	}
-	var expected []ActionExecutionReceipt
-	raw, err := json.Marshal(run.InputSnapshot["recoveredReceipts"])
-	if err != nil {
-		return err
-	}
-	if err = json.Unmarshal(raw, &expected); err != nil {
-		return err
-	}
+	expected := run.Snapshot.ScenarioExecution.RecoveredReceipts
 	a, _ := json.Marshal(current)
 	b, _ := json.Marshal(expected)
 	if string(a) != string(b) {
 		return fmt.Errorf("%w: 待恢复操作已变化，请重新预览基线复核", domain.ErrConflict)
 	}
-	var targets []scenarioTargetNode
-	raw, err = json.Marshal(run.InputSnapshot["targetNodes"])
-	if err != nil {
-		return err
-	}
-	if err = json.Unmarshal(raw, &targets); err != nil {
-		return err
-	}
+	targets := run.Snapshot.ScenarioExecution.TargetNodes
 	for _, receipt := range current {
 		covered := false
 		for _, node := range targets {
@@ -461,8 +418,8 @@ func (s *Store) MarkScenarioBaselineUnverified(ctx context.Context, run domain.R
 	if !isScenarioLifecycleRun(run) {
 		return nil
 	}
-	scenarioID, _ := run.InputSnapshot["scenarioId"].(string)
-	_, err := s.db.ExecContext(ctx, `UPDATE scenario_installations SET state='unverified',generation=generation+1,updated_at=? WHERE environment_id=? AND scenario_id=? AND generation=? AND mutating_run_id IS NULL`, timeText(time.Now().UTC()), run.EnvironmentID, scenarioID, scenarioSnapshotNumber(run.InputSnapshot, "baselineGeneration"))
+	scenarioID := run.Snapshot.Subject.ScenarioID
+	_, err := s.db.ExecContext(ctx, `UPDATE scenario_installations SET state='unverified',generation=generation+1,updated_at=? WHERE environment_id=? AND scenario_id=? AND generation=? AND mutating_run_id IS NULL`, timeText(time.Now().UTC()), run.EnvironmentID, scenarioID, run.Snapshot.ScenarioExecution.Baseline.Generation)
 	return err
 }
 
@@ -470,7 +427,7 @@ func scenarioRequiredEvidenceTx(ctx context.Context, q queryer, revision domain.
 	if len(revision.AcceptanceJobs) == 0 {
 		return nil, fmt.Errorf("%w: 场景业务验收作业必填", domain.ErrConflict)
 	}
-	rows, err := q.QueryContext(ctx, runSelect+` WHERE scenario_revision_id=? AND kind='scenario_test' AND status='succeeded' AND json_extract(input_snapshot_json,'$.scenarioRevisionSpecDigest')=? ORDER BY created_at DESC`, revision.ID, domain.ScenarioRevisionSpecDigest(revision))
+	rows, err := q.QueryContext(ctx, runSelect+` WHERE scenario_revision_id=? AND kind='scenario_test' AND status='succeeded' AND json_extract(execution_snapshot_json,`+runSnapshotScenarioDigestPath+`)=? ORDER BY created_at DESC`, revision.ID, domain.ScenarioRevisionSpecDigest(revision))
 	if err != nil {
 		return nil, err
 	}
@@ -490,15 +447,15 @@ func scenarioRequiredEvidenceTx(ctx context.Context, q queryer, revision domain.
 	}
 	found := map[string]string{}
 	for _, run := range runs {
-		mode, _ := run.InputSnapshot["executionMode"].(string)
+		mode := run.Snapshot.ScenarioExecution.Mode
 		if mode != "install" && mode != "upgrade" {
 			continue
 		}
-		if found[mode] != "" {
+		if found[string(mode)] != "" {
 			continue
 		}
 		if _, err := scenarioTestEvidenceMatches(ctx, q, run, revision); err == nil {
-			found[mode] = run.ID
+			found[string(mode)] = run.ID
 		}
 	}
 	if found["install"] == "" || (revision.SourceRevisionID != "" && found["upgrade"] == "") {

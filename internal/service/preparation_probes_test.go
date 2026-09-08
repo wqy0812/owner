@@ -10,9 +10,9 @@ import (
 )
 
 func TestPreparationSchedulesYAMLWithoutRunningComponentChecks(t *testing.T) {
-	inventory, _ := json.Marshal(InventoryDocument{Hosts: []InventoryHost{{Name: "local", Address: "127.0.0.1", Groups: []string{"nodes"}}}})
+	inventory, _ := json.Marshal(InventoryDocument{Hosts: []domain.RunInventoryHost{{Name: "local", Address: "127.0.0.1", Groups: []string{"nodes"}}}})
 	env := domain.Environment{Revision: &domain.EnvironmentRevision{Inventory: inventory, Variables: map[string]string{"ansible_python_interpreter": "sh"}}}
-	plan := lockedPlan{Steps: []lockedStep{{ID: "pre", ReleaseID: "consumer", Phase: "pre", Limit: "nodes", Playbook: "tasks/checks/pre.yml"}, {ID: "rollback-post", Action: domain.ActionCheck, Phase: "post", SourceParametersFrozen: true, Playbook: "tasks/checks/source-pre.yml"}}}
+	plan := domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "pre", ReleaseID: "consumer", Phase: "pre", Limit: "nodes", Playbook: "tasks/checks/pre.yml"}, {ID: "rollback-post", Action: domain.ActionCheck, Phase: "post", SourceParametersFrozen: true, Playbook: "tasks/checks/source-pre.yml"}}}
 	var checks []PreparationCheck
 	err := (&EnvironmentService{}).probeForPreparation(context.Background(), env, plan, func(c PreparationCheck) { checks = append(checks, c) })
 	if err != nil {

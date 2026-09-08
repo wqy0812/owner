@@ -1,6 +1,7 @@
 package service
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"errors"
 	"reflect"
@@ -72,15 +73,15 @@ func TestCaptureReleasePublicationStateFailsForMissingRootOrEmptyReference(t *te
 }
 
 func currentScenarioEvidence(revision domain.ScenarioRevision, releases ...domain.ComponentRelease) domain.Run {
-	steps := make([]lockedStep, 0, len(releases))
+	steps := make([]domain.RunPlanStep, 0, len(releases))
 	for index, release := range releases {
-		steps = append(steps, lockedStep{ID: string(rune('a' + index)), ReleaseID: release.ID, ReleaseSpecDigest: componentReleaseSpecDigest(release)})
+		steps = append(steps, domain.RunPlanStep{ID: string(rune('a' + index)), ReleaseID: release.ID, ReleaseSpecDigest: componentReleaseSpecDigest(release)})
 	}
-	snapshot := structToMap(lockedPlan{Steps: steps})
+	snapshot := structToMap(domain.RunExecutionPlan{Steps: steps})
 	snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
 	return domain.Run{
 		ID: "scenario-test", Kind: domain.RunScenarioTest, Status: domain.RunSucceeded,
-		ScenarioRevisionID: revision.ID, InputSnapshot: snapshot,
+		ScenarioRevisionID: revision.ID, Snapshot: runfixture.Snapshot(snapshot),
 	}
 }
 
@@ -147,12 +148,12 @@ func TestReleasedScenarioMayRetainDeprecatedReleaseEvidence(t *testing.T) {
 func TestScenarioEvidenceRejectsConflictingDuplicateReleaseLocks(t *testing.T) {
 	release := domain.ComponentRelease{ID: "release-1", Version: "1.0.0", Status: domain.ReleaseReleased}
 	revision := domain.ScenarioRevision{ID: "revision-1", Graph: domain.ScenarioGraph{Nodes: []domain.ScenarioNode{{ID: "node", ReleaseID: release.ID}}}}
-	snapshot := structToMap(lockedPlan{Steps: []lockedStep{
+	snapshot := structToMap(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{
 		{ID: "one", ReleaseID: release.ID, ReleaseSpecDigest: componentReleaseSpecDigest(release)},
 		{ID: "two", ReleaseID: release.ID, ReleaseSpecDigest: "different"},
 	}})
 	snapshot["scenarioRevisionSpecDigest"] = scenarioRevisionSpecDigest(revision)
-	run := domain.Run{ScenarioRevisionID: revision.ID, InputSnapshot: snapshot}
+	run := domain.Run{ScenarioRevisionID: revision.ID, Snapshot: runfixture.Snapshot(snapshot)}
 	coordinator := &ReleaseCoordinator{store: &releasesStoreStub{releases: map[string]domain.ComponentRelease{release.ID: release}}}
 	if current, err := coordinator.scenarioRunDefinitionCurrent(context.Background(), run, revision); err != nil || current {
 		t.Fatalf("conflicting locks current=%v err=%v", current, err)

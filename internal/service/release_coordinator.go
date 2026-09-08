@@ -171,7 +171,7 @@ func (c *ReleaseCoordinator) PublishScenario(ctx context.Context, user domain.Us
 		if err != nil {
 			return revision, err
 		}
-		locked, err := mapToPlan(tested.InputSnapshot)
+		locked, err := planFromRun(tested)
 		if err != nil {
 			return revision, err
 		}
@@ -263,19 +263,18 @@ func (c *ReleaseCoordinator) scenarioTestEvidenceCurrent(ctx context.Context, ru
 }
 
 func (c *ReleaseCoordinator) scenarioRunDefinitionCurrent(ctx context.Context, run domain.Run, revision domain.ScenarioRevision) (bool, error) {
-	return scenarioRunDefinitionCurrent(ctx, run, revision, c.store.GetComponentRelease)
+	return scenarioRunDefinitionCurrent(ctx, domain.ReadModelFromRun(run), revision, c.store.GetComponentRelease)
 }
 
-func scenarioRunDefinitionCurrent(ctx context.Context, run domain.Run, revision domain.ScenarioRevision, getRelease func(context.Context, string) (domain.ComponentRelease, error)) (bool, error) {
-	if run.ScenarioRevisionID != revision.ID || snapshotString(run, "scenarioRevisionSpecDigest") != scenarioRevisionSpecDigest(revision) {
+func scenarioRunDefinitionCurrent(ctx context.Context, run domain.RunReadModel, revision domain.ScenarioRevision, getRelease func(context.Context, string) (domain.ComponentRelease, error)) (bool, error) {
+	if run.ScenarioRevisionID != revision.ID || run.Subject.ScenarioRevisionSpecDigest != scenarioRevisionSpecDigest(revision) {
 		return false, nil
 	}
-	plan, err := mapToPlan(run.InputSnapshot)
-	if err != nil {
+	if len(run.LockedSteps) == 0 {
 		return false, nil
 	}
 	locks := map[string]string{}
-	for _, step := range plan.Steps {
+	for _, step := range run.LockedSteps {
 		if step.SourceType == "scenario_acceptance" {
 			if step.ScenarioRevisionID != revision.ID {
 				return false, nil

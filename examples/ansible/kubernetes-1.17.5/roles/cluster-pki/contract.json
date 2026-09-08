@@ -1,0 +1,146 @@
+{
+  "slug": "cluster-pki",
+  "name": "Cluster PKI",
+  "description": "生成并分发三控制节点、三工作节点的集群证书及 kubeconfig，独立恢复原始信任材料。",
+  "referenceVersion": "1.17.5-env2.1",
+  "target": {
+    "ansible": "2.8.8",
+    "python": "3.6.9",
+    "operatingSystem": "Ubuntu",
+    "osVersion": "18.04",
+    "architecture": "amd64",
+    "ipFamily": "IPv4"
+  },
+  "parameters": [
+    {
+      "name": "pki_dir",
+      "description": "集群证书目录；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "suggestedValue": "/etc/kubernetes/pki",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    },
+    {
+      "name": "admin_kubeconfig_path",
+      "description": "管理员 kubeconfig 路径；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "suggestedValue": "/etc/kubernetes/admin.conf",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    },
+    {
+      "name": "control_plane_endpoint",
+      "description": "控制面 API 入口；按参数提供方维护。",
+      "type": "string",
+      "required": true,
+      "visibility": "public",
+      "modifiable": true,
+      "valueProvider": "environment_owner",
+      "environmentBinding": {
+        "kind": "private"
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "component": "kubernetes-distribution",
+      "version": "1.17.5-env2.1",
+      "kind": "execution",
+      "parameterMappings": []
+    }
+  ],
+  "images": [],
+  "artifacts": [],
+  "actions": [
+    {
+      "name": "安装前检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 900,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "precheck",
+      "entry": "tasks/precheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 900,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "postcheck",
+      "entry": "tasks/postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "恢复后检查",
+      "kind": "check",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 900,
+      "riskLevel": "low",
+      "destructive": false,
+      "idempotent": false,
+      "id": "rollback-postcheck",
+      "entry": "tasks/rollback-postcheck.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": ""
+    },
+    {
+      "name": "安装与配置",
+      "kind": "install",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 900,
+      "riskLevel": "high",
+      "destructive": false,
+      "idempotent": false,
+      "id": "install",
+      "entry": "tasks/install.yml",
+      "preCheckActionId": "precheck",
+      "postCheckActionId": "postcheck"
+    },
+    {
+      "name": "恢复安装前状态",
+      "kind": "rollback",
+      "become": true,
+      "tags": [],
+      "hostGroup": "all",
+      "requiredCredentials": [],
+      "timeoutSeconds": 900,
+      "riskLevel": "high",
+      "destructive": true,
+      "idempotent": false,
+      "id": "rollback",
+      "entry": "tasks/rollback.yml",
+      "preCheckActionId": "",
+      "postCheckActionId": "rollback-postcheck"
+    }
+  ]
+}

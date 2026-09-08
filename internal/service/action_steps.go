@@ -8,8 +8,8 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *ActionPlanner) expandActionSteps(ctx context.Context, steps []lockedStep) ([]lockedStep, error) {
-	expanded := []lockedStep{}
+func (p *ActionPlanner) expandActionSteps(ctx context.Context, steps []domain.RunPlanStep) ([]domain.RunPlanStep, error) {
+	expanded := []domain.RunPlanStep{}
 	for _, main := range steps {
 		if main.Phase != "" {
 			expanded = append(expanded, main)
@@ -92,8 +92,8 @@ func (p *ActionPlanner) expandActionSteps(ctx context.Context, steps []lockedSte
 
 // Backup context is bound to the executable action once and shared by its
 // checks. A retry must retain the source baseline, never capture partial state.
-func syncActionCheckContext(steps []lockedStep) {
-	parents := map[string]lockedStep{}
+func syncActionCheckContext(steps []domain.RunPlanStep) {
+	parents := map[string]domain.RunPlanStep{}
 	for _, step := range steps {
 		if step.Phase == "execute" {
 			parents[step.SourceNodeID+"\x00"+step.ActionID] = step
@@ -123,7 +123,7 @@ func syncActionCheckContext(steps []lockedStep) {
 	}
 }
 
-func refreshParentSteps(plan *lockedPlan) {
+func refreshParentSteps(plan *domain.RunExecutionPlan) {
 	syncActionCheckContext(plan.Steps)
 	for i := range plan.ParentSteps {
 		for _, current := range plan.Steps {
@@ -135,8 +135,8 @@ func refreshParentSteps(plan *lockedPlan) {
 	}
 }
 
-func (b *ActionPlanner) lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (lockedStep, error) {
-	step := lockedStep{ID: "locked-" + digestValue([]string{nodeID, release.ID, action.ID})[:24], NodeID: nodeID, Name: component.Name + " · " + actionDisplayName(action),
+func (b *ActionPlanner) lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (domain.RunPlanStep, error) {
+	step := domain.RunPlanStep{ID: "locked-" + digestValue([]string{nodeID, release.ID, action.ID})[:24], NodeID: nodeID, Name: component.Name + " · " + actionDisplayName(action),
 		ComponentID: component.ID, ComponentName: component.Name, ReleaseID: release.ID, ReleaseVersion: release.Version,
 		ReleaseSpecDigest: componentReleaseSpecDigest(release), ActionID: action.ID,
 		Action: action.Kind, FromReleaseID: action.FromReleaseID, ToReleaseID: action.ToReleaseID,

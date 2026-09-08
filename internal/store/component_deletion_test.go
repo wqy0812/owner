@@ -1,6 +1,7 @@
 package store
 
 import (
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,7 +137,7 @@ func TestEmptyComponentDeletionBlocksReferences(t *testing.T) {
 			if err := s.CreateEnvironment(ctx, e, er); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.CreateRun(ctx, domain.Run{ID: "run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: c.OwnerID, EnvironmentID: e.ID, EnvironmentRevisionID: er.ID, ComponentReleaseID: r.ID, InputSnapshot: map[string]any{}, CreatedAt: testNow}, nil); err != nil {
+			if err := insertStoredRunForTest(ctx, s, domain.Run{ID: "run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: c.OwnerID, EnvironmentID: e.ID, EnvironmentRevisionID: er.ID, ComponentReleaseID: r.ID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: testNow}); err != nil {
 				t.Fatal(err)
 			}
 			// The schema stores component and Release references separately. Even

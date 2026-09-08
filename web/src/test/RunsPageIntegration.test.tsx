@@ -62,6 +62,28 @@ describe("scoped lightweight read models", () => {
 });
 
 describe("RunsPageIntegration", () => {
+  it('shows a damaged snapshot as diagnostic detail and keeps cleanup and logs available', async () => {
+    const fallback = installFetch({ initialUser: admin });
+    const damaged = { id: 'damaged', name: 'Damaged Run', status: 'failed', environmentId: 'environment-test', environmentName: 'Test', createdAt: '', snapshotError: '执行快照不可用，仅显示诊断信息', steps: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://test');
+      if (url.pathname === '/api/v1/runs') return new Response(JSON.stringify({ items: [damaged], page: 1, pageSize: 50, total: 1 }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/runs/damaged') return json(damaged);
+      if (url.pathname === '/api/v1/runs/damaged/activity') return json({ runId: damaged.id, status: 'failed', nextAfterId: 0, hasMore: false, archived: false, logs: [], waitingObservations: [] });
+      if (url.pathname === '/api/v1/runs/damaged/diagnostics') return json({ runId: damaged.id, status: 'failed', capturedAt: '', lastLogId: 0, logCount: 0, items: [{ source: 'run', message: 'invalid active run' }] });
+      return fallback(input, init);
+    }));
+    renderApp('/runs?selected=damaged', true);
+    expect(await screen.findByText(damaged.snapshotError)).toHaveAttribute('role', 'alert');
+    expect(screen.getByText('未记录执行步骤')).toBeVisible();
+    expect(screen.queryByText('Planner 正在生成执行步骤。')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '删除失败记录' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '下载完整日志包' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('tab', { name: '诊断' }));
+    expect(await screen.findByText('invalid active run')).toBeVisible();
+    expect(screen.queryByRole('button', { name: '预览安全续跑' })).not.toBeInTheDocument();
+  });
+
   it('reveals the failed step before scrolling from diagnostics and resets tabs for another run', async () => {
     const fallback = installFetch();
     const runs = [

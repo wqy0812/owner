@@ -76,8 +76,8 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateInventory(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Hosts        []service.InventoryHost `json:"hosts"`
-		ChangeReason string                  `json:"changeReason"`
+		Hosts        []domain.RunInventoryHost `json:"hosts"`
+		ChangeReason string                    `json:"changeReason"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, err)
@@ -241,7 +241,7 @@ func (h *Handler) restoreEnvironmentRevision(w http.ResponseWriter, r *http.Requ
 }
 
 func environmentRevisionDTO(revision domain.EnvironmentRevision) map[string]any {
-	hosts := []service.InventoryHost{}
+	hosts := []domain.RunInventoryHost{}
 	var document service.InventoryDocument
 	if json.Unmarshal(revision.Inventory, &document) == nil {
 		hosts = document.Hosts

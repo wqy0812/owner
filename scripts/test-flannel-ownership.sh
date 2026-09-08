@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
 
-if ! command -v ansible-playbook >/dev/null 2>&1; then
-  echo "ansible-playbook is not installed; skipping Flannel ownership checks"
-  exit 0
+if [ -z "${ANSIBLE_PLAYBOOK:-}" ] || ! command -v "$ANSIBLE_PLAYBOOK" >/dev/null 2>&1; then
+  echo "Set ANSIBLE_PLAYBOOK to the required Ansible executable" >&2
+  exit 1
 fi
+export ANSIBLE_PLAYBOOK
 
 python3 - <<'PY'
 import hashlib
@@ -19,7 +20,7 @@ import tempfile
 import unittest
 
 playbooks = pathlib.Path('examples/ansible/k8s-1.17.5-kubeadm/components')
-ansible = shutil.which('ansible-playbook')
+ansible = os.environ['ANSIBLE_PLAYBOOK']
 
 
 class OwnershipChecks(unittest.TestCase):
@@ -86,7 +87,7 @@ elif name == 'ip':
                    OWNERSHIP_COMMAND_LOG=str(self.root / 'commands.log'), OWNERSHIP_UID_FILE=str(uid_file),
                    OWNERSHIP_IP_STATUS=ip_status, ANSIBLE_NOCOLOR='1', ANSIBLE_LOCAL_TEMP=str(self.root / 'ansible'))
         result = subprocess.run([ansible, '-i', str(self.root / 'inventory'), str(test_playbook), '-e', '@' + str(variables)],
-                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=45)
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=45)
         self.assertEqual(result.returncode == 0, success, result.stdout)
         if message:
             self.assertIn(message, result.stdout)

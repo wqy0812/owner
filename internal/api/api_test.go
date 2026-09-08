@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -281,10 +282,10 @@ func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
 
 	historyID, historyRevisionID := createEnvironment("Historical Environment")
 	finished := time.Now().UTC()
-	if err := f.database.CreateRun(ctx, domain.Run{
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{
 		ID: "run-retains-environment", Kind: domain.RunComponentTest, Status: domain.RunFailed,
 		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
-		InputSnapshot: map[string]any{}, CreatedAt: finished.Add(-time.Minute), FinishedAt: &finished,
+		Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: finished.Add(-time.Minute), FinishedAt: &finished,
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +311,7 @@ func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
 	if err := f.database.CreateRun(ctx, domain.Run{
 		ID: "run-rejected-for-archived-environment", Kind: domain.RunComponentTest, Status: domain.RunQueued,
 		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: historyID, EnvironmentRevisionID: historyRevisionID,
-		InputSnapshot: map[string]any{}, CreatedAt: time.Now().UTC(),
+		Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: time.Now().UTC(),
 	}, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("archived environment database fence error=%v", err)
 	}
@@ -353,10 +354,10 @@ func TestEnvironmentLifecycleDeleteArchiveAndRestore(t *testing.T) {
 
 	installedID, installedRevisionID := createEnvironment("Installed Environment")
 	installRunID := "run-retains-installed-environment"
-	if err := f.database.CreateRun(ctx, domain.Run{
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{
 		ID: installRunID, Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
 		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: installedID, EnvironmentRevisionID: installedRevisionID,
-		ComponentReleaseID: "release-test-runtime-1.1.0", InputSnapshot: map[string]any{}, CreatedAt: finished, FinishedAt: &finished,
+		ComponentReleaseID: "release-test-runtime-1.1.0", Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: finished, FinishedAt: &finished,
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -770,9 +771,10 @@ func TestEvolutionRoundTripRetryKeepsRollbackBackupConsistent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			steps, ok := run.InputSnapshot["steps"].([]any)
+			steps := runfixture.StepMaps(run.Snapshot.Plan.Steps)
+			ok := steps != nil
 			if !ok {
-				t.Fatalf("retry steps=%#v", run.InputSnapshot["steps"])
+				t.Fatalf("retry steps=%#v", run.Snapshot.Plan.Steps)
 			}
 			var rollbackBackup, upgradeBackup map[string]any
 			for _, raw := range steps {
@@ -806,7 +808,7 @@ func TestRetryChainRejectsASecondActiveBranch(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	source := domain.Run{ID: "run-retry-root", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionInstall, InputSnapshot: map[string]any{}, ArtifactDigest: "fixed-tree-digest", CreatedAt: now, FinishedAt: &now}
+	source := domain.Run{ID: "run-retry-root", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionInstall, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), ArtifactDigest: "fixed-tree-digest", CreatedAt: now, FinishedAt: &now}
 	if err := f.database.CreateRun(ctx, source, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +816,7 @@ func TestRetryChainRejectsASecondActiveBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.InputSnapshot["retryRecoveryStateDigest"] = stateDigest
+	source.Snapshot.Retry.RecoveryStateDigest = stateDigest
 	failedBranch := source
 	failedBranch.ID = "run-retry-failed-branch"
 	failedBranch.RetryOfRunID = source.ID
@@ -869,7 +871,7 @@ func TestCreateRunRejectsWithdrawnScenarioDraftAtFinalStoreBoundary(t *testing.T
 		return f.database.CreateRun(ctx, domain.Run{
 			ID: id, Kind: domain.RunScenarioTest, Status: domain.RunQueued,
 			RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-			ScenarioRevisionID: "scenario-test-runtime-r2", InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": release.ID}}}, CreatedAt: now,
+			ScenarioRevisionID: "scenario-test-runtime-r2", Snapshot: runfixture.Snapshot(map[string]any{"scenarioContractVersion": 2, "executionMode": "install", "scenarioId": "scenario-test-runtime", "scenarioRevisionSpecDigest": "captured-scenario", "targetNodes": []domain.ScenarioTargetNode{}, "baselineInstallationDigest": "empty", "acceptanceJobIds": []string{}, "submissionKey": id, "submissionDigest": "request", "planDigest": "preview", "steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": release.ID}}}), CreatedAt: now,
 		}, nil)
 	}
 
@@ -959,20 +961,23 @@ func testEnvironmentOwnerWholeClusterReset(t *testing.T, failPostcheck bool, cha
 		{
 			ID: sourceRunIDs[0], Kind: domain.RunScenarioTest, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID,
 			EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1",
-			InputSnapshot: map[string]any{"steps": []any{
+			Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{
 				lockedInstall("foundation-control", fixtures[0], "test_nodes"),
 				lockedInstall("foundation-workers", fixtures[0], "test_nodes"),
-			}, "treeDigest": "fixed-tree-digest"},
+			}, "treeDigest": "fixed-tree-digest"}),
 			ArtifactDigest: "fixed-tree-digest", CreatedAt: now, StartedAt: &now, FinishedAt: &now,
 		},
 		{
 			ID: sourceRunIDs[1], Kind: domain.RunScenarioTest, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID,
 			EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1",
-			InputSnapshot:  map[string]any{"steps": []any{lockedInstall("service", fixtures[1], "test_nodes")}, "treeDigest": "fixed-tree-digest"},
+			Snapshot:       runfixture.Snapshot(map[string]any{"steps": []any{lockedInstall("service", fixtures[1], "test_nodes")}, "treeDigest": "fixed-tree-digest"}),
 			ArtifactDigest: "fixed-tree-digest", CreatedAt: later, StartedAt: &later, FinishedAt: &later,
 		},
 	}
 	for _, sourceRun := range sourceRuns {
+		sourceRun.Snapshot.Subject = domain.RunSubject{ScenarioID: "scenario-test-runtime", ScenarioRevisionSpecDigest: "historical-scenario"}
+		sourceRun.Snapshot.ScenarioExecution = domain.ScenarioRunExecution{Mode: domain.ScenarioExecutionInstall, TargetNodes: []domain.ScenarioTargetNode{}, AcceptanceJobIDs: []string{}, Baseline: domain.ScenarioRunBaseline{InstallationDigest: "baseline"}}
+		sourceRun.Snapshot.Submission = domain.RunSubmission{Key: sourceRun.ID, Digest: "request", PlanDigest: "preview"}
 		if err := testutil.InsertRunRecord(ctx, f.database.DB(), sourceRun); err != nil {
 			t.Fatal(err)
 		}
@@ -1008,8 +1013,8 @@ func testEnvironmentOwnerWholeClusterReset(t *testing.T, failPostcheck bool, cha
 		if err := json.Unmarshal(revision.Inventory, &inventory); err != nil {
 			t.Fatal(err)
 		}
-		inventory.Hosts[0] = service.InventoryHost{Name: "replacement", Address: "192.0.2.99", Port: 2222, User: "testops", Groups: []string{"test_nodes"}}
-		inventory.Hosts = append(inventory.Hosts, service.InventoryHost{Name: "added", Address: "192.0.2.98", User: "testops", Groups: []string{"test_nodes"}})
+		inventory.Hosts[0] = domain.RunInventoryHost{Name: "replacement", Address: "192.0.2.99", Port: 2222, User: "testops", Groups: []string{"test_nodes"}}
+		inventory.Hosts = append(inventory.Hosts, domain.RunInventoryHost{Name: "added", Address: "192.0.2.98", User: "testops", Groups: []string{"test_nodes"}})
 		revision.Inventory, _ = json.Marshal(inventory)
 		revision.ID, revision.Revision = "environment-test-r3-members", 3
 		if err := f.database.CreateEnvironmentRevision(ctx, revision); err != nil {
@@ -1240,10 +1245,10 @@ func TestBatchApprovalRequiresAndTrimsReason(t *testing.T) {
 		ID: "run-batch-reason", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
 		ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionInstall, Destructive: true,
-		InputSnapshot: map[string]any{}, CreatedAt: now,
+		Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now,
 	}
 	approval := domain.Approval{ID: "approval-batch-reason", RunID: run.ID, Status: "pending", RequestedAt: now}
-	if err := f.database.CreateRun(ctx, run, &approval); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), run, &approval); err != nil {
 		t.Fatal(err)
 	}
 	owner := f.session(seed.EnvironmentOwnerID)
@@ -1532,9 +1537,9 @@ func TestWorkbenchLatestSuccessClearsEarlierFailure(t *testing.T) {
 	failed := domain.Run{
 		ID: "run-workbench-failed", Kind: domain.RunEnvironmentRollback, Status: domain.RunFailed,
 		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-		InputSnapshot: map[string]any{}, Error: "rollback failed", CreatedAt: failedAt, StartedAt: &failedAt, FinishedAt: &failedAt,
+		Snapshot: runfixture.Snapshot(map[string]any{}), Error: "rollback failed", CreatedAt: failedAt, StartedAt: &failedAt, FinishedAt: &failedAt,
 	}
-	if err := f.database.CreateRun(ctx, failed, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), failed, nil); err != nil {
 		t.Fatal(err)
 	}
 	owner := f.session(seed.EnvironmentOwnerID)
@@ -1547,9 +1552,9 @@ func TestWorkbenchLatestSuccessClearsEarlierFailure(t *testing.T) {
 	succeeded := domain.Run{
 		ID: "run-workbench-succeeded", Kind: domain.RunEnvironmentRollback, Status: domain.RunSucceeded,
 		RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-		InputSnapshot: map[string]any{}, CreatedAt: succeededAt, StartedAt: &succeededAt, FinishedAt: &succeededAt,
+		Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: succeededAt, StartedAt: &succeededAt, FinishedAt: &succeededAt,
 	}
-	if err := f.database.CreateRun(ctx, succeeded, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), succeeded, nil); err != nil {
 		t.Fatal(err)
 	}
 	response = f.request(http.MethodGet, "/api/v1/workbench", nil, owner)
@@ -1594,10 +1599,10 @@ func TestWorkbenchApprovalActionMatchesViewerPermission(t *testing.T) {
 		ID: "run-workbench-awaiting-approval", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
 		ComponentReleaseID: "release-test-runtime-1.1.0", Action: domain.ActionUpgrade, Destructive: true,
-		InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "release-test-runtime-1.1.0", "action": "upgrade"}}}, CreatedAt: now,
+		Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "release-test-runtime-1.1.0", "action": "upgrade"}}}), CreatedAt: now,
 	}
 	approval := &domain.Approval{ID: "approval-workbench", RunID: run.ID, Status: "pending", RequestedAt: now}
-	if err := f.database.CreateRun(context.Background(), run, approval); err != nil {
+	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), run, approval); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.database.FailInvalidActiveRuns(context.Background(), now.Add(time.Second)); err != nil {
@@ -1860,10 +1865,10 @@ func seedAPITestFixtures(t *testing.T, database *store.Store) {
 	installedRun := domain.Run{
 		ID: "run-installed-runtime-1.1", Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: environment.ID, EnvironmentRevisionID: environmentRevision.ID,
-		ComponentReleaseID: newRelease.ID, Action: domain.ActionUpgrade, InputSnapshot: map[string]any{"steps": []any{map[string]any{"id": "fixture-install", "nodeId": "fixture-install", "phase": "execute", "releaseId": newRelease.ID, "componentId": newRelease.ComponentID, "limit": "test_nodes"}}},
+		ComponentReleaseID: newRelease.ID, Action: domain.ActionUpgrade, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "fixture-install", "nodeId": "fixture-install", "phase": "execute", "releaseId": newRelease.ID, "componentId": newRelease.ComponentID, "limit": "test_nodes"}}}),
 		ArtifactDigest: "fixed-tree-digest", CreatedAt: now, StartedAt: &now, FinishedAt: &now,
 	}
-	if err := database.CreateRun(ctx, installedRun, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, database.DB(), installedRun, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertEnvironmentComponentInstallation(ctx, domain.EnvironmentComponentInstallation{
@@ -1985,10 +1990,10 @@ func (f *apiFixture) recordReleaseReadiness(releaseID string) {
 			ID: fmt.Sprintf("run-readiness-%d", f.evidenceSeq), Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
 			RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
 			ComponentReleaseID: releaseID, Action: domain.ActionUpgrade,
-			InputSnapshot: map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": "evolution_round_trip"},
-			CreatedAt:     now, StartedAt: &now, FinishedAt: &now,
+			Snapshot:  runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": "evolution_round_trip"}),
+			CreatedAt: now, StartedAt: &now, FinishedAt: &now,
 		}
-		if err := f.database.CreateRun(context.Background(), run, nil); err != nil {
+		if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), run, nil); err != nil {
 			f.t.Fatal(err)
 		}
 		return
@@ -2003,10 +2008,10 @@ func (f *apiFixture) recordReleaseReadiness(releaseID string) {
 			ID: fmt.Sprintf("run-readiness-%d", f.evidenceSeq), Kind: domain.RunComponentTest, Status: domain.RunSucceeded,
 			RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
 			ComponentReleaseID: releaseID, Action: evidence.action,
-			InputSnapshot: map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence.name},
-			CreatedAt:     now, StartedAt: &now, FinishedAt: &now,
+			Snapshot:  runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": digest, "componentTestEvidence": evidence.name}),
+			CreatedAt: now, StartedAt: &now, FinishedAt: &now,
 		}
-		if err := f.database.CreateRun(context.Background(), run, nil); err != nil {
+		if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), run, nil); err != nil {
 			f.t.Fatal(err)
 		}
 	}
@@ -2443,9 +2448,9 @@ func TestDraftReleaseDeprecationAllowsActiveTestAndPreservesHistory(t *testing.T
 	activeRun := domain.Run{
 		ID: "run-active-draft-deprecation", Kind: domain.RunComponentTest, Status: domain.RunQueued,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-		ComponentReleaseID: releaseID, Action: domain.ActionInstall, InputSnapshot: map[string]any{}, CreatedAt: time.Now().UTC(),
+		ComponentReleaseID: releaseID, Action: domain.ActionInstall, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: time.Now().UTC(),
 	}
-	if err := f.database.CreateRun(ctx, activeRun, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), activeRun, nil); err != nil {
 		t.Fatal(err)
 	}
 	impact := f.request(http.MethodGet, "/api/v1/component-releases/"+releaseID+"/impact", nil, alice)
@@ -2897,7 +2902,7 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		f := newAPIFixture(t)
 		alice := f.session(seed.ComponentOwnerRuntimeID)
 		f.recordReleaseReadiness("release-test-runtime-1.1.0")
-		if _, err := f.database.DB().Exec(`DELETE FROM runs WHERE component_release_id=? AND json_extract(input_snapshot_json,'$.componentTestEvidence')='evolution_round_trip'`, "release-test-runtime-1.1.0"); err != nil {
+		if _, err := f.database.DB().Exec(`DELETE FROM runs WHERE component_release_id=? AND json_extract(execution_snapshot_json,'$.subject.componentTestEvidence')='evolution_round_trip'`, "release-test-runtime-1.1.0"); err != nil {
 			t.Fatal(err)
 		}
 		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/publish", nil, alice)
@@ -2910,7 +2915,7 @@ func TestPublishReleaseRequiresCurrentDeliveryEvidence(t *testing.T) {
 		f := newAPIFixture(t)
 		alice := f.session(seed.ComponentOwnerRuntimeID)
 		f.recordReleaseReadiness("release-test-runtime-1.1.0")
-		if _, err := f.database.DB().Exec(`DELETE FROM runs WHERE component_release_id=? AND json_extract(input_snapshot_json,'$.componentTestEvidence')='evolution_round_trip'`, "release-test-runtime-1.1.0"); err != nil {
+		if _, err := f.database.DB().Exec(`DELETE FROM runs WHERE component_release_id=? AND json_extract(execution_snapshot_json,'$.subject.componentTestEvidence')='evolution_round_trip'`, "release-test-runtime-1.1.0"); err != nil {
 			t.Fatal(err)
 		}
 		response := f.request(http.MethodPost, "/api/v1/component-releases/release-test-runtime-1.1.0/test-plan", map[string]any{
@@ -3061,9 +3066,9 @@ func TestEditingDraftReleaseInvalidatesVerification(t *testing.T) {
 	queued := domain.Run{
 		ID: "active-edit-guard", Kind: domain.RunComponentTest, Status: domain.RunQueued,
 		RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-		ComponentReleaseID: releaseID, InputSnapshot: map[string]any{}, CreatedAt: time.Now().UTC(),
+		ComponentReleaseID: releaseID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: time.Now().UTC(),
 	}
-	if err := f.database.CreateRun(context.Background(), queued, nil); err != nil {
+	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), queued, nil); err != nil {
 		t.Fatal(err)
 	}
 	owner, _ := f.database.GetUser(context.Background(), seed.ComponentOwnerRuntimeID)
@@ -3587,7 +3592,7 @@ func TestScenarioDeletionRetainsPublishedAndRunHistory(t *testing.T) {
 	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{
 		ID: "run-locks-draft-scenario", Kind: domain.RunScenarioTest, Status: domain.RunFailed,
 		RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1",
-		ScenarioRevisionID: runLockedRevisionID, InputSnapshot: map[string]any{}, CreatedAt: now, FinishedAt: &finished,
+		ScenarioRevisionID: runLockedRevisionID, Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &finished,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3620,7 +3625,7 @@ func TestScenarioRunHistoryBlocksComponentReleaseDeprecation(t *testing.T) {
 	alice := f.session(seed.ComponentOwnerRuntimeID)
 	// Historical Run references must survive current execution-contract changes.
 	now := time.Now().UTC()
-	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), domain.Run{ID: "historical-scenario-runtime", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1", InputSnapshot: map[string]any{"steps": []any{map[string]any{"releaseId": "release-test-runtime-1.0.0", "componentId": "component-test-runtime"}}}, CreatedAt: now, FinishedAt: &now}); err != nil {
+	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), domain.Run{ID: "historical-scenario-runtime", Kind: domain.RunScenario, Status: domain.RunSucceeded, RequestedBy: seed.ScenarioOwnerID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ScenarioRevisionID: "scenario-test-runtime-r1", Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"releaseId": "release-test-runtime-1.0.0", "componentId": "component-test-runtime"}}}), CreatedAt: now, FinishedAt: &now}); err != nil {
 		t.Fatal(err)
 	}
 	impact := f.request(http.MethodGet, "/api/v1/component-releases/release-test-runtime-1.0.0/impact", nil, alice)
@@ -3704,7 +3709,7 @@ func TestDraftComponentRollbackTestLocksRollbackAndTargetVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps := lockedRun.InputSnapshot["steps"].([]any)
+	steps := runfixture.StepMaps(lockedRun.Snapshot.Plan.Steps)
 	if len(steps) != 2 {
 		t.Fatalf("draft rollback locked steps=%#v", steps)
 	}
@@ -4213,8 +4218,8 @@ func (f *apiFixture) recordRetrySafety(releaseID string) {
 	}
 	now := time.Now().UTC()
 	f.evidenceSeq++
-	run := domain.Run{ID: fmt.Sprintf("run-retry-proof-%d", f.evidenceSeq), Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ComponentReleaseID: releaseID, Action: domain.ActionInstall, CreatedAt: now, FinishedAt: &now, InputSnapshot: map[string]any{"componentReleaseSpecDigest": service.ComponentReleaseSpecDigest(release), "parentSteps": parents}}
-	if err := f.database.CreateRun(context.Background(), run, nil); err != nil {
+	run := domain.Run{ID: fmt.Sprintf("run-retry-proof-%d", f.evidenceSeq), Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: "environment-test", EnvironmentRevisionID: "environment-test-r1", ComponentReleaseID: releaseID, Action: domain.ActionInstall, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": service.ComponentReleaseSpecDigest(release), "parentSteps": parents})}
+	if err := testutil.InsertRunRecord(context.Background(), f.database.DB(), run, nil); err != nil {
 		f.t.Fatal(err)
 	}
 }

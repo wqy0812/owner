@@ -34,7 +34,7 @@ type ApprovalService struct {
 
 type approvalsStore interface {
 	BatchDecideApprovals(ctx context.Context, ids []string, ownerID, decision, reason string, at time.Time) ([]domain.Run, error)
-	DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot map[string]any, at time.Time) error
+	DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot *domain.RunSnapshot, results []domain.RunDeliveryResult, at time.Time) error
 	GetApproval(ctx context.Context, id string) (domain.Approval, error)
 	GetEnvironment(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error)
 	GetRun(ctx context.Context, id string) (domain.Run, error)
@@ -77,7 +77,7 @@ type catalogStore interface {
 	ReplaceDraftPlaybookFilesAndDeleteMutation(context.Context, string, string, string, []domain.ComponentPlaybookFile, map[string]string, string) error
 	AppendComponentImageBuildLog(ctx context.Context, log domain.ImageBuildLog) error
 	CompleteComponentImageBuild(ctx context.Context, buildID, pushedDigest string, image domain.ComponentImage, at time.Time) error
-	ComponentEvidenceReads(ctx context.Context, user domain.User, componentID string) ([]domain.Run, map[string]string, error)
+	ComponentEvidenceReads(ctx context.Context, user domain.User, componentID string) ([]domain.RunReadModel, map[string]string, error)
 	ComponentReleaseDeletionImpact(ctx context.Context, id string) (store.ComponentReleaseDeletionImpact, error)
 	ComponentSlugExists(ctx context.Context, slug string) (bool, error)
 	ComponentUsage(ctx context.Context, viewer domain.User, id, releaseID string, history bool) (store.ComponentUsage, error)
@@ -143,7 +143,7 @@ type deliveryStore interface {
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 	RecordComponentArtifactMirror(ctx context.Context, sourceStation, targetStation, relativePath, sha256 string, at time.Time) error
 	RecordComponentImageMirror(ctx context.Context, targetRegistry, sourceDigest, targetRef, targetDigest string, at time.Time) error
-	UpdateRunDeliveryResults(ctx context.Context, runID string, results any) error
+	UpdateRunDeliveryResults(ctx context.Context, runID string, results []domain.RunDeliveryResult) error
 }
 
 type EnvironmentService struct {
@@ -200,6 +200,7 @@ type ExecutionService struct {
 }
 
 type executionStore interface {
+	GetRunDiagnosticRecord(context.Context, string) (domain.RunReadModel, error)
 	ReadRunActivity(context.Context, string, *int64, int) (store.RunActivity, error)
 	StreamRunLogSnapshot(context.Context, string, func(domain.RunLog) error) (store.RunLogSnapshot, error)
 	BatchApprovalCandidates(ctx context.Context, viewer domain.User) ([]store.RunSummary, error)
@@ -218,7 +219,7 @@ type executionStore interface {
 	GetScenarioSubmission(ctx context.Context, userID, key, digest string) (domain.Run, error)
 	GetUser(ctx context.Context, id string) (domain.User, error)
 	HasActiveRetry(ctx context.Context, retryRootRunID string) (bool, error)
-	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]store.ActionExecutionReceipt, error)
+	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]domain.ActionExecutionReceipt, error)
 	ListRunLogTail(ctx context.Context, runID string, limit int) ([]domain.RunLog, error)
 	ListRunWaitingObservations(context.Context, string) ([]json.RawMessage, error)
 	ListRunSteps(ctx context.Context, runID string) ([]domain.RunStep, error)
@@ -262,7 +263,7 @@ type recorderStore interface {
 	GetUser(ctx context.Context, id string) (domain.User, error)
 	MarkScenarioBaselineUnverified(ctx context.Context, run domain.Run) error
 	MarkScenarioMutation(ctx context.Context, run domain.Run) error
-	RecordActionExecution(ctx context.Context, r store.ActionExecutionReceipt) error
+	RecordActionExecution(ctx context.Context, r domain.ActionExecutionReceipt) error
 	SetScenarioRevisionStatus(ctx context.Context, id string, from []domain.RevisionStatus, to domain.RevisionStatus, at time.Time) error
 	UpdateRunStatus(ctx context.Context, id string, from []domain.RunStatus, to domain.RunStatus, errText string, at time.Time) error
 	UpdateRunStep(ctx context.Context, st domain.RunStep) error
@@ -291,7 +292,7 @@ type plannerStore interface {
 	GetScenarioRevision(ctx context.Context, id string) (domain.ScenarioRevision, error)
 	HasActiveEnvironmentRun(ctx context.Context, environmentID string) (bool, error)
 	HasSuccessfulActionTest(ctx context.Context, releaseID, spec, actionID, core, python string) (bool, error)
-	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]store.ActionExecutionReceipt, error)
+	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]domain.ActionExecutionReceipt, error)
 	ListEnvironmentComponentInstallations(ctx context.Context, environmentID string) ([]domain.EnvironmentComponentInstallation, error)
 	ScenarioEnvironmentStateCount(ctx context.Context, id string) (int, error)
 	SuccessfulScenarioSourceRun(ctx context.Context, revision domain.ScenarioRevision, runID string) (domain.Run, error)
@@ -332,10 +333,10 @@ type ReadModelService struct {
 
 type readModelStore interface {
 	WorkbenchSubjects(context.Context, domain.User) (store.WorkbenchSubjects, error)
-	WorkbenchRuns(context.Context, domain.User) ([]domain.Run, error)
-	WorkbenchComponentRun(context.Context, domain.User, string, string) ([]domain.Run, error)
-	WorkbenchScenarioRuns(context.Context, domain.User, string, string, bool, time.Time, string) ([]domain.Run, error)
-	WorkbenchMetadata(context.Context, domain.User, []domain.Run) (store.WorkbenchMetadata, error)
+	WorkbenchRuns(context.Context, domain.User) ([]domain.RunReadModel, error)
+	WorkbenchComponentRun(context.Context, domain.User, string, string) ([]domain.RunReadModel, error)
+	WorkbenchScenarioRuns(context.Context, domain.User, string, string, bool, time.Time, string) ([]domain.RunReadModel, error)
+	WorkbenchMetadata(context.Context, domain.User, []domain.RunReadModel) (store.WorkbenchMetadata, error)
 	WorkbenchContracts(context.Context, map[string]bool, map[string]bool) (store.WorkbenchContracts, error)
 	WorkbenchFailedNodes(context.Context, map[string]bool) (map[string]string, error)
 	FirstAuditForResourceAfter(ctx context.Context, resourceType, resourceID string, after time.Time, actions []string) (domain.AuditEvent, error)
@@ -405,9 +406,9 @@ type rollbackStore interface {
 	GetEnvironmentComponentInstallationForNode(ctx context.Context, environmentID, componentID, nodeID string) (domain.EnvironmentComponentInstallation, error)
 	GetRun(ctx context.Context, id string) (domain.Run, error)
 	HasSuccessfulActionTest(ctx context.Context, releaseID, spec, actionID, core, python string) (bool, error)
-	IsActionReceiptRecovered(ctx context.Context, receipt store.ActionExecutionReceipt) (bool, error)
-	LatestActionReceiptForNode(ctx context.Context, environmentID, componentID, releaseID, nodeID string) (store.ActionExecutionReceipt, error)
-	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]store.ActionExecutionReceipt, error)
+	IsActionReceiptRecovered(ctx context.Context, receipt domain.ActionExecutionReceipt) (bool, error)
+	LatestActionReceiptForNode(ctx context.Context, environmentID, componentID, releaseID, nodeID string) (domain.ActionExecutionReceipt, error)
+	LatestEnvironmentActionReceipts(ctx context.Context, environmentID string) ([]domain.ActionExecutionReceipt, error)
 	ListEnvironmentComponentInstallations(ctx context.Context, environmentID string) ([]domain.EnvironmentComponentInstallation, error)
 }
 
@@ -455,7 +456,7 @@ type creatorStore interface {
 }
 
 type runEnvironmentVerifierPort interface {
-	verifyRunEnvironment(context.Context, domain.Run, lockedPlan) error
+	verifyRunEnvironment(context.Context, domain.Run, domain.RunExecutionPlan) error
 }
 
 type RunExecutor struct {
@@ -546,8 +547,8 @@ type workspaceVerifierStore interface {
 }
 
 type actionsPort interface {
-	expandActionSteps(ctx context.Context, steps []lockedStep) ([]lockedStep, error)
-	lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (lockedStep, error)
+	expandActionSteps(ctx context.Context, steps []domain.RunPlanStep) ([]domain.RunPlanStep, error)
+	lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (domain.RunPlanStep, error)
 }
 
 type approvalsPort interface {
@@ -576,12 +577,12 @@ type catalogPort interface {
 }
 
 type deliveryPort interface {
-	verifyLockedMedia(ctx context.Context, plan lockedPlan) error
-	bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error
-	bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *lockedPlan) error
-	finalizeDeliveryPlan(ctx context.Context, plan lockedPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (lockedPlan, error)
-	mirrorRunArtifacts(ctx context.Context, runID string, plan *lockedPlan) error
-	mirrorRunImages(ctx context.Context, runID string, plan *lockedPlan) error
+	verifyRunMedia(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
+	bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error
+	bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error
+	finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (domain.RunExecutionPlan, error)
+	mirrorRunArtifacts(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
+	mirrorRunImages(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
 }
 
 type environmentsPort interface {
@@ -589,8 +590,8 @@ type environmentsPort interface {
 }
 
 type recorderPort interface {
-	beginStep(ctx context.Context, run domain.Run, locked lockedStep, result ansiblerunner.JobStepResult) (domain.RunStep, error)
-	completeStep(ctx context.Context, run domain.Run, locked lockedStep, parents []lockedStep, step domain.RunStep, result ansiblerunner.JobStepResult) (domain.RunStep, error)
+	beginStep(ctx context.Context, run domain.Run, locked domain.RunPlanStep, result ansiblerunner.JobStepResult) (domain.RunStep, error)
+	completeStep(ctx context.Context, run domain.Run, locked domain.RunPlanStep, parents []domain.RunPlanStep, step domain.RunStep, result ansiblerunner.JobStepResult) (domain.RunStep, error)
 	finishRun(run domain.Run, status domain.RunStatus, cause error)
 	markMutation(ctx context.Context, run domain.Run) error
 	recordEvent(ctx context.Context, runID, stepID string, event ansiblerunner.JobEvent) error
@@ -599,11 +600,11 @@ type recorderPort interface {
 }
 
 type plannerPort interface {
-	componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan lockedPlan, digest string, destructive bool) ComponentTestPlan
-	environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan lockedPlan, digest string, destructive bool) EnvironmentRollbackPlan
+	componentTestPlanDTO(ctx context.Context, environment domain.Environment, plan domain.RunExecutionPlan, digest string, destructive bool) ComponentTestPlan
+	environmentRollbackPlanDTO(ctx context.Context, prepared preparedEnvironmentRollback, plan domain.RunExecutionPlan, digest string, destructive bool) EnvironmentRollbackPlan
 	prepareComponentTest(ctx context.Context, user domain.User, releaseID string, input ComponentTestRequest) (preparedComponentTest, error)
 	prepareEnvironmentRollback(ctx context.Context, user domain.User, environmentID string) (preparedEnvironmentRollback, error)
-	prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []lockedStep) (lockedPlan, string, bool, error)
+	prepareLockedPlan(ctx context.Context, environment domain.Environment, kind domain.RunKind, runID string, capturedAt time.Time, steps []domain.RunPlanStep) (domain.RunExecutionPlan, string, bool, error)
 	prepareScenarioLifecycle(ctx context.Context, user domain.User, id string, input ScenarioExecutionRequest, kind domain.RunKind, runID string, at time.Time) (scenarioExecution, error)
 }
 
@@ -617,17 +618,17 @@ type releasesPort interface {
 
 type rollbackPort interface {
 	environmentResetState(ctx context.Context, revision domain.EnvironmentRevision) (environmentResetState, error)
-	validateEnvironmentReset(ctx context.Context, revision domain.EnvironmentRevision, plan lockedPlan, complete bool) error
-	bindRollbackCheckSources(ctx context.Context, environmentID string, steps []lockedStep) error
-	addRecoverySteps(ctx context.Context, job *ansiblerunner.JobPlan, plan lockedPlan) error
-	bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *lockedPlan) error
+	validateEnvironmentReset(ctx context.Context, revision domain.EnvironmentRevision, plan domain.RunExecutionPlan, complete bool) error
+	bindRollbackCheckSources(ctx context.Context, environmentID string, steps []domain.RunPlanStep) error
+	addRecoverySteps(ctx context.Context, job *ansiblerunner.JobPlan, plan domain.RunExecutionPlan) error
+	bindBackupPlan(ctx context.Context, environmentID, runID string, kind domain.RunKind, capturedAt time.Time, plan *domain.RunExecutionPlan) error
 	recoveryBaselines(ctx context.Context, environmentID string) ([]domain.EnvironmentComponentInstallation, error)
 	validateCurrentInstallEvidence(ctx context.Context, installation domain.EnvironmentComponentInstallation) error
-	validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan lockedPlan) error
+	validateLockedRollbackPlan(ctx context.Context, run domain.Run, plan domain.RunExecutionPlan) error
 }
 
 type creatorPort interface {
-	createRetryRun(ctx context.Context, user domain.User, source domain.Run, locked lockedPlan, preview RunRetryPlan, runID string, now time.Time) (domain.Run, error)
+	createRetryRun(ctx context.Context, user domain.User, source domain.Run, locked domain.RunExecutionPlan, preview RunRetryPlan, runID string, now time.Time) (domain.Run, error)
 	createRun(ctx context.Context, user domain.User, environment domain.Environment, kind domain.RunKind, releaseID, revisionID string, action domain.ActionKind, prepared lockedRunPreparation, resolvedParametersByNode map[string]map[string]resolvedParameter, expectedScenarioDigest ...string) (domain.Run, error)
 	createScenarioRun(ctx context.Context, user domain.User, id string, input ScenarioExecutionRequest, kind domain.RunKind, runID string, at time.Time, x scenarioExecution, requestDigest string) (domain.Run, error)
 }
@@ -649,9 +650,9 @@ type scenariosPort interface {
 }
 
 type workspaceVerifierPort interface {
-	bindVerifiedWorkspaceDigests(ctx context.Context, steps []lockedStep) error
-	verifyLockedWorkspaceDigests(ctx context.Context, locked []lockedStep) error
-	verifyScenarioAcceptanceStep(ctx context.Context, step *lockedStep) error
+	bindVerifiedWorkspaceDigests(ctx context.Context, steps []domain.RunPlanStep) error
+	verifyLockedWorkspaceDigests(ctx context.Context, locked []domain.RunPlanStep) error
+	verifyScenarioAcceptanceStep(ctx context.Context, step *domain.RunPlanStep) error
 }
 
 type executionControl struct {
