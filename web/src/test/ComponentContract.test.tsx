@@ -88,6 +88,7 @@ describe("ComponentContract", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
+      if (url.includes('/component-releases/release-scheduler-draft/playbook?actionId=action-rollback')) return json({ path: 'tasks/rollback.yml', filename: 'rollback.yml', content: '---\n- debug: { msg: rollback }', sha256: 'rollback-sha' });
       if (url.endsWith('/component-releases/release-scheduler-draft') && init?.method === 'PUT') return pendingResponse(resolve => { resolveSave = resolve; }, init?.signal);
       if (url.endsWith('/components')) return json([{
         id: 'component-scheduler', name: 'kube-scheduler', slug: 'kube-scheduler', ownerId: alice.id,
@@ -236,6 +237,7 @@ describe("ComponentContract", () => {
       if (url.endsWith('/components')) return json([{ ...components[0], latestRelease: created ? draft : released, releases: created ? [draft, released] : [released] }]);
       if (url.endsWith('/components/component-containerd/release-draft-plan')) return json({ mode: 'evolution', lineId: 'line-component-containerd', lineName: 'component-containerd baseline', parentReleaseId: released.id, parentVersion: released.version, targetVersion: draft.version, compatibility: 'compatible', planDigest: 'draft-plan', actions: [], removedActions: [], playbooks: [], artifactCount: 0, imageCount: 0 });
       if (url.endsWith('/components/component-containerd/release-drafts')) { created = true; return json(draft); }
+      if (url.includes('/component-releases/release-containerd-draft/playbook?actionId=action-upgrade')) return json({ path: 'tasks/upgrade.yml', filename: 'upgrade.yml', content: '---\n- debug: { msg: upgrade }', sha256: 'upgrade-sha' });
       if (url.endsWith('/scenarios') || url.endsWith('/environments') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
       return defaultResponse(input, init);
     }));

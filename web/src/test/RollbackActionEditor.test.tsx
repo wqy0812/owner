@@ -1,3 +1,4 @@
+import { api } from '../api/client';
 import { useState } from 'react';
 import { expect, it, vi } from 'vitest';
 import { PlaybookActionEditor } from '../features/components/contract/PlaybookActionEditor';
@@ -21,6 +22,7 @@ function Editor() {
 }
 
 it('keeps deployment prechecks and gives rollback only a postcheck selector', async () => {
+  vi.spyOn(api, 'playbook').mockResolvedValue({ path: 'tasks/install.yml', filename: 'install.yml', content: '---\n- debug: { msg: ready }', sha256: 'sha' });
   render(<Editor />);
   expect(screen.queryByRole('region', { name: '资源管理范围' })).not.toBeInTheDocument();
   expect(screen.queryByText('资源管理范围')).not.toBeInTheDocument();

@@ -76,7 +76,8 @@ export interface ScenarioRunEvidenceGroup {
 }
 
 export function isActionEntry(path: string) {
-  return ACTION_OPTIONS.some((option) => path === `${option.value}.yml`);
+  return /^tasks\/checks\/[^/]+\.yml$/.test(path)
+    || ACTION_OPTIONS.some((option) => option.value !== 'check' && path === `tasks/${option.value}.yml`);
 }
 
 export function formatBytes(value: number) {

@@ -1,0 +1,95 @@
+.release-playbook-dialog { display: grid; gap: 16px; min-width: 0; }
+.release-playbook-metadata { border: 1px solid #e2e7f0; border-radius: 10px; background: #fff; }
+.release-playbook-metadata > summary { display: flex; align-items: center; gap: 14px; padding: 13px 16px; list-style: none; cursor: pointer; }
+.release-playbook-metadata > summary::before { content: '›'; color: #7d88a0; font-size: 20px; line-height: 1; transition: transform .15s; }
+.release-playbook-metadata[open] > summary::before { transform: rotate(90deg); }
+.release-playbook-metadata > summary::-webkit-details-marker { display: none; }
+.release-playbook-metadata > summary strong { color: #33415e; font-size: 14px; }
+.release-playbook-metadata > summary span { color: #758099; font-size: 13px; }
+.release-playbook-metadata > summary small { margin-left: auto; color: #5365bc; }
+.release-playbook-metadata > .form-grid { padding: 16px; border-top: 1px solid #e8ecf3; }
+.playbook-workbench { background: #fff; }
+.playbook-workbench [hidden] { display: none !important; }
+.playbook-workbench .playbook-editor__header { padding: 16px; background: #fff; }
+.playbook-workbench .playbook-editor__header h3 { font-size: 16px; }
+.playbook-workbench .playbook-editor__header p { margin-top: 5px; color: #758199; }
+.playbook-view-switch { display: flex; gap: 3px; padding: 4px; border: 1px solid #e6eaf2; border-radius: 9px; background: #f3f5f9; }
+.playbook-view-switch .ant-btn { border: 0; background: transparent; color: #6f7b93; box-shadow: none; font-size: 13px; }
+.playbook-view-switch .ant-btn[aria-pressed="true"] { color: #435cc5; background: #fff; box-shadow: 0 1px 4px #24335912; }
+.playbook-view-switch .ant-btn span + span { padding: 0 5px; border-radius: 4px; background: #edf0f8; font-size: 11px; }
+.playbook-action-view { display: grid; grid-template-columns: 200px minmax(0, 1fr) 330px; height: clamp(360px, calc(100vh - 500px), 620px); }
+.playbook-action-nav { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding: 14px 10px; overflow: auto; border-right: 1px solid #e4e8f1; background: #f8f9fc; }
+.playbook-action-nav__heading { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
+.playbook-action-nav__heading strong { color: #758099; font-size: 11px; white-space: nowrap; }
+.playbook-action-nav__heading .ant-btn { padding: 3px; color: #4f63bd; font-size: 12px; }
+.playbook-action-nav h4 { margin: 0 7px 7px; color: #8a94a8; font-size: 11px; font-weight: 500; }
+.playbook-action-nav [role="group"] > button { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; margin-bottom: 5px; padding: 11px 10px; border: 1px solid transparent; border-radius: 8px; color: #5a6984; background: transparent; text-align: left; cursor: pointer; }
+.playbook-action-nav [role="group"] > button:hover { background: #edf0f8; }
+.playbook-action-nav [role="group"] > button.active { color: #4158c0; border-color: #dce3fc; background: #edf1ff; }
+.playbook-action-nav [role="group"] > button:focus-visible { outline: 2px solid #6379dc; outline-offset: 1px; }
+.playbook-action-nav [role="group"] > button > svg { flex: none; }
+.playbook-action-nav [role="group"] > button > span { display: grid; gap: 4px; min-width: 0; }
+.playbook-action-nav [role="group"] strong { overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
+.playbook-action-nav [role="group"] small { color: #8590a5; font-size: 10px; }
+.playbook-action-nav [role="group"] i { width: 6px; height: 6px; margin-left: auto; flex: none; border-radius: 50%; background: #d89735; }
+.playbook-action-nav p { margin: 4px 7px; color: #8a94a8; font-size: 12px; line-height: 1.8; }
+.playbook-action-nav .playbook-action-nav__note { margin-top: auto; padding-top: 18px; border-top: 1px solid #e5e9f1; font-size: 11px; }
+.playbook-workbench .playbook-source { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; border: 0; border-radius: 0; }
+.playbook-entry-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 17px 18px; border-bottom: 1px solid #e5e9f1; }
+.playbook-entry-heading > div { display: grid; gap: 9px; min-width: 0; }
+.playbook-entry-heading > div > span { color: #7e8ba2; font-size: 12px; }
+.playbook-entry-heading strong { display: flex; align-items: flex-start; gap: 8px; color: #334566; font-size: 13px; font-weight: 500; }
+.playbook-entry-heading strong > svg { flex: none; }
+.playbook-entry-heading code { overflow-wrap: anywhere; font: 12px/1.6 var(--font-code); }
+.playbook-save-state { flex: none; padding: 3px 7px; border-radius: 5px; color: #668573; background: #f0f7f2; font-size: 11px; }
+.playbook-save-state.is-dirty { color: #a97525; background: #fff6e5; }
+.playbook-workbench .playbook-source__toolbar { display: flex; justify-content: flex-end; gap: 8px; padding: 9px 14px; background: #fbfcfe; }
+.playbook-workbench .playbook-source__toolbar > span:first-child { margin-right: auto; color: #909aae; font-size: 11px; }
+.playbook-workbench .playbook-source__toolbar .ant-btn { color: #61708b; font-size: 11px; }
+.playbook-workbench .playbook-source .ant-input.playbook-source__editor,
+.playbook-workbench .workspace-browser__editor .ant-input.code-editor { flex: 1; min-height: 160px; resize: none; padding: 20px; border: 0; border-radius: 0; box-shadow: none; color: #dce5f5; background: #172036; font: 13px/1.85 var(--font-code); tab-size: 2; }
+.playbook-workbench .ant-input.code-editor::placeholder { color: #8293b0; opacity: 1; }
+.playbook-workbench .ant-input.code-editor:disabled { color: #bac8df; background: #1e2b43; -webkit-text-fill-color: #bac8df; }
+.playbook-workbench .playbook-source__actions { gap: 12px; min-height: 60px; padding: 10px 14px; background: #fff; }
+.playbook-workbench .playbook-source__actions > span { color: #8a94a8; font-size: 11px; }
+.playbook-workbench .playbook-source__actions > .ant-btn { flex: none; }
+.playbook-entry-empty { display: flex; flex: 1; flex-direction: column; justify-content: center; align-items: center; gap: 13px; padding: 30px; color: #8b98b0; text-align: center; background: #fafbfe; }
+.playbook-entry-empty h4, .playbook-entry-empty p { margin: 0; color: #66758f; font-size: 14px; }
+.playbook-entry-empty small { color: #919bb0; font-size: 12px; }
+.playbook-load-error { padding: 10px 16px; color: #a64647; background: #fff1f0; font-size: 12px; }
+.playbook-settings-panel { display: flex; min-height: 0; flex-direction: column; border-left: 1px solid #e5e9f1; }
+.playbook-settings { min-height: 0; flex: 1; overflow: auto; }
+.playbook-settings > header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 14px 16px; border-bottom: 1px solid #e9edf4; background: #fbfcfe; }
+.playbook-settings h4 { margin: 0; color: #40516f; font-size: 13px; }
+.playbook-settings > header > span { color: #929bb0; font-size: 10px; }
+.playbook-settings .playbook-action-fields { min-width: 0; margin: 0; border: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 10px; padding: 16px; }
+.playbook-settings .playbook-action-fields > .ant-form-item,
+.playbook-settings .credential-ref-editor,
+.playbook-settings .checkbox-field { grid-column: 1 / -1; min-width: 0; margin: 0; }
+.playbook-settings .ant-form-item-label > label { color: #697792; font-size: 12px; }
+.playbook-settings .ant-form-item-extra { font-size: 11px; line-height: 1.65; }
+.playbook-settings .ant-input, .playbook-settings .ant-select, .playbook-settings .ant-checkbox-label { font-size: 12px; }
+.playbook-settings .info-note, .playbook-settings .form-validation { margin: 0; font-size: 11px; line-height: 1.7; }
+.playbook-settings-delete { padding: 10px 14px; border-top: 1px solid #e8ecf3; }
+.playbook-settings-delete .ant-btn { font-size: 12px; }
+.playbook-workbench .playbook-editor__empty { grid-column: 2 / -1; }
+.playbook-files-view { height: clamp(360px, calc(100vh - 500px), 620px); }
+.playbook-workbench .workspace-browser { display: flex; flex-direction: column; height: 100%; margin: 0; border: 0; border-radius: 0; }
+.playbook-workbench .workspace-browser > header { padding: 13px 16px; background: #fafbfe; }
+.playbook-workbench .workspace-browser > header > div { min-width: 0; }
+.playbook-workbench .workspace-browser > header h4 small { margin-left: 8px; color: #8c97ab; font-weight: 400; }
+.playbook-workbench .workspace-browser > header p { overflow-wrap: anywhere; font-size: 11px; }
+.playbook-workbench .workspace-browser__create { padding: 11px 14px; }
+.playbook-workbench .workspace-browser__body { flex: 1; min-height: 0; grid-template-columns: 310px minmax(0, 1fr); }
+.playbook-workbench .workspace-browser__editor { min-height: 0; overflow: auto; }
+.playbook-workbench .workspace-browser__selection { padding: 14px 16px; }
+.playbook-workbench .workspace-browser__selection > span { flex: none; font-size: 11px; }
+.playbook-workbench .workspace-references { margin: 0; padding: 12px 16px; border-radius: 0; font-size: 12px; }
+@media (max-width: 1450px) {
+  .playbook-action-view { grid-template-columns: 180px minmax(0, 1fr) 290px; }
+  .playbook-entry-heading { flex-wrap: wrap; }
+  .playbook-workbench .playbook-source__actions > span { max-width: 150px; }
+}
+
+.playbook-workbench .workspace-browser__editor .playbook-source__actions { justify-content: flex-start; }
+.playbook-workbench .workspace-browser__editor .playbook-source__actions > .button--secondary { margin-left: auto; }

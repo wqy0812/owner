@@ -90,7 +90,15 @@ test('desktop editor, upload and environment dialogs retain readable populated c
   await page.getByRole('button',{name:'Playbook',exact:true}).click();
   let dialog=page.getByRole('dialog');await dialog.getByRole('button',{name:'新增第一个动作',exact:true}).click();
   await dialog.getByRole('textbox',{name:'Playbook 在线编辑器',exact:true}).fill('---\n- name: 验证桌面编辑器中的长任务名称和 YAML 缩进\n  hosts: all\n  gather_facts: false\n  tasks:\n    - name: 本地显示测试，不提交或执行\n      ansible.builtin.debug:\n        msg: "桌面字体与代码行滚动检查"\n');
-  await geometry(dialog,1440);const editor=dialog.getByRole('textbox',{name:'Playbook 在线编辑器',exact:true});await editor.scrollIntoViewIfNeeded();await editor.evaluate(el=>el.scrollTop=0);await expect(editor).toHaveCSS('background-color','rgb(23, 32, 54)');expect((await editor.boundingBox())!.height).toBeGreaterThanOrEqual(320);await capture(page,'playbook-action-editor');await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+  await geometry(dialog,1440);const editor=dialog.getByRole('textbox',{name:'Playbook 在线编辑器',exact:true});await editor.scrollIntoViewIfNeeded();await editor.evaluate(el=>el.scrollTop=0);await expect(editor).toHaveCSS('background-color','rgb(23, 32, 54)');expect((await editor.boundingBox())!.height).toBeGreaterThanOrEqual(320);await capture(page,'playbook-action-editor');await page.keyboard.press('Escape');
+  const discard = page.getByRole('dialog', { name: '确认操作', exact: true });
+  await expect(discard).toBeVisible();
+  await discard.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(discard).toHaveCount(0);
+  await expect(editor).toHaveValue(/验证桌面编辑器/);
+  await page.keyboard.press('Escape');
+  await discard.getByRole('button', { name: '确认', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   for(const [button,name] of [['构建镜像','image-build'],['组件介质','artifacts']] as const){
     await page.getByRole('button',{name:button,exact:true}).click();dialog=page.getByRole('dialog');await geometry(dialog,1040);await capture(page,name);await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
   }
@@ -121,4 +129,60 @@ test('build update dialog prevents old-page work and stays open until refresh',a
   await expect(page.locator('.build-version-guard__content')).toHaveAttribute('inert','');
   await page.keyboard.press('Escape');await expect(dialog).toBeVisible();await expect(dialog.getByRole('button',{name:'刷新使用新版本',exact:true})).toBeEnabled();
   await page.screenshot({path:path.join(screenshots,'build-update.png'),animations:'disabled'});
+});
+
+test('saves an action through the real API, reopens its YAML and preserves local text on conflict', async ({ page }) => {
+  await identity(page, 'component_owner');
+  // This writable fixture has its own valid contract, separate from display-only lineage data.
+  const componentResponse = await page.request.post('/api/v1/components', { data: { name: 'Action browser acceptance', slug: 'action-browser-acceptance', layer: 'runtime_state', tags: [] } });
+  expect(componentResponse.ok(), await componentResponse.text()).toBeTruthy();
+  const { data: component } = await componentResponse.json();
+  const input = { mode: 'new_line', lineName: 'Browser acceptance', version: '1.0.0', releaseNotes: 'Isolated action persistence test', riskLevel: 'low', environmentConstraints: {} };
+  const preview = await page.request.post(`/api/v1/components/${component.id}/release-draft-plan`, { data: input });
+  expect(preview.ok(), await preview.text()).toBeTruthy();
+  const { data: plan } = await preview.json();
+  const creation = await page.request.post(`/api/v1/components/${component.id}/release-drafts`, { data: { ...input, expectedPlanDigest: plan.planDigest } });
+  expect(creation.ok(), await creation.text()).toBeTruthy();
+  const { data: release } = await creation.json();
+  await page.goto(`/components?selected=${component.id}`);
+  await page.getByRole('button', { name: 'Playbook', exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: /配置 Draft/ });
+  await dialog.getByRole('button', { name: '新增第一个动作', exact: true }).click();
+  const content = '---\n- name: Persist a valid Role task\n  debug:\n    msg: saved by browser acceptance\n';
+  await dialog.getByRole('textbox', { name: 'Playbook 在线编辑器', exact: true }).fill(content);
+  const endpoint = `/api/v1/component-releases/${release.id}/playbook`;
+  const savedResponse = page.waitForResponse(response => response.url().endsWith(endpoint) && response.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存 Playbook', exact: true }).click();
+  const response = await savedResponse;
+  const payload = await response.json();
+  expect(response.ok(), JSON.stringify(payload)).toBeTruthy();
+  const { data: saved } = payload;
+  const readback = await page.request.get(`${endpoint}?actionId=${encodeURIComponent(saved.action.id)}`);
+  expect(readback.ok()).toBeTruthy();
+  expect((await readback.json()).data.content).toBe(content);
+  await expect(dialog.getByRole('button', { name: '保存 Draft', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '关闭编辑器', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Playbook', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: /配置 Draft/ });
+  const editor = dialog.getByRole('textbox', { name: 'Playbook 在线编辑器', exact: true });
+  await expect(editor).toHaveValue(content);
+
+  const workspace = await page.request.get(`/api/v1/component-releases/${release.id}/playbook-workspace`);
+  expect(workspace.ok()).toBeTruthy();
+  const { data: tree } = await workspace.json();
+  const remoteContent = content.replace('saved by browser acceptance', 'updated by another editor');
+  const remoteSave = await page.request.put(endpoint, { data: { actionKind: saved.action.kind, action: saved.action, content: remoteContent, expectedSha256: saved.sha256, expectedTreeSha256: tree.treeSha256 } });
+  expect(remoteSave.ok()).toBeTruthy();
+  const localContent = content.replace('saved by browser acceptance', 'keep these local edits');
+  await editor.fill(localContent);
+  const conflictResponse = page.waitForResponse(result => result.url().endsWith(endpoint) && result.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存 Playbook', exact: true }).click();
+  expect((await conflictResponse).status()).toBe(409);
+  await expect(page.getByText('保存 Playbook 失败', { exact: true })).toBeVisible();
+  await expect(editor).toHaveValue(localContent);
+  await expect(dialog.getByRole('button', { name: '保存 Draft', exact: true })).toBeDisabled();
+  const finalReadback = await page.request.get(`${endpoint}?actionId=${encodeURIComponent(saved.action.id)}`);
+  expect((await finalReadback.json()).data.content).toBe(remoteContent);
 });

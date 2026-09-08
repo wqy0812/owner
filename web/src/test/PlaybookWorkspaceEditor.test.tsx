@@ -3,9 +3,41 @@ import { api } from '../api/client';
 import { PlaybookWorkspaceEditor } from '../features/components/contract/PlaybookWorkspaceEditor';
 import type { PlaybookWorkspaceFile } from '../types/domain';
 import { answerConfirm } from './antdInteractions';
-import { fireEvent, render, screen, waitFor, within } from './render';
+import { act, fireEvent, render, screen, waitFor, within } from './render';
+import { deferred } from './testLifecycle';
 
 beforeEach(() => vi.restoreAllMocks());
+
+it('locks the editor during a refresh and preserves unsaved contents when reload is declined', async () => {
+  const file: PlaybookWorkspaceFile = { releaseId: 'release', path: 'templates/a.j2', sha256: 'old', sizeBytes: 8, mediaType: 'text/plain', editable: true, content: 'original' };
+  const pending = deferred<Awaited<ReturnType<typeof api.playbookWorkspace>>>();
+  vi.spyOn(api, 'playbookWorkspace').mockResolvedValueOnce({ root: 'managed/test/', treeSha256: 'before', files: [file] }).mockReturnValueOnce(pending.promise);
+  vi.spyOn(api, 'workspaceFile').mockResolvedValue(file);
+  render(<PlaybookWorkspaceEditor releaseId="release" refreshToken="" notify={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: file.path }));
+  const editor = await screen.findByLabelText('辅助文件在线编辑器');
+  await waitFor(() => expect(editor).toBeEnabled());
+  fireEvent.change(editor, { target: { value: 'local changes' } });
+  fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+  expect(editor).toBeDisabled();
+  await act(async () => pending.resolve({ root: 'managed/test/', treeSha256: 'remote', files: [{ ...file, sha256: 'remote' }] }));
+  await answerConfirm(false);
+  await waitFor(() => expect(editor).toBeEnabled());
+  expect(editor).toHaveValue('local changes');
+  expect(api.workspaceFile).toHaveBeenCalledTimes(1);
+});
+
+it('ignores an older workspace response after a newer refresh has completed', async () => {
+  const earlier = deferred<Awaited<ReturnType<typeof api.playbookWorkspace>>>();
+  vi.spyOn(api, 'playbookWorkspace').mockReturnValueOnce(earlier.promise).mockResolvedValueOnce({ root: 'managed/new/', treeSha256: 'new', files: [] });
+  const notify = vi.fn();
+  const view = render(<PlaybookWorkspaceEditor releaseId="release" refreshToken="old" notify={notify} />);
+  view.rerender(<PlaybookWorkspaceEditor releaseId="release" refreshToken="new" notify={notify} />);
+  await screen.findByText('managed/new/');
+  await act(async () => earlier.resolve({ root: 'managed/old/', treeSha256: 'old', files: [] }));
+  expect(screen.getByText('managed/new/')).toBeInTheDocument();
+  expect(screen.queryByText('managed/old/')).not.toBeInTheDocument();
+});
 
 it('saves a newly created helper using its returned file identity', async () => {
   const file: PlaybookWorkspaceFile = { releaseId: 'release', path: 'templates/example.j2', sha256: 'empty-file-sha', sizeBytes: 0, mediaType: 'text/plain', editable: true, content: '' };
@@ -14,6 +46,7 @@ it('saves a newly created helper using its returned file identity', async () => 
   const save = vi.spyOn(api, 'saveWorkspaceFile').mockResolvedValue(file);
   render(<PlaybookWorkspaceEditor releaseId="release" refreshToken="" notify={vi.fn()} />);
   await screen.findByText('工作区尚无文件。');
+  fireEvent.change(screen.getByLabelText('工作区相对路径'), { target: { value: file.path } });
   fireEvent.click(screen.getByRole('button', { name: '新建文本文件' }));
   const editor = await screen.findByLabelText('辅助文件在线编辑器');
   await waitFor(() => expect(screen.getByRole('button', { name: '新建文本文件' })).not.toBeDisabled());

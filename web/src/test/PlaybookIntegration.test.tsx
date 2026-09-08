@@ -123,24 +123,25 @@ describe("PlaybookIntegration", () => {
   it('sends an explicit empty CredentialRef list and keeps it cleared after reopening', async () => {
     let draft = {
       id: 'release-credential-draft', componentId: 'component-credential', version: '1.0.0-rc1',
-      status: 'draft' as const, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
-      actions: [{ id: 'action-install', name: 'install', kind: 'install' as const, playbook: 'managed/credential/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
+      status: 'draft' as const, definitionGeneration: 1, releaseNotes: 'Credential draft', parameters: [], dependencies: [],
+      actions: [{ id: 'action-install', name: 'install', kind: 'install' as const, playbook: 'managed/credential/tasks/install.yml', requiredCredentials: ['K8S_BOOTSTRAP_TOKEN'] }],
     };
     let submitted: Record<string, unknown> | undefined;
     let atomicAction: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/session/me')) return json(alice);
-      if (url.includes('/component-releases/release-credential-draft/playbook?actionId=action-install')) return json({ path: 'managed/credential/install.yml', filename: 'install.yml', content: '---\n- hosts: all\n  tasks: []\n', sha256: 'credential-playbook-sha' });
-      if (url.endsWith('/component-releases/release-credential-draft/playbook-workspace')) return json({ root: 'managed/credential/', treeSha256: 'credential-tree-sha', files: [{ releaseId: 'release-credential-draft', path: 'install.yml', sha256: 'credential-playbook-sha', sizeBytes: 32, mediaType: 'application/yaml', editable: true }] });
+      if (url.includes('/component-releases/release-credential-draft/playbook?actionId=action-install')) return json({ path: 'managed/credential/tasks/install.yml', filename: 'install.yml', content: '---\n- name: Credential check\n  debug: { msg: ready }\n', sha256: 'credential-playbook-sha' });
+      if (url.endsWith('/component-releases/release-credential-draft/playbook-workspace')) return json({ root: 'managed/credential/', treeSha256: 'credential-tree-sha', files: [{ releaseId: 'release-credential-draft', path: 'tasks/install.yml', sha256: 'credential-playbook-sha', sizeBytes: 32, mediaType: 'application/yaml', editable: true }] });
       if (url.endsWith('/component-releases/release-credential-draft/playbook') && init?.method === 'PUT') {
         const parsed = JSON.parse(String(init.body)); atomicAction = parsed.action;
-        return json({ path: 'managed/credential/install.yml', filename: 'install.yml', content: parsed.content, sha256: 'credential-playbook-sha-2', action: { ...parsed.action, playbook: 'managed/credential/install.yml' } });
+        draft = { ...draft, definitionGeneration: draft.definitionGeneration + 1, actions: [{ ...parsed.action, playbook: 'managed/credential/tasks/install.yml' }] };
+        return json({ path: 'managed/credential/tasks/install.yml', filename: 'install.yml', content: parsed.content, sha256: 'credential-playbook-sha-2', action: { ...parsed.action, playbook: 'managed/credential/tasks/install.yml' } });
       }
       if (url.endsWith('/component-releases/release-credential-draft') && init?.method === 'PUT') {
         const parsed = JSON.parse(String(init.body)) as Record<string, unknown>;
         submitted = parsed;
-        draft = { ...draft, ...parsed, status: 'draft', actions: (parsed.actions as typeof draft.actions).map((action) => ({ ...action, playbook: `managed/credential/${action.kind}.yml` })) } as typeof draft;
+        draft = { ...draft, ...parsed, status: 'draft', actions: (parsed.actions as typeof draft.actions).map((action) => ({ ...action, playbook: `managed/credential/tasks/${action.kind}.yml` })) } as typeof draft;
         return json(draft);
       }
       if (url.endsWith('/components')) return json([{
@@ -156,14 +157,14 @@ describe("PlaybookIntegration", () => {
     await renderDraftEditor('component-credential');
     await userEvent.click(await screen.findByRole('button', { name: 'Playbook' }));
     expect(screen.getByText('K8S_BOOTSTRAP_TOKEN')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
-    await screen.findByDisplayValue(/hosts: all/);
+    await userEvent.click(screen.getByRole('button', { name: '重新载入' }));
+    await screen.findByDisplayValue(/Credential check/);
     await userEvent.click(screen.getByRole('button', { name: '清空全部' }));
-    expect(screen.getByText('请先保存当前 Action')).toBeInTheDocument();
+    expect(screen.getByText('请先保存未完成的编辑')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存 Draft' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: '保存 Playbook' }));
     await waitFor(() => expect(atomicAction?.requiredCredentials).toEqual([]));
-    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled());
     await userEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
 
     await waitFor(() => expect(submitted).toBeDefined());
@@ -198,7 +199,7 @@ describe("PlaybookIntegration", () => {
     await renderDraftEditor('component-docker');
     await userEvent.click(screen.getByRole('button', { name: 'Playbook' }));
     await selectOption(await screen.findByRole('combobox', { name: '可安全重试' }), /是 · 已验证/);
-    await userEvent.click(screen.getByRole('button', { name: '载入编辑器' }));
+    await userEvent.click(screen.getByRole('button', { name: '重新载入' }));
     const editor = await screen.findByDisplayValue(/Install Docker/);
     const original = (editor as HTMLTextAreaElement).value;
     await userEvent.click(screen.getByRole('button', { name: '保存 Playbook' }));
@@ -211,14 +212,14 @@ describe("PlaybookIntegration", () => {
     expect(screen.getByRole('button', { name: '保存 Draft' })).toBeDisabled();
     fireEvent.change(editor, { target: { value: original } });
     expect(screen.getByText('内容已保存')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled());
   });
 
   it('confirms before discarding an unsaved Playbook to add another action', async () => {
     installPlaybookDraft();
     await renderDraftEditor('component-docker');
     await userEvent.click(screen.getByRole('button', { name: 'Playbook' }));
-    await userEvent.click(await screen.findByRole('button', { name: '载入编辑器' }));
+    await userEvent.click(await screen.findByRole('button', { name: '重新载入' }));
     const editor = await screen.findByDisplayValue(/Install Docker/);
     fireEvent.change(editor, { target: { value: 'locally changed install' } });
     await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
@@ -227,7 +228,7 @@ describe("PlaybookIntegration", () => {
     expect(editor).toHaveValue('locally changed install');
     await userEvent.click(screen.getByRole('button', { name: '新增动作' }));
     await answerConfirm();
-    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).getAllByRole('button', { name: 'rollback' }).at(-1)).toHaveClass('active');
+    expect(within(screen.getByRole('navigation', { name: 'Ansible 动作' })).getAllByRole('button', { name: 'rollback' }).at(-1)).toHaveClass('active');
   });
 
   it.each(['check', 'rollback'] as const)('saves a new %s action with its own managed Playbook', async kind => {
@@ -241,15 +242,15 @@ describe("PlaybookIntegration", () => {
       await selectOption(screen.getByRole('combobox', { name: '来源 Release' }), /26.1.0/);
       await selectOption(screen.getByRole('combobox', { name: '目标 Release' }), /25.0.0/);
     }
-    fireEvent.change(screen.getByRole('textbox', { name: 'Playbook 在线编辑器' }), { target: { value: `---\n- name: ${kind} Docker\n  hosts: all\n  tasks: []\n` } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Playbook 在线编辑器' }), { target: { value: `---\n- name: ${kind} Docker\n  debug: { msg: ready }\n` } });
     await userEvent.click(screen.getByRole('button', { name: '保存 Playbook' }));
     await waitFor(() => expect(fixture.persistedAction.kind).toBe(kind));
     expect(fixture.saveRequests).toHaveLength(1);
     expect(fixture.saveRequests[0]).toMatchObject({
-      actionKind: kind, action: { kind }, content: `---\n- name: ${kind} Docker\n  hosts: all\n  tasks: []\n`,
+      actionKind: kind, action: { kind }, content: `---\n- name: ${kind} Docker\n  debug: { msg: ready }\n`,
       expectedSha256: '', expectedTreeSha256: 'workspace-tree-sha256',
     });
-    expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存 Draft' })).toBeEnabled());
     if (kind === 'rollback') expect(fixture.persistedAction).toMatchObject({ fromReleaseId: 'release-docker-draft', toReleaseId: 'release-docker-previous' });
   });
 
@@ -262,8 +263,8 @@ describe("PlaybookIntegration", () => {
     await answerConfirm();
     await waitFor(() => expect(fixture.deletedActionKind).toBe('check'));
     expect(await screen.findByText('Action 已删除')).toBeInTheDocument();
-    expect(within(screen.getByRole('tablist', { name: 'Ansible 动作' })).queryByRole('button', { name: 'check' })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(within(screen.getByRole('navigation', { name: 'Ansible 动作' })).queryByRole('button', { name: 'check' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '关闭编辑器' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
@@ -286,7 +287,7 @@ function installPlaybookDraft(allActions = false) {
   };
   let draft = {
     id: 'release-docker-draft', componentId: 'component-docker', version: '26.1.0',
-    status: 'draft', releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
+    status: 'draft', definitionGeneration: 1, releaseNotes: 'Docker Runtime draft', parameters: [], dependencies: [],
     actions: [{ name: 'install', kind: 'install', playbook: 'managed/docker/release-docker-draft/tasks/install.yml', timeoutSeconds: 1800, riskLevel: 'low' }],
   };
   let persistedAction: Record<string, unknown> = {};
@@ -300,7 +301,7 @@ function installPlaybookDraft(allActions = false) {
       return json({
         path: 'managed/docker/release-docker-draft/tasks/install.yml',
         filename: 'install.yml',
-        content: '---\n- name: Install Docker\n  hosts: all\n  tasks: []\n',
+        content: '---\n- name: Install Docker\n  debug: { msg: installed }\n',
         sha256: 'existing-playbook-sha256',
       });
     }
@@ -313,19 +314,28 @@ function installPlaybookDraft(allActions = false) {
     }
     if (url.endsWith('/component-releases/release-docker-draft/playbook') && init?.method === 'PUT') {
       const body = JSON.parse(String(init.body));
+      const id = body.action.id || `action-${body.actionKind}`;
+      const entry = body.actionKind === 'check' ? `tasks/checks/${id}.yml` : `tasks/${body.actionKind}.yml`;
+      const savedAction = { ...body.action, id, playbook: `managed/docker/release-docker-draft/${entry}` };
+      draft = { ...draft, definitionGeneration: draft.definitionGeneration + 1, actions: [...draft.actions.filter(item => item.kind !== body.actionKind), savedAction] };
       persistedAction = body.action;
       saveRequests.push(body);
       return json({
-        path: `managed/docker/release-docker-draft/tasks/${body.actionKind}.yml`,
+        path: savedAction.playbook,
         filename: `${body.actionKind}.yml`,
         content: body.content,
         sha256: 'playbook-sha256',
-        action: { ...body.action, id: body.action.id || `action-${body.actionKind}`, playbook: `managed/docker/release-docker-draft/tasks/${body.actionKind}.yml` },
+        action: savedAction,
       });
+    }
+    if (url.includes('/component-releases/release-docker-draft/playbook?actionId=') && (!init?.method || init.method === 'GET')) {
+      const id = new URL(url, 'http://localhost').searchParams.get('actionId');
+      const action = draft.actions.find(item => `action-${item.kind}` === id);
+      if (action) return json({ path: action.playbook, filename: `${action.kind}.yml`, content: `---\n- name: ${action.kind} Docker\n  debug: { msg: test }\n`, sha256: `sha-${id}` });
     }
     if (url.includes('/component-releases/release-docker-draft/playbook?actionId=') && init?.method === 'DELETE') {
       deletedActionKind = new URL(url, 'http://localhost').searchParams.get('actionId')?.replace('action-', '') ?? '';
-      draft = { ...draft, actions: draft.actions.filter((action) => action.kind !== deletedActionKind) };
+      draft = { ...draft, definitionGeneration: draft.definitionGeneration + 1, actions: draft.actions.filter((action) => action.kind !== deletedActionKind) };
       return json({ root: 'managed/docker/release-docker-draft/', treeSha256: 'workspace-tree-after-delete', files: [] });
     }
     if (url.endsWith('/component-releases/release-docker-draft') && init?.method === 'PUT') {

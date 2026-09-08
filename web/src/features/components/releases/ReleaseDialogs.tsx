@@ -198,15 +198,22 @@ export function EditReleaseModal({ release, releases, onClose, onDone }: {
     onDone: () => void;
 }) {
     const { notify, signalRefresh } = useApp();
+    const { confirm } = useDialogs();
+    const [versionDirty, setVersionDirty] = useState(false);
     const [busy, setBusy] = useState(false);
     const [generation, setGeneration] = useState(release.definitionGeneration);
+    const [generationStatus, setGenerationStatus] = useState<'ready' | 'loading' | 'error'>('ready');
     const [actions, setActions] = useState<ActionDefinition[]>(release.actions ?? []);
     const [savedActions, setSavedActions] = useState(() => JSON.stringify(release.actions ?? []));
     const [playbookDirty, setPlaybookDirty] = useState(false);
     const actionsDirty = JSON.stringify(actions) !== savedActions;
     async function submit(values: Record<string, string>) {
+        if (generationStatus !== 'ready') {
+            notify('error', '请先读取最新版本状态');
+            return;
+        }
         if (playbookDirty || actionsDirty) {
-            notify('error', '请先保存当前 Action', 'Action 配置或在线编辑器内容仍有未保存变更。');
+            notify('error', '请先保存未完成的编辑', '动作配置、入口 YAML 或工作区文件仍有未保存变更。');
             return;
         }
         setBusy(true);
@@ -239,11 +246,38 @@ export function EditReleaseModal({ release, releases, onClose, onDone }: {
             setBusy(false);
         }
     }
-    const close = () => {
-        if (!busy)
-            onClose();
+    async function refreshGeneration() {
+        setGenerationStatus('loading');
+        signalRefresh('components');
+        try {
+            const component = await api.component(release.componentId);
+            const current = component.releases?.find(item => item.id === release.id);
+            if (!current || current.definitionGeneration === undefined) throw new Error('未读取到当前 Draft 的版本状态');
+            setGeneration(current.definitionGeneration);
+            setGenerationStatus('ready');
+        }
+        catch (reason) {
+            setGenerationStatus('error');
+            notify('error', '版本状态刷新失败，请重试', displayError(reason));
+        }
+    }
+    async function persistActions(persistedActions: ActionDefinition[], actionId?: string) {
+        setActions(persistedActions);
+        setSavedActions(previous => {
+            const baseline = (JSON.parse(previous) as ActionDefinition[]).filter(item => persistedActions.some(current => current.id === item.id));
+            const saved = persistedActions.find(item => item.id === actionId);
+            const next = baseline.map(item => item.id === actionId && saved ? saved : item);
+            if (saved && !next.some(item => item.id === saved.id)) next.push(saved);
+            return JSON.stringify(next);
+        });
+        await refreshGeneration();
+    }
+    const close = async () => {
+        if (busy) return;
+        if ((playbookDirty || actionsDirty || versionDirty) && !await confirm('仍有未保存的修改，确认放弃并关闭？已经保存的动作和文件不会撤销。')) return;
+        onClose();
     };
-    return <Modal busy={Boolean(busy)} size="workspace" title={`配置 Draft ${release.version}`} description="维护版本信息与 Playbook。Action 保存/删除会立即原子持久化，关闭编辑器不会撤销。" onClose={close} formProps={{ onFinish: (values) => submit(values), layout: "vertical", preserve: false }} footer={<footer className="modal-actions">{playbookDirty || actionsDirty ? <span className="modal-actions__hint">请先保存当前 Action</span> : null}<Button className="button button--quiet" disabled={busy} onClick={close} htmlType={"button"} type="default">取消</Button><Button className="button button--primary" disabled={busy || playbookDirty || actionsDirty} htmlType={"submit"} type="primary"><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</Button></footer>}><div className="form-grid"><Field label={"版本"} name={"version"} initialValue={release.version} required rules={[{ required: true, message: "请填写此项" }]}><Input required/></Field><Field label={"风险级别"} name={"riskLevel"} initialValue={release.riskLevel ?? 'low'}><Select popupMatchSelectWidth={true}><Select.Option value="low">低</Select.Option><Select.Option value="medium">中</Select.Option><Select.Option value="high">高</Select.Option><Select.Option value="destructive">破坏性（需审批）</Select.Option></Select></Field>{release.parentReleaseId ? <Field label={"升级兼容性"} name={"compatibility"} initialValue={release.compatibility}><Select popupMatchSelectWidth={true}><Select.Option value="compatible">兼容升级</Select.Option><Select.Option value="breaking">破坏性升级</Select.Option></Select></Field> : <div className="field-summary"><span>版本关系</span><strong>全新基线 · 不适用升级兼容性</strong></div>}<Field className="span-2" label={"发布说明"} name={"notes"} initialValue={release.releaseNotes} required rules={[{ required: true, message: "请填写此项" }]}><Input.TextArea rows={3} required/></Field><div className="span-2"><PlaybookActionEditor releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onPersisted={(persistedActions) => { setActions(persistedActions); setSavedActions(JSON.stringify(persistedActions)); signalRefresh('components'); void api.component(release.componentId).then(component => setGeneration(component.releases?.find(item => item.id === release.id)?.definitionGeneration)).catch(reason => notify('error', '版本状态刷新失败，请重新打开编辑器', displayError(reason))); }} onDirtyChange={setPlaybookDirty}/></div></div></Modal>;
+    return <Modal busy={busy || generationStatus === 'loading'} size="workspace" title={`配置 Draft ${release.version}`} description="动作入口与工作区文件分别保存；保存后立即生效。" onClose={close} formProps={{ onFinish: (values) => submit(values), layout: "vertical", preserve: false, onValuesChange: () => setVersionDirty(true) }} footer={<footer className="modal-actions">{generationStatus === 'error' && <Button onClick={() => void refreshGeneration()}>重试读取版本状态</Button>}{playbookDirty || actionsDirty ? <span className="modal-actions__hint">请先保存未完成的编辑</span> : null}<Button className="button button--quiet" disabled={busy} onClick={close} htmlType={"button"} type="default" aria-label="关闭编辑器">关闭</Button><Button className="button button--primary" disabled={busy || generationStatus !== 'ready' || playbookDirty || actionsDirty} htmlType={"submit"} type="primary"><SaveIcon /> {busy ? '保存中…' : '保存 Draft'}</Button></footer>}><div className="release-playbook-dialog"><details className="release-playbook-metadata"><summary><strong>版本信息</strong><span>{release.version} · {release.parentReleaseId ? '演进版本' : '全新基线'}{versionDirty ? ' · 有未保存修改' : ''}</span><small>编辑版本与发布说明</small></summary><div className="form-grid"><Field label={"版本"} name={"version"} initialValue={release.version} required rules={[{ required: true, message: "请填写此项" }]}><Input required/></Field><Field label={"风险级别"} name={"riskLevel"} initialValue={release.riskLevel ?? 'low'}><Select popupMatchSelectWidth={true}><Select.Option value="low">低</Select.Option><Select.Option value="medium">中</Select.Option><Select.Option value="high">高</Select.Option><Select.Option value="destructive">破坏性（需审批）</Select.Option></Select></Field>{release.parentReleaseId ? <Field label={"升级兼容性"} name={"compatibility"} initialValue={release.compatibility}><Select popupMatchSelectWidth={true}><Select.Option value="compatible">兼容升级</Select.Option><Select.Option value="breaking">破坏性升级</Select.Option></Select></Field> : <div className="field-summary"><span>版本关系</span><strong>全新基线 · 不适用升级兼容性</strong></div>}<Field className="span-2" label={"发布说明"} name={"notes"} initialValue={release.releaseNotes} required rules={[{ required: true, message: "请填写此项" }]}><Input.TextArea rows={3} required/></Field></div></details><div><PlaybookActionEditor disabled={busy || generationStatus === 'loading'} savedActions={JSON.parse(savedActions) as ActionDefinition[]} releaseId={release.id} releases={releases} actions={actions} onChange={setActions} onPersisted={persistActions} onWorkspacePersisted={refreshGeneration} onDirtyChange={setPlaybookDirty}/></div></div></Modal>;
 }
 export function InspectReleaseModal({ release, components, onClose }: {
     release: ComponentRelease;

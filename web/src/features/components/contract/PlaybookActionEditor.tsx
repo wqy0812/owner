@@ -1,47 +1,25 @@
 import { Upload as AntUpload } from 'antd';
 import { useModalBusy } from '../../../components/ModalBusyContext';
 import { useDialogs } from '../../../components/UIProvider';
-import { Field } from '../../../components/Field';
-import { Input, Button, Select, Checkbox } from 'antd';
+import { Input, Button } from 'antd';
 import { FileCode2, Plus, Trash2, Upload } from 'lucide-react';
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { api } from '../../../api/client';
 import { displayError, useApp } from '../../../context/AppContext';
 import type { ActionDefinition, ComponentRelease } from '../../../types/domain';
-import { ACTION_OPTIONS, splitCSV } from '../model';
+import { ACTION_OPTIONS } from '../model';
+import { PlaybookActionSettings } from './PlaybookActionSettings';
+import './PlaybookEditor.css';
 import { PlaybookWorkspaceEditor } from './PlaybookWorkspaceEditor';
-function CredentialNameEditor({ values, onChange }: {
-    values: string[];
-    onChange: (values: string[]) => void;
-}) {
-    const [input, setInput] = useState('');
-    function add() {
-        const additions = splitCSV(input);
-        if (!additions.length)
-            return;
-        onChange([...new Set([...values, ...additions])]);
-        setInput('');
-    }
-    return <div className="span-2 credential-ref-editor">
-    <div className="credential-ref-editor__label"><span>所需 CredentialRef</span>{values.length ? <button type="button" onClick={() => onChange([])}>清空全部</button> : null}</div>
-    <div className="credential-ref-tags" aria-label="所需 CredentialRef 列表">
-      {values.map((name) => <span key={name}>{name}<button type="button" aria-label={`删除 CredentialRef ${name}`} onClick={() => onChange(values.filter((item) => item !== name))}>×</button></span>)}
-      {!values.length ? <small>未声明 CredentialRef</small> : null}
-    </div>
-    <div className="inline-field"><Input aria-label="添加 CredentialRef" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ',') {
-                    event.preventDefault();
-                add();
-            }
-        }} placeholder="输入名称后按回车"/><Button className="button button--quiet" disabled={!input.trim()} onClick={add} htmlType={"button"} type="default">添加</Button></div>
-  </div>;
-}
-export function PlaybookActionEditor({ releaseId, releases, actions, onChange, onPersisted, onDirtyChange }: {
+export function PlaybookActionEditor({ releaseId, releases, actions, onChange, onPersisted, onWorkspacePersisted, onDirtyChange, savedActions = actions, disabled = false }: {
     releaseId: string;
     releases: ComponentRelease[];
     actions: ActionDefinition[];
     onChange: Dispatch<SetStateAction<ActionDefinition[]>>;
-    onPersisted: (actions: ActionDefinition[]) => void;
+    onPersisted: (actions: ActionDefinition[], actionId?: string) => void | Promise<void>;
+    onWorkspacePersisted?: () => Promise<void>;
+    savedActions?: ActionDefinition[];
+    disabled?: boolean;
     onDirtyChange: (dirty: boolean) => void;
 }) {
     const { confirm } = useDialogs();
@@ -51,15 +29,27 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
     const [content, setContent] = useState('');
     const [savedContent, setSavedContent] = useState('');
     const [savedSHA256, setSavedSHA256] = useState('');
+    const [view, setView] = useState<'actions' | 'files'>('actions');
+    const [workspaceDirty, setWorkspaceDirty] = useState(false);
+    const [loadError, setLoadError] = useState('');
+    const [loaded, setLoaded] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [saving, setSaving] = useState(false);
-    useModalBusy(saving || loading);
+    const [writing, setSaving] = useState(false);
+    const saving = writing || disabled;
+    useModalBusy(writing || loading);
     const pendingSelection = useRef<number>();
     const loadRequest = useRef(0);
     const action = actions[selected];
-    const releaseIds = new Set(releases.map((release) => release.id));
     const dirty = content !== savedContent;
-    useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+    const entryPath = action?.type === 'check' ? `tasks/checks/${action.id ?? '待保存'}.yml` : `tasks/${action?.type}.yml`;
+    const configurationDirty = !!action && JSON.stringify(action) !== JSON.stringify(savedActions.find(item => item.id === action.id && item.type === action.type));
+    useEffect(() => onDirtyChange(dirty || workspaceDirty), [dirty, workspaceDirty, onDirtyChange]);
+    useEffect(() => {
+        if (action?.id && !loaded) void loadPlaybook();
+        return () => { loadRequest.current += 1; };
+        // Selection owns loading; metadata edits must never replace the current text.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [releaseId, selected, action?.id]);
     useEffect(() => {
         const pending = pendingSelection.current;
         if (pending !== undefined) {
@@ -85,12 +75,7 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
             return;
         if (dirty && !await confirm('当前 Playbook 有未保存内容，确认放弃并切换动作？'))
             return;
-        loadRequest.current += 1;
-        setLoading(false);
-        setSelected(index);
-        setContent('');
-        setSavedContent('');
-        setSavedSHA256('');
+        await selectActionAfterConfirmation(index);
     }
     function updateAction(patch: Partial<ActionDefinition>, index = selected) {
         // Playbook saves are asynchronous. Always merge into the latest parent
@@ -108,6 +93,9 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
             pendingSelection.current = current.length;
             return [...current, next];
         });
+        setLoaded(true);
+        setLoadError('');
+        setView('actions');
         const template = '---\n- name: Complete this action before testing\n  ansible.builtin.fail:\n    msg: 请编写此动作的 Role 任务\n';
         setContent(template);
         setSavedContent('');
@@ -122,49 +110,56 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
     }
     async function removeAction() {
         if (!action || !await confirm(action.id
-            ? `确认立即删除 ${action.type} Action 及入口 ${action.type}.yml？该操作不会因关闭 Draft 编辑器而撤销。`
+            ? `确认立即删除 ${action.name || action.type} Action 及入口 ${entryPath}？该操作不会因关闭 Draft 编辑器而撤销。`
             : `确认移除尚未保存的 ${action.type} Action？`))
             return;
-        if (action.id) {
-            try {
+        setSaving(true);
+        try {
+            if (action.id) {
                 const expected = await currentWorkspaceExpectation();
-                await api.deleteActionPlaybook(releaseId, action.id ?? '', expected.fileSHA256, expected.treeSHA256);
+                await api.deleteActionPlaybook(releaseId, action.id, expected.fileSHA256, expected.treeSHA256);
             }
-            catch (reason) {
-                notify('error', '删除动作入口失败', displayError(reason));
-                return;
-            }
+            const remaining = actions.filter((_, index) => index !== selected);
+            if (action.id) await onPersisted(remaining, action.id);
+            else onChange(remaining);
+            loadRequest.current += 1;
+            setLoading(false);
+            setLoaded(false);
+            setLoadError('');
+            setSelected(Math.max(0, selected - 1));
+            setContent('');
+            setSavedContent('');
+            setSavedSHA256('');
+            if (action.id) notify('success', 'Action 已删除', '动作配置、入口文件与工作区清单已原子更新。');
         }
-        const remaining = actions.filter((_, index) => index !== selected);
-        if (action.id)
-            onPersisted(remaining);
-        else
-            onChange(remaining);
-        loadRequest.current += 1;
-        setLoading(false);
-        setSelected(Math.max(0, selected - 1));
-        setContent('');
-        setSavedContent('');
-        setSavedSHA256('');
-        if (action.id)
-            notify('success', 'Action 已删除', '动作配置、入口文件与工作区清单已原子更新。');
+        catch (reason) {
+            notify('error', '删除动作入口失败', displayError(reason));
+        }
+        finally {
+            setSaving(false);
+        }
     }
     async function loadPlaybook() {
-        if (!action)
+        if (!action?.id)
             return;
+        if (dirty && !await confirm('当前 Playbook 有未保存内容，确认放弃并重新载入？')) return;
         const request = ++loadRequest.current;
+        setLoadError('');
         setLoading(true);
         try {
             const playbook = await api.playbook(releaseId, action.id ?? '');
             if (request !== loadRequest.current)
                 return;
             setContent(playbook.content);
+            setLoaded(true);
             setSavedContent(playbook.content);
             setSavedSHA256(playbook.sha256);
         }
         catch (reason) {
             if (request !== loadRequest.current)
                 return;
+            setLoadError(displayError(reason));
+            setLoaded(false);
             notify('error', '读取 Playbook 失败', displayError(reason));
         }
         finally {
@@ -185,7 +180,8 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
             const persistedAction = { ...(playbook.action ?? action), playbook: playbook.path };
             const nextActions = actions.map((item, index) => index === actionIndex ? persistedAction : item);
             setContent(playbook.content);
-            onPersisted(nextActions);
+            await onPersisted(nextActions, persistedAction.id);
+            setLoaded(true);
             setSavedContent(playbook.content);
             setSavedSHA256(playbook.sha256);
             notify('success', 'Action 已保存', '动作配置、入口文件与工作区清单已作为一个操作保存。');
@@ -209,7 +205,8 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
             const playbook = await api.savePlaybook(releaseId, action, content, expected.fileSHA256, expected.treeSHA256);
             const persistedAction = { ...(playbook.action ?? action), playbook: playbook.path };
             const nextActions = actions.map((item, index) => index === actionIndex ? persistedAction : item);
-            onPersisted(nextActions);
+            await onPersisted(nextActions, persistedAction.id);
+            setLoaded(true);
             setSavedContent(content);
             setSavedSHA256(playbook.sha256);
             notify('success', 'Action 已保存', '动作配置、入口文件与工作区清单已作为一个操作保存。');
@@ -221,54 +218,64 @@ export function PlaybookActionEditor({ releaseId, releases, actions, onChange, o
             setSaving(false);
         }
     }
-    return <section className="playbook-editor">
-    <header className="playbook-editor__header">
-      <div><h3>Playbook 与生命周期动作</h3><p>上传 YAML 或直接在线编辑；每个版本使用独立 Role。部署依次运行前置检查、部署、后置检查；回滚依次运行回滚和回滚后检查。</p></div>
-      <Button className="button button--quiet" disabled={saving} onClick={addAction} htmlType={"button"} type="default"><Plus size={15}/> 新增动作</Button>
-    </header>
-    {action ? <>
-      <div className="playbook-action-tabs" role="tablist" aria-label="Ansible 动作">
-        {(['execute', 'check'] as const).map(group => <div key={group} role="group" aria-label={group === 'check' ? '检查动作' : '执行动作'}><span>{group === 'check' ? '检查动作' : '执行动作'}</span>{actions.map((item, index) => (item.type === 'check') === (group === 'check') && <button key={item.id ?? index} type="button" disabled={saving} className={selected === index ? 'active' : ''} onClick={() => selectAction(index)}>{item.name || item.type}</button>)}</div>)}
-      </div>
-      <div className="form-grid playbook-action-fields">
-        <Field label={"动作类型"} extra={<>{action.id ? <small>已保存动作的类型不可修改；如需更换，请删除后新建。</small> : null}</>}><Select value={action.type} disabled={Boolean(action.id)} onChange={(selectedValue) => {
-                const type = selectedValue as ActionDefinition['type'];
-                setContent('');
-                setSavedContent('');
-                setSavedSHA256('');
-                updateAction({ type, name: !action.name || action.name === action.type ? type : action.name, idempotent: type !== 'check' ? action.idempotent : false, preCheckActionId: type === 'rollback' || type === 'check' ? '' : action.preCheckActionId });
-            }} popupMatchSelectWidth={true}>{ACTION_OPTIONS.map((option) => <Select.Option key={option.value} value={option.value}>{option.value} · {option.label}</Select.Option>)}</Select></Field>
-        <Field label={"动作名称"}><Input aria-label="动作名称" value={action.name ?? ''} onChange={event => updateAction({ name: event.target.value })}/></Field><Field label={<>{action.type === 'check' ? '独立测试主机组（绑定时继承执行动作）' : '目标主机组'}</>} required={action.type !== 'check'}><Select value={action.hostGroup ?? ''} onChange={(selectedValue) => updateAction({ hostGroup: selectedValue })} popupMatchSelectWidth={true}><Select.Option value="">请选择主机组</Select.Option>{hostGroups.map((option) => <Select.Option key={option.id} value={option.value}>{option.label}</Select.Option>)}</Select></Field>
-        {action.type !== 'check' && <>
-          {action.type !== 'rollback' && <Field label={"前置检查 *"}><Select aria-label="前置检查" value={action.preCheckActionId ?? ''} onChange={(selectedValue) => updateAction({ preCheckActionId: selectedValue })} popupMatchSelectWidth={true}><Select.Option value="">请选择本版本的检查动作</Select.Option>{actions.filter(item => item.type === 'check' && item.id).map(item => <Select.Option key={item.id} value={item.id}>{item.name || item.id}</Select.Option>)}</Select></Field>}
-          <Field label={<>{action.type === 'rollback' ? '回滚后检查' : '后置检查 *'}</>}><Select aria-label="后置检查" value={action.postCheckActionId ?? ''} onChange={(selectedValue) => updateAction({ postCheckActionId: selectedValue })} popupMatchSelectWidth={true}><Select.Option value="">{action.type === 'rollback' ? '复用被回滚动作的前置检查' : '请选择本版本的检查动作'}</Select.Option>{actions.filter(item => item.type === 'check' && item.id).map(item => <Select.Option key={item.id} value={item.id}>{item.name || item.id}</Select.Option>)}</Select></Field>
-          <Field label={"可安全重试"} extra={<><small>{action.type === 'rollback' ? '仅在已验证部分执行后可安全重跑时声明；回滚主体成功后只重试未通过的后检查。' : '仅在已验证部分执行后可安全重跑时声明；已绑定的前置检查会随动作重试。'}</small></>}><Select aria-label="可安全重试" value={String(action.idempotent ?? false)} onChange={(selectedValue) => updateAction({ idempotent: selectedValue === 'true' })} popupMatchSelectWidth={true}><Select.Option value="false">否 · 未声明可安全重试</Select.Option><Select.Option value="true">是 · 已验证可安全重试</Select.Option></Select></Field>
-          {action.type === 'rollback' && !action.postCheckActionId && <p className="info-note span-2">回滚后按实际来源动作复用检查：{actions.filter(item => ['install', 'configure', 'upgrade'].includes(item.type)).map(item => `${item.name || item.type} → ${actions.find(check => check.id === item.preCheckActionId)?.name || '待绑定'}`).join('；')}。执行计划将展示具体检查 YAML。</p>}
-          {action.type !== 'rollback' && (!action.preCheckActionId || !action.postCheckActionId) && <p className="form-validation span-2">此动作尚未绑定完整检查，可保存 Draft，绑定完成后才能执行或发布。</p>}
-        </>}
-        <Checkbox className="checkbox-field" checked={action.become ?? false} onChange={(event) => updateAction({ become: event.target.checked })}><span>提权执行</span></Checkbox>
-        <Field label={"超时（秒）"}><Input type="number" min={1} value={action.timeoutSeconds ?? 1800} onChange={(event) => updateAction({ timeoutSeconds: Number(event.target.value) })}/></Field>
-        <Field label={"风险级别"}><Select value={action.riskLevel ?? 'low'} onChange={(selectedValue) => { const riskLevel = selectedValue as NonNullable<ActionDefinition['riskLevel']>; updateAction({ riskLevel, destructive: riskLevel === 'destructive' }); }} popupMatchSelectWidth={true}><Select.Option value="low">低</Select.Option><Select.Option value="medium">中</Select.Option><Select.Option value="high">高</Select.Option><Select.Option value="destructive">破坏性（需审批）</Select.Option></Select></Field>
-
-        <p className="info-note span-2">{action.type === 'rollback' ? '回滚直接执行恢复 YAML，再由回滚后检查验证恢复结果；需要的 facts 由 YAML 自行采集。' : 'facts 由本动作 YAML 自行采集；运行条件与残留探测写入前置检查 YAML，在依赖完成后执行。'}</p>
-        <div className="span-2 platform-managed-path"><span>平台入口</span><code>{action.type === 'check' ? `tasks/checks/${action.id ?? "待保存"}.yml` : `tasks/${action.type}.yml`}</code><Button className="button button--quiet" disabled={loading} onClick={() => void loadPlaybook()} htmlType={"button"} type="default">{loading ? '读取中…' : '载入编辑器'}</Button></div>
-        <Field label={"Tags（逗号分隔）"}><Input value={(action.tags ?? []).join(', ')} onChange={(event) => updateAction({ tags: splitCSV(event.target.value) })}/></Field>
-        <CredentialNameEditor values={action.requiredCredentials ?? []} onChange={(requiredCredentials) => updateAction({ requiredCredentials })}/>
-        {(action.type === 'upgrade' || action.type === 'rollback') ? <>
-          <Field label={"来源版本"}><Select aria-label="来源 Release" value={action.fromReleaseId ?? ''} onChange={(selectedValue) => updateAction({ fromReleaseId: selectedValue || undefined })} popupMatchSelectWidth={true}><Select.Option value="">请选择来源版本</Select.Option>{action.fromReleaseId && !releaseIds.has(action.fromReleaseId) ? <Select.Option value={action.fromReleaseId}>{action.fromReleaseId} · 现有值</Select.Option> : null}{releases.map((item) => <Select.Option key={item.id} value={item.id}>{item.version} · {item.id}</Select.Option>)}</Select></Field>
-          <Field label={"目标版本"}><Select aria-label="目标 Release" value={action.toReleaseId ?? ''} onChange={(selectedValue) => updateAction({ toReleaseId: selectedValue || undefined })} popupMatchSelectWidth={true}><Select.Option value="">请选择目标版本</Select.Option>{action.toReleaseId && !releaseIds.has(action.toReleaseId) ? <Select.Option value={action.toReleaseId}>{action.toReleaseId} · 现有值</Select.Option> : null}{releases.map((item) => <Select.Option key={item.id} value={item.id}>{item.version} · {item.id}</Select.Option>)}</Select></Field>
-          {action.type === 'rollback' ? <small className="span-2">起止版本都留空时表示回退当前版本的安装；填写时表示从当前版本回到指定旧版本。</small> : null}
-        </> : null}
-      </div>
-      <div className="playbook-source">
-        <div className="playbook-source__toolbar">
-          <AntUpload showUploadList={false} accept=".yml,.yaml,text/yaml,application/x-yaml"  beforeUpload={selectedUpload => { void uploadPlaybook(selectedUpload);  ;return false;}}><Button ><Upload size={15}/><span>上传 .yml / .yaml</span></Button></AntUpload>
-          <span>Role 入口由平台生成；检查按 Action ID 定位</span><span>{dirty ? '有未保存内容' : content ? '内容已保存' : '可上传或载入现有文件'}</span>
+    async function openActionFile(path: string) {
+        const index = actions.findIndex(item => (item.type === 'check' ? `tasks/checks/${item.id}.yml` : `tasks/${item.type}.yml`) === path);
+        if (index < 0) { notify('error', '未找到对应动作', path); return false; }
+        if (index !== selected) {
+            if (dirty && !await confirm('当前 Playbook 有未保存内容，确认放弃并切换动作？')) return false;
+            await selectActionAfterConfirmation(index);
+        }
+        setView('actions');
+        return true;
+    }
+    async function selectActionAfterConfirmation(index: number) {
+        loadRequest.current += 1;
+        setLoading(false);
+        setSelected(index);
+        setLoaded(false);
+        setLoadError('');
+        setContent('');
+        setSavedContent('');
+        setSavedSHA256('');
+    }
+    return <section className="playbook-editor playbook-workbench">
+      <header className="playbook-editor__header">
+        <div><h3>Playbook 工作台</h3><p>选择动作编写入口任务，或维护本版本的模板与文件。</p></div>
+        <div className="playbook-view-switch" aria-label="编辑视图">
+          <Button disabled={saving} aria-pressed={view === 'actions'} onClick={() => setView('actions')}>动作入口 <span>{actions.length}</span></Button>
+          <Button disabled={saving} aria-pressed={view === 'files'} onClick={() => setView('files')}>工作区文件{workspaceDirty ? ' · 未保存' : ''}</Button>
         </div>
-        <Input.TextArea className="code-editor playbook-source__editor" aria-label="Playbook 在线编辑器" spellCheck={false} value={content} placeholder={'---\n- name: Check required input\n  ansible.builtin.assert:\n    that: cf.inputs.version is defined'} onChange={(event) => setContent(event.target.value)}/>
-        <div className="playbook-source__actions"><Button className="icon-text icon-text--danger" disabled={saving || actions.some(item => item.preCheckActionId === action.id && !!action.id || item.postCheckActionId === action.id && !!action.id)} title={action.type === 'check' ? '被执行动作引用的检查需先解除绑定' : undefined} onClick={() => void removeAction()} htmlType={"button"} type="text" danger><Trash2 size={14}/> 移除动作</Button><Button className="button button--secondary" disabled={saving || !content.trim()} onClick={() => void savePlaybook()} htmlType={"button"} type="default"><FileCode2 size={15}/> {saving ? '保存中…' : '保存 Playbook'}</Button></div>
+      </header>
+      <div hidden={view !== 'actions'} className="playbook-action-view">
+        <nav className="playbook-action-nav" aria-label="Ansible 动作">
+          <div className="playbook-action-nav__heading"><strong>生命周期动作</strong><Button type="text" size="small" disabled={saving || loading} onClick={() => void addAction()}><Plus size={14}/>新增动作</Button></div>
+          {(['execute', 'check'] as const).map(group => <div key={group} role="group" aria-label={group === 'check' ? '检查动作' : '执行动作'}>
+            <h4>{group === 'check' ? '检查动作' : '执行动作'}</h4>
+            {actions.map((item, index) => (item.type === 'check') === (group === 'check') && <button key={item.id ?? index} type="button" aria-label={item.name || item.type} aria-current={selected === index ? 'true' : undefined} disabled={saving} className={selected === index ? 'active' : ''} onClick={() => void selectAction(index)}>
+              <FileCode2 size={16}/><span><strong>{item.name || item.type}</strong><small>{ACTION_OPTIONS.find(option => option.value === item.type)?.label} · {item.type}</small></span>
+              {JSON.stringify(item) !== JSON.stringify(savedActions.find(saved => saved.id === item.id && saved.type === item.type)) && <i title="动作配置未保存"/>}
+            </button>)}
+            {!actions.some(item => (item.type === 'check') === (group === 'check')) && <p>暂无{group === 'check' ? '检查' : '执行'}动作</p>}
+          </div>)}
+          <p className="playbook-action-nav__note">执行动作可绑定前置与后置检查；检查的 YAML 在对应检查动作中维护。</p>
+        </nav>
+        {action ? <>
+          <section className="playbook-source" aria-label="当前动作入口">
+            <header className="playbook-entry-heading"><div><span>当前编辑 · {action.name || action.type}</span><strong><FileCode2 size={16}/><code>{entryPath}</code></strong></div><span className={`playbook-save-state${dirty || configurationDirty ? ' is-dirty' : ''}`} role="status">{loading ? '正在载入…' : dirty || configurationDirty ? '有未保存内容' : loaded ? '内容已保存' : loadError ? '载入失败' : '尚未载入'}</span></header>
+            <div className="playbook-source__toolbar">
+              <span>Role 任务 · YAML</span>
+              <Button size="small" disabled={loading || saving || !action.id} onClick={() => void loadPlaybook()} title="重新读取当前动作的入口文件">{loaded ? '重新载入' : '载入编辑器'}</Button>
+              <AntUpload showUploadList={false} disabled={loading || saving} accept=".yml,.yaml,text/yaml,application/x-yaml" beforeUpload={file => { void uploadPlaybook(file); return false; }}><Button size="small" disabled={loading || saving}><Upload size={14}/>上传并保存 YAML</Button></AntUpload>
+            </div>
+            {loadError && <div className="playbook-load-error" role="alert">载入失败：{loadError}。请重新载入后编辑。</div>}
+            {!loaded && action.id ? <div className="playbook-entry-empty"><FileCode2 size={30}/><p>{loading ? '正在读取当前动作的 YAML…' : '入口文件尚未载入'}</p><small>载入成功后将在这里显示实际文件内容。</small></div> : <Input.TextArea className="code-editor playbook-source__editor" aria-label="Playbook 在线编辑器" disabled={loading || saving} spellCheck={false} value={content} placeholder="在这里编写当前动作的 Role 任务 YAML" onChange={event => setContent(event.target.value)}/>}
+            <footer className="playbook-source__actions"><span>保存当前动作配置与入口 YAML，立即生效。</span><Button type="primary" disabled={saving || loading || !content.trim() || !loaded && !!action.id} onClick={() => void savePlaybook()}><FileCode2 size={15}/>{writing ? '保存中…' : '保存 Playbook'}</Button></footer>
+          </section>
+          <div className="playbook-settings-panel"><PlaybookActionSettings disabled={saving || loading} action={action} actions={actions} releases={releases} updateAction={updateAction} onTypeChange={() => { setContent(''); setSavedContent(''); setSavedSHA256(''); setLoaded(true); setLoadError(''); }}/>
+            <div className="playbook-settings-delete"><Button type="text" danger disabled={saving || loading || actions.some(item => !!action.id && (item.preCheckActionId === action.id || item.postCheckActionId === action.id))} title={action.type === 'check' ? '被执行动作引用的检查需先解除绑定' : undefined} onClick={() => void removeAction()}><Trash2 size={14}/>移除动作</Button></div>
+          </div>
+        </> : <div className="playbook-editor__empty"><FileCode2 size={32}/><h4>从第一个生命周期动作开始</h4><p>新增安装或检查动作后，在这里编辑 YAML 并配置执行方式。</p><Button onClick={() => void addAction()}><Plus size={15}/>新增第一个动作</Button></div>}
       </div>
-      <PlaybookWorkspaceEditor releaseId={releaseId} refreshToken={`${action.type}:${savedSHA256}`} notify={notify}/>
-    </> : <><div className="playbook-editor__empty"><FileCode2 size={24}/><p>尚未配置生命周期动作。新增动作后即可上传或在线编写 Playbook。</p><Button className="button button--secondary" onClick={addAction} htmlType={"button"} type="default"><Plus size={15}/> 新增第一个动作</Button></div><PlaybookWorkspaceEditor releaseId={releaseId} refreshToken="" notify={notify}/></>}
-  </section>;
+      <div hidden={view !== 'files'} className="playbook-files-view"><PlaybookWorkspaceEditor disabled={saving || loading} releaseId={releaseId} refreshToken={`${actions.map(item => item.id).join(':')}:${savedSHA256}`} notify={notify} onDirtyChange={setWorkspaceDirty} onOpenAction={openActionFile} onPersisted={onWorkspacePersisted}/></div>
+    </section>;
 }
