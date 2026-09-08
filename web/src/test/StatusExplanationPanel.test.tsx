@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { StatusExplanationPanel } from '../components/StatusExplanationPanel';
+import { user as userEvent } from './interactions';
+import { render, screen } from './render';
 
 describe('StatusExplanationPanel', () => {
   it('keeps only the title visible until all reasons are expanded on demand', async () => {

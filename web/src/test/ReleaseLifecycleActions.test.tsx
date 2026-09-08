@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { deferredTask } from './testLifecycle';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import { useReleaseLifecycleActions } from '../features/components/releases/ReleaseLifecycleActions';
 import type { ComponentRelease, ImpactPreview } from '../types/domain';
+import { answerConfirm } from './antdInteractions';
+import { act, fireEvent, render, screen } from './render';
 
 const app = vi.hoisted(() => ({ notify: vi.fn(), signalRefresh: vi.fn() }));
 vi.mock('../context/AppContext', () => ({ useApp: () => app, displayError: (error: unknown) => String(error) }));
@@ -15,7 +17,7 @@ function Harness({ scope }: { scope: string }) {
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
 it('ignores an obsolete impact response after closing and reopening the preview', async () => {
   let finishFirst!: (value: ImpactPreview) => void;
-  const first = new Promise<ImpactPreview>(resolve => { finishFirst = resolve; });
+  const first = deferredTask<ImpactPreview>(resolve => { finishFirst = resolve; });
   vi.spyOn(api, 'releaseImpact').mockReturnValueOnce(first).mockResolvedValueOnce({ componentOwners: [], scenarioOwners: [], scenarios: [] } as unknown as ImpactPreview);
   render(<Harness scope="a" />);
   fireEvent.click(screen.getByText('Preview'));
@@ -27,10 +29,10 @@ it('ignores an obsolete impact response after closing and reopening the preview'
 });
 it('does not restore the previous selection when an operation completes after scope changed', async () => {
   let finish!: () => void;
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
-  vi.spyOn(api, 'restoreRelease').mockImplementation(() => new Promise(resolve => { finish = () => resolve(release); }));
+  vi.spyOn(api, 'restoreRelease').mockImplementation(() => deferredTask(resolve => { finish = () => resolve(release); }));
   const view = render(<Harness scope="a" />);
   fireEvent.click(screen.getByText('Restore'));
+  await answerConfirm();
   view.rerender(<Harness scope="b" />);
   await act(async () => { finish(); });
   expect(restored).not.toHaveBeenCalled();

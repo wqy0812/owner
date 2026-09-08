@@ -1,0 +1,4759 @@
+{
+  "schemaVersion": 1,
+  "originalFile": "web/src/test/App.test.tsx",
+  "originalCases": 123,
+  "mappedCases": 131,
+  "originalFailureCounts": {
+    "timeout": 19,
+    "query": 18
+  },
+  "cases": [
+    {
+      "originalTitle": "shows candidates beyond all list pages while preserving the 100-item atomic approval limit",
+      "originalGroup": [
+        "scoped lightweight read models"
+      ],
+      "originalLine": 244,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 6804
+      },
+      "targets": [
+        {
+          "file": "web/src/test/RunsPageIntegration.test.tsx",
+          "title": "shows candidates beyond all list pages while preserving the 100-item atomic approval limit",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1013.93
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1014.23
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1022.04
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1930.32
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1934.88
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps the directory on detail failure and retries without full runs, Workbench or catalog contracts",
+      "originalGroup": [
+        "scoped lightweight read models"
+      ],
+      "originalLine": 269,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentCatalog.test.tsx",
+          "title": "keeps the directory on detail failure and retries without full runs, Workbench or catalog contracts",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 500.91
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 509.62
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 494.3
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 862.06
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 860.41
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "aborts an obsolete component detail and ignores its late response",
+      "originalGroup": [
+        "scoped lightweight read models"
+      ],
+      "originalLine": 285,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentCatalog.test.tsx",
+          "title": "aborts an obsolete component detail and ignores its late response",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 268.98
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 271.64
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 264.96
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 560.54
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 563.32
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "loads a cross-page deep link, preserves detail on summary refresh and clamps an empty last page",
+      "originalGroup": [
+        "scoped lightweight read models"
+      ],
+      "originalLine": 302,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/RunsPageIntegration.test.tsx",
+          "title": "loads a cross-page deep link, preserves detail on summary refresh and clamps an empty last page",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 647.97
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 642.19
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 694.02
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 873.27
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 808.08
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "waits for identity initialization before requesting protected resources",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 329,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "waits for identity initialization before requesting protected resources",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 602.45
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 576.93
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 592.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 977.6
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 565.3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows the dashboard summary and all primary navigation entries",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 354,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "shows the dashboard summary and all primary navigation entries",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 170.23
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 171.03
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 171.09
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 318.22
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 304.02
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows each switchable identity as one role and one plain name",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 367,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "shows each switchable identity as one role and one plain name",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 77.32
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 77.44
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 77.8
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 152.29
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 144.2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps platform directory maintenance separate from contract review",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 382,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "keeps platform directory maintenance separate from contract review",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 607.64
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 613.14
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 598.73
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1041.15
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 943.69
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "creates an environment dimension category with its required flag",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 896.19
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 908.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 906.24
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1710.08
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1705.6
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "adds an architecture option from its scoped dialog",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 653.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 637.31
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 642.72
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1286.65
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1238.08
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "creates an environment variable field without retired global parameters",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1200.18
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1176.33
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1191.75
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2559.8
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2387.18
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides retired global management even when historical definitions exist",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 427,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "hides retired global management even when historical definitions exist",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 621.71
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 615.57
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 616.94
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1338.19
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1352.69
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets owners explicitly clear removed component fields before saving an environment revision",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 438,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1514
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "lets owners explicitly clear removed component fields before saving an environment revision",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1144.58
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1140.86
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1159.73
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2074.44
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2442.26
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "groups child dimensions under each parent option and scopes child drafts",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 460,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "groups child dimensions under each parent option and scopes child drafts",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 977.55
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 987.11
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 973.11
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2120.76
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2122.36
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "renames platform option labels inline without exposing technical values",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 501,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlatformManagement.test.tsx",
+          "title": "renames platform option labels inline without exposing technical values",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1100.12
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1145.43
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1102.71
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2297.8
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2386.33
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "loads platform-admin review work, requires a full preview, and refreshes after a digest-guarded decision",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 533,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DashboardPage.test.tsx",
+          "title": "loads platform-admin review work, requires a full preview, and refreshes after a digest-guarded decision",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 511.36
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 517.89
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 513.6
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 825.75
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 843.1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps the platform option cards visible while mutation events coalesce into a background refresh",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 630,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/AppRefresh.test.tsx",
+          "title": "keeps loaded platform options while mutation and SSE refreshes coalesce",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 60.0
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 61.88
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 60.66
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 74.64
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 73.92
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "filters impact notifications and marks a selected notification as read",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 665,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/NotificationsPage.test.tsx",
+          "title": "filters impact notifications and marks a selected notification as read",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 221.6
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 224.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 224.44
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 302.4
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 290.35
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets the user collapse and expand the desktop sidebar",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 686,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "lets the user collapse and expand the desktop sidebar",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 85.36
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 83.76
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 84.45
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 156.49
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 157.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows catalog backup warnings on the 环境 Owner workbench",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 700,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DashboardPage.test.tsx",
+          "title": "shows catalog backup warnings on the 环境 Owner workbench",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 81.39
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 83.12
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 82.41
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 158.77
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 160.43
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets an 环境 Owner preview and confirm an empty-database Git restore",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 732,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "lets an 环境 Owner preview and confirm an empty-database Git restore",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 519.09
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 467.42
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 455.32
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 913.67
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 931.23
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "explains the backup strategy and lets an 环境 Owner create an immediate recovery point",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 749,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "explains the backup strategy and lets an 环境 Owner create an immediate recovery point",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 182.76
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 187.85
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 182.43
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 246.8
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 139.65
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "explains when Catalog backup is disabled and keeps mutation entry points closed",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 769,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "explains when Catalog backup is disabled and keeps mutation entry points closed",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 35.43
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 33.82
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 39.71
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 61.53
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 76.2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "allows first-time repository setup when Catalog backup is enabled but unconfigured",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 801,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "allows first-time repository setup when Catalog backup is enabled but unconfigured",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 543.48
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 534.66
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 533.26
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 875.11
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 793.79
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "guides an empty Catalog from an existing Git repository into restore-point selection",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 871,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "guides an empty Catalog from an existing Git repository into restore-point selection",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 331.34
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 325.59
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 329.66
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 590.1
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 860.16
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "offers repository connection without restore when the current Catalog is not empty",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 923,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "offers repository connection without restore when the current Catalog is not empty",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 102.22
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 102.98
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 101.77
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 204.09
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 204.64
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps repository reconfiguration available when the selected repository is unavailable",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 955,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/DisasterRecoveryPage.test.tsx",
+          "title": "keeps repository reconfiguration available when the selected repository is unavailable",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 95.43
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 94.48
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 93.78
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 197.72
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 190.17
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "explains a blocking work item and links to its exact resource",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 997,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "explains a blocking work item and links to its exact resource",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 147.72
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 144.63
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 143.65
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 292.75
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 315.05
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "can execute the same component next-step deep link more than once",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1030,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "can execute the same component next-step deep link more than once",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 882.21
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 853.39
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 885.55
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1767.29
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1809.94
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides current-run links in run details while keeping workbench and external actions available",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1059,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "hides current-run links in run details while keeping workbench and external actions available",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 566.07
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 579.03
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 563.23
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1155.24
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1051.48
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "clears a run action explanation when another run is selected",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1107,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/RunsPageIntegration.test.tsx",
+          "title": "clears a run action explanation when another run is selected",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 344.59
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 340.13
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 342.17
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 688.17
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 691.95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "changes visible owner actions after a server-backed identity switch",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1133,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "changes visible owner actions after a server-backed identity switch",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 536.74
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 543.22
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 527.23
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1197.46
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1234.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "reloads the role-scoped workbench safely after an identity switch",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1142,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "reloads the role-scoped workbench safely after an identity switch",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 171.46
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 173.93
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 173.98
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 370.23
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 399.9
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps environment selection synchronized with browser history",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1151,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "keeps environment selection synchronized with browser history",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 602.62
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 593.87
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 607.07
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1172.2
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1180.26
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps scenario and revision selection synchronized with browser history",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1170,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "keeps scenario and revision selection synchronized with browser history",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 393.52
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 402.8
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 405.39
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 737.69
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 696.29
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "allows an invalidated candidate Draft to be withdrawn",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1191,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "allows an invalidated candidate Draft to be withdrawn",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 788.34
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 787.36
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 810.94
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1405.96
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1280.86
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "opens the shared platform capabilities and navigates to the workflow",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1220,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "opens the shared platform capabilities and navigates to the workflow",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 350.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 356.86
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 350.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 689.08
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 625.57
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows the platform workflow overview from the platform manual entry",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1230,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "shows the platform workflow overview from the platform manual entry",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 261.34
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 255.66
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 247.11
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 532.02
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 510.92
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "updates the role manual after switching the current owner identity",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1253,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "updates the role manual after switching the current owner identity",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 569.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 569.56
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 577.13
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1186.2
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1218.7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "documents deployment handoff and version refresh steps by role",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1284,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "documents deployment handoff and version refresh steps by role",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 84.28
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 83.66
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 86.87
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 190.3
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 179.97
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows which upstream component parameter a release depends on",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1295,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "shows which upstream component parameter a release depends on",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 462.77
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 460.53
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 475.11
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 962.85
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 950.6
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "closes a component release dialog when the selected route changes",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1327,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "closes a component release dialog when the selected route changes",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1109.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1161.97
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1155.48
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2527.03
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2468.91
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps component navigation locked until a Draft save finishes and its dialog unmounts",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1356,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5279
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "keeps component navigation locked until a Draft save finishes and its dialog unmounts",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1713.95
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1680.95
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1710.08
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3860.98
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3858.92
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "switches the visible contract when a component has multiple releases",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1411,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "switches the visible contract when a component has multiple releases",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 373.39
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 358.35
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 355.73
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 896.64
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 907.65
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets the owner edit dependencies and parameters on the component page",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1450,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5154
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "lets the owner edit dependencies and parameters on the component page",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1228.8
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1204.59
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1165.57
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2923.52
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2802.46
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "creates a version from the dedicated entry with inherited scope",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1506,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "creates a version from the dedicated entry with inherited scope",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1453.86
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1478.12
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1458.49
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3497.84
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3286.07
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "groups versions by release line and renders the three compatibility badges",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1534,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "groups versions by release line and renders the three compatibility badges",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 167.86
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 165.05
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 167.2
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 429.39
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 381.62
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "creates an empty Draft without cloning an existing release",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1564,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5105
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "creates an empty Draft without cloning an existing release",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1858.81
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1798.57
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1851.28
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 4069.95
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 4063.95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "synchronizes template constraints and confirms before overwriting manual edits",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1603,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5073
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "synchronizes template constraints and confirms before overwriting manual edits",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1289.27
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1260.53
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1303.83
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2958.58
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2822.68
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows the backend reason when a deprecated latest publication blocks evolution",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1634,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "shows the backend reason when a deprecated latest publication blocks evolution",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 601.92
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 566.41
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 558.4
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1221.58
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1239.62
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps readiness and lifecycle editing on the selected Draft when several Drafts exist",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1654,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "keeps readiness and lifecycle editing on the selected Draft when several Drafts exist",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 671.14
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 653.14
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 665.84
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1540.12
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1436.54
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides empty Draft creation from non component owners",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1673,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "hides empty Draft creation from non component owners",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 254.7
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 252.35
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 256.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 537.6
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 522.58
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows the backend conflict when an empty Draft version already exists",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1687,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "shows the backend conflict when an empty Draft version already exists",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1334.69
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1255.64
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1330.98
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2811.63
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2892.63
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "scrolls to the matching contract section when editing a draft",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1712,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "scrolls to the matching contract section when editing a draft",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1627.36
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1653.35
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1625.74
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3584.0
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3370.03
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets the owner choose public vs internal visibility on a draft release",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1750,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "lets the owner choose public vs internal visibility on a draft release",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 348.69
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 367.15
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 368.24
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 935.45
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 894.25
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "renders all six component layers including an empty L5",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1772,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "renders all six component layers including an empty L5",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 434.49
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 433.68
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 415.34
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1057.02
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 980.23
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "collapses unused catalog layers and can expand or fold them",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1787,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "collapses unused catalog layers and can expand or fold them",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 999.21
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 992.65
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1039.31
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2223.88
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1659.38
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "searches and filters the component owner catalog without changing component data",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1798,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "searches and filters the component owner catalog without changing component data",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1120.19
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 970.24
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 994.66
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2240.01
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1977.01
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "describes released environment validation as a state-changing Run instead of a Draft-only test",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1811,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "describes released environment validation as a state-changing Run instead of a Draft-only test",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 765.83
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 751.91
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 774.92
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1357.51
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1117.22
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows Draft readiness and links current install and rollback evidence",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1819,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "shows Draft readiness and links current install and rollback evidence",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 473.51
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 454.78
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 470.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 976.54
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 984.58
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows all component and scenario Run evidence grouped by stable scenario",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1857,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "shows all component and scenario Run evidence grouped by stable scenario",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 538.8
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 532.06
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 530.91
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1146.13
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1212.04
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows empty Release Run evidence and retries a failed evidence request",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1896,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "shows empty Release Run evidence and retries a failed evidence request",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 527.59
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 503.29
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 522.88
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1138.96
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1170.21
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "only shows the Release Run evidence entry to the owning component Owner",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1919,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "only shows the Release Run evidence entry to the owning component Owner",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 251.87
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 246.43
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 251.93
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 538.93
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 591.22
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "does not count rollback-only runs as Draft delivery evidence",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1926,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "does not count rollback-only runs as Draft delivery evidence",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 177.82
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 176.14
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 177.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 457.57
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 453.66
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "previews downstream impact before deprecating a released component version",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1953,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "previews downstream impact before deprecating a released component version",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 613.57
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 661.73
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 606.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1360.04
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1361.56
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "blocks deprecation when a scenario Run has locked the component version",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 1979,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "blocks deprecation when a scenario Run has locked the component version",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 333.9
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 340.96
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 333.65
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 793.59
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 815.11
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "opens the component batch import flow with the renamed entry",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2007,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "opens the component batch import flow with the renamed entry",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 476.12
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 467.45
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 465.84
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1098.42
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1094.24
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets the owner confirm or cancel Draft deprecation",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2014,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5621
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "lets the owner confirm or cancel Draft deprecation",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1638.49
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1570.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1591.21
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3627.39
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2842.03
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "restores or permanently deletes a never-published deprecated Release",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2050,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5480
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "restores or permanently deletes a never-published deprecated Release",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1731.4
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1751.84
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1688.57
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 4037.45
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2868.41
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets component owners read rejected review comments from the release row and details",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2099,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5338
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "lets component owners read rejected review comments from the release row and details",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 2068.84
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 2003.38
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 2054.77
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 4452.92
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3480.48
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides review comments and entry points for approved reviews on draft releases",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2128,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 6687
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "hides review comments and entry points for approved reviews on draft releases",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1175.76
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1221.16
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1176.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2435.21
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1999.66
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides review comments and entry points for approved reviews on released releases",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2128,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5141
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "hides review comments and entry points for approved reviews on released releases",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 873.2
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 877.24
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 896.01
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1939.5
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1718.38
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides review comments and entry points for pending reviews on draft releases",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2128,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5164
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "hides review comments and entry points for pending reviews on draft releases",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1115.47
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1071.87
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1071.78
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2402.02
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1932.29
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides review comments and entry points for not_submitted reviews on draft releases",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2128,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "hides review comments and entry points for not_submitted reviews on draft releases",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1159.24
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1105.96
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1119.13
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2441.45
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2226.44
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows released details and Playbook content without Draft edit shortcuts",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2150,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "shows released details and Playbook content without Draft edit shortcuts",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 989.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 980.9
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 835.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1817.08
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1758.52
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows each release environment constraints such as architecture",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2183,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "shows each release environment constraints such as architecture",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 490.19
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 476.23
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 487.7
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1070.87
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 971.89
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps inherited scope read-only when creating a version",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2216,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "keeps inherited scope read-only when creating a version",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1023.27
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 974.83
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1014.57
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2206.03
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1843.42
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "submits the simplified component metadata contract",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2267,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "submits the simplified component metadata contract",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1070.48
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1102.54
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1073.52
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2538.75
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2027.19
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "surfaces a backend 403 instead of silently accepting a forbidden write",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2284,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ComponentContract.test.tsx",
+          "title": "surfaces a backend 403 instead of silently accepting a forbidden write",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 713.23
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 715.99
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 699.43
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1607.01
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1312.95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "previews rollback with its bound checks and submits the selected action and locked digest",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2294,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5290
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "previews rollback with its bound checks and submits the selected action and locked digest",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1811.03
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1778.92
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1779.97
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3918.46
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3908.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "lets an environment owner maintain environment variables in a new revision",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2337,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5495
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "lets an environment owner maintain environment variables in a new revision",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1550.02
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1537.75
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1543.65
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3150.95
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3259.68
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "runs TCP and SSH checks from one button and displays classified errors",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2377,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "runs TCP and SSH checks from one button and displays classified errors",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 545.1
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 544.54
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 533.71
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1124.29
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1135.84
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "permanently deletes an environment that has never been used",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2421,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "permanently deletes an environment that has never been used",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 513.31
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 552.71
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 533.76
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1096.71
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 997.62
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "archives a historical environment and can restore it",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2455,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "archives a historical environment and can restore it",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 876.47
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 896.08
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 864.81
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1863.25
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1723.4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows an empty rollback state when no installation or recovery baselines exist",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2498,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "shows an empty rollback state when no installation or recovery baselines exist",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 325.11
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 333.01
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 323.76
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 751.69
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 778.43
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps rollback request failures visible and allows retrying into an empty state",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2526,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "keeps rollback request failures visible and allows retrying into an empty state",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 346.92
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 352.62
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 435.27
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 822.34
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 807.1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "previews and submits restoration to backup baselines with exact-name confirmation",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2553,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentsPage.test.tsx",
+          "title": "previews and submits restoration to backup baselines with exact-name confirmation",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 728.0
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 638.4
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 658.98
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1418.33
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1353.23
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "loads completed image build logs when opening the new log disclosure",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2609,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "loads completed image build logs when opening the new log disclosure",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 566.03
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 528.52
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 553.27
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1117.81
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1256.4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "locks the selected environment when submitting a Dockerfile image build",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2629,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "locks the selected environment when submitting a Dockerfile image build",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1050.37
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1021.89
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1054.43
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2323.45
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2511.4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "sends an explicit empty CredentialRef list and keeps it cleared after reopening",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2673,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 6257
+      },
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "sends an explicit empty CredentialRef list and keeps it cleared after reopening",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 916.03
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 962.5
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 921.44
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1986.13
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1977.74
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "persists multiple lifecycle actions with distinct managed Playbooks",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2728,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 31723
+      },
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "persists multiple lifecycle actions with distinct managed Playbooks",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 789.41
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 795.99
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 703.75
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1771.94
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1726.91
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "persists retry safety with an edited action and recognizes content restored to its saved value",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1017.81
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1011.15
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1007.89
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2224.9
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1690.35
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "confirms before discarding an unsaved Playbook to add another action",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 747.19
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 742.45
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 746.88
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1827.74
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1825.02
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "saves a new check action with its own managed Playbook",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 962.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 948.51
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 976.18
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2232.25
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2213.0
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "saves a new rollback action with its own managed Playbook",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1497.82
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1450.31
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1469.24
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3270.99
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3336.64
+            }
+          }
+        },
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "removes a persisted lifecycle action only after confirmation",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 657.59
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 690.83
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 657.23
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1564.93
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1539.11
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "downloads the current scenario 版本 as JSON instead of using the clipboard",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2861,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "downloads the current scenario 版本 as JSON instead of using the clipboard",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 550.86
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 551.71
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 557.92
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 936.14
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 554.42
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "adapts the backend graph DTO into an editable React Flow node",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2901,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "adapts the backend graph DTO into an editable React Flow node",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 334.16
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 327.89
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 340.06
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 692.64
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 697.98
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "generates a locked dependency edge from the exact Release contract and saves its binding",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2913,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "generates a locked dependency edge from the exact Release contract and saves its binding",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 306.95
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 309.82
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 318.35
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 653.6
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 635.62
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "groups scenario-owned parameters by exact release and keeps repeated node values independent",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2960,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "groups scenario-owned parameters by exact release and keeps repeated node values independent",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 453.67
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 433.03
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 442.37
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 900.02
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 879.26
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows a clear empty state when a scenario has no scenario-owner parameters",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 2996,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "shows a clear empty state when a scenario has no scenario-owner parameters",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 214.31
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 200.46
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 203.64
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 476.96
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 462.09
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "previews a new version from a released source and does not submit when cancelled",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3004,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "previews a new version from a released source and does not submit when cancelled",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 639.16
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 661.26
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 691.37
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1336.0
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1351.35
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows revision history and can abandon the current draft",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3041,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "shows revision history and can abandon the current draft",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 860.06
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 837.19
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 815.93
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1757.5
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1813.1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "confirms and deletes a never-published scenario",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3088,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "confirms and deletes a never-published scenario",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 480.93
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 510.51
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 489.3
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1059.11
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1057.91
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "allows the same release to be added more than once with independent host groups",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3123,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "allows the same release to be added more than once with independent host groups",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 642.05
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 645.44
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 639.88
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1394.74
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1423.29
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps unsaved scenario nodes when a component metadata refresh arrives",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3132,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "keeps unsaved scenario nodes when a component metadata refresh arrives",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1053.82
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1056.61
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1060.31
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1830.21
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1849.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps persisted scenario content clean through selection, views and metadata refresh",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3145,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "keeps persisted scenario content clean through selection, views and metadata refresh",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 848.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 845.67
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 857.01
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1409.22
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1458.89
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "preserves edits made during a scenario save: success",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3160,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "preserves edits made during a scenario save: success",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 836.76
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 804.74
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 900.78
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1861.26
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1835.49
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "preserves edits made during a scenario save: failure",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3160,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 6231
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "preserves edits made during a scenario save: failure",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 800.05
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 799.75
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 808.25
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1746.4
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1806.59
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "preserves edits made during a scenario save: conflict",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3160,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5596
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "preserves edits made during a scenario save: conflict",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 804.65
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 803.71
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 853.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1760.2
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1833.86
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "ignores a late save after leaving and returning to a 版本",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3187,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 5675
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "ignores a late save after leaving and returning to a 版本",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1132.08
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1125.32
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1127.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2435.72
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2483.95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "does not reload scenario component metadata for a run log event",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3217,
+      "originalCoverageFailure": {
+        "kind": "timeout",
+        "durationMs": 6150
+      },
+      "targets": [
+        {
+          "file": "web/src/test/AppRefresh.test.tsx",
+          "title": "does not reload scenario component metadata for a run log event",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 9.02
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 9.09
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 8.96
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 14.24
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 12.86
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "aligns business state once when the SSE connection reopens",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3229,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/AppRefresh.test.tsx",
+          "title": "aligns business state once when the SSE connection reopens",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 13.97
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 15.95
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 16.23
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 21.11
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 20.73
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "renders actionable missing-CredentialRef details in the component validation modal",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3244,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 10193
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ComponentVerification.test.tsx",
+          "title": "renders actionable missing-CredentialRef details in the component validation modal",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1473.3
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1447.61
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1439.4
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3280.84
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3262.35
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "blocks a full scenario test while the current draft DAG is empty",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3280,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "blocks a full scenario test while the current draft DAG is empty",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 634.92
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 610.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 625.96
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1343.36
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1369.44
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "submits a scenario test with a preview digest, execution mode and stable idempotency key",
+      "originalGroup": [
+        "platform shell and RBAC UI"
+      ],
+      "originalLine": 3303,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "submits a scenario test with a preview digest, execution mode and stable idempotency key",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 850.96
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 845.75
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 861.27
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2009.71
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1895.95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "exposes upgrade once when install is idempotent",
+      "originalGroup": [
+        "action capability conversion"
+      ],
+      "originalLine": 3327,
+      "originalCoverageFailure": null,
+      "targets": [
+        {
+          "file": "web/src/test/PlaybookIntegration.test.tsx",
+          "title": "exposes upgrade once when install is idempotent",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 2.68
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 2.75
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 2.6
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2.64
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2.81
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "waits for initial contracts without flashing missing-contract or order warnings",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3339,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "waits for initial contracts without flashing missing-contract or order warnings",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 226.4
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 219.37
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 229.92
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 498.86
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 498.27
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows contract failures after the request ends and recovers with retry",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3353,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1002
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "shows contract failures after the request ends and recovers with retry",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 405.76
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 325.45
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 349.18
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 752.63
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 808.57
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps the canvas and frozen branch scope during a background contract refresh",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3366,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "keeps the canvas and frozen branch scope during a background contract refresh",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1124.65
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1121.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1124.96
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1934.05
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2013.97
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "redirects the removed reference rebuild route without showing its navigation entry",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3389,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1002
+      },
+      "targets": [
+        {
+          "file": "web/src/test/App.test.tsx",
+          "title": "redirects the removed reference rebuild route without showing its navigation entry",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 66.96
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 65.1
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 73.37
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 201.23
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 143.66
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "resets settings on 版本 changes and keeps historical adaptation values read-only",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3397,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1006
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "resets settings on 版本 changes and keeps historical adaptation values read-only",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 663.99
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 666.68
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 664.99
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1557.67
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1494.04
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "keeps the latest scene selected when switching during a slow background contract request",
+      "originalGroup": [
+        "scenario workspace loading and settings"
+      ],
+      "originalLine": 3420,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/ScenariosPage.test.tsx",
+          "title": "keeps the latest scene selected when switching during a slow background contract request",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1000.94
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1036.33
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1012.18
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1862.64
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1847.66
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "opens Run history management on demand for the platform admin",
+      "originalGroup": [],
+      "originalLine": 3450,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/RunsPageIntegration.test.tsx",
+          "title": "opens Run history management on demand for the platform admin",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 163.85
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 152.7
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 157.17
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 325.24
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 309.73
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "previews on demand, preserves the original note, cancels without deleting and refreshes after confirmation",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3494,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "previews on demand, preserves the original note, cancels without deleting and refreshes after confirmation",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1086.57
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1055.32
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1078.94
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 2078.66
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 2023.21
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "shows run blockers and keeps deletion disabled",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3517,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "shows run blockers and keeps deletion disabled",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 496.81
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 496.69
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 485.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1047.63
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1167.25
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "retains the dialog and version on conflict and requires a new preview",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3528,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "retains the dialog and version on conflict and requires a new preview",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 726.6
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 705.25
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 712.64
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 1543.84
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 1685.55
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "disables deletion for unsaved edits and refreshes remote deletion events",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3546,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1002
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "disables deletion for unsaved edits and refreshes remote deletion events",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 1659.8
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 1746.05
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 1671.3
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 3152.5
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 3084.9
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides deletion for other-owner",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3567,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "hides deletion for other-owner",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 280.31
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 283.47
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 285.19
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 615.94
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 638.78
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides deletion for admin",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3567,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1003
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "hides deletion for admin",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 257.79
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 261.33
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 262.41
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 583.87
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 677.11
+            }
+          }
+        }
+      ]
+    },
+    {
+      "originalTitle": "hides deletion for archived",
+      "originalGroup": [
+        "environment history version deletion"
+      ],
+      "originalLine": 3567,
+      "originalCoverageFailure": {
+        "kind": "query",
+        "durationMs": 1002
+      },
+      "targets": [
+        {
+          "file": "web/src/test/EnvironmentHistory.test.tsx",
+          "title": "hides deletion for archived",
+          "verification": {
+            "ordinary-1": {
+              "status": "passed",
+              "durationMs": 279.54
+            },
+            "ordinary-2": {
+              "status": "passed",
+              "durationMs": 275.3
+            },
+            "ordinary-3": {
+              "status": "passed",
+              "durationMs": 346.35
+            },
+            "coverage-1": {
+              "status": "passed",
+              "durationMs": 673.35
+            },
+            "coverage-shuffled": {
+              "status": "passed",
+              "durationMs": 662.12
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "verificationSourceSha256": "51aa791f1240575ca763a6ea78a97f11e3115d9ac764bcb03583caab91c962b7",
+  "verificationEvidence": "output/playwright/frontend-test-stability/acceptance/manifest.json"
+}

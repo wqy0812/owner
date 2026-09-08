@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BuildVersionGuard } from '../components/BuildVersionGuard';
+import { user as userEvent } from './interactions';
+import { fireEvent, render, screen, waitFor } from './render';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -18,7 +18,7 @@ describe('BuildVersionGuard', () => {
     render(<BuildVersionGuard loadedVersion="build-a"><button>旧页面动作</button></BuildVersionGuard>);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '旧页面动作' })).toBeEnabled();
   });
 
@@ -29,7 +29,7 @@ describe('BuildVersionGuard', () => {
       <BuildVersionGuard loadedVersion="build-a" reload={reload}><button>旧回滚提交</button></BuildVersionGuard>,
     );
 
-    expect(await screen.findByRole('alertdialog')).toHaveTextContent('请刷新后继续操作');
+    expect(await screen.findByRole('dialog')).toHaveTextContent('请刷新后继续操作');
     expect(container.querySelector('.build-version-guard__content')).toHaveAttribute('inert');
     expect(container.querySelector('.build-version-guard__content')).toHaveAttribute('aria-hidden', 'true');
     await userEvent.click(screen.getByRole('button', { name: '刷新使用新版本' }));
@@ -45,7 +45,7 @@ describe('BuildVersionGuard', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     fireEvent.focus(window);
-    expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -54,6 +54,6 @@ describe('BuildVersionGuard', () => {
     render(<BuildVersionGuard loadedVersion="build-a"><span>内容</span></BuildVersionGuard>);
 
     await waitFor(() => expect(screen.getByText('内容')).toBeInTheDocument());
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api } from '../api/client';
 import { EnvironmentConstraintEditor } from '../components/EnvironmentConstraintEditor';
 import { ScenarioCreateModal } from '../components/ScenarioCreateModal';
 import { NewVersionModal } from '../features/components/releases/ReleaseDialogs';
-import { api } from '../api/client';
 import type { Component } from '../types/domain';
 import type { ConstraintSelection } from '../types/environmentConstraints';
+import { fireEvent, render, screen, waitFor, within } from './render';
 
 const catalog = vi.hoisted(() => ({ failed: false, retry: vi.fn() }));
 vi.mock('../context/AppContext', () => ({

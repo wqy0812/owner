@@ -89,13 +89,13 @@ export function splitCSV(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-export function componentInput(form: FormData): Partial<Component> {
+export function componentInput(values: Record<string, string>): Partial<Component> {
   return {
-    name: String(form.get('name')),
-    slug: String(form.get('slug')),
-    description: String(form.get('description')),
-    layer: String(form.get('layer')) as ComponentLayer,
-    tags: String(form.get('tags') ?? '').split(',').map((tag) => tag.trim()).filter(Boolean),
+    name: values.name,
+    slug: values.slug,
+    description: values.description ?? '',
+    layer: values.layer as ComponentLayer,
+    tags: (values.tags ?? '').split(',').map((tag) => tag.trim()).filter(Boolean),
   };
 }
 

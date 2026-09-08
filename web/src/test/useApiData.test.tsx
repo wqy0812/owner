@@ -1,7 +1,8 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { deferredTask } from './testLifecycle';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppProvider, useApp } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
+import { act, render, screen, waitFor } from './render';
 
 interface PendingRequest {
   signal: AbortSignal;
@@ -11,10 +12,9 @@ interface PendingRequest {
 
 function Query({ scope, pending, abortable = true }: { scope: string; pending: PendingRequest[]; abortable?: boolean }) {
   const { signalRefresh } = useApp();
-  const { data, error, reload, loading } = useApiData((signal) => new Promise<string>((resolve, reject) => {
+  const { data, error, reload, loading } = useApiData((signal) => deferredTask<string>((resolve, reject) => {
     pending.push({ signal, resolve, reject });
-    if (abortable) signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
-  }), [scope], 'components');
+  }, signal, { ignoreAbort: !abortable }), [scope], 'components');
   return <><output>{data ?? 'empty'}</output><span>{error}</span><span>{loading ? 'loading' : 'idle'}</span>
     <button onClick={() => signalRefresh('components')}>refresh</button>
     <button onClick={() => signalRefresh('runs')}>unrelated</button>

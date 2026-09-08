@@ -61,7 +61,7 @@ test('component page shows upstream parameter lineage and visibility editor', as
   await expect(page.getByRole('radio', { name: /公开/ }).first()).toBeChecked();
   const valueProvider = page.getByRole('combobox', { name: '值的负责人' }).last();
   await valueProvider.click();
-  await valueProvider.selectOption('scenario_owner');
-  await expect(valueProvider).toHaveValue('scenario_owner');
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({hasText:'集群 Owner 填写'}).click();
+  await expect(valueProvider.locator('..')).toContainText('集群 Owner 填写');
   await expect(page.getByRole('button', { name: '保存参数合同', exact: true })).toBeVisible();
 });

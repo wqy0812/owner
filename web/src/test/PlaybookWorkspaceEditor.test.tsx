@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import { PlaybookWorkspaceEditor } from '../features/components/contract/PlaybookWorkspaceEditor';
 import type { PlaybookWorkspaceFile } from '../types/domain';
+import { answerConfirm } from './antdInteractions';
+import { fireEvent, render, screen, waitFor, within } from './render';
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -61,15 +62,16 @@ it('deletes an empty directory through its directory action without exposing the
   const file = { releaseId: 'release', path: 'files/empty/.gitkeep', sha256: 'empty', sizeBytes: 0, mediaType: 'text/plain' };
   vi.spyOn(api, 'playbookWorkspace').mockResolvedValue({ root: 'managed/test/', treeSha256: 'before', files: [file] });
   const remove = vi.spyOn(api, 'deleteWorkspaceDirectory').mockResolvedValue({ root: 'managed/test/', treeSha256: 'after', files: [] });
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValue(true);
   render(<PlaybookWorkspaceEditor releaseId="release" refreshToken="" notify={vi.fn()} />);
   const button = await screen.findByRole('button', { name: '删除目录 files/empty' });
   fireEvent.click(button);
+  await answerConfirm(false);
   expect(remove).not.toHaveBeenCalled();
   fireEvent.click(button);
+  expect(await screen.findByText(/包含 0 个文件/)).toBeInTheDocument();
+  await answerConfirm();
   await screen.findByText('工作区尚无文件。');
   expect(remove).toHaveBeenCalledWith('release', 'files/empty', 'before');
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('包含 0 个文件'));
 });
 
 it('protects action directories and retains unsaved helper content when directory deletion fails', async () => {
@@ -78,7 +80,6 @@ it('protects action directories and retains unsaved helper content when director
   vi.spyOn(api, 'playbookWorkspace').mockResolvedValue({ root: 'managed/test/', treeSha256: 'before', files: [file, action], references: { 'tasks/install.yml': { actions: [], staticReferences: [], dynamicReferencesUnknown: true, protectionReason: '动作入口' } } });
   vi.spyOn(api, 'workspaceFile').mockResolvedValue(file);
   const remove = vi.spyOn(api, 'deleteWorkspaceDirectory').mockRejectedValue(new Error('workspace changed'));
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
   const notify = vi.fn();
   render(<PlaybookWorkspaceEditor releaseId="release" refreshToken="" notify={notify} />);
   expect(await screen.findByRole('button', { name: '删除目录 tasks' })).toBeDisabled();
@@ -87,9 +88,10 @@ it('protects action directories and retains unsaved helper content when director
   await waitFor(() => expect(screen.getByRole('button', { name: '删除目录 files/nested' })).not.toBeDisabled());
   fireEvent.change(editor, { target: { value: 'unsaved' } });
   fireEvent.click(screen.getByRole('button', { name: '删除目录 files/nested' }));
+  expect(await screen.findByText(/当前文件有未保存内容/)).toBeInTheDocument();
+  await answerConfirm();
   await waitFor(() => expect(notify).toHaveBeenCalledWith('error', '删除目录失败', 'workspace changed'));
   expect(remove).toHaveBeenCalledWith('release', 'files/nested', 'before');
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('当前文件有未保存内容'));
   expect(editor).toHaveValue('unsaved');
 });
 

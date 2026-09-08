@@ -6,6 +6,7 @@ import { App } from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { BuildVersionGuard } from './components/BuildVersionGuard';
 import { AppProvider } from './context/AppContext';
+import { UIProvider } from './components/UIProvider';
 
 try {
   window.sessionStorage.removeItem('clusterforge:boot-retry');
@@ -17,11 +18,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <AppErrorBoundary>
-        <AppProvider>
+        <UIProvider><AppProvider>
           <BuildVersionGuard>
             <App />
           </BuildVersionGuard>
-        </AppProvider>
+        </AppProvider></UIProvider>
       </AppErrorBoundary>
     </BrowserRouter>
   </React.StrictMode>,

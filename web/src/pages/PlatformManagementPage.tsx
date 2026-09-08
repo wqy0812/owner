@@ -1,263 +1,294 @@
+import { Table } from 'antd';
+import { WorkspaceTabs } from '../components/WorkspaceTabs';
+import { useDialogs } from '../components/UIProvider';
+import { Field } from '../components/Field';
+import { Input, Button, Form, Select, Checkbox } from 'antd';
 import { ArchiveRestore, Ban, Cpu, Layers3, Link2, Monitor, Network, Plus, Server, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from '../api/client';
 import { useApp, displayError } from '../context/AppContext';
 import { useApiData } from '../hooks/useApiData';
 import type { PlatformOption, PlatformOptionCategory, PlatformOptionUsage } from '../types/domain';
 import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader } from '../components/Primitives';
-
 function usageTotal(usage: PlatformOptionUsage) {
-  return usage.componentReleases + usage.scenarioRevisions + usage.environmentRevisions;
+    return usage.componentReleases + usage.scenarioRevisions + usage.environmentRevisions;
 }
-
 function usageText(usage: PlatformOptionUsage) {
-  const parts = [
-    usage.componentReleases ? `组件 ${usage.componentReleases}` : '',
-    usage.scenarioRevisions ? `场景 ${usage.scenarioRevisions}` : '',
-    usage.environmentRevisions ? `环境 ${usage.environmentRevisions}` : '',
-  ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : '无引用';
+    const parts = [
+        usage.componentReleases ? `组件 ${usage.componentReleases}` : '',
+        usage.scenarioRevisions ? `场景 ${usage.scenarioRevisions}` : '',
+        usage.environmentRevisions ? `环境 ${usage.environmentRevisions}` : '',
+    ].filter(Boolean);
+    return parts.length ? parts.join(' · ') : '无引用';
 }
-
 type RenameTarget = {
-  kind: 'category' | 'option';
-  id: string;
-  originalLabel: string;
-  label: string;
+    kind: 'category' | 'option';
+    id: string;
+    originalLabel: string;
+    label: string;
 };
-
 type OptionCreateTarget = {
-  categoryId: string;
-  draftKey: string;
-  parent?: PlatformOption;
-  buttonLabel: string;
+    categoryId: string;
+    draftKey: string;
+    parent?: PlatformOption;
+    buttonLabel: string;
 };
-
 export function PlatformManagementPage() {
-  const { user, platformOptionCategories, platformOptionsLoading, notify, scheduleRefresh } = useApp();
-  const [categoryOpen, setCategoryOpen] = useState(false);
-  const [createdCategoryId, setCreatedCategoryId] = useState('');
-  const [categoryForm, setCategoryForm] = useState({ label: '', parentCategoryId: '', environmentRequired: false });
-  const [optionLabels, setOptionLabels] = useState<Record<string, string>>({});
-  const [optionCreateTarget, setOptionCreateTarget] = useState<OptionCreateTarget | null>(null);
-  const optionSubmitting = useRef(false);
-  const [busy, setBusy] = useState('');
-  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
-  const renameSubmitting = useRef(false);
-  const [variableForm, setVariableForm] = useState({ name: '', label: '', description: '' });
-  const { data: variableDefinitions, loading: variablesLoading, error: variablesError, reload: reloadVariableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
-  const admin = user.role === 'platform_admin';
-
-  const categoryById = new Map(platformOptionCategories.map((category) => [category.id, category]));
-  const optionCreateCategory = optionCreateTarget ? categoryById.get(optionCreateTarget.categoryId) : undefined;
-  const visibleCategories = platformOptionCategories.filter((category) => !category.parentCategoryId || !categoryById.has(category.parentCategoryId));
-
-  useEffect(() => { if (createdCategoryId && categoryById.has(createdCategoryId)) { document.getElementById(`category-${createdCategoryId}`)?.scrollIntoView({behavior:'smooth', block:'center'}); setCreatedCategoryId(''); } }, [createdCategoryId, platformOptionCategories]);
-  function openCategory(parentCategoryId = '') { setCategoryForm({label:'', parentCategoryId, environmentRequired:false}); setCategoryOpen(true); }
-  function childCategories(categoryId: string) {
-    return platformOptionCategories.filter((category) => category.parentCategoryId === categoryId);
-  }
-
-  async function createCategory(event: FormEvent) {
-    event.preventDefault();
-    if (!categoryForm.label.trim()) return;
-    setBusy('category:new');
-    try {
-      const created = await api.createPlatformOptionCategory({ label: categoryForm.label.trim(), parentCategoryId: categoryForm.parentCategoryId || undefined, environmentRequired: categoryForm.environmentRequired });
-      setCategoryForm({ label: '', parentCategoryId: '', environmentRequired: false });
-      setCategoryOpen(false); setCreatedCategoryId(created.id);
-      scheduleRefresh('platform-options');
-      notify('success', '类别已新增', '请在类别中继续添加选项。');
-    } catch (error) { notify('error', '新增类别失败', displayError(error)); } finally { setBusy(''); }
-  }
-
-  async function createOption(categoryId: string, draftKey: string, parentOptionId?: string) {
-    const label = optionLabels[draftKey]?.trim();
-    if (!label || optionSubmitting.current) return;
-    optionSubmitting.current = true;
-    setBusy(`option:new:${draftKey}`);
-    try {
-      await api.createPlatformOption(categoryId, label, parentOptionId);
-      setOptionLabels((current) => ({ ...current, [draftKey]: '' }));
-      setOptionCreateTarget(null);
-      scheduleRefresh('platform-options');
-      notify('success', '选项已新增');
-    } catch (error) { notify('error', '新增选项失败', displayError(error)); } finally { optionSubmitting.current = false; setBusy(''); }
-  }
-
-  async function setRetired(kind: 'category' | 'option', id: string, retired: boolean) {
-    setBusy(`retire:${kind}:${id}`);
-    try {
-      if (kind === 'category') await api.setPlatformOptionCategoryRetired(id, retired);
-      else await api.setPlatformOptionRetired(id, retired);
-      scheduleRefresh('platform-options');
-      notify('success', retired ? '已退役；历史引用继续保留' : '已恢复');
-    } catch (error) { notify('error', retired ? '退役失败' : '恢复失败', displayError(error)); } finally { setBusy(''); }
-  }
-
-  async function deleteCategory(id: string, label: string) {
-    if (!window.confirm(`确认删除类别“${label}”及其全部未引用选项？`)) return;
-    setBusy(`category:${id}`);
-    try {
-      await api.deletePlatformOptionCategory(id);
-      scheduleRefresh('platform-options');
-      notify('success', '类别已删除');
-    } catch (error) { notify('error', '删除类别失败', displayError(error)); } finally { setBusy(''); }
-  }
-
-  async function deleteOption(id: string, label: string) {
-    if (!window.confirm(`确认删除选项“${label}”？`)) return;
-    setBusy(`option:${id}`);
-    try {
-      await api.deletePlatformOption(id);
-      scheduleRefresh('platform-options');
-      notify('success', '选项已删除');
-    } catch (error) { notify('error', '删除选项失败', displayError(error)); } finally { setBusy(''); }
-  }
-
-  function startRename(kind: RenameTarget['kind'], id: string, label: string) {
-    if (busy) return;
-    setRenameTarget({ kind, id, originalLabel: label, label });
-  }
-
-  async function commitRename(target: RenameTarget) {
-    if (renameSubmitting.current) return;
-    const label = target.label.trim();
-    if (!label) {
-      notify('error', '更名失败', '显示名不能为空。');
-      return;
+    const { confirm } = useDialogs();
+    const { user, platformOptionCategories, platformOptionsLoading, notify, scheduleRefresh } = useApp();
+    const [categoryOpen, setCategoryOpen] = useState(false);
+    const [createdCategoryId, setCreatedCategoryId] = useState('');
+    const [categoryForm, setCategoryForm] = useState({ label: '', parentCategoryId: '', environmentRequired: false });
+    const [optionLabels, setOptionLabels] = useState<Record<string, string>>({});
+    const [optionCreateTarget, setOptionCreateTarget] = useState<OptionCreateTarget | null>(null);
+    const optionSubmitting = useRef(false);
+    const [busy, setBusy] = useState('');
+    const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+    const renameSubmitting = useRef(false);
+    const [variableForm, setVariableForm] = useState({ name: '', label: '', description: '' });
+    const { data: variableDefinitions, loading: variablesLoading, error: variablesError, reload: reloadVariableDefinitions } = useApiData((signal) => api.environmentVariableDefinitions(signal), [user.id], 'environment-variable-definitions');
+    const admin = user.role === 'platform_admin';
+    const categoryById = new Map(platformOptionCategories.map((category) => [category.id, category]));
+    const optionCreateCategory = optionCreateTarget ? categoryById.get(optionCreateTarget.categoryId) : undefined;
+    const visibleCategories = platformOptionCategories.filter((category) => !category.parentCategoryId || !categoryById.has(category.parentCategoryId));
+    useEffect(() => {
+        if (createdCategoryId && categoryById.has(createdCategoryId)) {
+            document.getElementById(`category-${createdCategoryId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setCreatedCategoryId('');
+        }
+    }, [createdCategoryId, platformOptionCategories]);
+    function openCategory(parentCategoryId = '') { setCategoryForm({ label: '', parentCategoryId, environmentRequired: false }); setCategoryOpen(true); }
+    function childCategories(categoryId: string) {
+        return platformOptionCategories.filter((category) => category.parentCategoryId === categoryId);
     }
-    if (label === target.originalLabel) {
-      setRenameTarget(null);
-      return;
+    async function createCategory(_values?: unknown) {
+        if (!categoryForm.label.trim())
+            return;
+        setBusy('category:new');
+        try {
+            const created = await api.createPlatformOptionCategory({ label: categoryForm.label.trim(), parentCategoryId: categoryForm.parentCategoryId || undefined, environmentRequired: categoryForm.environmentRequired });
+            setCategoryForm({ label: '', parentCategoryId: '', environmentRequired: false });
+            setCategoryOpen(false);
+            setCreatedCategoryId(created.id);
+            scheduleRefresh('platform-options');
+            notify('success', '类别已新增', '请在类别中继续添加选项。');
+        }
+        catch (error) {
+            notify('error', '新增类别失败', displayError(error));
+        }
+        finally {
+            setBusy('');
+        }
     }
-    renameSubmitting.current = true;
-    setBusy(`rename:${target.kind}:${target.id}`);
-    try {
-      if (target.kind === 'category') await api.renamePlatformOptionCategory(target.id, label);
-      else await api.renamePlatformOption(target.id, label);
-      setRenameTarget(null);
-      scheduleRefresh('platform-options');
-      notify('success', target.kind === 'category' ? '类别已更名' : '选项已更名');
-    } catch (error) {
-      notify('error', '更名失败', displayError(error));
-    } finally {
-      renameSubmitting.current = false;
-      setBusy('');
+    async function createOption(categoryId: string, draftKey: string, parentOptionId?: string) {
+        const label = optionLabels[draftKey]?.trim();
+        if (!label || optionSubmitting.current)
+            return;
+        optionSubmitting.current = true;
+        setBusy(`option:new:${draftKey}`);
+        try {
+            await api.createPlatformOption(categoryId, label, parentOptionId);
+            setOptionLabels((current) => ({ ...current, [draftKey]: '' }));
+            setOptionCreateTarget(null);
+            scheduleRefresh('platform-options');
+            notify('success', '选项已新增');
+        }
+        catch (error) {
+            notify('error', '新增选项失败', displayError(error));
+        }
+        finally {
+            optionSubmitting.current = false;
+            setBusy('');
+        }
     }
-  }
-
-  function renameKeyDown(event: KeyboardEvent<HTMLInputElement>, target: RenameTarget) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void commitRename(target);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      setRenameTarget(null);
+    async function setRetired(kind: 'category' | 'option', id: string, retired: boolean) {
+        setBusy(`retire:${kind}:${id}`);
+        try {
+            if (kind === 'category')
+                await api.setPlatformOptionCategoryRetired(id, retired);
+            else
+                await api.setPlatformOptionRetired(id, retired);
+            scheduleRefresh('platform-options');
+            notify('success', retired ? '已退役；历史引用继续保留' : '已恢复');
+        }
+        catch (error) {
+            notify('error', retired ? '退役失败' : '恢复失败', displayError(error));
+        }
+        finally {
+            setBusy('');
+        }
     }
-  }
-
-  function renameInput(target: RenameTarget) {
-    const subject = target.kind === 'category' ? '类别' : '选项';
-    return <input
-      className={`inline-rename-input${target.kind === 'category' ? ' inline-rename-input--heading' : ''}`}
-      aria-label={`更名${subject} ${target.originalLabel}`}
-      value={target.label}
-      maxLength={64}
-      autoFocus
-      onFocus={(event) => event.currentTarget.select()}
-      onChange={(event) => setRenameTarget({ ...target, label: event.target.value })}
-      onKeyDown={(event) => renameKeyDown(event, target)}
-      onBlur={() => void commitRename(target)}
-    />;
-  }
-
-  function categoryLabel(category: PlatformOptionCategory, heading = false): ReactNode {
-    if (renameTarget?.kind === 'category' && renameTarget.id === category.id) return renameInput(renameTarget);
-    const content = <>{category.label}{category.retiredAt ? '（已退役）' : ''}</>;
-    const props = {
-      className: 'renamable-label', title: '双击更名', tabIndex: 0,
-      onDoubleClick: () => startRename('category' as const, category.id, category.label),
-      onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.key === 'Enter') startRename('category', category.id, category.label); },
-    };
-    return heading ? <h2 {...props}>{content}</h2> : <strong {...props}>{content}</strong>;
-  }
-
-  function optionLabel(option: PlatformOption) {
-    if (renameTarget?.kind === 'option' && renameTarget.id === option.id) return renameInput(renameTarget);
-    return <strong className="renamable-label" title="双击更名" tabIndex={0} onDoubleClick={() => startRename('option', option.id, option.label)} onKeyDown={(event) => { if (event.key === 'Enter') startRename('option', option.id, option.label); }}>
+    async function deleteCategory(id: string, label: string) {
+        if (!await confirm(`确认删除类别“${label}”及其全部未引用选项？`))
+            return;
+        setBusy(`category:${id}`);
+        try {
+            await api.deletePlatformOptionCategory(id);
+            scheduleRefresh('platform-options');
+            notify('success', '类别已删除');
+        }
+        catch (error) {
+            notify('error', '删除类别失败', displayError(error));
+        }
+        finally {
+            setBusy('');
+        }
+    }
+    async function deleteOption(id: string, label: string) {
+        if (!await confirm(`确认删除选项“${label}”？`))
+            return;
+        setBusy(`option:${id}`);
+        try {
+            await api.deletePlatformOption(id);
+            scheduleRefresh('platform-options');
+            notify('success', '选项已删除');
+        }
+        catch (error) {
+            notify('error', '删除选项失败', displayError(error));
+        }
+        finally {
+            setBusy('');
+        }
+    }
+    function startRename(kind: RenameTarget['kind'], id: string, label: string) {
+        if (busy)
+            return;
+        setRenameTarget({ kind, id, originalLabel: label, label });
+    }
+    async function commitRename(target: RenameTarget) {
+        if (renameSubmitting.current)
+            return;
+        const label = target.label.trim();
+        if (!label) {
+            notify('error', '更名失败', '显示名不能为空。');
+            return;
+        }
+        if (label === target.originalLabel) {
+            setRenameTarget(null);
+            return;
+        }
+        renameSubmitting.current = true;
+        setBusy(`rename:${target.kind}:${target.id}`);
+        try {
+            if (target.kind === 'category')
+                await api.renamePlatformOptionCategory(target.id, label);
+            else
+                await api.renamePlatformOption(target.id, label);
+            setRenameTarget(null);
+            scheduleRefresh('platform-options');
+            notify('success', target.kind === 'category' ? '类别已更名' : '选项已更名');
+        }
+        catch (error) {
+            notify('error', '更名失败', displayError(error));
+        }
+        finally {
+            renameSubmitting.current = false;
+            setBusy('');
+        }
+    }
+    function renameKeyDown(event: KeyboardEvent<HTMLInputElement>, target: RenameTarget) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            void commitRename(target);
+        }
+        else if (event.key === 'Escape') {
+            event.preventDefault();
+            setRenameTarget(null);
+        }
+    }
+    function renameInput(target: RenameTarget) {
+        const subject = target.kind === 'category' ? '类别' : '选项';
+        return <Input className={`inline-rename-input${target.kind === 'category' ? ' inline-rename-input--heading' : ''}`} aria-label={`更名${subject} ${target.originalLabel}`} value={target.label} maxLength={64} autoFocus onFocus={(event) => event.currentTarget.select()} onChange={(event) => setRenameTarget({ ...target, label: event.target.value })} onKeyDown={(event) => renameKeyDown(event, target)} onBlur={() => void commitRename(target)}/>;
+    }
+    function categoryLabel(category: PlatformOptionCategory, heading = false): ReactNode {
+        if (renameTarget?.kind === 'category' && renameTarget.id === category.id)
+            return renameInput(renameTarget);
+        const content = <>{category.label}{category.retiredAt ? '（已退役）' : ''}</>;
+        const props = {
+            className: 'renamable-label', title: '双击更名', tabIndex: 0,
+            onDoubleClick: () => startRename('category' as const, category.id, category.label),
+            onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+                if (event.key === 'Enter')
+                    startRename('category', category.id, category.label);
+            },
+        };
+        return heading ? <h2 {...props}>{content}</h2> : <strong {...props}>{content}</strong>;
+    }
+    function optionLabel(option: PlatformOption) {
+        if (renameTarget?.kind === 'option' && renameTarget.id === option.id)
+            return renameInput(renameTarget);
+        return <strong className="renamable-label" title="双击更名" tabIndex={0} onDoubleClick={() => startRename('option', option.id, option.label)} onKeyDown={(event) => {
+                if (event.key === 'Enter')
+                    startRename('option', option.id, option.label);
+            }}>
       {option.label}{option.retiredAt ? '（已退役）' : ''}
     </strong>;
-  }
-
-  function requiredPill(category: PlatformOptionCategory, qualified = false) {
-    const label = category.environmentRequired ? '环境必填' : '环境可选';
-    return <span className={`category-status${category.environmentRequired ? ' category-status--required' : ''}`}>{qualified ? `${category.label}：${label}` : label}</span>;
-  }
-
-  function categoryIcon(category: PlatformOptionCategory) {
-    const Icon = category.kind === 'host_group' ? Server : category.key === 'architecture' ? Cpu : category.key === 'operatingSystem' ? Monitor : category.key === 'ipFamily' ? Network : Layers3;
-    return <span className={`category-icon${category.kind === 'host_group' ? ' category-icon--host' : ''}`} aria-hidden="true"><Icon size={20} /></span>;
-  }
-
-  function optionUsage(usage: PlatformOptionUsage) {
-    const used = usageTotal(usage) > 0;
-    return <span className={`option-usage${used ? ' option-usage--linked' : ''}`}>{used ? <Link2 size={12} aria-hidden="true" /> : null}{usageText(usage)}</span>;
-  }
-
-  function categoryActions(category: PlatformOptionCategory, hasChildren = false) {
-    const protectedCategory = category.kind === 'host_group';
-    const categoryUsed = usageTotal(category.usage) > 0;
-    const deleteTitle = protectedCategory ? '主机组类别受系统保护' : categoryUsed ? usageText(category.usage) : hasChildren ? '存在从属类别，不能删除' : '彻底删除类别';
-    return <div className="form-actions category-actions">
-      {category.kind === 'environment_dimension' && !category.parentCategoryId && !category.retiredAt ? <button type="button" className="button button--quiet button--small" onClick={() => openCategory(category.id)}><Plus size={14} /> 新增子类别</button> : null}
-      {!protectedCategory ? <button type="button" className="button button--quiet button--small" disabled={Boolean(busy)} onClick={() => void setRetired('category', category.id, !category.retiredAt)}>
-        {category.retiredAt ? <ArchiveRestore size={14} /> : <Ban size={14} />}{category.retiredAt ? '恢复' : '退役'}
-      </button> : null}
-      <button type="button" className="button button--quiet button--small category-delete" disabled={protectedCategory || categoryUsed || hasChildren || Boolean(busy)} title={deleteTitle} onClick={() => void deleteCategory(category.id, category.label)}>
-        <Trash2 size={14} /> 彻底删除
-      </button>
+    }
+    function requiredPill(category: PlatformOptionCategory, qualified = false) {
+        const label = category.environmentRequired ? '环境必填' : '环境可选';
+        return <span className={`category-status${category.environmentRequired ? ' category-status--required' : ''}`}>{qualified ? `${category.label}：${label}` : label}</span>;
+    }
+    function categoryIcon(category: PlatformOptionCategory) {
+        const Icon = category.kind === 'host_group' ? Server : category.key === 'architecture' ? Cpu : category.key === 'operatingSystem' ? Monitor : category.key === 'ipFamily' ? Network : Layers3;
+        return <span className={`category-icon${category.kind === 'host_group' ? ' category-icon--host' : ''}`} aria-hidden="true"><Icon size={20}/></span>;
+    }
+    function optionUsage(usage: PlatformOptionUsage) {
+        const used = usageTotal(usage) > 0;
+        return <span className={`option-usage${used ? ' option-usage--linked' : ''}`}>{used ? <Link2 size={12} aria-hidden="true"/> : null}{usageText(usage)}</span>;
+    }
+    function categoryActions(category: PlatformOptionCategory, hasChildren = false) {
+        const protectedCategory = category.kind === 'host_group';
+        const categoryUsed = usageTotal(category.usage) > 0;
+        const deleteTitle = protectedCategory ? '主机组类别受系统保护' : categoryUsed ? usageText(category.usage) : hasChildren ? '存在从属类别，不能删除' : '彻底删除类别';
+        return <div className="form-actions category-actions">
+      {category.kind === 'environment_dimension' && !category.parentCategoryId && !category.retiredAt ? <Button className="button button--quiet button--small" onClick={() => openCategory(category.id)} htmlType={"button"} type="default" size="small"><Plus size={14}/> 新增子类别</Button> : null}
+      {!protectedCategory ? <Button className="button button--quiet button--small" disabled={Boolean(busy)} onClick={() => void setRetired('category', category.id, !category.retiredAt)} htmlType={"button"} type="default" size="small">
+        {category.retiredAt ? <ArchiveRestore size={14}/> : <Ban size={14}/>}{category.retiredAt ? '恢复' : '退役'}
+      </Button> : null}
+      <Button className="button button--quiet button--small category-delete" disabled={protectedCategory || categoryUsed || hasChildren || Boolean(busy)} title={deleteTitle} onClick={() => void deleteCategory(category.id, category.label)} htmlType={"button"} type="default" size="small">
+        <Trash2 size={14}/> 彻底删除
+      </Button>
     </div>;
-  }
-
-  function optionActions(category: PlatformOptionCategory, option: PlatformOption, descendants: PlatformOption[] = [], compact = false) {
-    const protectedCategory = category.kind === 'host_group';
-    const retireBlocked = !option.retiredAt && descendants.some((child) => !child.retiredAt);
-    const deleteBlocked = descendants.length > 0;
-    const deleteTitle = protectedCategory ? '主机组选项受系统保护' : usageTotal(option.usage) ? usageText(option.usage) : deleteBlocked ? '仍有关联子选项，不能删除' : '彻底删除选项';
-    return <div className={`form-actions option-actions${compact ? ' option-actions--compact' : ''}`}>
-      {!protectedCategory ? <button type="button" className="button button--quiet button--small" aria-label={option.retiredAt ? '恢复' : '退役'} disabled={Boolean(busy) || retireBlocked} title={retireBlocked ? '请先退役关联子选项' : option.retiredAt ? '恢复选项' : '退役选项'} onClick={() => void setRetired('option', option.id, !option.retiredAt)}>{compact ? option.retiredAt ? <ArchiveRestore size={12} /> : <Ban size={12} /> : option.retiredAt ? '恢复' : '退役'}</button> : null}
-      <button type="button" className="button button--quiet button--small category-delete" aria-label="彻底删除" disabled={protectedCategory || usageTotal(option.usage) > 0 || deleteBlocked || Boolean(busy)} title={deleteTitle} onClick={() => void deleteOption(option.id, option.label)}><Trash2 size={compact ? 12 : 14} />{compact ? null : '彻底删除'}</button>
+    }
+    function optionActions(category: PlatformOptionCategory, option: PlatformOption, descendants: PlatformOption[] = [], compact = false) {
+        const protectedCategory = category.kind === 'host_group';
+        const retireBlocked = !option.retiredAt && descendants.some((child) => !child.retiredAt);
+        const deleteBlocked = descendants.length > 0;
+        const deleteTitle = protectedCategory ? '主机组选项受系统保护' : usageTotal(option.usage) ? usageText(option.usage) : deleteBlocked ? '仍有关联子选项，不能删除' : '彻底删除选项';
+        return <div className={`form-actions option-actions${compact ? ' option-actions--compact' : ''}`}>
+      {!protectedCategory ? <Button className="button button--quiet button--small" aria-label={option.retiredAt ? '恢复' : '退役'} disabled={Boolean(busy) || retireBlocked} title={retireBlocked ? '请先退役关联子选项' : option.retiredAt ? '恢复选项' : '退役选项'} onClick={() => void setRetired('option', option.id, !option.retiredAt)} htmlType={"button"} type="default" size="small">{compact ? option.retiredAt ? <ArchiveRestore size={12}/> : <Ban size={12}/> : option.retiredAt ? '恢复' : '退役'}</Button> : null}
+      <Button className="button button--quiet button--small category-delete" aria-label="彻底删除" disabled={protectedCategory || usageTotal(option.usage) > 0 || deleteBlocked || Boolean(busy)} title={deleteTitle} onClick={() => void deleteOption(option.id, option.label)} htmlType={"button"} type="default" size="small"><Trash2 size={compact ? 12 : 14}/>{compact ? null : '彻底删除'}</Button>
     </div>;
-  }
-
-  function optionCreateButton(category: PlatformOptionCategory, draftKey: string, options: { parent?: PlatformOption; hierarchicalRoot?: boolean } = {}) {
-    const { parent, hierarchicalRoot } = options;
-    const buttonLabel = parent ? `新增${category.label}` : hierarchicalRoot ? `新增${category.label}` : '新增选项';
-    return <button type="button" className={`button category-add-option${parent ? ' category-add-option--child' : ''}`} disabled={Boolean(busy)} onClick={() => setOptionCreateTarget({ categoryId: category.id, draftKey, parent, buttonLabel })}><Plus size={14} /> {buttonLabel}</button>;
-  }
-
-  function flatCategoryCard(category: PlatformOptionCategory) {
-    const orphaned = Boolean(category.parentCategoryId && !categoryById.has(category.parentCategoryId));
-    const protectedCategory = category.kind === 'host_group';
-    return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}${category.retiredAt ? ' category-card--retired' : ''}`} id={`category-${category.id}`} key={category.id}>
+    }
+    function optionCreateButton(category: PlatformOptionCategory, draftKey: string, options: {
+        parent?: PlatformOption;
+        hierarchicalRoot?: boolean;
+    } = {}) {
+        const { parent, hierarchicalRoot } = options;
+        const buttonLabel = parent ? `新增${category.label}` : hierarchicalRoot ? `新增${category.label}` : '新增选项';
+        return <Button className={`button category-add-option${parent ? ' category-add-option--child' : ''}`} disabled={Boolean(busy)} onClick={() => setOptionCreateTarget({ categoryId: category.id, draftKey, parent, buttonLabel })} htmlType={"button"}><Plus size={14}/> {buttonLabel}</Button>;
+    }
+    function flatCategoryCard(category: PlatformOptionCategory) {
+        const orphaned = Boolean(category.parentCategoryId && !categoryById.has(category.parentCategoryId));
+        const protectedCategory = category.kind === 'host_group';
+        return <section className={`panel category-card${orphaned ? ' category-card--orphaned' : ''}${category.retiredAt ? ' category-card--retired' : ''}`} id={`category-${category.id}`} key={category.id}>
       <div className="section-heading category-heading">
         <div className="category-heading__identity">{categoryIcon(category)}<div>{categoryLabel(category, true)}<div className="category-status-row"><span className="category-option-count">{category.options.length} 个选项</span>{requiredPill(category)}{protectedCategory ? <span className="category-status">系统保护 · 主机组</span> : null}</div></div></div>
         {categoryActions(category)}
       </div>
       {orphaned ? <div className="inline-warning">关联的父类别不存在；当前类别仅供查看，请先修复目录关系。</div> : null}
-      <div className="table-wrap category-option-table"><table aria-label={`${category.label}选项`}><thead><tr><th scope="col">显示名</th><th scope="col">引用</th><th scope="col">操作</th></tr></thead><tbody>
-        {category.options.map((option) => <tr className={option.retiredAt ? 'category-option--retired' : undefined} key={option.id}><td>{optionLabel(option)}</td><td>{optionUsage(option.usage)}</td><td>{optionActions(category, option)}</td></tr>)}
-        {!category.options.length && <tr><td colSpan={3}><div className="category-empty"><Layers3 size={20} aria-hidden="true" /><strong>暂无选项</strong><span>{category.retiredAt || orphaned ? '当前类别仅供查看' : '在下方添加第一个选项'}</span></div></td></tr>}
-      </tbody></table></div>
+      <div className="table-wrap category-option-table"><Table aria-label={category.label + '选项'} dataSource={category.options} rowKey="id" pagination={false} rowClassName={option => option.retiredAt ? 'category-option--retired' : ''} columns={[
+{ title: '显示名', key: 'label', render: (_, option) => optionLabel(option) },
+{ title: '引用', key: 'usage', width: 140, render: (_, option) => optionUsage(option.usage) },
+{ title: '操作', key: 'actions', width: 200, render: (_, option) => optionActions(category, option) }
+]} locale={{emptyText: <div className="category-empty"><Layers3 size={20}/><strong>暂无选项</strong><span>{category.retiredAt || orphaned ? '当前类别仅供查看' : '在下方添加第一个选项'}</span></div>}} /></div>
       {!category.retiredAt && !orphaned ? <div className="category-add-footer">{optionCreateButton(category, category.id)}</div> : null}
     </section>;
-  }
-
-  function hierarchicalCategoryCard(root: PlatformOptionCategory, children: PlatformOptionCategory[]) {
-    const rootOptionIds = new Set(root.options.map((option) => option.id));
-    const orphanOptions = children.flatMap((child) => child.options.filter((option) => !option.parentOptionId || !rootOptionIds.has(option.parentOptionId)).map((option) => ({ child, option })));
-    return <section className={`panel category-card category-card--hierarchical${root.retiredAt ? ' category-card--retired' : ''}`} id={`category-${root.id}`} key={root.id}>
+    }
+    function hierarchicalCategoryCard(root: PlatformOptionCategory, children: PlatformOptionCategory[]) {
+        const rootOptionIds = new Set(root.options.map((option) => option.id));
+        const orphanOptions = children.flatMap((child) => child.options.filter((option) => !option.parentOptionId || !rootOptionIds.has(option.parentOptionId)).map((option) => ({ child, option })));
+        return <section className={`panel category-card category-card--hierarchical${root.retiredAt ? ' category-card--retired' : ''}`} id={`category-${root.id}`} key={root.id}>
       <div className="section-heading category-heading hierarchy-heading">
         <div className="category-heading__identity">{categoryIcon(root)}<div>
           <div className="category-path">{categoryLabel(root, true)}{children.map((child) => <span className="category-path__child" key={child.id}><span aria-hidden="true">→</span>{categoryLabel(child)}</span>)}</div>
@@ -273,15 +304,15 @@ export function PlatformManagementPage() {
       </div>
       <div className="hierarchy-option-list">
         {root.options.map((parent) => {
-          const descendants = children.flatMap((child) => child.options.filter((option) => option.parentOptionId === parent.id));
-          return <article className={`hierarchy-parent${parent.retiredAt ? ' hierarchy-parent--retired' : ''}`} key={parent.id}>
+                const descendants = children.flatMap((child) => child.options.filter((option) => option.parentOptionId === parent.id));
+                return <article className={`hierarchy-parent${parent.retiredAt ? ' hierarchy-parent--retired' : ''}`} key={parent.id}>
             <header className="hierarchy-parent__header"><span className="hierarchy-parent-tag">{optionLabel(parent)}</span>{optionUsage(parent.usage)}{optionActions(root, parent, descendants)}</header>
             <div className="hierarchy-children">
               {children.map((child) => {
-                const linked = child.options.filter((option) => option.parentOptionId === parent.id);
-                const canAdd = !root.retiredAt && !parent.retiredAt && !child.retiredAt;
-                const draftKey = `${child.id}:${parent.id}`;
-                return <section className="hierarchy-child-section" key={child.id}>
+                        const linked = child.options.filter((option) => option.parentOptionId === parent.id);
+                        const canAdd = !root.retiredAt && !parent.retiredAt && !child.retiredAt;
+                        const draftKey = `${child.id}:${parent.id}`;
+                        return <section className="hierarchy-child-section" key={child.id}>
                   {children.length > 1 ? <header><strong>{child.label}</strong></header> : null}
                   <div className="hierarchy-child-tags">
                     {linked.map((option) => <div className={`hierarchy-child-tag${option.retiredAt ? ' hierarchy-child-tag--retired' : ''}`} key={option.id}><div>{optionLabel(option)}{usageTotal(option.usage) > 0 ? optionUsage(option.usage) : null}</div>{optionActions(child, option, [], true)}</div>)}
@@ -289,67 +320,86 @@ export function PlatformManagementPage() {
                     {!linked.length ? <span className="hierarchy-empty">暂无{child.label}</span> : null}
                   </div>
                 </section>;
-              })}
+                    })}
             </div>
           </article>;
-        })}
+            })}
         {!root.options.length ? <div className="hierarchy-empty hierarchy-empty--root">尚未录入{root.label}；请先新增父选项。</div> : null}
       </div>
       {orphanOptions.length ? <section className="hierarchy-orphans"><header><strong>未关联选项</strong><span>父选项不存在，仅保留历史查看</span></header>{orphanOptions.map(({ child, option }) => <div key={option.id}><span><small>{child.label}</small>{optionLabel(option)}</span>{optionActions(child, option)}</div>)}</section> : null}
       {!root.retiredAt ? <div className="category-add-footer">{optionCreateButton(root, root.id, { hierarchicalRoot: true })}</div> : null}
     </section>;
-  }
+    }
+    async function createVariableDefinition(_values?: unknown) {
+        setBusy('variable:new');
+        try {
+            await api.createEnvironmentVariableDefinition(variableForm);
+            setVariableForm({ name: '', label: '', description: '' });
+            await reloadVariableDefinitions();
+            notify('success', '环境变量字段已新增');
+        }
+        catch (error) {
+            notify('error', '新增环境变量字段失败', displayError(error));
+        }
+        finally {
+            setBusy('');
+        }
+    }
+    return <div className="page-stack">
+    <PageHeader eyebrow="Platform directory" title="平台管理" description="集中维护环境适配维度与主机组。技术键和值由平台生成，已被任何历史业务快照引用的数据不能删除。"/>
+    {!admin ? <EmptyState title="仅平台 Owner 可管理目录" description="其他 Owner 可以在各自表单中选择目录数据，但不能新增或删除。"/> : <>
 
-  async function createVariableDefinition(event: FormEvent) {
-    event.preventDefault(); setBusy('variable:new');
-    try {
-      await api.createEnvironmentVariableDefinition(variableForm);
-      setVariableForm({ name: '', label: '', description: '' });
-      await reloadVariableDefinitions(); notify('success', '环境变量字段已新增');
-    } catch (error) { notify('error', '新增环境变量字段失败', displayError(error)); } finally { setBusy(''); }
-  }
-
-  return <div className="page-stack">
-    <PageHeader eyebrow="Platform directory" title="平台管理" description="集中维护环境适配维度与主机组。技术键和值由平台生成，已被任何历史业务快照引用的数据不能删除。" />
-    {!admin ? <EmptyState title="仅平台 Owner 可管理目录" description="其他 Owner 可以在各自表单中选择目录数据，但不能新增或删除。" /> : <>
-      <section className="panel environment-variable-panel" aria-label="环境变量字段">
+<WorkspaceTabs  items={[{key: 'dimensions', label: '环境适配维度', children: <><section className="directory-section" aria-label="环境适配维度"><header className="section-heading"><div><h2>环境适配维度</h2><p>类别下维护选项，父子类别在同一组中管理。双击名称可更名。</p></div><Button className="button button--primary" onClick={() => openCategory()} htmlType={"button"} type="primary"><Plus size={16}/> 新增类别</Button></header>
+      {platformOptionsLoading ? <LoadingBlock label="正在加载平台目录…"/> : <div className="card-grid">
+        {visibleCategories.filter(category => category.kind === 'environment_dimension').map((category) => {
+                    const children = childCategories(category.id);
+                    return children.length ? hierarchicalCategoryCard(category, children) : flatCategoryCard(category);
+                })}
+      </div>}</section></>},
+{key: 'groups', label: '主机组', children: <><section className="directory-section" aria-label="主机组目录"><header className="section-heading"><h2>主机组</h2></header><div className="card-grid">{visibleCategories.filter(category => category.kind === 'host_group').map(category => flatCategoryCard(category))}</div></section></>},
+{key: 'variables', label: '环境变量', children: <><section className="panel environment-variable-panel" aria-label="环境变量字段">
         <div className="section-heading"><div><h2>环境变量字段</h2><p>环境 Owner 只能从此目录选择键。</p></div></div>
         <div className="environment-variable-layout">
-          <form className="form-grid environment-variable-create" onSubmit={(event) => void createVariableDefinition(event)}>
+          <Form className="form-grid environment-variable-create" onFinish={(event) => void createVariableDefinition(event)} layout="vertical" preserve={false}>
             <h3 className="span-2">新增字段</h3>
-            <label><span>变量名</span><input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))} /></label>
-            <label><span>显示名</span><input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))} /></label>
-            <label className="span-2"><span>说明</span><input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))} /></label>
-            <button className="button button--primary" disabled={Boolean(busy)}><Plus size={15} /> 新增变量字段</button>
-          </form>
+            <Field label={"变量名"} required><Input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))}/></Field>
+            <Field label={"显示名"} required><Input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))}/></Field>
+            <Field className="span-2" label={"说明"}><Input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))}/></Field>
+            <Button className="button button--primary" disabled={Boolean(busy)} htmlType={"submit"} type="primary"><Plus size={15}/> 新增变量字段</Button>
+          </Form>
           <section className="environment-variable-existing" aria-label="现有环境变量字段">
             <h3>现有字段 <span>{variableDefinitions?.length ?? 0}</span></h3>
-            {variablesError ? <ErrorBlock message={variablesError} onRetry={() => void reloadVariableDefinitions()} /> : null}
-            {variablesLoading && !variableDefinitions ? <LoadingBlock label="正在读取环境变量字段…" /> : <div className="managed-definition-list">{variableDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.name} · 引用 {item.usage}</small>{item.description && <p>{item.description}</p>}</div><button type="button" className="icon-text" disabled={item.usage > 0 || Boolean(busy)} title={item.usage > 0 ? '字段已被引用，不能删除' : undefined} onClick={async () => { setBusy(`variable:${item.id}`); try { await api.deleteEnvironmentVariableDefinition(item.id); await reloadVariableDefinitions(); } catch (error) { notify('error', '删除失败', displayError(error)); } finally { setBusy(''); } }}><Trash2 size={14} /> 删除</button></div>)}</div>}
-            {!variablesLoading && !variablesError && !variableDefinitions?.length ? <EmptyState title="暂无环境变量字段" description="从左侧新增，已创建字段会显示在这里。" /> : null}
+            {variablesError ? <ErrorBlock message={variablesError} onRetry={() => void reloadVariableDefinitions()}/> : null}
+            {variablesLoading && !variableDefinitions ? <LoadingBlock label="正在读取环境变量字段…"/> : <div className="managed-definition-list">{variableDefinitions?.map((item) => <div key={item.id}><div><strong>{item.label}</strong><small>{item.name} · 引用 {item.usage}</small>{item.description && <p>{item.description}</p>}</div><Button className="icon-text" disabled={item.usage > 0 || Boolean(busy)} title={item.usage > 0 ? '字段已被引用，不能删除' : undefined} onClick={async () => {
+                        setBusy(`variable:${item.id}`);
+                        try {
+                            await api.deleteEnvironmentVariableDefinition(item.id);
+                            await reloadVariableDefinitions();
+                        }
+                        catch (error) {
+                            notify('error', '删除失败', displayError(error));
+                        }
+                        finally {
+                            setBusy('');
+                        }
+                    }} htmlType={"button"} type="text"><Trash2 size={14}/> 删除</Button></div>)}</div>}
+            {!variablesLoading && !variablesError && !variableDefinitions?.length ? <EmptyState title="暂无环境变量字段" description="从左侧新增，已创建字段会显示在这里。"/> : null}
           </section>
         </div>
-      </section>
-      <section className="directory-section" aria-label="环境适配维度"><header className="section-heading"><div><h2>环境适配维度</h2><p>类别下维护选项，父子类别在同一组中管理。双击名称可更名。</p></div><button className="button button--primary" onClick={() => openCategory()}><Plus size={16} /> 新增类别</button></header>
-      {platformOptionsLoading ? <LoadingBlock label="正在加载平台目录…" /> : <div className="card-grid">
-        {visibleCategories.filter(category => category.kind === 'environment_dimension').map((category) => {
-          const children = childCategories(category.id);
-          return children.length ? hierarchicalCategoryCard(category, children) : flatCategoryCard(category);
-        })}
-      </div>}</section>
-      <section className="directory-section" aria-label="主机组目录"><header className="section-heading"><h2>主机组</h2></header><div className="card-grid">{visibleCategories.filter(category => category.kind === 'host_group').map(category => flatCategoryCard(category))}</div></section>
-      {optionCreateTarget && optionCreateCategory && <Modal title={`${optionCreateTarget.buttonLabel} · ${optionCreateTarget.parent?.label ?? optionCreateCategory.label}`} description="录入显示名，保存后添加到对应类别。" onClose={() => { if (!optionSubmitting.current) setOptionCreateTarget(null); }}>
-        <form className="option-create-dialog" onSubmit={(event) => { event.preventDefault(); void createOption(optionCreateTarget.categoryId, optionCreateTarget.draftKey, optionCreateTarget.parent?.id); }}>
-          <div className="option-create-context"><Layers3 size={17} aria-hidden="true" /><span>{optionCreateTarget.parent ? <>{categoryById.get(optionCreateCategory.parentCategoryId ?? '')?.label} <strong>{optionCreateTarget.parent.label}</strong><span aria-hidden="true">→</span></> : null}<strong>{optionCreateCategory.label}</strong></span></div>
-          <label><span>显示名</span><input autoFocus required aria-label={`为${optionCreateTarget.parent ? `${optionCreateTarget.parent.label}新增${optionCreateCategory.label}` : `${optionCreateCategory.label}新增选项`}`} value={optionLabels[optionCreateTarget.draftKey] ?? ''} disabled={Boolean(busy)} onChange={(event) => setOptionLabels((current) => ({ ...current, [optionCreateTarget.draftKey]: event.target.value }))} placeholder={optionCreateTarget.parent ? `输入${optionCreateTarget.parent.label}的${optionCreateCategory.label}` : `输入${optionCreateCategory.label}显示名`} /></label>
-          <div className="form-actions"><button type="button" className="button button--quiet" disabled={Boolean(busy)} onClick={() => setOptionCreateTarget(null)}>取消</button><button className="button button--primary" disabled={Boolean(busy) || !optionLabels[optionCreateTarget.draftKey]?.trim()}><Plus size={15} />{optionCreateTarget.buttonLabel}</button></div>
-        </form>
-      </Modal>}
-      {categoryOpen && <Modal title={categoryForm.parentCategoryId ? `新增子类别 · ${categoryById.get(categoryForm.parentCategoryId)?.label ?? ''}` : '新增环境维度类别'} description="创建后在类别中录入选项。" onClose={() => setCategoryOpen(false)}><div className="category-create-dialog">      <form className="category-create-form" onSubmit={(event) => void createCategory(event)}>
-        <label><span>类别名称</span><input value={categoryForm.label} onChange={(event) => setCategoryForm((current) => ({ ...current, label: event.target.value }))} placeholder="例如 CPU 厂商" required /></label>
-        <label><span>父类别（可选）</span><select value={categoryForm.parentCategoryId} onChange={(event) => setCategoryForm((current) => ({ ...current, parentCategoryId: event.target.value }))}><option value="">无（根类别）</option>{platformOptionCategories.filter((item) => item.kind === 'environment_dimension' && !item.parentCategoryId && !item.retiredAt).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-        <div className="category-create-actions"><label className="required-toggle"><input type="checkbox" checked={categoryForm.environmentRequired} onChange={(event) => setCategoryForm((current) => ({ ...current, environmentRequired: event.target.checked }))} /><span className="required-toggle__track" aria-hidden="true"><span /></span><span>环境录入时必填</span></label><button className="button button--primary" disabled={busy === 'category:new'}><Plus size={16} /> 新增类别</button></div>
-      </form></div></Modal>}
+      </section></>}]} />
+{optionCreateTarget && optionCreateCategory && <Modal busy={Boolean(busy)} title={`${optionCreateTarget.buttonLabel} · ${optionCreateTarget.parent?.label ?? optionCreateCategory.label}`} description="录入显示名，保存后添加到对应类别。" onClose={() => {
+                    if (!optionSubmitting.current)
+                        setOptionCreateTarget(null);
+                }} footer={<footer className="modal-actions"><Button className="button button--quiet" disabled={Boolean(busy)} onClick={() => setOptionCreateTarget(null)} htmlType={"button"} type="default">取消</Button><Button className="button button--primary" disabled={Boolean(busy) || !optionLabels[optionCreateTarget.draftKey]?.trim()} htmlType={"submit"} type="primary"><Plus size={15}/>{optionCreateTarget.buttonLabel}</Button></footer>} formProps={{ className: "option-create-dialog", onFinish: () => { return createOption(optionCreateTarget.categoryId, optionCreateTarget.draftKey, optionCreateTarget.parent?.id); }, layout: "vertical", preserve: false }}>
+          <div className="option-create-context"><Layers3 size={17} aria-hidden="true"/><span>{optionCreateTarget.parent ? <>{categoryById.get(optionCreateCategory.parentCategoryId ?? '')?.label} <strong>{optionCreateTarget.parent.label}</strong><span aria-hidden="true">→</span></> : null}<strong>{optionCreateCategory.label}</strong></span></div>
+          <Field label={"显示名"} required><Input autoFocus required aria-label={`为${optionCreateTarget.parent ? `${optionCreateTarget.parent.label}新增${optionCreateCategory.label}` : `${optionCreateCategory.label}新增选项`}`} value={optionLabels[optionCreateTarget.draftKey] ?? ''} disabled={Boolean(busy)} onChange={(event) => setOptionLabels((current) => ({ ...current, [optionCreateTarget.draftKey]: event.target.value }))} placeholder={optionCreateTarget.parent ? `输入${optionCreateTarget.parent.label}的${optionCreateCategory.label}` : `输入${optionCreateCategory.label}显示名`}/></Field>
+
+        </Modal>}
+{categoryOpen && <Modal title={categoryForm.parentCategoryId ? `新增子类别 · ${categoryById.get(categoryForm.parentCategoryId)?.label ?? ''}` : '新增环境维度类别'} description="创建后在类别中录入选项。" onClose={() => setCategoryOpen(false)} busy={Boolean(busy)} formProps={{onFinish: createCategory}} footer={<footer className="modal-actions"><Button onClick={() => setCategoryOpen(false)} disabled={Boolean(busy)}>取消</Button><Button type="primary" htmlType="submit" loading={busy === 'category:new'}>新增类别</Button></footer>}>
+<Field label="类别名称" required><Input value={categoryForm.label} onChange={event => setCategoryForm(current => ({...current, label:event.target.value}))} placeholder="例如 CPU 厂商" required /></Field>
+<Field label="父类别（可选）"><Select value={categoryForm.parentCategoryId} onChange={value => setCategoryForm(current => ({...current, parentCategoryId:value}))} options={[{value:'',label:'无（根类别）'}, ...platformOptionCategories.filter(item=>item.kind==='environment_dimension' && !item.parentCategoryId && !item.retiredAt).map(item=>({value:item.id,label:item.label}))]} /></Field>
+<Checkbox checked={categoryForm.environmentRequired} onChange={event => setCategoryForm(current=>({...current, environmentRequired:event.target.checked}))}>环境录入时必填</Checkbox>
+</Modal>}
     </>}
   </div>;
 }

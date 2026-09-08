@@ -1,9 +1,10 @@
-import { act, renderHook } from '@testing-library/react';
+import { deferredTask } from './testLifecycle';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import { RunActivityEvents } from '../context/runActivityEvents';
 import { useRunActivity } from '../hooks/useRunActivity';
 import type { RunActivity } from '../types/domain';
+import { act, renderHook } from './render';
 
 const state = vi.hoisted(() => ({ user: { id: 'alice' }, scheduleRefresh: vi.fn(), bus: undefined as unknown as RunActivityEvents }));
 vi.mock('../context/AppContext', () => ({ useApp: () => ({ user: state.user, scheduleRefresh: state.scheduleRefresh, runActivityEvents: state.bus }), displayError: (e: Error) => e.message }));
@@ -24,7 +25,7 @@ it('routes log bursts by Run ID without refreshing global queries', async () => 
 
 it('coalesces in-flight events and pulls every cursor page before terminal reconciliation', async () => {
   let finish!: (v: RunActivity) => void;
-  const read = vi.spyOn(api, 'runActivity').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+  const read = vi.spyOn(api, 'runActivity').mockImplementationOnce((_id, _cursor, signal) => deferredTask(resolve => { finish = resolve; }, signal))
     .mockResolvedValueOnce({ ...page('a', 2), hasMore: true }).mockResolvedValue(page('a', 3, 'succeeded'));
   const view = renderHook(() => useRunActivity('a', 'running'));
   act(() => { state.bus.emit('a', { type: 'log', logId: 2 }); state.bus.emit('a', { type: 'state' }); });
@@ -48,7 +49,7 @@ it('retains observations and cursor on failure, then resumes on reconnect', asyn
 
 it('aborts old Run and identity requests and ignores their late responses', async () => {
   let finish!: (v: RunActivity) => void;
-  const read = vi.spyOn(api, 'runActivity').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(page('b'));
+  const read = vi.spyOn(api, 'runActivity').mockImplementationOnce((_id, _cursor, signal) => deferredTask(resolve => { finish = resolve; }, signal, { ignoreAbort: true })).mockResolvedValue(page('b'));
   const view = renderHook(({ id }) => useRunActivity(id, 'running'), { initialProps: { id: 'a' } });
   const oldSignal = read.mock.calls[0][2]!;
   view.rerender({ id: 'b' }); await flush(); expect(oldSignal.aborted).toBe(true);

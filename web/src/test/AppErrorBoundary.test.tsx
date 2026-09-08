@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
+import { render, screen } from './render';
 
 function BrokenPage(): never {
   throw new Error('render failed');

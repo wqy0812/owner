@@ -1,3 +1,4 @@
+import { App as AntApp } from 'antd';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, eventsURL } from '../api/client';
 import { RunActivityEvents } from './runActivityEvents';
@@ -12,7 +13,6 @@ export const DEMO_USERS: User[] = [
 ];
 
 interface Toast {
-  id: number;
   tone: 'success' | 'error' | 'info';
   title: string;
   message?: string;
@@ -60,7 +60,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [platformOptionCategories, setPlatformOptionCategories] = useState<PlatformOptionCategory[]>([]);
   const [platformOptionsLoading, setPlatformOptionsLoading] = useState(true);
   const [platformOptionsError, setPlatformOptionsError] = useState<string>();
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const { notification } = AntApp.useApp();
   const [refreshTokens, setRefreshTokens] = useState<RefreshTokens>({
     components: 0,
     scenarios: 0,
@@ -79,10 +79,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sessionInitialization = useRef<Promise<{ user: User; users: User[]; switched: boolean }>>();
 
   const notify = useCallback((tone: Toast['tone'], title: string, message?: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((items) => [...items, { id, tone, title, message }]);
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4600);
-  }, []);
+    notification[tone]({ title, description: message, duration: 4.6 });
+  }, [notification]);
 
   const signalRefresh = useCallback((targets: RefreshTarget | readonly RefreshTarget[] = ALL_REFRESH_TARGETS) => {
     const affected: readonly RefreshTarget[] = typeof targets === 'string' ? [targets] : targets;
@@ -240,17 +238,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={value}>
       {sessionReady ? children : <div className="state-block" role="status">正在初始化 Demo 身份…</div>}
-      <div className="toast-stack" aria-live="polite">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast--${toast.tone}`}>
-            <strong>{toast.title}</strong>
-            {toast.message && <span>{toast.message}</span>}
-            <button type="button" aria-label="关闭提示" onClick={() => setToasts((items) => items.filter((i) => i.id !== toast.id))}>
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
+
     </AppContext.Provider>
   );
 }

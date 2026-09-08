@@ -1,20 +1,22 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { deferredTask } from './testLifecycle';
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
+import { api } from "../api/client";
 import {
-  ComponentUsagePanel,
+ComponentUsagePanel,
 } from "../components/ComponentUsagePanel";
 import { RunCleanupModal } from "../components/RunCleanupModal";
 import { RunRetentionPanel } from "../components/RunRetentionPanel";
-import { api } from "../api/client";
 import type { Component, RunSummary } from "../types/domain";
+import { selectOption } from './antdInteractions';
+import {
+act,
+fireEvent,
+render,
+screen,
+waitFor,
+within,
+} from "./render";
 
 import type { ComponentUsage } from '../types/componentUsage';
 
@@ -106,9 +108,7 @@ it("filters exact versions and history, keeps private summaries private and link
     "href",
     "/scenarios?selected=scene&revision=r1",
   );
-  fireEvent.change(screen.getByLabelText("组件版本"), {
-    target: { value: "v1" },
-  });
+  await selectOption(screen.getByLabelText("组件版本"), /1.*Main|Main.*1/);
   fireEvent.click(screen.getByLabelText("包含历史引用"));
   await waitFor(() =>
     expect(api.componentUsage).toHaveBeenLastCalledWith(
@@ -132,15 +132,13 @@ it("retries failed requests and ignores an old component response after switchin
   let resolveOld!: (u: ComponentUsage) => void;
   vi.mocked(api.componentUsage)
     .mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
+      (_id, _releaseId, _includeHistory, signal) =>
+        deferredTask((resolve) => {
           resolveOld = resolve;
-        }),
+        }, signal, { ignoreAbort: true }),
     )
     .mockResolvedValueOnce(empty);
-  fireEvent.change(screen.getByLabelText("组件版本"), {
-    target: { value: "v1" },
-  });
+  await selectOption(screen.getByLabelText("组件版本"), /1.*Main|Main.*1/);
   view.rerender(
     <MemoryRouter>
       <ComponentUsagePanel
@@ -152,7 +150,7 @@ it("retries failed requests and ignores an old component response after switchin
   expect(await screen.findByText("暂无下游组件")).toBeInTheDocument();
   await act(async () => resolveOld(usage));
   expect(screen.queryByText("Private · 1")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("组件版本")).toHaveValue("");
+  expect(screen.getByLabelText("组件版本").closest(".ant-select")).toHaveTextContent("全部版本");
 });
 const runs = [
   {

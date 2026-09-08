@@ -26,7 +26,8 @@ test('identity switch changes owner-specific component controls', async ({ page 
   await page.goto('/components');
   await expect(page.getByRole('heading', { name: '组件中心' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新建组件' })).toBeVisible();
-  await page.getByLabel('切换演示身份').selectOption('environment-owner-a');
+  await page.getByLabel('切换演示身份').click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({hasText:'环境 Owner · Environment Owner'}).click();
   await expect(page.getByRole('button', { name: '新建组件' })).toHaveCount(0);
   await page.getByRole('link', { name: '集群', exact: true }).click();
   await expect(page.getByRole('heading', { name: '场景编排' })).toBeVisible();
@@ -79,11 +80,12 @@ test('scenario parameters stay in the graph and test submission binds the execut
   await expect(overview.getByRole('textbox', { name: 'runtime_version 的值' })).toHaveValue('1.0.0');
   await overview.getByRole('button', { name: '定位节点' }).click();
   await page.getByText('Runtime node').click();
-  await expect(page.getByRole('combobox', { name: '目标集群动作' })).toHaveValue('install');
+  await expect(page.getByRole('combobox', { name: '目标集群动作' }).locator('..')).toContainText('install');
   await expect(page.getByRole('combobox', { name: '目标集群动作' })).toBeDisabled();
   await expect(page.getByRole('option', { name: 'uninstall' })).toHaveCount(0);
   await page.getByRole('button', { name: '环境测试' }).click();
-  await page.getByRole('combobox', { name: '场景执行环境' }).selectOption('test');
+  await page.getByRole('combobox', { name: '场景执行环境' }).click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({hasText:'Test Environment'}).click();
   await expect(page.getByRole('button', { name: '提交安装测试' })).toBeDisabled();
   await page.getByRole('button', { name: '预览执行计划' }).click();
   await page.getByRole('button', { name: '提交安装测试' }).click();
@@ -134,7 +136,8 @@ test('scenario dependencies are generated and an ambiguous exact Release source 
   await page.goto('/scenarios');
   await expect(page.getByText('1 项依赖待处理')).toBeVisible();
   await page.getByText('Control', { exact: true }).last().click();
-  await page.getByRole('combobox', { name: '来源节点' }).selectOption('runtime-b');
+  await page.getByRole('combobox', { name: '来源节点' }).click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({hasText:/Runtime B/}).click();
   await expect(page.locator('.scenario-edge--dependency')).toHaveCount(1);
   await expect(page.getByText('1 项依赖待处理')).toHaveCount(0);
   await page.getByRole('button', { name: '保存草稿' }).click();

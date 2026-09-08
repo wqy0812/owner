@@ -1,9 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { deferredTask } from './testLifecycle';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AppProvider, useApp } from '../context/AppContext';
 import { ComponentsPage } from '../pages/ComponentsPage';
+import { answerConfirm, moreAction } from './antdInteractions';
+import { user as userEvent } from './interactions';
+import { act, fireEvent, render, screen, waitFor } from './render';
 import { EventSourceMock } from './setup';
 
 const owner = { id: 'component-owner-a', name: '林晓', role: 'component_owner' };
@@ -56,11 +58,11 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it('shows delete only when the backend confirms the owner can delete, and cancel sends no request', async () => {
   const f = fixture([empty('empty-a')]);
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   open();
-  await userEvent.click(await screen.findByRole('button', { name: '删除组件' }));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('确认永久删除空组件“empty-a”'));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('此操作不可恢复'));
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  expect(await screen.findByText(/确认永久删除空组件“empty-a”/)).toHaveTextContent('此操作不可恢复');
+  await answerConfirm(false);
   expect(f.deletes()).toHaveLength(0);
   expect(screen.getByRole('heading', { name: 'empty-a' })).toBeInTheDocument();
 });
@@ -84,9 +86,10 @@ it('clears the deleted selection and uses the refreshed catalog order', async ()
     f.state.entries = [empty('empty-c'), empty('empty-b')];
     return response({ deleted: true });
   };
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   open();
-  await userEvent.click(await screen.findByRole('button', { name: '删除组件' }));
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  await answerConfirm();
   expect(await screen.findByText('组件已永久删除')).toBeInTheDocument();
   expect(await screen.findByRole('heading', { name: 'empty-c' })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'empty-a' })).not.toBeInTheDocument();
@@ -97,9 +100,10 @@ it('clears the deleted selection and uses the refreshed catalog order', async ()
 
 it('shows the empty catalog after deleting the last component', async () => {
   fixture([empty('empty-a')]);
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   open();
-  await userEvent.click(await screen.findByRole('button', { name: '删除组件' }));
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  await answerConfirm();
   expect(await screen.findByText('暂无组件')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '删除组件' })).not.toBeInTheDocument();
   expect(screen.queryByText('组件不存在')).not.toBeInTheDocument();
@@ -109,13 +113,14 @@ it('shows the empty catalog after deleting the last component', async () => {
 it('prevents duplicate deletion while the request is pending', async () => {
   const f = fixture([empty('empty-a')]);
   let finish!: (value: Response) => void;
-  f.state.remove = () => new Promise(resolve => { finish = resolve; });
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  f.state.remove = () => deferredTask(resolve => { finish = resolve; });
   open();
-  const button = await screen.findByRole('button', { name: '删除组件' });
-  fireEvent.click(button);
-  fireEvent.click(button);
-  expect(screen.getByRole('button', { name: '删除中…' })).toBeDisabled();
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  const confirmButton = await screen.findByRole('button', { name: '确认' });
+  fireEvent.click(confirmButton);
+  fireEvent.click(confirmButton);
+  await waitFor(() => expect(f.deletes()).toHaveLength(1));
   expect(f.deletes()).toHaveLength(1);
   await act(async () => { f.state.entries = []; finish(response({ deleted: true })); });
   await screen.findByText('暂无组件');
@@ -127,9 +132,10 @@ it('refreshes a rejected deletion and hides the now-ineligible action', async ()
     f.state.entries = [empty('empty-a', false)];
     return new Response(JSON.stringify({ error: { code: 'conflict', message: '该组件仍有引用，不能删除' } }), { status: 409 });
   };
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
   open();
-  await userEvent.click(await screen.findByRole('button', { name: '删除组件' }));
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  await answerConfirm();
   expect(await screen.findByText('删除组件失败')).toBeInTheDocument();
   expect(screen.getByText('该组件仍有引用，不能删除')).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('button', { name: '删除组件' })).not.toBeInTheDocument());
@@ -141,10 +147,11 @@ it('refreshes a rejected deletion and hides the now-ineligible action', async ()
 it('preserves a new selection when an earlier deletion completes', async () => {
   const f = fixture([empty('empty-a'), empty('empty-b')]);
   let finish!: (value: Response) => void;
-  f.state.remove = () => new Promise(resolve => { finish = resolve; });
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  f.state.remove = () => deferredTask(resolve => { finish = resolve; });
   open();
-  await userEvent.click(await screen.findByRole('button', { name: '删除组件' }));
+  await screen.findByRole('heading', { name: 'empty-a' });
+  await moreAction('删除组件');
+  await answerConfirm();
   await userEvent.click(screen.getByRole('button', { name: 'empty-b 暂无标签' }));
   await screen.findByRole('heading', { name: 'empty-b' });
   await act(async () => { f.state.entries = [empty('empty-b')]; finish(response({ deleted: true })); });
@@ -156,7 +163,7 @@ it('preserves a new selection when an earlier deletion completes', async () => {
 it('refreshes component eligibility and the workbench on the deletion SSE event', async () => {
   fixture([empty('empty-a')]);
   open();
-  await screen.findByRole('button', { name: '删除组件' });
+  await screen.findByRole('heading', { name: 'empty-a' });
   const before = Number(screen.getByTestId('workbench-refresh').textContent);
   act(() => EventSourceMock.instances.at(-1)?.emit('component.deleted', { componentId: 'other' }));
   await waitFor(() => expect(Number(screen.getByTestId('workbench-refresh').textContent)).toBeGreaterThan(before));

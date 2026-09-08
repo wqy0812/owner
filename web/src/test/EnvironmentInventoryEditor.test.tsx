@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { EnvironmentInventoryEditor } from '../components/EnvironmentInventoryEditor';
 import type { EnvironmentHost, PlatformOption } from '../types/domain';
+import { user as userEvent } from './interactions';
+import { render, screen, within } from './render';
 
 const options: PlatformOption[] = ['group-a', 'group-b', 'retired'].map((value, index) => ({
   id: value, categoryId: 'host-group', value, label: value, sortOrder: index,

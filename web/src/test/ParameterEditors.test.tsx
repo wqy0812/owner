@@ -1,9 +1,10 @@
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { DependencyContractList, DependencyEditor, ParameterContractList, ParameterTable, defaultContractRelease, describeParameterMapping, parameterContractErrors } from '../components/ParameterEditors';
 import { isNodeReachable } from '../pages/ScenariosPage';
 import type { Component, ComponentRelease, ParameterDefinition } from '../types/domain';
+import { optionsFor, selectOption } from './antdInteractions';
+import { user as userEvent } from './interactions';
+import { render, screen } from './render';
 
 const readiness: ComponentRelease['readiness'] = { status: 'ready', blockers: [] };
 const review: ComponentRelease['review'] = { status: 'approved' };
@@ -103,7 +104,7 @@ describe('parameter contract editor', () => {
     const parameter: ParameterDefinition = { name: 'docker_data_dir', description: 'Docker 数据目录', type: 'string', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: '/var/lib/docker' };
     render(<ParameterTable parameters={[parameter]} onChange={(values) => { changed = values; }} />);
     await userEvent.click(screen.getByRole('button', { name: '编辑参数 docker_data_dir' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '值的负责人' }), 'environment_owner');
+    await selectOption(screen.getByRole('combobox', { name: '值的负责人' }), '环境 Owner 填写');
     expect(changed[0].environmentBinding).toEqual({ kind: 'private' });
     expect(screen.queryByRole('combobox', { name: '环境字段绑定' })).not.toBeInTheDocument();
     const legacy = { ...changed[0], environmentBinding: { kind: 'invalid' as 'private', definitionId: 'retained' } };
@@ -150,18 +151,18 @@ describe('parameter contract editor', () => {
     );
     const { rerender } = render(view([{ kind: 'execution', componentId: '', releaseId: '', purpose: '', parameterMappings: [] }]));
     expect(screen.getByLabelText('已发布版本')).toBeDisabled();
-    expect(screen.getByLabelText('上游组件')).toContainHTML('kubelet');
-    expect(screen.getByLabelText('上游组件')).toContainHTML('containerd');
-    expect(screen.getByLabelText('已发布版本')).not.toContainHTML('1.17.5');
-    await userEvent.selectOptions(screen.getByLabelText('上游组件'), 'component-kubelet');
+    expect(await optionsFor(screen.getByLabelText('上游组件'))).toHaveTextContent('kubelet');
+    expect(screen.getByRole('listbox')).toHaveTextContent('containerd');
+    expect(screen.getByLabelText('已发布版本')).toBeDisabled();
+    await selectOption(screen.getByLabelText('上游组件'), 'kubelet');
     expect(seen.at(-1)?.[0]).toMatchObject({ componentId: 'component-kubelet', releaseId: '' });
     rerender(view([{ kind: 'execution', componentId: 'component-kubelet', releaseId: '', purpose: '', parameterMappings: [] }]));
     const versionSelect = screen.getByLabelText('已发布版本');
     expect(versionSelect).toBeEnabled();
-    expect(versionSelect).toContainHTML('1.17.5');
-    expect(versionSelect).toContainHTML('1.18.0');
-    expect(versionSelect).not.toContainHTML('v2.1.1');
-    await userEvent.selectOptions(versionSelect, 'release-kubelet-2');
+    expect(await optionsFor(versionSelect)).toHaveTextContent('1.17.5');
+    expect(screen.getByRole('listbox')).toHaveTextContent('1.18.0');
+    expect(screen.getByRole('listbox')).not.toHaveTextContent('v2.1.1');
+    await selectOption(versionSelect, /1.18.0/);
     expect(seen.at(-1)?.[0]).toMatchObject({ componentId: 'component-kubelet', releaseId: 'release-kubelet-2' });
   });
 
@@ -175,9 +176,9 @@ describe('parameter contract editor', () => {
       onChange={(dependencies) => seen.push(dependencies)}
     />);
     const source = screen.getByLabelText('上游公开参数');
-    expect(source).toContainHTML('kubeInstallRoot');
-    expect(source).not.toContainHTML('K8S_VERSION');
-    await userEvent.selectOptions(source, 'kubeInstallRoot');
+    expect(await optionsFor(source)).toHaveTextContent('kubeInstallRoot');
+    expect(screen.getByRole('listbox')).not.toHaveTextContent('K8S_VERSION');
+    await selectOption(source, /kubeInstallRoot/);
     expect(seen.at(-1)?.[0]?.parameterMappings).toEqual([{ upstreamParameter: 'kubeInstallRoot', targetParameter: '' }]);
   });
 

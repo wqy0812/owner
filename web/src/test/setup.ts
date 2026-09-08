@@ -1,16 +1,60 @@
+// Disable RTL's automatic unmount so the owned teardown can wrap it in act.
+import '@testing-library/react/dont-cleanup-after-each';
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
-import { afterEach, vi } from 'vitest';
+import { act, cleanup } from '@testing-library/react';
+import { createRequire } from 'node:module';
+import { useId } from 'react';
+import { afterAll, afterEach, beforeEach, expect, vi } from 'vitest';
+import { finishTestTasks, unexpectedRequests } from './testLifecycle';
 
-afterEach(() => {
-  cleanup();
-  EventSourceMock.instances.length = 0;
+// Ant's CJS dependency bypasses vi.mock and deliberately returns "test-id".
+// Replace only this hook with React's real IDs; keep every library in test mode.
+const requireFromWeb = createRequire(import.meta.url);
+const antRequire = createRequire(requireFromWeb.resolve('antd'));
+const idHook = antRequire('@rc-component/util/lib/hooks/useId') as { default: (id?: string) => string };
+const originalIdHook = idHook.default;
+idHook.default = (id?: string) => { const generated = useId(); return id || generated; };
+afterAll(() => { idHook.default = originalIdHook; });
+
+const originalError = console.error;
+const originalWarn = console.warn;
+let asyncWarnings: string[] = [];
+beforeEach(() => {
+  asyncWarnings = [];
+  unexpectedRequests.length = 0;
+  const capture = (original: typeof console.error) => (...args: unknown[]) => {
+    const text = args.map(String).join(' ');
+    if (/overlapping act\(\)|not (?:wrapped in|configured to support) act\(|act\(async.*without await|Cannot update a component.*while rendering|Can't perform a React state update|Maximum update depth exceeded/.test(text)) asyncWarnings.push(text);
+    original(...args);
+  };
+  console.error = capture(originalError);
+  console.warn = capture(originalWarn);
+});
+
+afterEach(async () => {
+  try {
+    await act(async () => { cleanup(); await finishTestTasks(); });
+    const openStreams = EventSourceMock.instances.filter(stream => stream.readyState !== EventSourceMock.CLOSED);
+    for (const stream of EventSourceMock.instances) stream.close();
+    expect(openStreams, 'SSE streams must close on unmount').toHaveLength(0);
+    expect(unexpectedRequests, `All fixture requests need an explicit handler:\n${unexpectedRequests.join('\n')}`).toEqual([]);
+    expect(asyncWarnings, 'React asynchronous work must settle within its test').toEqual([]);
+  } finally {
+    EventSourceMock.instances.length = 0;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
 });
 
 class ResizeObserverMock {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  observe() { }
+  unobserve() { }
+  disconnect() { }
 }
 
 export class EventSourceMock {
@@ -44,8 +88,9 @@ export class EventSourceMock {
     this.listeners.get(type)?.delete(callback);
   }
   dispatchEvent() { return true; }
-  close() { this.readyState = 2; }
+  close() { this.readyState = 2; this.listeners.clear(); this.onopen = this.onmessage = this.onerror = null; }
   emit(type: string, data: unknown = {}) {
+    if (this.readyState === EventSourceMock.CLOSED) return;
     const event = new MessageEvent(type, { data: JSON.stringify(data) });
     if (type === 'message') this.onmessage?.(event);
     for (const listener of this.listeners.get(type) ?? []) listener(event);
@@ -57,7 +102,7 @@ Object.defineProperty(globalThis, 'EventSource', { value: EventSourceMock, writa
 Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: vi.fn(), writable: true });
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
+  value: (query: string) => ({
     matches: false,
     media: query,
     onchange: null,
@@ -66,5 +111,9 @@ Object.defineProperty(window, 'matchMedia', {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
-  })),
+  }),
 });
+
+// jsdom does not implement pseudo-element computed styles used for scrollbar measurement.
+const originalComputedStyle = window.getComputedStyle;
+window.getComputedStyle = (element) => originalComputedStyle(element);

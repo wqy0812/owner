@@ -1,3 +1,4 @@
+import { RouteButton } from '../components/RouteButton';
 import type { ReactNode } from 'react';
 import {
   ArrowRight,
@@ -91,9 +92,9 @@ const COMMON_BUTTON_GROUPS: ButtonGuideGroup[] = [
   {
     page: '通用弹窗与异常恢复',
     path: '所有页面',
-    description: '关闭类操作不会提交表单；重试类操作会重新向服务端读取数据。',
+    description: '桌面以 1920×1080、100% 缩放使用。弹窗标题和底部操作固定，正文独立滚动；提交期间禁止关闭和重复提交。',
     entries: [
-      { label: '取消 / 关闭 / ×', purpose: '退出当前弹窗或编辑流程。', availability: '弹窗打开时', result: '不提交当前表单；未保存内容会丢失。' },
+      { label: '取消 / 关闭 / ×', purpose: '退出当前弹窗或编辑流程，也可使用 Esc。', availability: '弹窗打开且未提交时', result: '编辑弹窗不可点击遮罩关闭；已有未保存提示继续生效。取消预览确认保留下层表单，关闭后焦点返回原入口。' },
       { label: '重试', purpose: '数据读取失败后重新请求。', availability: '错误或空状态允许重试时', result: '重新读取服务端，不会绕过权限或校验。' },
       { label: '重新加载', purpose: '页面发生未捕获错误时恢复应用。', availability: '错误边界页面', result: '整页刷新，未保存的前台状态会丢失。' },
       { label: '平台功能 / 工作流总览 / 我的角色手册 / 部署与版本切换', purpose: '了解功能、对象关系并查阅角色操作。', availability: '平台说明书页面', result: '只切换文档；角色手册随当前身份变化。' },
@@ -273,7 +274,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 1. 在 **我的工作** 打开每条待审 Component Release 的 **预览并审核**；完整合同和全部锁定 Playbook 加载成功前不能批准或驳回。
 2. 核对组件 Owner、版本关系、发布说明、风险、环境约束、参数、依赖映射、介质、镜像、Action、主机组、CredentialRef、Playbook 正文与 SHA-256。批准备注可选，驳回原因必填；摘要漂移后必须重新预览。
-3. 在 **平台管理** 的环境适配维度区域新增类别，或在父类别框内新增子类别；父子类别同框整行维护，选项在其所属类别内新增。维护非敏感环境变量字段；主机组是系统保护类别，只能维护其选项。组件参数及建议值由所属组件的 Owner 定义，其他组件通过公开参数映射引用；平台管理不再提供全局环境参数字段或默认值入口。这里不再提供合同审核入口。
+3. 在 **平台管理** 的 **环境适配维度** 标签页新增类别，或在父类别框内新增子类别；父子类别同框整行维护，选项在其所属类别内新增。切换到 **环境变量** 标签维护非敏感字段；**主机组** 标签是系统保护类别，只能维护其选项。组件参数及建议值由所属组件的 Owner 定义，其他组件通过公开参数映射引用；平台管理不再提供全局环境参数字段或默认值入口。这里不再提供合同审核入口。
 4. 删除目录项前核对组件、场景和环境历史引用统计；存在任一引用时平台会拒绝删除。
 5. 在 **运行 → 运行历史管理** 配置保留策略、归档成功记录或预览清理过期失败记录；自动处理初始关闭。
 6. 平台 Owner 不能代替资源 Owner 创建组件、场景或环境，也不能发起 Run、审批危险执行或发布版本。`,
@@ -296,11 +297,11 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 1. 在 **组件** 页面新建组件，填写名称、标识、说明和 L1-L6 分类。
 2. 点击 **新增分支** 创建独立发布线，或点击 **新增版本** 沿当前分支演进。分支创建时选择并确认适配标签，创建后固定；新增版本继承范围。全新发布线需要命名，可空白创建或复制一个同组件历史版本作为模板；复制不建立升级关系。同一组件投放到不同主机组时，分别创建发布线并在 Action 中固定目标。演进只能选择该线最新 Released 版本，并声明兼容升级或破坏性升级。
 3. 只有组件 Owner 能修改自己拥有的组件和 Draft。
-4. 需要批量录入时使用 **批量导入**；点击 **预检并导入** 后，组件、Draft 和 Playbook 整批生效或整批失败，成功后仍要逐个完成环境验证与候选交接。
+4. 需要批量录入时使用页面右上角 **更多操作 → 批量导入**；点击 **预检并导入** 后，组件、Draft 和 Playbook 整批生效或整批失败，成功后仍要逐个完成环境验证与候选交接。
 
 ### 2. 配置版本合同
 
-- 首行显示固定的分支适配标签。参数和直接依赖分别在各自区域编辑；生命周期动作在“编辑版本与 Playbook”中维护。Docker/containerd 通过组件依赖表达。
+- 顶部选择当前版本，默认进入 **版本与合同**；**版本历史** 查看各发布线，**引用关系** 查看下游。废弃、恢复和删除位于 **更多操作**。首行显示固定的分支适配标签。参数和直接依赖分别在各自区域编辑；生命周期动作在“编辑版本与 Playbook”中维护。Docker/containerd 通过组件依赖表达。
 - 直接发布时依赖必须锁定已发布的上游 Release；候选链应由场景版本一并编排和原子发布。下游只能映射上游的公开参数。
 - 参数必须明确公开/内部、可修改性和值提供方。组件固定值写入 fixedValue；场景和环境字段只由相应 Owner 填写；映射字段必须存在唯一上游映射。
 - 密码、Token、私钥等不能写进参数，只能声明所需的 CredentialRef。
@@ -400,9 +401,9 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 ### 1. 创建与维护环境
 
 1. 在 **环境** 页面新建环境，填写架构、操作系统、网络栈和说明。
-2. 在 Inventory 中通过 **添加节点 / 编辑节点** 弹框维护地址、SSH 用户、端口和所属主机组；通过 **主机组管理** 按组搜索并增删成员，点击 **应用更改** 后保存新版本。每台节点至少属于一个组，移出组后仍保留在环境中。
+2. 在 **配置 → 主机分组** 中通过 **添加节点 / 编辑节点** 弹框维护地址、SSH 用户、端口和所属主机组；通过 **主机组管理** 按组搜索并增删成员，点击 **应用更改** 后保存新版本。每台节点至少属于一个组，移出组后仍保留在环境中。
 3. 分别维护环境事实、组件环境参数、受治理的环境变量与 CredentialRef；每次保存都会创建新的环境版本。
-4. 需要迁移配置时使用版本导出/导入；含实际 CredentialRef 引用的文件必须在当前文件上重新确认，编辑或替换文件会清除旧确认。
+4. 需要迁移配置时从环境 **更多操作** 导出，或使用页面右上角 **更多操作 → 导入环境**；版本历史和最近运行分别在同名标签页查看。含实际 CredentialRef 引用的文件必须在当前文件上重新确认，编辑或替换文件会清除旧确认。
 
 ### 2. 管理仓库变量与凭据
 
@@ -420,7 +421,7 @@ const OWNER_MANUALS: Record<Role, OwnerManual> = {
 
 1. destructive、recovery、clean、destroy、uninstall 等动作会进入等待审批。
 2. 核对目标环境、主机组、锁定版本、动作、已解析参数来源，以及镜像/介质平移的来源和目标后再批准或拒绝。
-3. 整集群清理可从环境详情单击“一键回滚至干净状态”，预览会校验来源、备份和文件，并按安装层逆序恢复。当前安装来源含场景升级历史时明确阻塞，须使用保留的恢复作业并复核基线；恢复旧版本不能显示为已清空。
+3. 整集群清理可从环境详情 **更多操作 → 重置环境** 进入“一键回滚至干净状态”，预览会校验来源、备份和文件，并按安装层逆序恢复。当前安装来源含场景升级历史时明确阻塞，须使用保留的恢复作业并复核基线；恢复旧版本不能显示为已清空。
 4. 预览不会创建 Run；完整输入环境名称后只创建 Awaiting Approval Run，仍需在运行中心批准。
 5. 批准只表示允许平台执行，不替代真实环境变更评审。
 6. 场景变更后失败、取消或中断保留部分变更与备份，按阶段状态与动作安全证据决定续跑；不能续跑时先恢复。恢复后通过场景执行入口 **恢复后基线复核**；复核不交付新介质、不产生发布证据、不改变测试身份，新增节点须先证明清理或卸载。
@@ -669,7 +670,7 @@ export function PlatformManualPage() {
         eyebrow="Platform guide"
         title="平台说明书"
         description={`当前为项目首个版本（V1），环境仅用于测试，不是生产环境；除非出现明确的 V2 文档，所有操作都按首版合同执行。当前身份：${ROLE_LABELS[user.role]}。`}
-        actions={<Link className="button button--primary" to={showRoleManualAction ? '/manual/role' : '/manual/deployment'}>{showRoleManualAction ? <OwnerIcon size={16} /> : <RefreshCw size={16} />}{showRoleManualAction ? '查看我的操作手册' : '查看部署交接'}</Link>}
+        actions={<RouteButton className="button button--primary" to={showRoleManualAction ? '/manual/role' : '/manual/deployment'} type="primary">{showRoleManualAction ? <OwnerIcon size={16} /> : <RefreshCw size={16} />}{showRoleManualAction ? '查看我的操作手册' : '查看部署交接'}</RouteButton>}
       />
 
       <div className="manual-shell">
@@ -716,8 +717,8 @@ export function PlatformManualPage() {
                     <div>{(deploymentView ? DEPLOYMENT_CHECKPOINTS : manual.checkpoints).map((item) => <span key={item}><CheckCircle2 size={15} /> {item}</span>)}</div>
                   </section>
                   <div className="manual-actions">
-                    <Link className="button button--primary" to={deploymentView ? '/manual/role' : manual.primaryPath}>{deploymentView ? '查看我的角色手册' : manual.primaryLabel} <ArrowRight size={15} /></Link>
-                    <Link className="button button--quiet" to="/runs"><PlayCircle size={15} /> 查看运行中心</Link>
+                    <RouteButton className="button button--primary" to={deploymentView ? '/manual/role' : manual.primaryPath} type="primary">{deploymentView ? '查看我的角色手册' : manual.primaryLabel} <ArrowRight size={15} /></RouteButton>
+                    <RouteButton className="button button--quiet" to="/runs" type="default"><PlayCircle size={15} /> 查看运行中心</RouteButton>
                   </div>
                 </>
               ) : (

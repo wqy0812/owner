@@ -5,6 +5,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     css: true,
+    isolate: true,
+    minWorkers: 1,
+    maxWorkers: 2,
+    testTimeout: 5000,
+    sequence: { hooks: 'list' },
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'v8',

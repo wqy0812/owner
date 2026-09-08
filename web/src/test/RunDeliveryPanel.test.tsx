@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import { RunDeliveryPanel } from '../components/RunDeliveryPanel';
 import type { Run } from '../types/domain';
+import { render, screen } from './render';
 
 vi.mock('../context/AppContext', () => ({ useApp: () => ({ user: { id: 'owner' } }), displayError: (error: unknown) => String(error) }));
 beforeEach(() => vi.restoreAllMocks());

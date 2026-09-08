@@ -1,3 +1,5 @@
+import { Field } from './Field';
+import { Select, Checkbox } from 'antd';
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -5,57 +7,36 @@ import { useApp } from "../context/AppContext";
 import { useApiData } from "../hooks/useApiData";
 import { STATUS_LABELS, type Component } from "../types/domain";
 import { EmptyState, ErrorBlock, LoadingBlock } from "./Primitives";
-export function ComponentUsagePanel({ component }: { component: Component }) {
-  const { user } = useApp();
-  const [releaseId, setReleaseId] = useState("");
-  const [history, setHistory] = useState(false);
-  const { data, loading, error, reload } = useApiData(
-    (signal) => api.componentUsage(component.id, releaseId, history, signal),
-    [user.id, component.id, releaseId, history],
-    ["components", "scenarios"],
-  );
-  return (
-    <section className="panel usage-panel" aria-label="谁用了我">
+export function ComponentUsagePanel({ component }: {
+    component: Component;
+}) {
+    const { user } = useApp();
+    const [releaseId, setReleaseId] = useState("");
+    const [history, setHistory] = useState(false);
+    const { data, loading, error, reload } = useApiData((signal) => api.componentUsage(component.id, releaseId, history, signal), [user.id, component.id, releaseId, history], ["components", "scenarios"]);
+    return (<section className="panel usage-panel" aria-label="谁用了我">
       <header>
         <h2>谁用了我</h2>
         <p>已保存的直接引用；不要求运行过。</p>
       </header>
       <div className="filter-bar">
-        <label>
-          组件版本
-          <select
-            value={releaseId}
-            onChange={(e) => setReleaseId(e.target.value)}
-          >
-            <option value="">全部版本</option>
-            {component.releases?.map((r) => (
-              <option key={r.id} value={r.id}>
+        <Field label="组件版本">
+          <Select value={releaseId} onChange={(selectedValue) => setReleaseId(selectedValue)} popupMatchSelectWidth={true}>
+            <Select.Option value="">全部版本</Select.Option>
+            {component.releases?.map((r) => (<Select.Option key={r.id} value={r.id}>
                 {r.lineName} · {r.version}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={history}
-            onChange={(e) => setHistory(e.target.checked)}
-          />{" "}
+              </Select.Option>))}
+          </Select>
+        </Field>
+        <Checkbox checked={history} onChange={(e) => setHistory(e.target.checked)}>{" "}
           包含历史引用
-        </label>
+        </Checkbox>
       </div>
       {history ? <p>包含旧版本、已废弃及已放弃记录。</p> : null}
-      {error ? (
-        <ErrorBlock message={error} onRetry={() => void reload()} />
-      ) : loading && !data ? (
-        <LoadingBlock />
-      ) : data ? (
-        <>
+      {error ? (<ErrorBlock message={error} onRetry={() => void reload()}/>) : loading && !data ? (<LoadingBlock />) : data ? (<>
           <h3>下游组件（{data.componentCount}）</h3>
-          {data.components.length ? (
-            <div className="usage-list">
-              {data.components.map((row) => (
-                <article key={`${row.releaseId}:${row.upstreamReleaseId}`}>
+          {data.components.length ? (<div className="usage-list">
+              {data.components.map((row) => (<article key={`${row.releaseId}:${row.upstreamReleaseId}`}>
                   <strong>
                     {row.name} · {row.version}
                   </strong>
@@ -66,29 +47,17 @@ export function ComponentUsagePanel({ component }: { component: Component }) {
                   <p>
                     使用 {row.upstreamVersion} ·{" "}
                     {row.dependencyKind === "configuration"
-                      ? "配置依赖"
-                      : "执行依赖"}
+                        ? "配置依赖"
+                        : "执行依赖"}
                   </p>
-                  {row.canViewDetails ? (
-                    <Link
-                      to={`/components?selected=${encodeURIComponent(row.componentId)}&release=${encodeURIComponent(row.releaseId)}`}
-                    >
+                  {row.canViewDetails ? (<Link to={`/components?selected=${encodeURIComponent(row.componentId)}&release=${encodeURIComponent(row.releaseId)}`}>
                       查看版本
-                    </Link>
-                  ) : (
-                    <small>仅引用摘要</small>
-                  )}
-                </article>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="暂无下游组件" />
-          )}
+                    </Link>) : (<small>仅引用摘要</small>)}
+                </article>))}
+            </div>) : (<EmptyState title="暂无下游组件"/>)}
           <h3>场景（{data.scenarioCount}）</h3>
-          {data.scenarios.length ? (
-            <div className="usage-list">
-              {data.scenarios.map((row) => (
-                <article key={`${row.revisionId}:${row.releaseId}`}>
+          {data.scenarios.length ? (<div className="usage-list">
+              {data.scenarios.map((row) => (<article key={`${row.revisionId}:${row.releaseId}`}>
                   <strong>
                     {row.name} · 版本 {row.revision}
                   </strong>
@@ -99,23 +68,11 @@ export function ComponentUsagePanel({ component }: { component: Component }) {
                   <p>
                     使用 {row.version} · 引用 {row.references} 次
                   </p>
-                  {row.canViewDetails ? (
-                    <Link
-                      to={`/scenarios?selected=${encodeURIComponent(row.scenarioId)}&revision=${encodeURIComponent(row.revisionId)}`}
-                    >
+                  {row.canViewDetails ? (<Link to={`/scenarios?selected=${encodeURIComponent(row.scenarioId)}&revision=${encodeURIComponent(row.revisionId)}`}>
                       查看版本
-                    </Link>
-                  ) : (
-                    <small>仅引用摘要</small>
-                  )}
-                </article>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="暂无场景引用" />
-          )}
-        </>
-      ) : null}
-    </section>
-  );
+                    </Link>) : (<small>仅引用摘要</small>)}
+                </article>))}
+            </div>) : (<EmptyState title="暂无场景引用"/>)}
+        </>) : null}
+    </section>);
 }
