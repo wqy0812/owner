@@ -54,6 +54,48 @@ pnpm --dir web dev --host 127.0.0.1 --port 15173 --strictPort
 
 访问 `http://127.0.0.1:15173`。关闭两个终端进程即停止该实例。端口占用时同时调整后端地址和 Vite 代理。临时目录为空，不包含真实主机；需要验收数据时使用合成数据或本地 Demo，不复制真实凭据。`identities` 仅是 Seed 选择，不会禁用执行器；发起真实 Run 仍必须确认目标和授权。
 
+## 本地 Docker 部署与 Ansible 测试
+
+本地 Ansible 测试固定使用 `clusterforge-test-ubuntu` 容器中的
+`/opt/ansible/bin/ansible-playbook`，版本为 Ansible 2.8.8 / Python 3.6.9，
+Ubuntu 18.04。无需在 macOS 创建 Ansible 虚拟环境。
+
+从仓库根目录部署当前代码：
+
+```bash
+./scripts/deploy-local-docker.sh
+# 或 make deploy-local-docker
+```
+
+前置条件为本地 Docker、Python 3.9+、Go、pnpm 和已安装的前端依赖，以及现有
+`~/.local/share/clusterforge-test-env/ubuntu/compose.yaml` 环境。
+服务须已启动；可执行 `docker compose -f ~/.local/share/clusterforge-test-env/ubuntu/compose.yaml up -d --no-build`。
+只检查环境用 `--check`；已完成回归时可用 `--skip-tests`，它仍执行源码一致性、
+数据库、候选镜像、HTTP、静态资源和执行器检查。
+
+流程先将已跟踪文件和未忽略的新文件复制到临时目录，再构建嵌入前端的 Linux
+二进制。部署清单记录 Git 基线、未提交状态、工作区摘要及二进制/静态资源摘要；
+从复制目录构建的二进制不读取原仓库 Git 元数据，以该清单为源码来源证明。
+原工作区在复制、构建或验证期间改变时，脚本停止并要求重新执行。
+
+候选容器仅复用 Go 缓存，使用临时数据库和本地测试对象，不挂载正式平台数据。
+默认执行部署脚本门禁、Go/前端测试、`make test-role-job` 及真实 SSH 冒烟检查。
+每次部署都从当前的 [固定版本 Dockerfile](../deploy/local-docker/Dockerfile.runtime) 构建源运行时镜像，未变化的层由 Docker 缓存复用；修改运行时定义后不会继续沿用旧镜像。
+
+切换前检查活动工作和数据库合同，停止空闲容器后再次检查，通过仓库备份工具
+生成一致 SQLite 快照，随后使用已有 Compose 和 named volumes 更新镜像。
+平台数据仍在容器 `/var/lib/clusterforge-test/platform`；其他测试工作区、SSH 身份和
+缓存卷保留。地址保持 `http://127.0.0.1:8080`，SSH 保持 `127.0.0.1:22222`。
+
+每次部署在 `output/local-docker-deploy/<时间与标识>/` 保留清单、测试日志、
+原配置、数据库备份与验收结果。数据库快照也保留于容器持久目录
+`/var/lib/clusterforge-test/deploy-backups/<同一标识>/platform.db`。
+启动或验收失败会回退精确的旧镜像并恢复脚本改动的本地构建配置；当前数据库
+不会自动替换，以免覆盖切换期间的新数据。需要从快照恢复数据库时另行明确授权。
+
+脚本自身的拒绝部署与回退检查使用 `make test-deploy-local-docker`，不访问 Docker
+或平台数据。它也包含在 `make test-deploy-script` 中。
+
 ## 跨层修改顺序与不变量
 
 1. 写清触发条件、原有结果、预期结果、涉及角色及版本状态；先判断是缺陷、合同变更还是显示调整。

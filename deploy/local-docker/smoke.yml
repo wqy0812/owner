@@ -1,0 +1,38 @@
+---
+- name: Verify isolated Ubuntu SSH test environment
+  hosts: simulated
+  gather_facts: true
+  tasks:
+    - name: Check target identity
+      assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version == '18.04'
+          - ansible_python_version == '3.6.9'
+          - ansible_version.full == '2.8.8'
+    - name: Verify Ansible module over SSH
+      ping:
+    - name: Create isolated test directory
+      become: true
+      file:
+        path: /var/tmp/clusterforge-env-smoke
+        state: directory
+        mode: '0755'
+    - name: Write isolated marker
+      become: true
+      copy:
+        dest: /var/tmp/clusterforge-env-smoke/marker
+        content: 'clusterforge-docker-smoke'
+        mode: '0644'
+    - name: Read back marker
+      slurp:
+        src: /var/tmp/clusterforge-env-smoke/marker
+      register: marker
+    - name: Verify marker content
+      assert:
+        that: marker.content | b64decode == 'clusterforge-docker-smoke'
+    - name: Remove isolated marker directory
+      become: true
+      file:
+        path: /var/tmp/clusterforge-env-smoke
+        state: absent

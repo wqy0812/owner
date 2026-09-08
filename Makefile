@@ -7,7 +7,7 @@ BACKUP_APP := bin/clusterforge-backup
 JOB_APP := bin/clusterforge-job
 EMBED_DIR := internal/ui/dist
 
-.PHONY: bootstrap dev dev-api dev-web seed reset-demo test check-docs test-deploy-script test-fixture-boundary test-ansible test-role-job test-reference-playbooks test-e2e test-e2e-live build build-web
+.PHONY: bootstrap dev dev-api dev-web seed reset-demo test check-docs test-deploy-script test-deploy-local-docker deploy-local-docker test-fixture-boundary test-ansible test-role-job test-reference-playbooks test-e2e test-e2e-live build build-web
 
 check-docs:
 	python3 scripts/check-docs.py
@@ -40,6 +40,13 @@ test:
 
 test-deploy-script:
 	./scripts/test-deploy-test-88-55.sh
+	$(MAKE) test-deploy-local-docker
+
+test-deploy-local-docker:
+	python3 scripts/test-deploy-local-docker.py
+
+deploy-local-docker:
+	./scripts/deploy-local-docker.sh
 
 test-fixture-boundary:
 	./scripts/check-test-fixture-boundary.sh

@@ -67,6 +67,30 @@ make build
 
 本轮交付与验证边界见 [2026-09-07 分批审核记录](docs/records/2026-09-07-batched-code-review.md)。
 
+## 部署到本地 Docker
+
+更新现有 `clusterforge-test-ubuntu` 容器，包含当前工作区未提交改动：
+
+```bash
+./scripts/deploy-local-docker.sh
+```
+
+固定使用 **Ansible 2.8.8 / Python 3.6.9 / Ubuntu 18.04**，访问地址为
+`http://127.0.0.1:8080`，SSH 保持本机 `22222` 端口。以后本地涉及 Ansible 的测试
+均在这个运行时中执行。脚本要求已建立该本地环境及其 Compose 配置；具体流程见
+[开发指南](docs/development-guide.md#本地-docker-部署与-ansible-测试)。
+
+脚本先复制并构建当前工作区，默认执行 Go、前端与隔离容器内的真实 Ansible
+回归，再备份数据库、切换镜像并校验 HTTP、静态资源摘要和执行器。
+已有数据卷保留；活动工作、合同不匹配或源码变化会阻断部署。失败时回退原镜像，
+保留当前数据，数据库备份另存供需要时恢复。不会提交、推送或重建数据库。
+
+```bash
+./scripts/deploy-local-docker.sh --check       # 只检查当前环境
+./scripts/deploy-local-docker.sh --skip-tests  # 跳过项目回归，保留必需部署检查
+make test-deploy-local-docker                 # 脚本的隔离门禁测试
+```
+
 ## 部署到 192.168.88.55 测试环境
 
 部署当前工作区（包括未提交改动）：
