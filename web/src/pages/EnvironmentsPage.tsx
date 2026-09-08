@@ -477,7 +477,7 @@ export function EnvironmentsPage() {
           </div>}
         </article>
 <article className="panel environment-editor">
-          <Tabs activeKey={tab} onChange={value => setTab(value as typeof tab)} items={([
+          <Tabs className="environment-editor-tabs" tabBarGutter={24} activeKey={tab} onChange={value => setTab(value as typeof tab)} items={([
  ['inventory', '主机分组', <Server size={16}/>], ['facts', '环境标签', <Cpu size={16}/>], ['parameters', '组件环境参数', <CloudCog size={16}/>], ['variables', '环境变量', <Braces size={16}/>], ['credentials', '凭据引用', <KeyRound size={16}/>],
  ] as const).map(([key,label,icon]) => ({key,label:<>{label}{dirtyByTab[key] && <span className="dirty-dot" aria-label="有未保存更改"/>}</>,icon}))} />
           <div className="persistent-section" hidden={!(tab === 'inventory')}>{<EnvironmentInventoryEditor key={`${selected.id}:${selected.currentRevision?.id}`} hosts={hosts} options={hostGroupOptions} editable={Boolean(editable)} onChange={setHosts}/>}</div>

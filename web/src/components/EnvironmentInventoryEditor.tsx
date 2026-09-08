@@ -36,7 +36,7 @@ export function EnvironmentInventoryEditor({ hosts, options, editable, onChange 
     {hosts.length ? <div className="inventory-table-scroll"><Table className="inventory-table" dataSource={hosts} rowKey="name" pagination={false} scroll={{x: 760}} columns={[
 {title:'节点',key:'node',render:(_,host)=><div className="inventory-node"><span className="inventory-node__icon"><Server size={17}/></span><div><strong>{host.name}</strong><small>{host.address}</small></div></div>},
 {title:'主机组',key:'groups',render:(_,host)=><GroupTags groups={host.groups} options={options}/>},
-{title:'SSH 连接',key:'ssh',render:(_,host)=><span className="inventory-connection">{host.user || '默认用户'}<span>端口 {host.port || 22}</span></span>},
+{title:'SSH 连接',key:'ssh',width:200,render:(_,host)=><span className="inventory-connection">{host.user || '默认用户'}<span>端口 {host.port || 22}</span></span>},
 {title:'操作',key:'actions',width:112,hidden:!editable,render:(_,host,index)=><div className="inventory-row-actions"><Button type="text" aria-label={`编辑节点 ${host.name}`} onClick={()=>setEditing(index)}><Pencil size={15}/></Button><Button type="text" danger aria-label={`移除节点 ${host.name}，保存后生效`} onClick={()=>onChange(hosts.filter((_,i)=>i!==index))}><Trash2 size={15}/></Button></div>}
 ]} /></div> : <EmptyState title="尚未添加节点" description={editable ? '添加节点并选择所属主机组，开始配置环境。' : '环境 Owner 尚未配置节点。'}/>}
     {groupsOpen && editable && <HostGroupManager hosts={hosts} options={options} onClose={() => setGroupsOpen(false)} onApply={(next) => { onChange(next); setGroupsOpen(false); }}/>}

@@ -5,7 +5,6 @@
 .inventory-table th { padding: 11px 16px; background: #f8f9fc; color: #818ba0; font-size: 13px; font-weight: 600; }
 .inventory-table td { padding: 14px 16px; border-top: 1px solid #edf0f5; }
 .inventory-table th:nth-child(2) { width: 42%; }
-.inventory-table td:last-child { width: 1%; }
 .inventory-node { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .inventory-node > div { min-width: 0; }
 .inventory-node__icon { flex: 0 0 34px; height: 34px; display: grid; place-items: center; border: 1px solid #e7eaf2; border-radius: 9px; color: #7b86a3; background: #f7f9fc; }

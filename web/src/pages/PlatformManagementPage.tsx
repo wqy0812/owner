@@ -360,11 +360,11 @@ export function PlatformManagementPage() {
 {key: 'variables', label: '环境变量', children: <><section className="panel environment-variable-panel" aria-label="环境变量字段">
         <div className="section-heading"><div><h2>环境变量字段</h2><p>环境 Owner 只能从此目录选择键。</p></div></div>
         <div className="environment-variable-layout">
-          <Form className="form-grid environment-variable-create" onFinish={(event) => void createVariableDefinition(event)} layout="vertical" preserve={false}>
-            <h3 className="span-2">新增字段</h3>
-            <Field label={"变量名"} required><Input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))}/></Field>
-            <Field label={"显示名"} required><Input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))}/></Field>
-            <Field className="span-2" label={"说明"}><Input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))}/></Field>
+          <Form className="environment-variable-create" onFinish={(event) => void createVariableDefinition(event)} layout="horizontal" labelCol={{ flex: '80px' }} wrapperCol={{ flex: 'auto' }} labelAlign="left" colon={false} preserve={false}>
+            <h3>新增字段</h3>
+            <Field layout="horizontal" label={"变量名"} required><Input required pattern="[A-Z_][A-Z0-9_]*" value={variableForm.name} onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value.toUpperCase() }))}/></Field>
+            <Field layout="horizontal" label={"显示名"} required><Input required value={variableForm.label} onChange={(event) => setVariableForm((current) => ({ ...current, label: event.target.value }))}/></Field>
+            <Field layout="horizontal" label={"说明"}><Input value={variableForm.description} onChange={(event) => setVariableForm((current) => ({ ...current, description: event.target.value }))}/></Field>
             <Button className="button button--primary" disabled={Boolean(busy)} htmlType={"submit"} type="primary"><Plus size={15}/> 新增变量字段</Button>
           </Form>
           <section className="environment-variable-existing" aria-label="现有环境变量字段">

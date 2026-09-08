@@ -183,6 +183,7 @@ export function ParameterTable({ parameters, onChange, disabled }: {
             const expanded = expandedIndex === index;
             const displayName = parameter.name || `未命名参数 ${index + 1}`;
             const editorId = `${tableId}-parameter-${index}`;
+            const enumRequired = (parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner') && (parameter.type === 'object' || parameter.type === 'array');
             return <article key={`${parameter.name}-${index}`} className={`parameter-card parameter-card--${parameter.visibility}${expanded ? ' is-expanded' : ''}`}>
       <button type="button" className="parameter-card__summary" aria-label={`${expanded ? '收起' : '编辑'}参数 ${displayName}`} aria-expanded={expanded} aria-controls={editorId} onClick={() => setExpandedIndex(expanded ? undefined : index)}>
         <span className="parameter-card__identity"><strong>{displayName}</strong><small>{parameter.description || '尚未填写说明'}</small></span>
@@ -195,30 +196,52 @@ export function ParameterTable({ parameters, onChange, disabled }: {
         <span className="parameter-card__toggle">{expanded ? '收起' : '编辑'}<ChevronDown size={15} aria-hidden="true"/></span>
       </button>
       {expanded ? <div className="parameter-card__editor" id={editorId}>
-      <div className="parameter-card__grid">
-        <Field label={"参数名称"}><Input aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value.trim() })}/></Field>
-        <Field className="span-2" label={"说明"}><Input aria-label="参数说明" placeholder="这个参数给谁用" value={parameter.description} disabled={disabled} onChange={(event) => update(index, { description: event.target.value })}/></Field>
-        <Field label={"类型"}><Select aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(selectedValue) => update(index, { type: selectedValue as ParameterType, fixedValue: undefined, suggestedValue: undefined, testValue: undefined, enum: undefined, minLength: undefined })} popupMatchSelectWidth={true}>
+      <section className="parameter-card__section" aria-labelledby={`${editorId}-basics`}>
+        <h3 id={`${editorId}-basics`}>基本信息</h3>
+        <div className="parameter-card__fields parameter-card__fields--basics">
+        <Field required label={"参数名称"}><Input aria-required aria-label="参数名称" placeholder="例如 kubeInstallRoot" value={parameter.name} disabled={disabled} onChange={(event) => update(index, { name: event.target.value.trim() })}/></Field>
+        <Field required label={"类型"}><Select aria-required aria-label="参数类型" value={parameter.type} disabled={disabled} onChange={(selectedValue) => update(index, { type: selectedValue as ParameterType, fixedValue: undefined, suggestedValue: undefined, testValue: undefined, enum: undefined, minLength: undefined })} popupMatchSelectWidth={true}>
           {PARAMETER_TYPES.map((type) => <Select.Option key={type} value={type}>{type}</Select.Option>)}
         </Select></Field>
+        <Field required label={"说明"}><Input aria-required aria-label="参数说明" placeholder="这个参数给谁用" value={parameter.description} disabled={disabled} onChange={(event) => update(index, { description: event.target.value })}/></Field>
+        </div>
+      </section>
+      <section className="parameter-card__section" aria-labelledby={`${editorId}-rules`}>
+        <h3 id={`${editorId}-rules`}>使用规则</h3>
+        <div className="parameter-card__fields">
         <fieldset className="visibility-fieldset">
-          <legend>可见性</legend>
-          <div className="visibility-toggle" role="radiogroup" aria-label="可见性">
-            <Radio className={parameter.visibility === 'internal' ? 'active' : ''} aria-label="内部" name={`visibility-${index}`} value="internal" checked={parameter.visibility === 'internal'} disabled={disabled} onChange={() => update(index, { visibility: 'internal' })}><strong>仅本 Release 使用</strong><small>下游不可引用</small></Radio>
-            <Radio className={parameter.visibility === 'public' ? 'active' : ''} aria-label="公开" name={`visibility-${index}`} value="public" checked={parameter.visibility === 'public'} disabled={disabled} onChange={() => update(index, { visibility: 'public' })}><strong>允许下游映射引用</strong><small>下游可显式映射使用</small></Radio>
+          <legend><span className="parameter-card__required" aria-hidden="true">*</span>可见性</legend>
+          <div className="visibility-toggle" role="radiogroup" aria-required="true" aria-label="可见性">
+            <Radio className={parameter.visibility === 'internal' ? 'active' : ''} aria-label="内部" name={`visibility-${index}`} value="internal" checked={parameter.visibility === 'internal'} disabled={disabled} onChange={() => update(index, { visibility: 'internal' })}><span className="visibility-toggle__copy"><strong>仅本 Release 使用</strong><small>下游不可引用</small></span></Radio>
+            <Radio className={parameter.visibility === 'public' ? 'active' : ''} aria-label="公开" name={`visibility-${index}`} value="public" checked={parameter.visibility === 'public'} disabled={disabled} onChange={() => update(index, { visibility: 'public' })}><span className="visibility-toggle__copy"><strong>允许下游映射引用</strong><small>下游可显式映射使用</small></span></Radio>
           </div>
         </fieldset>
-        <Field label={"值的负责人"}><Select aria-label="值的负责人" value={parameter.valueProvider} disabled={disabled} onChange={(selectedValue) => changeProvider(index, selectedValue as ParameterValueProvider)} popupMatchSelectWidth={true}><Select.Option value="component_owner">组件 Owner 固定</Select.Option><Select.Option value="scenario_owner">集群 Owner 填写</Select.Option><Select.Option value="environment_owner">环境 Owner 填写</Select.Option><Select.Option value="upstream_mapping">上游映射提供</Select.Option></Select></Field>
-        <Checkbox className="checkbox-field checkbox-field--inline" checked={Boolean(parameter.modifiable)} disabled={disabled || parameter.valueProvider === 'component_owner' || parameter.valueProvider === 'upstream_mapping'} onChange={(event) => update(index, { modifiable: event.target.checked })}><span>允许外部修改</span></Checkbox>
-        <Checkbox className="checkbox-field checkbox-field--inline" checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })}><span>正式运行必须有值</span></Checkbox>
-        {parameter.valueProvider === 'component_owner' ? <Field label="Release 固定值"><ParameterValueEditor parameter={parameter} value={parameter.fixedValue} disabled={disabled} onChange={(fixedValue) => update(index, { fixedValue })}/></Field> : null}
+        <div className="parameter-card__provider">
+        <Field required label={"值的负责人"}><Select aria-required aria-label="值的负责人" value={parameter.valueProvider} disabled={disabled} onChange={(selectedValue) => changeProvider(index, selectedValue as ParameterValueProvider)} popupMatchSelectWidth={true}><Select.Option value="component_owner">组件 Owner 固定</Select.Option><Select.Option value="scenario_owner">集群 Owner 填写</Select.Option><Select.Option value="environment_owner">环境 Owner 填写</Select.Option><Select.Option value="upstream_mapping">上游映射提供</Select.Option></Select></Field>
+        <div className="parameter-card__flags">
+          <Checkbox checked={Boolean(parameter.modifiable)} disabled={disabled || parameter.valueProvider === 'component_owner' || parameter.valueProvider === 'upstream_mapping'} onChange={(event) => update(index, { modifiable: event.target.checked })}>允许外部修改</Checkbox>
+          <Checkbox checked={Boolean(parameter.required)} disabled={disabled} onChange={(event) => update(index, { required: event.target.checked })}>正式运行必须有值</Checkbox>
+        </div>
+        </div>
+        </div>
+      </section>
+      <section className="parameter-card__section" aria-labelledby={`${editorId}-values`}>
+        <h3 id={`${editorId}-values`}>参数值</h3>
+        <div className="parameter-card__fields">
+        {parameter.valueProvider === 'component_owner' ? <Field required label="Release 固定值"><ParameterValueEditor parameter={parameter} value={parameter.fixedValue} disabled={disabled} onChange={(fixedValue) => update(index, { fixedValue })}/></Field> : null}
         {parameter.valueProvider === 'scenario_owner' || parameter.valueProvider === 'environment_owner' ? <Field label="建议值（不自动生效）"><ParameterValueEditor parameter={parameter} value={parameter.suggestedValue} disabled={disabled} optional onChange={(suggestedValue) => update(index, { suggestedValue })}/></Field> : null}
         {parameter.valueProvider !== 'component_owner' ? <Field label="组件独立测试值"><ParameterValueEditor parameter={parameter} value={parameter.testValue} disabled={disabled} optional onChange={(testValue) => update(index, { testValue })}/></Field> : null}
-        {parameter.valueProvider === 'environment_owner' ? <p className="section-hint">由本组件定义，环境 Owner 按组件版本填写；其他组件通过公开参数映射引用。</p> : null}
-        <Field label={"枚举"}><Input aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })}/></Field>
-        {parameter.type === 'string' ? <Field label={"最小长度"}><Input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })}/></Field> : <span />}
-      </div>
-      {!disabled && <Button className="button button--quiet" onClick={() => removeParameter(index)} htmlType={"button"} type="default">删除参数</Button>}
+        {parameter.valueProvider === 'environment_owner' ? <p className="section-hint parameter-card__hint">由本组件定义，环境 Owner 按组件版本填写；其他组件通过公开参数映射引用。</p> : null}
+        </div>
+      </section>
+      <section className="parameter-card__section" aria-labelledby={`${editorId}-validation`}>
+        <h3 id={`${editorId}-validation`}>校验约束</h3>
+        <div className="parameter-card__fields">
+        <Field required={enumRequired} label={"枚举"}><Input aria-required={enumRequired} aria-label="枚举" placeholder="逗号分隔" value={(parameter.enum ?? []).map((item) => String(item)).join(', ')} disabled={disabled} onChange={(event) => update(index, { enum: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })}/></Field>
+        {parameter.type === 'string' ? <Field label={"最小长度"}><Input aria-label="最小长度" type="number" min={0} placeholder="minLength" value={parameter.minLength ?? ''} disabled={disabled} onChange={(event) => update(index, { minLength: event.target.value === '' ? undefined : Number(event.target.value) })}/></Field> : null}
+        </div>
+      </section>
+      {!disabled && <div className="parameter-card__actions"><Button danger onClick={() => removeParameter(index)} htmlType={"button"} type="text">删除参数</Button></div>}
       </div> : null}
     </article>;
         })}
