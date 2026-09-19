@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img">
+<title>验证环境 A · 接收归还 · 设计方案示例</title><desc>1920×1080 桌面页面线框，非已实现界面或真实运行结果。</desc>
+<g font-family="PingFang SC,Microsoft YaHei,Noto Sans CJK SC,Arial,sans-serif">
+<rect x="0" y="0" width="1920" height="1080" rx="0" fill="#f3f6fa" stroke="none"/>
+<rect x="0" y="0" width="224" height="1080" rx="0" fill="#152334" stroke="none"/>
+<rect x="24" y="25" width="34" height="34" rx="9" fill="#729aff" stroke="none"/>
+<text x="34" y="50" font-size="24" fill="#fff" font-weight="700">C</text>
+<text x="70" y="48" font-size="21" fill="#fff" font-weight="600">ClusterForge</text>
+<text x="28" y="112" font-size="15" fill="#8fa4bb" font-weight="600">协作交付</text>
+<rect x="31" y="153" width="14" height="14" rx="4" fill="#758ba2" stroke="none"/>
+<text x="60" y="171" font-size="20" fill="#b6c4d4" font-weight="400">我的工作</text>
+<rect x="31" y="213" width="14" height="14" rx="4" fill="#758ba2" stroke="none"/>
+<text x="60" y="231" font-size="20" fill="#b6c4d4" font-weight="400">组件</text>
+<rect x="16" y="258" width="192" height="48" rx="8" fill="#263e5b" stroke="none"/>
+<rect x="31" y="273" width="14" height="14" rx="4" fill="#8fb0ec" stroke="none"/>
+<text x="60" y="291" font-size="20" fill="#fff" font-weight="600">场景</text>
+<rect x="31" y="333" width="14" height="14" rx="4" fill="#758ba2" stroke="none"/>
+<text x="60" y="351" font-size="20" fill="#b6c4d4" font-weight="400">环境</text>
+<rect x="31" y="393" width="14" height="14" rx="4" fill="#758ba2" stroke="none"/>
+<text x="60" y="411" font-size="20" fill="#b6c4d4" font-weight="400">运行中心</text>
+<rect x="31" y="453" width="14" height="14" rx="4" fill="#758ba2" stroke="none"/>
+<text x="60" y="471" font-size="20" fill="#b6c4d4" font-weight="400">平台管理</text>
+<text x="26" y="999" font-size="15" fill="#afbdd0" font-weight="400">方案线框 / 示例数据</text>
+<text x="26" y="1028" font-size="14" fill="#8fa4bb" font-weight="400">未实施 · 2026-09-09</text>
+<rect x="224" y="0" width="1696" height="72" rx="0" fill="#fff" stroke="none"/>
+<path d="M 224 72 L 1920 72" stroke="#dbe3ec" fill="none"/>
+<text x="264" y="45" font-size="18" fill="#5b6f85" font-weight="400">场景 / 计算集群 / 环境使用 / 归还验收</text>
+<rect x="1395" y="22" width="181" height="30" rx="6" fill="#fff4df" stroke="none"/>
+<text x="1407" y="43" font-size="16" fill="#a86b0a" font-weight="600">设计方案 · 示例</text>
+<text x="1630" y="45" font-size="18" fill="#172b40" font-weight="600">场景 Owner</text>
+<rect x="1832" y="20" width="36" height="36" rx="18" fill="#eaf1ff" stroke="none"/>
+<text x="1843" y="45" font-size="20" fill="#2864dc" font-weight="600">O</text>
+<text x="264" y="129" font-size="34" fill="#172b40" font-weight="650">验证环境 A · 接收归还</text>
+<text x="264" y="166" font-size="19" fill="#5b6f85" font-weight="400">关联变更 Runtime 1.0 → 1.1  ·  归还负责人 Runtime Owner  ·  接收方 计算集群</text>
+<path d="M 264 1024 L 1880 1024" stroke="#dbe3ec" fill="none"/>
+<text x="264" y="1054" font-size="16" fill="#5b6f85" font-weight="400">设计方案，尚未实施；图中状态和数量仅用于说明交互。</text>
+<text x="1628" y="1054" font-size="16" fill="#5b6f85" font-weight="400">桌面基准 1920 × 1080</text>
+<rect x="1670" y="110" width="210" height="30" rx="6" fill="#fff4df" stroke="none"/>
+<text x="1682" y="131" font-size="16" fill="#a86b0a" font-weight="600">待接收 · 仍占用</text>
+<path d="M 264 233 L 1880 233" stroke="#dbe3ec" fill="none"/>
+<text x="276" y="208" font-size="19" fill="#2864dc" font-weight="600">基线对照</text>
+<rect x="264" y="230" width="104" height="3" rx="1" fill="#2864dc" stroke="none"/>
+<text x="424" y="208" font-size="19" fill="#5b6f85" font-weight="400">恢复证据</text>
+<text x="572" y="208" font-size="19" fill="#5b6f85" font-weight="400">使用记录</text>
+<rect x="264" y="254" width="1112" height="469" rx="12" fill="#fff" stroke="#dbe3ec"/>
+<text x="288" y="291" font-size="22" fill="#172b40" font-weight="600">借出前基线与当前状态</text>
+<rect x="280" y="314" width="1080" height="44" rx="6" fill="#f4f7fb" stroke="none"/>
+<text x="296" y="343" font-size="18" fill="#5b6f85" font-weight="600">核对项</text>
+<text x="622" y="343" font-size="18" fill="#5b6f85" font-weight="600">借出前</text>
+<text x="970" y="343" font-size="18" fill="#5b6f85" font-weight="600">当前</text>
+<text x="296" y="404" font-size="19" fill="#172b40" font-weight="500">环境配置</text>
+<text x="622" y="404" font-size="18" fill="#5b6f85" font-weight="400">r7 · 配置锁定</text>
+<text x="970" y="404" font-size="18" fill="#137653" font-weight="400">与借出前一致</text>
+<path d="M 288 425 L 1352 425" stroke="#dbe3ec" fill="none"/>
+<text x="296" y="463" font-size="19" fill="#172b40" font-weight="500">Runtime / NodeAgent</text>
+<text x="622" y="463" font-size="18" fill="#5b6f85" font-weight="400">1.0 / 2.0</text>
+<text x="970" y="463" font-size="18" fill="#137653" font-weight="400">1.0 / 2.0</text>
+<path d="M 288 484 L 1352 484" stroke="#dbe3ec" fill="none"/>
+<text x="296" y="522" font-size="19" fill="#172b40" font-weight="500">ImageCache</text>
+<text x="622" y="522" font-size="18" fill="#5b6f85" font-weight="400">1.0</text>
+<text x="970" y="522" font-size="18" fill="#137653" font-weight="400">1.0</text>
+<path d="M 288 543 L 1352 543" stroke="#dbe3ec" fill="none"/>
+<text x="296" y="581" font-size="19" fill="#172b40" font-weight="500">场景来源组合</text>
+<text x="622" y="581" font-size="18" fill="#5b6f85" font-weight="400">计算集群 · 原基线</text>
+<text x="970" y="581" font-size="18" fill="#137653" font-weight="400">原组合已复核</text>
+<path d="M 288 602 L 1352 602" stroke="#dbe3ec" fill="none"/>
+<text x="296" y="640" font-size="19" fill="#172b40" font-weight="500">活动 Run / 构建</text>
+<text x="622" y="640" font-size="18" fill="#5b6f85" font-weight="400">0 / 0</text>
+<text x="970" y="640" font-size="18" fill="#137653" font-weight="400">0 / 0</text>
+<path d="M 288 661 L 1352 661" stroke="#dbe3ec" fill="none"/>
+<text x="296" y="693" font-size="17" fill="#5b6f85" font-weight="400">恢复目标来自借出时记录；测试后的新版本不作为归还目标。</text>
+<rect x="1400" y="254" width="480" height="469" rx="12" fill="#fff" stroke="#dbe3ec"/>
+<text x="1424" y="291" font-size="22" fill="#172b40" font-weight="600">接收条件</text>
+<rect x="1424" y="327" width="22" height="22" rx="5" fill="#e9f5ef" stroke="none"/>
+<text x="1429" y="344" font-size="16" fill="#137653" font-weight="700">✓</text>
+<text x="1460" y="345" font-size="19" fill="#172b40" font-weight="600">基线匹配</text>
+<text x="1460" y="374" font-size="16" fill="#5b6f85" font-weight="400">环境、组件及来源身份一致</text>
+<rect x="1424" y="409" width="22" height="22" rx="5" fill="#e9f5ef" stroke="none"/>
+<text x="1429" y="426" font-size="16" fill="#137653" font-weight="700">✓</text>
+<text x="1460" y="427" font-size="19" fill="#172b40" font-weight="600">恢复执行成功</text>
+<text x="1460" y="456" font-size="16" fill="#5b6f85" font-weight="400">备份与恢复回执可追溯</text>
+<rect x="1424" y="491" width="22" height="22" rx="5" fill="#e9f5ef" stroke="none"/>
+<text x="1429" y="508" font-size="16" fill="#137653" font-weight="700">✓</text>
+<text x="1460" y="509" font-size="19" fill="#172b40" font-weight="600">原场景验收成功</text>
+<text x="1460" y="538" font-size="16" fill="#5b6f85" font-weight="400">原业务组合已完成完整验收</text>
+<rect x="1424" y="573" width="22" height="22" rx="5" fill="#e9f5ef" stroke="none"/>
+<text x="1429" y="590" font-size="16" fill="#137653" font-weight="700">✓</text>
+<text x="1460" y="591" font-size="19" fill="#172b40" font-weight="600">没有活动任务</text>
+<text x="1460" y="620" font-size="16" fill="#5b6f85" font-weight="400">接收时服务端再次复核</text>
+<text x="1424" y="683" font-size="17" fill="#5b6f85" font-weight="400">最终接收会生成不可变回执。</text>
+<rect x="264" y="747" width="1616" height="189" rx="12" fill="#fff" stroke="#dbe3ec"/>
+<text x="288" y="784" font-size="22" fill="#172b40" font-weight="600">恢复证据</text>
+<text x="288" y="831" font-size="20" fill="#172b40" font-weight="600">恢复执行</text>
+<text x="520" y="831" font-size="19" fill="#5b6f85" font-weight="400">组件回退与配置恢复</text>
+<rect x="1160" y="807" width="100" height="30" rx="6" fill="#e9f5ef" stroke="none"/>
+<text x="1172" y="828" font-size="16" fill="#137653" font-weight="600">成功</text>
+<text x="1655" y="831" font-size="19" fill="#2864dc" font-weight="400">查看步骤与日志</text>
+<text x="288" y="890" font-size="20" fill="#172b40" font-weight="600">归还检查</text>
+<text x="520" y="890" font-size="19" fill="#5b6f85" font-weight="400">组件检查 + 原场景业务验收</text>
+<rect x="1160" y="866" width="100" height="30" rx="6" fill="#e9f5ef" stroke="none"/>
+<text x="1172" y="887" font-size="16" fill="#137653" font-weight="600">成功</text>
+<text x="1655" y="890" font-size="19" fill="#2864dc" font-weight="400">查看完整证据</text>
+<text x="264" y="990" font-size="18" fill="#5b6f85" font-weight="400">接收仅结束借用，不代表验证中的新版本已正式采用。</text>
+<rect x="1510" y="958" width="156" height="44" rx="8" fill="#fff" stroke="#dbe3ec"/>
+<text x="1528" y="987" font-size="18" fill="#172b40" font-weight="600">退回处理</text>
+<rect x="1682" y="958" width="198" height="44" rx="8" fill="#2864dc" stroke="none"/>
+<text x="1700" y="987" font-size="18" fill="#fff" font-weight="600">接收归还</text>
+</g></svg>

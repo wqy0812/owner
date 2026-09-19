@@ -15,6 +15,9 @@
 | 理解平台功能 | [平台功能与核心概念](platform-capabilities.md) | 功能、对象关系和职责；与前端功能章节共用内容源 |
 | 第一次接触仓库 | [项目结构说明](project-structure.md) | 目录、运行架构、开发入口与常用命令 |
 | 后端开发、测试与设计 | [平台设计文档](backend-design.md) | 领域模型、权限、状态机、数据结构、API 与安全边界 |
+| 设计组件变更与环境申请流程 | [Owner 协作：使用流程方案](design/owner-collaboration/workflow.md) | **设计方案，尚未实施**；角色泳道、变更影响、环境分配、整环境借还与验证发布闭环 |
+| 设计 Owner 协作前端 | [Owner 协作：前端设计方案](design/owner-collaboration/frontend.md) | **设计方案，尚未实施**；1920×1080 页面线框、表单、工作台与角色交互 |
+| 设计 Owner 协作后端 | [Owner 协作：后端设计方案](design/owner-collaboration/backend.md) | **设计方案，尚未实施**；领域关系、状态、授权、证据门禁、拟议 API 与迁移验收 |
 | Run 刷新与工作台性能 | [活动读取与工作台合同](run-activity-and-workbench.md) | 场景保存基线、等待状态表、增量日志与按角色查询；[验收记录](records/2026-09-07-performance-validation.md) |
 | 场景分支、版本升级和业务验收 | [场景生命周期](scenario-lifecycle.md) | 新建分支、双测试发布、环境基线、失败恢复和保留历史转换 |
 | 回看配置来源与分支界面改造 | [2026-09-06 配置来源、分支适配标签与管理界面方案](configuration-provenance-branch-ui-plan-2026-09-06.md) | 本地实施完成：[验证记录](records/2026-09-06-configuration-provenance-branch-ui-validation.md)；来源展示、固定分支范围、类别层级与目录样板 |
@@ -53,6 +56,7 @@
 - `组件分类规则.md` 同时保存通用分类原则和带日期的测试目录映射；分类枚举或已发布组件变化时更新。
 - `kubernetes-reset-bootstrap-standard.md` 定义测试环境 reset/bootstrap 的标准操作与失败关闭边界，不替代某次执行记录。
 - `records/` 只保存带日期的历史验收证据；后续状态变化必须新增或链接新记录，不能回写为“当前状态”。
+- `design/owner-collaboration/` 保存尚未实施的 Owner 协作方案，按使用流程、前端、后端分为三份文档；配图和接口均为设计内容，不能作为现有功能或运行结果。实施后再同步对应正式合同文档及验收记录。
 - `history/` 只保存已经完成或不具约束力的历史方案与讨论；当前行为仍以代码、数据库合同和正式文档为准。
 - 带日期的部署快照是历史证据，禁止覆盖成“当前实时状态”；需要新快照时新增日期文件或显式更新日期和验证证据。
 
