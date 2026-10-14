@@ -450,14 +450,7 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		return domain.RunExecutionPlan{}, "", false, err
 	}
 	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
-	destructive := len(plan.DeliveryRequirements) > 0 || len(plan.ArtifactTransfers) > 0 || len(plan.ImageTransfers) > 0
-	for _, step := range plan.Steps {
-		if step.HighRisk {
-			destructive = true
-			break
-		}
-	}
-	return plan, planDigest, destructive, nil
+	return plan, planDigest, plan.HighRisk(), nil
 }
 
 // bindVerifiedWorkspaceDigests joins the immutable Release contract, its

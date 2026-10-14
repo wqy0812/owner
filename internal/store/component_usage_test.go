@@ -38,6 +38,16 @@ func TestComponentUsageExactHistoryAndPrivateSummaries(t *testing.T) {
 	if out.ComponentCount != 1 || out.ScenarioCount != 1 || len(out.Scenarios) != 1 || out.Scenarios[0].References != 2 || out.Scenarios[0].CanViewDetails || out.Components[0].CanViewDetails {
 		t.Fatalf("unexpected private usage: %+v", out)
 	}
+	if err := setCandidateForTest(ctx, s, r.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := s.ComponentUsage(ctx, viewer, "history-component", "", false)
+	if err != nil || len(shared.Components) != 1 || !shared.Components[0].CanViewDetails {
+		t.Fatalf("shared candidate usage=%+v err=%v", shared, err)
+	}
+	if err := setCandidateForTest(ctx, s, r.ID, false); err != nil {
+		t.Fatal(err)
+	}
 	out, err = s.ComponentUsage(ctx, viewer, "history-component", up2.ID, false)
 	if err != nil || out.ComponentCount != 0 || out.ScenarioCount != 0 {
 		t.Fatal(out, err)

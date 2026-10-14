@@ -43,11 +43,36 @@ def image(ref, expected):
         raise ValueError('image digest mismatch: ' + ref)
 
 
-def prepare(metadata):
+def validate_delivery(metadata):
     requirements = metadata.get('deliveryRequirements') or []
-    decisions = dict((d['requirementId'], d['mode']) for d in metadata.get('deliveryDecisions') or [])
-    if any(decisions.get(r['id']) not in ('direct', 'transfer') for r in requirements):
-        raise ValueError('media delivery choices are not completely locked')
+    by_id, decisions = {}, set()
+    for requirement in requirements:
+        identity = requirement.get('id')
+        if not identity or identity in by_id or requirement.get('kind') not in ('artifact', 'image'):
+            raise ValueError('invalid delivery requirement identity or kind')
+        if not requirement.get('target', '').strip():
+            raise ValueError('automatic transfer requires an environment target')
+        by_id[identity] = requirement
+    for decision in metadata.get('deliveryDecisions') or []:
+        identity = decision.get('requirementId')
+        if (identity not in by_id or identity in decisions or decision.get('mode') != 'transfer'
+                or decision.get('policy') != 'transfer_to_target'):
+            raise ValueError('each requirement must select transfer with policy transfer_to_target')
+        decisions.add(identity)
+    if len(decisions) != len(requirements):
+        raise ValueError('execution requires a complete automatic transfer plan')
+    transfers = set()
+    for key, kind in (('artifactTransfers', 'artifact'), ('imageTransfers', 'image')):
+        for transfer in metadata.get(key) or []:
+            identity = transfer.get('requirementId')
+            if identity not in decisions or identity in transfers or by_id[identity]['kind'] != kind:
+                raise ValueError('transfer differs from selection')
+            transfers.add(identity)
+    return requirements
+
+
+def prepare(metadata):
+    requirements = validate_delivery(metadata)
     for transfer in metadata.get('artifactTransfers') or []:
         base = 'http://' + transfer['targetStation'] + '/api/v1/'
         payload = dict(path=transfer['relativePath'], sha256=transfer['sha256'])
@@ -74,7 +99,7 @@ def prepare(metadata):
             docker('push', transfer['targetRef'])
             image(transfer['targetDigest'], transfer['targetDigest'])
     for requirement in requirements:
-        location = requirement['target'] if decisions[requirement['id']] == 'transfer' else requirement['source']
+        location = requirement['target']
         if requirement['kind'] == 'artifact':
             artifact(location, requirement['identity'], requirement.get('sizeBytes', 0))
         elif requirement['kind'] == 'image':

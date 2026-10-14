@@ -154,11 +154,10 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 	}
 	for index, step := range remaining {
 		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, HighRisk: step.HighRisk})
-		result.HighRisk = result.HighRisk || step.HighRisk
 	}
-	if len(locked.ArtifactTransfers) > 0 || len(locked.ImageTransfers) > 0 {
-		result.HighRisk = true
-	}
+	continuation := locked
+	continuation.Steps = remaining
+	result.HighRisk = continuation.HighRisk()
 	result.PlanDigest = digestValue(struct {
 		SourceID, Status, EnvironmentRevisionID, ArtifactDigest, RecoveryStateDigest string
 		Start                                                                        int

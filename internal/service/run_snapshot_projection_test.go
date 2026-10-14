@@ -27,6 +27,9 @@ func TestRunSnapshotPreservesOriginalPlanAndNativeJobProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := domain.ValidateRunSnapshot(domain.Run{Kind: domain.RunComponentTest, Status: domain.RunQueued, Snapshot: snapshot}); err != nil {
+		t.Fatalf("current golden must be an executable snapshot: %v", err)
+	}
 	projected := snapshot.ExecutionPlan(p.DeliveryResults)
 	actual, err := json.Marshal(projected)
 	if err != nil {

@@ -60,6 +60,20 @@ type RunExecutionPlan struct {
 	InstallationBaselineDigest string                    `json:"installationBaselineDigest,omitempty"`
 }
 
+// HighRisk uses the locked delivery requirements even when a target is reused.
+// A continuation supplies only its remaining steps, retaining its delivery plan.
+func (p RunExecutionPlan) HighRisk() bool {
+	if len(p.DeliveryRequirements) > 0 || len(p.ArtifactTransfers) > 0 || len(p.ImageTransfers) > 0 {
+		return true
+	}
+	for _, step := range p.Steps {
+		if step.HighRisk {
+			return true
+		}
+	}
+	return false
+}
+
 type RunInstallationBaseline struct {
 	NodeID         string `json:"nodeId"`
 	ComponentID    string `json:"componentId"`

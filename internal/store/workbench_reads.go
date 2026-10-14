@@ -281,7 +281,6 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 		if e != nil {
 			return out, e
 		}
-		candidates := []string{}
 		for rows.Next() {
 			var r domain.ComponentRelease
 			var c domain.Component
@@ -290,12 +289,9 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 				return out, e
 			}
 			owner := user.Role == domain.RolePlatformAdmin || (user.Role == domain.RoleComponentOwner && user.ID == c.OwnerID)
-			if owner || r.Status == domain.ReleaseReleased {
+			if owner || r.Status == domain.ReleaseReleased || r.IsSharedCandidate() {
 				out.Components[c.ID] = c
 				out.Releases[r.ID] = r
-			} else if r.Candidate {
-				out.Components[c.ID] = c
-				candidates = append(candidates, r.ID)
 			}
 		}
 		e = rows.Err()
@@ -303,17 +299,7 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 		if e != nil {
 			return out, e
 		}
-		if len(candidates) > 0 {
-			releases, e := listReleases(ctx, s.db, releaseSelect+` WHERE r.id IN (`+sqlPlaceholders(len(candidates))+`)`, stringArgs(candidates)...)
-			if e != nil {
-				return out, e
-			}
-			for _, r := range releases {
-				if r.IsSharedCandidate() {
-					out.Releases[r.ID] = r
-				}
-			}
-		}
+
 	}
 	for ids := rangeChunks(revisionIDs); len(ids) > 0; ids = ids[1:] {
 		batch := ids[0]

@@ -140,7 +140,7 @@ func TestEnvironmentRevisionDeletionAPI(t *testing.T) {
 }
 
 func TestEnvironmentRevisionDeletionRetainsEveryRunStatus(t *testing.T) {
-	for _, status := range []string{"queued", "running", "succeeded", "failed", "cancelled", "rejected", "interrupted", "archived", "cleaned"} {
+	for _, status := range []string{string(domain.RunQueued), string(domain.RunRunning), string(domain.RunSucceeded), string(domain.RunFailed), string(domain.RunCancelled), string(domain.RunInterrupted), "archived", "cleaned"} {
 		t.Run(status, func(t *testing.T) {
 			f, owner, id, ids := revisionDeletionFixture(t, 2)
 			ctx := context.Background()

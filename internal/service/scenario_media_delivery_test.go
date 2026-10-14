@@ -139,7 +139,7 @@ func queueScenarioWithMedia(t *testing.T, p *Platform, owner domain.User, revisi
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.Snapshot.Delivery.Requirements = []domain.RunDeliveryRequirement{{ID: "image", Kind: "image"}, {ID: "artifact", Kind: "artifact"}}
+	run.Snapshot.Delivery.Requirements = []domain.RunDeliveryRequirement{{ID: "image", Kind: "image", Target: "target/image@sha256:abc"}, {ID: "artifact", Kind: "artifact", Target: "http://target/package.tar"}}
 	run.Snapshot.Delivery.Decisions = []domain.RunDeliveryDecision{{RequirementID: "image", Mode: "transfer", Policy: "transfer_to_target"}, {RequirementID: "artifact", Mode: "transfer", Policy: "transfer_to_target"}}
 	run.Snapshot.Delivery.ImageTransfers = []domain.RunImageTransfer{{RequirementID: "image", SourceRegistry: "source", TargetRegistry: "target", SourceDigest: "source/image@sha256:abc", TargetRef: "target/image:version", TargetDigest: "target/image@sha256:abc"}}
 	run.Snapshot.Delivery.ArtifactTransfers = []domain.RunArtifactTransfer{{RequirementID: "artifact", Alias: "installer", SourceURL: "http://source/package", TargetStation: "target", RelativePath: "package.tar", SHA256: "abc", SizeBytes: 1}}

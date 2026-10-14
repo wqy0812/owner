@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"codex/platform-demo/internal/domain"
 )
 
 // Prepare reuses verified targets, performs planned transfers, then verifies the
 // selected media locations. Submission and execution timing belong to the caller.
 func Prepare(ctx context.Context, plan Plan, artifacts ArtifactDelivery, images ImageDelivery) error {
+	locked := domain.RunDeliveryPlan{Requirements: plan.DeliveryRequirements, Decisions: plan.DeliveryDecisions, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers}
+	if err := locked.Validate(true); err != nil {
+		return err
+	}
 	for _, transfer := range plan.ArtifactTransfers {
 		target := ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}
 		identity := ArtifactIdentity{SHA256: transfer.SHA256, SizeBytes: transfer.SizeBytes}
@@ -39,12 +45,7 @@ func Prepare(ctx context.Context, plan Plan, artifacts ArtifactDelivery, images 
 		}
 	}
 	for _, requirement := range plan.DeliveryRequirements {
-		location := requirement.Source
-		for _, choice := range plan.DeliveryDecisions {
-			if choice.RequirementID == requirement.ID && choice.Mode == "transfer" {
-				location = requirement.Target
-			}
-		}
+		location := requirement.Target
 		switch requirement.Kind {
 		case "artifact":
 			if err := artifacts.Probe(ctx, ArtifactLocation{URL: location}, ArtifactIdentity{SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes}); err != nil {

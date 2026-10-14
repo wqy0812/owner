@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -46,5 +47,29 @@ func TestNativeJobRealCachedMediaFence(t *testing.T) {
 	restored.Store(true)
 	if output, err := nativeCommand(t, binary, bundle, "resume", results, nil); err != nil {
 		t.Fatalf("resume after exact media restoration: %v\n%s", err, output)
+	}
+}
+
+func TestNativeJobRealRejectsDirectMediaPlan(t *testing.T) {
+	binary := os.Getenv("CLUSTERFORGE_JOB_TEST_ANSIBLE")
+	if binary == "" {
+		t.Skip("requires real Ansible")
+	}
+	runner, plan, target := roleJobFixture(t, binary, "")
+	plan.Metadata = map[string]any{
+		"deliveryRequirements": []map[string]any{{"id": "a", "kind": "artifact", "source": "https://source.invalid/a", "target": "https://target.invalid/a"}},
+		"deliveryDecisions":    []map[string]any{{"requirementId": "a", "mode": "direct", "policy": "transfer_to_target"}},
+	}
+	bundle, err := runner.BuildJob(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Close()
+	output, err := nativeCommand(t, binary, bundle, "install", filepath.Join(t.TempDir(), "results"), nil)
+	if err == nil || !strings.Contains(string(output), "transfer_to_target") {
+		t.Fatalf("direct plan was not rejected by its policy: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(target, "alpha-one-a-body")); !os.IsNotExist(err) {
+		t.Fatal("component mutated before delivery policy validation")
 	}
 }

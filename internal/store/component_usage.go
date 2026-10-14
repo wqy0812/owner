@@ -67,21 +67,22 @@ func (s *Store) ComponentUsage(ctx context.Context, viewer domain.User, id, rele
 			return out, fmt.Errorf("%w: 指定版本不属于当前组件", domain.ErrInvalid)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.name,r.id,r.version,l.name,r.status,c.owner_id,u.name,up.id,up.version,d.kind FROM component_dependencies d JOIN component_releases r ON r.id=d.release_id JOIN components c ON c.id=r.component_id JOIN users u ON u.id=c.owner_id JOIN component_release_lines l ON l.id=r.line_id JOIN component_releases up ON up.id=d.upstream_release_id WHERE d.upstream_component_id=? AND (?='' OR up.id=?) AND (? OR r.status<>'deprecated') ORDER BY c.name,r.version,r.id`, id, releaseID, releaseID, history)
+	rows, err := tx.QueryContext(ctx, `SELECT c.id,c.name,r.id,r.version,l.name,r.status,c.owner_id,u.name,up.id,up.version,d.kind,r.candidate FROM component_dependencies d JOIN component_releases r ON r.id=d.release_id JOIN components c ON c.id=r.component_id JOIN users u ON u.id=c.owner_id JOIN component_release_lines l ON l.id=r.line_id JOIN component_releases up ON up.id=d.upstream_release_id WHERE d.upstream_component_id=? AND (?='' OR up.id=?) AND (? OR r.status<>'deprecated') ORDER BY c.name,r.version,r.id`, id, releaseID, releaseID, history)
 	if err != nil {
 		return out, err
 	}
 	components := map[string]bool{}
 	for rows.Next() {
 		var row ComponentUsageRelease
-		if err = rows.Scan(&row.ComponentID, &row.Name, &row.ReleaseID, &row.Version, &row.LineName, &row.Status, &row.OwnerID, &row.OwnerName, &row.UpstreamReleaseID, &row.UpstreamVersion, &row.DependencyKind); err != nil {
+		var candidate bool
+		if err = rows.Scan(&row.ComponentID, &row.Name, &row.ReleaseID, &row.Version, &row.LineName, &row.Status, &row.OwnerID, &row.OwnerName, &row.UpstreamReleaseID, &row.UpstreamVersion, &row.DependencyKind, &candidate); err != nil {
 			rows.Close()
 			return out, err
 		}
 		if row.DependencyKind == "" {
 			row.DependencyKind = "execution"
 		}
-		row.CanViewDetails = viewer.Role == domain.RolePlatformAdmin || viewer.ID == row.OwnerID || row.Status == "released"
+		row.CanViewDetails = viewer.Role == domain.RolePlatformAdmin || viewer.ID == row.OwnerID || row.Status == "released" || (domain.ComponentRelease{Status: domain.ReleaseStatus(row.Status), Candidate: candidate}).IsSharedCandidate()
 		out.Components = append(out.Components, row)
 		components[row.ComponentID] = true
 	}
@@ -89,18 +90,6 @@ func (s *Store) ComponentUsage(ctx context.Context, viewer domain.User, id, rele
 	rows.Close()
 	if err != nil {
 		return out, err
-	}
-	// Explicit candidate sharing uses the established predicate. Candidate
-	// contract loading is limited to the exact candidate that needs a detail link.
-	for i := range out.Components {
-		r := &out.Components[i]
-		if !r.CanViewDetails && r.Status == "draft" {
-			release, e := getComponentRelease(ctx, tx, r.ReleaseID)
-			if e != nil {
-				return out, e
-			}
-			r.CanViewDetails = release.IsSharedCandidate()
-		}
 	}
 	rows, err = tx.QueryContext(ctx, `SELECT s.id,s.name,sr.id,sr.revision,CASE WHEN sr.abandoned_at IS NOT NULL THEN 'abandoned' ELSE sr.status END,s.owner_id,u.name,r.id,r.version,s.current_revision_id=sr.id,COUNT(*) FROM scenario_revisions sr JOIN scenarios s ON s.id=sr.scenario_id JOIN users u ON u.id=s.owner_id JOIN json_each(sr.graph_json,'$.nodes') node JOIN component_releases r ON r.id=json_extract(node.value,'$.releaseId') WHERE r.component_id=? AND (?='' OR r.id=?) AND (? OR (s.current_revision_id=sr.id AND sr.status<>'deprecated' AND sr.abandoned_at IS NULL)) GROUP BY s.id,sr.id,r.id ORDER BY s.name,sr.revision DESC,r.version`, id, releaseID, releaseID, history)
 	if err != nil {
