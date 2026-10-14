@@ -227,7 +227,7 @@ func TestAutomaticRetentionProgressesPastProtectedRecords(t *testing.T) {
 		}
 	}
 	holder := domain.Run{ID: "retention-holder", Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, CreatedAt: old, FinishedAt: &old, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}, InstallationBaseline: refs})}
-	if err = db.CreateRun(ctx, holder, nil); err != nil {
+	if err = db.CreateRun(ctx, holder); err != nil {
 		t.Fatal(err)
 	}
 	if err = p.ConfigureRunArchives(t.TempDir()); err != nil {

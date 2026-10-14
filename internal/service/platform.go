@@ -19,7 +19,7 @@ type Platform struct {
 	hub               *EventHub
 	cancel            context.CancelFunc
 	actions           *ActionPlanner
-	approvals         *ApprovalService
+	cancellation      *RunCancellationService
 	audit             *AuditRecorder
 	catalogRules      *CatalogRules
 	catalog           *CatalogService
@@ -64,7 +64,7 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 	artifact := observeArtifactDelivery(mediadelivery.NewHTTPArtifactDelivery(nil))
 	image := observeImageDelivery(mediadelivery.NewDockerImageDelivery("docker"))
 	actions := &ActionPlanner{}
-	approvals := &ApprovalService{}
+	cancellation := &RunCancellationService{}
 	audit := &AuditRecorder{}
 	catalogRules := &CatalogRules{}
 	catalog := &CatalogService{imageBuilder: imagebuild.NewDocker("", "docker")}
@@ -88,12 +88,10 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 	workspace := &WorkspaceFiles{}
 	workspaceVerifier := &WorkspaceVerifier{}
 	actions.store = database
-	approvals.audit = audit
-	approvals.control = control
-	approvals.delivery = delivery
-	approvals.hub = hub
-	approvals.scheduler = scheduler
-	approvals.store = database
+	cancellation.audit = audit
+	cancellation.control = control
+	cancellation.hub = hub
+	cancellation.store = database
 	audit.store = database
 	catalogRules.store = database
 	catalog.artifactDelivery = artifact
@@ -115,7 +113,7 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 	environments.dialContext = (&net.Dialer{Timeout: 2 * time.Second}).DialContext
 	environments.hub = hub
 	environments.store = database
-	execution.approvals = approvals
+	execution.cancellation = cancellation
 	execution.archives = archives
 	execution.audit = audit
 	execution.creator = creator
@@ -202,7 +200,7 @@ func NewPlatform(database *store.Store, runners RunnerDependencies, hub *EventHu
 		hub:               hub,
 		cancel:            cancel,
 		actions:           actions,
-		approvals:         approvals,
+		cancellation:      cancellation,
 		audit:             audit,
 		catalogRules:      catalogRules,
 		catalog:           catalog,

@@ -60,7 +60,7 @@ func (p *CatalogService) Get(ctx context.Context, user domain.User, id string) (
 	}
 	filtered := make([]domain.ComponentRelease, 0, len(component.Releases))
 	for _, release := range component.Releases {
-		if release.Status == domain.ReleaseReleased || release.IsApprovedCandidate() {
+		if release.Status == domain.ReleaseReleased || release.IsSharedCandidate() {
 			filtered = append(filtered, release)
 		}
 	}
@@ -280,9 +280,6 @@ func (p *CatalogService) setReleaseCandidate(ctx context.Context, user domain.Us
 		return release, err
 	}
 	if candidate {
-		if release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != componentReleaseSpecDigest(release) {
-			return release, fmt.Errorf("%w: component release contract must be approved before candidate sharing", domain.ErrConflict)
-		}
 		if err := p.releaseRules.validateReleaseForCandidate(ctx, release); err != nil {
 			return release, err
 		}

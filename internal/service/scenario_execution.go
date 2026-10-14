@@ -33,17 +33,18 @@ type ScenarioOperation struct {
 	ToReleaseID   string `json:"toReleaseId,omitempty"`
 }
 type ScenarioExecutionPreview struct {
-	ScenarioRevisionID string                       `json:"scenarioRevisionId"`
-	EnvironmentID      string                       `json:"environmentId"`
-	ExecutionMode      domain.ScenarioExecutionMode `json:"executionMode"`
-	PlanDigest         string                       `json:"planDigest"`
-	SourceRevisionID   string                       `json:"sourceRevisionId,omitempty"`
-	BaselineRunID      string                       `json:"baselineRunId,omitempty"`
-	Operations         []ScenarioOperation          `json:"operations"`
-	Steps              []domain.RunPlanStep         `json:"steps"`
-	Issues             []domain.ValidationIssue     `json:"issues"`
-	Ready              bool                         `json:"ready"`
-	NeedsApproval      bool                         `json:"needsApproval"`
+	DeliveryRequirements []domain.RunDeliveryRequirement `json:"deliveryRequirements"`
+	ScenarioRevisionID   string                          `json:"scenarioRevisionId"`
+	EnvironmentID        string                          `json:"environmentId"`
+	ExecutionMode        domain.ScenarioExecutionMode    `json:"executionMode"`
+	PlanDigest           string                          `json:"planDigest"`
+	SourceRevisionID     string                          `json:"sourceRevisionId,omitempty"`
+	BaselineRunID        string                          `json:"baselineRunId,omitempty"`
+	Operations           []ScenarioOperation             `json:"operations"`
+	Steps                []domain.RunPlanStep            `json:"steps"`
+	Issues               []domain.ValidationIssue        `json:"issues"`
+	Ready                bool                            `json:"ready"`
+	HighRisk             bool                            `json:"highRisk"`
 }
 type scenarioExecution struct {
 	preview            ScenarioExecutionPreview
@@ -309,7 +310,7 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 		}
 		steps = append(steps, acceptance...)
 	}
-	plan, _, approval, err := p.prepareLockedPlan(ctx, prepared.environment, kind, runID, at, steps)
+	plan, _, highRisk, err := p.prepareLockedPlan(ctx, prepared.environment, kind, runID, at, steps)
 	if err != nil {
 		return x, err
 	}
@@ -327,7 +328,8 @@ func (p *PlanBuilder) prepareScenarioLifecycle(ctx context.Context, user domain.
 	}
 	x.plan = plan
 	x.preview.Steps = plan.Steps
-	x.preview.NeedsApproval = approval
+	x.preview.DeliveryRequirements = append([]domain.RunDeliveryRequirement{}, plan.DeliveryRequirements...)
+	x.preview.HighRisk = highRisk
 	x.preview.PlanDigest = digestValue(struct {
 		Contract                      int
 		Mode                          domain.ScenarioExecutionMode
@@ -401,7 +403,7 @@ func (p *PlanBuilder) scenarioActionStep(ctx context.Context, node domain.Scenar
 	step.Stage = stage
 	step.MayMutate = kind != domain.ActionCheck
 	if kind == domain.ActionUninstall {
-		step.NeedsApproval = true
+		step.HighRisk = true
 	}
 	return step, err
 }
@@ -459,7 +461,7 @@ func scenarioSnapshotNodes(snapshot domain.RunSnapshot) ([]domain.ScenarioTarget
 	return snapshot.ScenarioExecution.TargetNodes, nil
 }
 
-// A baseline's final checks contain the actual approved delivery locations and
+// A baseline's final checks contain the locked delivery locations and
 // complete execution values. Keep these for source checks and deletion; compare
 // governed targetNodes separately so incidental recovery metadata is not a change.
 func scenarioFrozenExecutionNodes(run domain.Run, nodes []domain.ScenarioTargetNode) ([]domain.ScenarioTargetNode, error) {

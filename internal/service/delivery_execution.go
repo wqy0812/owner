@@ -41,7 +41,7 @@ func (e *DeliveryService) mirrorRunImages(ctx context.Context, runID string, pla
 	for _, transfer := range plan.ImageTransfers {
 		_, _ = e.store.AppendRunLog(context.Background(), domain.RunLog{RunID: runID, Stream: "stdout", Message: fmt.Sprintf("mirroring image from %s to %s", transfer.SourceRegistry, transfer.TargetRegistry), CreatedAt: time.Now().UTC()})
 		if err := e.imageDelivery.Probe(ctx, mediadelivery.ImageLocation{Ref: transfer.TargetDigest}, mediadelivery.ImageDigest{Value: transfer.TargetDigest}); err == nil {
-			if resultErr := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, "reused_target", transfer.TargetDigest, "target content appeared while approval was pending"); resultErr != nil {
+			if resultErr := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, "reused_target", transfer.TargetDigest, "target content appeared while queued"); resultErr != nil {
 				return resultErr
 			}
 			continue
@@ -92,7 +92,7 @@ func (e *DeliveryService) mirrorRunArtifacts(ctx context.Context, runID string, 
 		}
 		status, message := "transferred", "target FSS fetched and verified the content"
 		if err == nil {
-			status, message = "reused_target", "target content appeared while approval was pending"
+			status, message = "reused_target", "target content appeared while queued"
 		}
 		if err := e.recordDeliveryResult(ctx, runID, plan, transfer.RequirementID, status, artifactURL(transfer.TargetStation, transfer.RelativePath), message); err != nil {
 			return err

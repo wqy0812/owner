@@ -193,7 +193,7 @@ func validateScenarioRunCreationTx(ctx context.Context, tx *sql.Tx, run domain.R
 		return fmt.Errorf("%w: 业务验收作业必填", domain.ErrConflict)
 	}
 	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE scenario_revision_id=? AND status IN ('awaiting_approval','queued','running')`, revision.ID).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE scenario_revision_id=? AND status IN ('queued','running')`, revision.ID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const RunSnapshotContract = "clusterforge-run-v1"
+const RunSnapshotContract = "clusterforge-run-v2"
 
 // RunSnapshot is the persisted execution contract. Run identity lives in Run;
 // observations and delivery results are deliberately stored outside this value.
@@ -304,41 +304,53 @@ func ValidateRunSnapshot(r Run) error {
 		}
 		jobs[id] = true
 	}
+	return s.Delivery.Validate(r.Status == RunQueued || r.Status == RunRunning)
+}
+
+// Validate checks the automatic delivery contract before any media side effects.
+// Incomplete decisions are only allowed in non-executable diagnostic snapshots.
+func (p RunDeliveryPlan) Validate(requireComplete bool) error {
+	bad := func(path, reason string) error {
+		return fmt.Errorf("%w: delivery.%s: %s", ErrInvalid, path, reason)
+	}
 	requirements := map[string]RunDeliveryRequirement{}
-	for _, v := range s.Delivery.Requirements {
+	for _, v := range p.Requirements {
 		if v.ID == "" || requirements[v.ID].ID != "" || (v.Kind != "artifact" && v.Kind != "image") {
-			return bad("delivery.requirements", "invalid requirement identity or kind")
+			return bad("requirements", "invalid requirement identity or kind")
 		}
 		requirements[v.ID] = v
 	}
 	decisions := map[string]string{}
-	for _, v := range s.Delivery.Decisions {
-		if requirements[v.RequirementID].ID == "" || decisions[v.RequirementID] != "" || (v.Mode != "direct" && v.Mode != "transfer") {
-			return bad("delivery.decisions", "invalid or contradictory selection")
+	for _, v := range p.Decisions {
+		if requirements[v.RequirementID].ID == "" || decisions[v.RequirementID] != "" || v.Mode != "transfer" || v.Policy != DeliveryPolicyTransferToTarget {
+			return bad("decisions", "each requirement must select transfer with policy transfer_to_target")
+		}
+		if strings.TrimSpace(requirements[v.RequirementID].Target) == "" {
+			return bad("requirements", "automatic transfer requires an environment target")
 		}
 		decisions[v.RequirementID] = v.Mode
 	}
 	transfers := map[string]bool{}
-	for _, v := range s.Delivery.ArtifactTransfers {
+	for _, v := range p.ArtifactTransfers {
 		if requirements[v.RequirementID].Kind != "artifact" || decisions[v.RequirementID] != "transfer" || transfers[v.RequirementID] {
-			return bad("delivery.artifactTransfers", "transfer differs from selection")
+			return bad("artifactTransfers", "transfer differs from selection")
 		}
 		transfers[v.RequirementID] = true
 	}
-	for _, v := range s.Delivery.ImageTransfers {
+	for _, v := range p.ImageTransfers {
 		if requirements[v.RequirementID].Kind != "image" || decisions[v.RequirementID] != "transfer" || transfers[v.RequirementID] {
-			return bad("delivery.imageTransfers", "transfer differs from selection")
+			return bad("imageTransfers", "transfer differs from selection")
 		}
 		transfers[v.RequirementID] = true
 	}
-	if (r.Status == RunQueued || r.Status == RunRunning) && len(requirements) != len(decisions) {
-		return bad("delivery.decisions", "queued delivery requires complete approval")
+	if requireComplete && len(requirements) != len(decisions) {
+		return bad("decisions", "execution requires a complete automatic transfer plan")
 	}
 	return nil
 }
 
 // ReferencedRunIDs walks authoritative identities only, never user variables or
-// parameter provenance. It is shared by creation, approval and offline migration.
+// parameter provenance. It is shared by creation and history reads.
 func (s RunSnapshot) ReferencedRunIDs() []string {
 	ids := map[string]bool{}
 	add := func(id string) {

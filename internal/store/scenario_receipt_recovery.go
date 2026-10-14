@@ -31,7 +31,7 @@ func (s *Store) IsActionReceiptRecovered(ctx context.Context, receipt domain.Act
 	if jsonText(latest) != jsonText(receipt) {
 		return false, nil
 	}
-	rows, err := tx.QueryContext(ctx, runSelect+` WHERE environment_id=? AND kind='scenario_run' AND status='succeeded' AND json_extract(execution_snapshot_json,`+runSnapshotContractPath+`)='clusterforge-run-v1' AND json_extract(execution_snapshot_json,`+runSnapshotScenarioModePath+`)='baseline_verify' AND finished_at IS NOT NULL ORDER BY finished_at DESC`, receipt.EnvironmentID)
+	rows, err := tx.QueryContext(ctx, runSelect+` WHERE environment_id=? AND kind='scenario_run' AND status='succeeded' AND json_extract(execution_snapshot_json,`+runSnapshotContractPath+`)='clusterforge-run-v2' AND json_extract(execution_snapshot_json,`+runSnapshotScenarioModePath+`)='baseline_verify' AND finished_at IS NOT NULL ORDER BY finished_at DESC`, receipt.EnvironmentID)
 	if err != nil {
 		return false, err
 	}

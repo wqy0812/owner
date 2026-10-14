@@ -49,7 +49,7 @@ func addSharedResetRecords(t *testing.T, f *apiFixture) []domain.EnvironmentComp
 		source := domain.Run{ID: backup.InstallRunID, Kind: domain.RunComponentTest, Status: domain.RunSucceeded, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: backup.ReleaseID, CreatedAt: now, FinishedAt: &now,
 			Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": group, "nodeId": group, "sourceNodeId": group, "componentId": backup.ComponentID, "releaseId": backup.ReleaseID, "actionId": backup.ActionID, "action": "install", "limit": group}}}),
 		}
-		if err := testutil.InsertRunRecord(ctx, f.database.DB(), source, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, f.database.DB(), source); err != nil {
 			t.Fatal(err)
 		}
 		item := domain.EnvironmentComponentInstallation{EnvironmentID: revision.EnvironmentID, ComponentID: backup.ComponentID, ReleaseID: backup.ReleaseID, NodeID: group, InstallRunID: source.ID, BackupRef: "/shared-backups/" + group, Backup: backup, TestOnly: true, InstalledAt: now}

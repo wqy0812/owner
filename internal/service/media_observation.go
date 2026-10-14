@@ -78,7 +78,7 @@ func observedProbe(ctx context.Context, key, source string, probe func(context.C
 }
 
 // A validated source plus an explicit transfer requirement supplies a missing
-// target at execution approval. It does not turn a failed probe into a pass.
+// target during submission. It does not turn a failed probe into a pass.
 func observePlannedMediaTransfer(ctx context.Context, target string) {
 	state, _ := ctx.Value(mediaObservationKey{}).(*mediaObservation)
 	if state == nil {
@@ -91,7 +91,7 @@ func observePlannedMediaTransfer(ctx context.Context, target string) {
 		if normalize(entry.source) == normalize(target) && entry.check.Status == "failed" {
 			check := entry.check
 			check.Status = "provided"
-			check.Message = "目标介质尚未就绪；已验证当前来源，需在环境审批后按计划同步，并在使用前复核摘要"
+			check.Message = "目标介质尚未就绪；已验证当前来源，将按计划自动同步，并在使用前复核摘要"
 			updates = append(updates, check)
 		}
 	}

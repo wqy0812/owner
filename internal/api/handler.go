@@ -28,6 +28,7 @@ type Handler struct {
 	platform        *service.Platform
 	router          *http.ServeMux
 	static          http.Handler
+	mcp             http.Handler
 	catalogRepos    *backup.RepositoryController
 	visibilityMu    sync.Mutex
 	visibilityCache map[string]runVisibility
@@ -48,6 +49,14 @@ func NewHandler(platform *service.Platform, static http.Handler, catalogRepos ..
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/mcp" {
+		if h.mcp == nil {
+			http.NotFound(w, r)
+			return
+		}
+		h.mcp.ServeHTTP(w, r)
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		if h.static == nil {
 			http.NotFound(w, r)
@@ -57,8 +66,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// API responses describe live workflow state. They must never be reused by
-	// the browser cache: a cached awaiting_approval detail can otherwise outlive
-	// an approved list response and expose an already-consumed approval action.
+	// the browser cache: stale responses can hide queue and cancellation changes.
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Path != "/api/v1/events" {
 		w.Header().Add("Vary", "Accept-Encoding")
@@ -92,7 +100,6 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/execution-preparations/{id}/cancel", h.cancelPreparation)
 	h.router.HandleFunc("GET /api/v1/events", h.events)
 	h.router.HandleFunc("GET /api/v1/workbench", h.workbench)
-	h.router.HandleFunc("GET /api/v1/approvals/batch-candidates", h.batchApprovalCandidates)
 	h.router.HandleFunc("GET /api/v1/platform-option-categories", h.listPlatformOptionCategories)
 	h.router.HandleFunc("POST /api/v1/platform-option-categories", h.createPlatformOptionCategory)
 	h.router.HandleFunc("PATCH /api/v1/platform-option-categories/{id}", h.renamePlatformOptionCategory)
@@ -132,9 +139,6 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("GET /api/v1/component-releases/{id}/impact", h.releaseImpact)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/publish", h.publishRelease)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/candidate", h.setReleaseCandidate)
-	h.router.HandleFunc("POST /api/v1/component-releases/{id}/review-submission", h.submitReleaseReview)
-	h.router.HandleFunc("GET /api/v1/component-releases/{id}/review-preview", h.previewReleaseReview)
-	h.router.HandleFunc("POST /api/v1/component-releases/{id}/review-decision", h.decideReleaseReview)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/deprecate", h.deprecateRelease)
 	h.router.HandleFunc("POST /api/v1/component-releases/{id}/restore", h.restoreRelease)
 	h.router.HandleFunc("DELETE /api/v1/component-releases/{id}", h.deleteRelease)
@@ -227,9 +231,6 @@ func (h *Handler) routes() {
 	h.router.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
 	h.router.HandleFunc("POST /api/v1/runs/{id}/retry-plan", h.previewRunRetry)
 	h.router.HandleFunc("POST /api/v1/runs/{id}/retry-runs", h.retryRun)
-	h.router.HandleFunc("POST /api/v1/approvals/{id}/approve", h.approveRun)
-	h.router.HandleFunc("POST /api/v1/approvals/{id}/reject", h.rejectRun)
-	h.router.HandleFunc("POST /api/v1/approvals/batch", h.batchDecideRuns)
 
 	h.router.HandleFunc("GET /api/v1/notifications", h.listNotifications)
 	h.router.HandleFunc("PATCH /api/v1/notifications/{id}", h.markNotificationRead)

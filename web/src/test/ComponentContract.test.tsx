@@ -6,7 +6,7 @@ import { act, fireEvent, screen, waitFor, within } from './render';
 import { pendingResponse } from './testLifecycle';
 
 import { ComponentsPage } from '../pages/ComponentsPage';
-import { admin, alice, components, dave, installFetch, json } from './fixtures/appFixtures';
+import { alice, components, dave, installFetch, json } from './fixtures/appFixtures';
 import { pageRenderer } from './pageRenderer';
 const renderApp = pageRenderer(ComponentsPage, '/components');
 
@@ -624,48 +624,23 @@ describe("ComponentContract", () => {
     expect(await screen.findByText('组件版本已永久删除')).toBeInTheDocument();
   });
 
-  it('lets component owners read rejected review comments from the release row and details', async () => {
-    const release = {
-      id: 'release-review-result', componentId: 'component-review-result', version: '1.0.0', status: 'draft',
-      review: { status: 'rejected', reviewedBy: admin.id, submittedAt: '2026-01-01T08:00:00Z', reviewedAt: '2026-01-01T09:00:00Z', comment: '第一项：核对参数合同。\n第二项：补齐验证说明。' },
-    };
+  it('offers owner publication without any review entry or request', async () => {
+    const release = { id: 'release-direct', componentId: 'component-direct', version: '1.0.0', status: 'draft', readiness: { status: 'ready', blockers: [] } };
     const fallback = installFetch().getMockImplementation()!;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/components') ? json([{
-      id: release.componentId, name: 'Review Result Component', ownerId: alice.id, layer: 'runtime_state', tags: [], releases: [release],
-    }]) : fallback(input, init));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/components') ? json([{ id: release.componentId, name: 'Direct publication', ownerId: alice.id, layer: 'runtime_state', tags: [], releases: [release] }]) : fallback(input, init));
     vi.stubGlobal('fetch', fetchMock);
     renderApp('/components');
-    await userEvent.click(await screen.findByRole('button', { name: '审批意见' }));
-    const dialog = screen.getByRole('dialog', { name: '1.0.0 审批意见' });
-    expect(dialog).toHaveTextContent('已驳回');
-    expect(dialog).toHaveTextContent(admin.name);
-    expect(dialog).toHaveTextContent('审批时间');
-    expect(dialog).toHaveTextContent('第一项：核对参数合同。');
-    expect(dialog).toHaveTextContent('第二项：补齐验证说明。');
-    expect(within(dialog).queryByRole('button', { name: /批准|驳回/ })).not.toBeInTheDocument();
-    await userEvent.click(within(dialog).getByText('关闭'));
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
-    await userEvent.click(screen.getByLabelText('平台合同审核 · 待完成'));
-    await userEvent.click(screen.getByRole('button', { name: '查看审批意见' }));
-    expect(screen.getByRole('dialog', { name: '1.0.0 审批意见' })).toHaveTextContent('第二项：补齐验证说明。');
-    const reopened = screen.getByRole('dialog');
-    await userEvent.click(within(reopened).getByText('关闭'));
-    await waitFor(() => expect(reopened).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: '查看详情' }));
-    expect(screen.getByRole('dialog', { name: '1.0.0 Release 详情' })).toHaveTextContent('第二项：补齐验证说明。');
-    expect(fetchMock.mock.calls.some(([input]) => /review-preview|review-decision/.test(String(input)))).toBe(false);
+    expect(await screen.findByRole('button', { name: '发布' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '加入候选集' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /审批意见|提交合同审核/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => /review-submission|review-preview|review-decision/.test(String(input)))).toBe(false);
   });
 
-  it.each([
-    ['approved', 'draft'],
-    ['approved', 'released'],
-    ['pending', 'draft'],
-    ['not_submitted', 'draft'],
-  ])('hides review comments and entry points for %s reviews on %s releases', async (status, releaseStatus) => {
+  it.each(['draft', 'released'])('hides retired review entry points on %s releases', async (releaseStatus) => {
     const fallback = installFetch().getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/components') ? json([{
       id: 'component-review-result', name: 'Review Result Component', ownerId: alice.id, layer: 'runtime_state', tags: [],
-      releases: [{ id: 'release-review-result', componentId: 'component-review-result', version: '1.0.0', status: releaseStatus, review: { status, comment: '不应展示的审批备注' } }],
+      releases: [{ id: 'release-review-result', componentId: 'component-review-result', version: '1.0.0', status: releaseStatus, }],
     }]) : fallback(input, init)));
     renderApp('/components');
     const details = await screen.findByRole('button', { name: '查看详情' });

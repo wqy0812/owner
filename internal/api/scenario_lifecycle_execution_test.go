@@ -17,7 +17,7 @@ import (
 func TestScenarioLifecycleAPIInstallPublishForkDeriveAndUpgrade(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
-	owner, envOwner := f.session(seed.ScenarioOwnerID), f.session(seed.EnvironmentOwnerID)
+	owner := f.session(seed.ScenarioOwnerID)
 	data := func(method, path string, body any, cookie *http.Cookie, want int) map[string]any {
 		t.Helper()
 		response := f.request(method, path, body, cookie)
@@ -68,10 +68,6 @@ func TestScenarioLifecycleAPIInstallPublishForkDeriveAndUpgrade(t *testing.T) {
 		}
 		started := data(http.MethodPost, "/api/v1/scenario-revisions/"+revision+"/"+endpoint, input, owner, http.StatusAccepted)
 		id := started["id"].(string)
-		if started["status"] == string(domain.RunAwaitingApproval) {
-			approval := started["approval"].(map[string]any)
-			data(http.MethodPost, "/api/v1/approvals/"+approval["id"].(string)+"/approve", map[string]any{"reason": "Approve lifecycle fixture"}, envOwner, http.StatusOK)
-		}
 		waitForRun(t, f.database, id, domain.RunSucceeded)
 		stored, err := f.database.GetRun(ctx, id)
 		if err != nil {

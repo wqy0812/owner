@@ -58,7 +58,7 @@ func TestRunLogsBrowserFixture(t *testing.T) {
 		}
 	}
 	run := domain.Run{ID: "run-browser-diagnostics", Kind: domain.RunScenario, Status: domain.RunFailed, RequestedBy: owner.ID, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, ScenarioRevisionID: revision.ID, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"nodeId": "locked-check", "componentName": "CoreDNS", "phase": "post"}}})}
-	if err := db.CreateRun(ctx, run, nil); err != nil {
+	if err := db.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreateRunStep(ctx, domain.RunStep{ID: "step-failed", RunID: run.ID, NodeID: "locked-check", Name: "CoreDNS check", Status: domain.RunFailed, StartedAt: &now, FinishedAt: &now}); err != nil {

@@ -78,7 +78,7 @@ func TestScenarioFailedUpgradeRequiresRecoveryVerificationBeforeNewUpgrade(t *te
 				t.Fatal(err)
 			}
 			if err := db.UpdateRunStatus(ctx, failed.ID, []domain.RunStatus{domain.RunQueued}, domain.RunRunning, "", time.Now().UTC()); err != nil {
-				t.Fatalf("start status=%s approval=%+v transition=%v", failed.Status, failed.Approval, err)
+				t.Fatalf("start status=%s transition=%v", failed.Status, err)
 			}
 			failed.Status = domain.RunRunning
 			p.executor.executeRun(failed)

@@ -61,20 +61,15 @@ func (s stubImageDelivery) Probe(context.Context, mediadelivery.ImageLocation, m
 
 func (stubImageDelivery) Transfer(context.Context, mediadelivery.ImageTransfer) error { return nil }
 
-func TestFinalizeDeliveryPlanValidatesCompleteUniqueDecisions(t *testing.T) {
+func TestFinalizeDeliveryPlanValidatesUniqueRequirements(t *testing.T) {
 	p := &DeliveryService{}
-	if _, err := p.finalizeDeliveryPlan(context.Background(), domain.RunExecutionPlan{}, []DeliveryDecisionInput{{RequirementID: "extra", Mode: "direct"}}, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("decision without requirements error=%v", err)
-	}
-	plan := domain.RunExecutionPlan{DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "artifact:a"}, {ID: "image:b"}}}
-	for name, inputs := range map[string][]DeliveryDecisionInput{
-		"missing":   {{RequirementID: "artifact:a", Mode: "direct"}},
-		"duplicate": {{RequirementID: "artifact:a", Mode: "direct"}, {RequirementID: "artifact:a", Mode: "transfer"}},
-		"mode":      {{RequirementID: "artifact:a", Mode: "copy"}, {RequirementID: "image:b", Mode: "direct"}},
-		"unknown":   {{RequirementID: "artifact:a", Mode: "direct"}, {RequirementID: "other", Mode: "direct"}},
+	for name, requirements := range map[string][]domain.RunDeliveryRequirement{
+		"missing":   {{ID: ""}},
+		"duplicate": {{ID: "artifact:a"}, {ID: "artifact:a"}},
 	} {
-		if _, err := p.finalizeDeliveryPlan(context.Background(), plan, inputs, domain.User{}, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("%s decision error=%v", name, err)
+		plan := domain.RunExecutionPlan{DeliveryRequirements: requirements}
+		if _, err := p.finalizeDeliveryPlan(context.Background(), plan, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("%s requirement error=%v", name, err)
 		}
 	}
 }
@@ -92,9 +87,12 @@ func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 			StepIDs: []string{"install"}, TargetStation: "fss.test", RelativePath: "components/runtime.tgz", SizeBytes: 42,
 		}},
 	}
-	got, err := p.finalizeDeliveryPlan(context.Background(), plan, []DeliveryDecisionInput{{RequirementID: "artifact:release:runtime", Mode: "transfer"}}, domain.User{ID: "environment-owner"}, at)
+	got, err := p.finalizeDeliveryPlan(context.Background(), plan, at)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(got.DeliveryDecisions) != 1 || got.DeliveryDecisions[0].Mode != "transfer" || got.DeliveryDecisions[0].Policy != domain.DeliveryPolicyTransferToTarget {
+		t.Fatalf("automatic policy=%+v", got.DeliveryDecisions)
 	}
 	if len(got.ArtifactTransfers) != 1 || got.ArtifactTransfers[0].SHA256 != checksum || got.ArtifactTransfers[0].SizeBytes != 42 {
 		t.Fatalf("artifact transfers=%+v", got.ArtifactTransfers)
@@ -113,32 +111,11 @@ func TestFinalizeArtifactTransferLocksWorkAndBindsTarget(t *testing.T) {
 	}
 }
 
-func TestFinalizeDirectImageBindsImmutableSource(t *testing.T) {
+func TestAutomaticDeliveryRejectsMissingTarget(t *testing.T) {
 	p := &DeliveryService{}
-	digest := "sha256:" + strings.Repeat("b", 64)
-	plan := domain.RunExecutionPlan{
-		Steps: []domain.RunPlanStep{{ID: "install", Variables: map[string]any{}}},
-		DeliveryRequirements: []domain.RunDeliveryRequirement{{
-			ID: "image:release:main", Kind: "image", Name: "main", Identity: digest,
-			Source: "registry.test/runtime@" + digest, StepIDs: []string{"install"},
-		}},
-	}
-	got, err := p.finalizeDeliveryPlan(context.Background(), plan, []DeliveryDecisionInput{{RequirementID: "image:release:main", Mode: "direct"}}, domain.User{ID: "owner"}, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"main_image_ref", "component_image_ref"} {
-		if got.Steps[0].Variables[name] != plan.DeliveryRequirements[0].Source {
-			t.Fatalf("%s=%v", name, got.Steps[0].Variables[name])
-		}
-	}
-	for _, name := range []string{"main_image_digest", "component_image_digest"} {
-		if got.Steps[0].Variables[name] != digest {
-			t.Fatalf("%s=%v", name, got.Steps[0].Variables[name])
-		}
-	}
-	if got.DeliveryResults[0].Status != "direct" || got.DeliveryResults[0].CompletedAt == nil {
-		t.Fatalf("direct result=%+v", got.DeliveryResults[0])
+	plan := domain.RunExecutionPlan{DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "image", Kind: "image", Source: "source/image@sha256:abc"}}}
+	if _, err := p.finalizeDeliveryPlan(context.Background(), plan, time.Time{}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing target error=%v", err)
 	}
 }
 

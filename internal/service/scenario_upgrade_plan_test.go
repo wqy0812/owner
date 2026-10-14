@@ -62,7 +62,7 @@ func TestScenarioUpgradePlanDependencyMigrationAndOldParameterUninstall(t *testi
 	if len(steps) != 3 || steps[0].SourceNodeID != "b" || steps[1].SourceNodeID != "c" || steps[2].SourceNodeID != "a" {
 		t.Fatalf("unsafe migration order: %+v", steps)
 	}
-	if steps[1].Action != domain.ActionUpgrade || steps[1].Variables["endpoint"] != "mapped-new-environment" || steps[2].Action != domain.ActionUninstall || steps[2].Variables["endpoint"] != "actual-old-environment" || !steps[2].NeedsApproval {
+	if steps[1].Action != domain.ActionUpgrade || steps[1].Variables["endpoint"] != "mapped-new-environment" || steps[2].Action != domain.ActionUninstall || steps[2].Variables["endpoint"] != "actual-old-environment" || !steps[2].HighRisk {
 		t.Fatalf("incorrect actions or frozen parameters: %+v", steps)
 	}
 	if len(ops) != 3 {

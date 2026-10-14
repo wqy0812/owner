@@ -77,7 +77,7 @@ systemctl restart clusterforge-platform
 
 环境 Owner 可在“发布目录灾备”选择远端仍存在的 `backup/*` 恢复点并先执行预检；本地残留但远端已删除的标签不会展示，也不能绕过恢复门禁。页面会先显示组件和场景数量，目录非空时直接关闭恢复按钮。前台恢复仍采用严格空库模式：当前数据库只要存在任一组件或场景，就返回 `target_catalog_not_empty` 且不写入任何内容。确认执行时会重新核对 Git commit、Catalog SHA-256、Schema contract、数据库空库状态、发布代次和 `planDigest`。
 
-空库恢复在单一 SQLite 事务中写入已发布/废弃的组件、Release、依赖、Action、场景 Revision、制品和镜像元数据。既有用户 ID 仅在名称与角色完全一致时复用；Playbook 仅在目标不存在或内容 SHA-256 完全一致时允许。ID/slug、用户属性或 Playbook 内容冲突都会整批失败，未提交的新文件会清理。成功后记录审计并异步触发新快照；Run、环境、审批、通知、Session 和既有审计历史不会从 Git 恢复。
+空库恢复在单一 SQLite 事务中写入已发布/废弃的组件、Release、依赖、Action、场景 Revision、制品和镜像元数据。既有用户 ID 仅在名称与角色完全一致时复用；Playbook 仅在目标不存在或内容 SHA-256 完全一致时允许。ID/slug、用户属性或 Playbook 内容冲突都会整批失败，未提交的新文件会清理。成功后记录审计并异步触发新快照；Run、环境、通知、Session 和既有审计历史不会从 Git 恢复。
 
 CLI 恢复仍只写入不存在的新路径，适用于离线重建。不得把 `--target` 或 `--target-playbook-root` 指向在线数据库、当前作业根目录或其父目录。
 
@@ -107,7 +107,7 @@ clusterforge-backup restore-catalog \
   --target-playbook-root /var/lib/clusterforge/restore/jobs
 ```
 
-Catalog-only 恢复保留用户身份、组件/Release ID、依赖、动作、已发布/废弃状态、场景 Revision/DAG、Playbook 和内容身份；不会伪造 Draft、Run、审批、审计、环境 Revision 或安装回滚基线。完成校验后，仍须通过受保护部署流程停服、备份当前状态、切换数据库和 Playbook 根目录，再验证 HTTP、Schema contract、外键、资源数量和外部介质。
+Catalog-only 恢复保留用户身份、组件/Release ID、依赖、动作、已发布/废弃状态、场景 Revision/DAG、Playbook 和内容身份；不会伪造 Draft、Run、审计、环境 Revision 或安装回滚基线。完成校验后，仍须通过受保护部署流程停服、备份当前状态、切换数据库和 Playbook 根目录，再验证 HTTP、Schema contract、外键、资源数量和外部介质。
 
 Catalog 导入只接受当前完整表结构，包括环境参数默认值表；不补齐旧格式缺失的表，也不转换历史数据库或旧参数结构。
 
@@ -148,7 +148,7 @@ Git 只保存介质和镜像的不可变身份与来源位置，不保存大型�
 
 ## 业务清空专用备份（不含 Run 历史）
 
-仅在明确授权清空业务数据时使用。`database business-snapshot` 从当前精确合同的只读源库把白名单业务表复制到全新数据库，不会先复制完整库再删除 Run；未知表、活动 Run、活动镜像构建、完整性或外键错误均阻止导出。历史会话、运行记录、审批、通知、审计、构建及检查记录、安装回滚基线不进入新文件，仅重建用于避免基础目录重复初始化的固定标记。测试中或测试通过的场景转为 Draft，测试时间清空。`foundation-snapshot` 用当前 schema 创建全新基础库，仅复制当前合同的账号、平台分类/选项（含父子关系及退役标记）与环境变量字段定义。它不复制旧 schema、组件、场景、环境、Run、会话、自动保留策略；新库自动归档和清理保持关闭。源库目录字段不满足当前约束时拒绝重置。业务恢复库保持当前合同，用于部署失败回退。
+仅在明确授权清空业务数据时使用。`database business-snapshot` 从当前精确合同的只读源库把白名单业务表复制到全新数据库，不会先复制完整库再删除 Run；未知表、活动 Run、活动镜像构建、完整性或外键错误均阻止导出。历史会话、运行记录、通知、审计、构建及检查记录、安装回滚基线不进入新文件，仅重建用于避免基础目录重复初始化的固定标记。测试中或测试通过的场景转为 Draft，测试时间清空。`foundation-snapshot` 用当前 schema 创建全新基础库，仅复制当前合同的账号、平台分类/选项（含父子关系及退役标记）与环境变量字段定义。它不复制旧 schema、组件、场景、环境、Run、会话、自动保留策略；新库自动归档和清理保持关闭。源库目录字段不满足当前约束时拒绝重置。业务恢复库保持当前合同，用于部署失败回退。
 
 停服准备使用 `scripts/prepare-business-reset.sh <远端全新目录> <新备份工具路径> <package-business-reset.py路径>`。它持有部署和备份锁，禁用 Git 自动备份，生成业务恢复库、基础库、JSON、完整 Playbook 包、受限凭据包及录入清单。成功后保持停服；准备失败会尝试启动原服务，但不会重新开启 Git 备份。
 

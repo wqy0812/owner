@@ -156,7 +156,7 @@ describe('scenario template import', () => {
     const component = {
       id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: 'component-owner-a',
       layer: 'runtime_state', tags: ['runtime', 'core'],
-      releases: [{ id: 'release-runtime', componentId: 'component-runtime', lineId: 'line-runtime', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', state: 'released', review: { status: 'approved' }, readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
+      releases: [{ id: 'release-runtime', componentId: 'component-runtime', lineId: 'line-runtime', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', state: 'released', readiness: { status: 'ready', blockers: [] }, actions: [{ type: 'verify', playbook: 'verify.yml' }] }],
     } as Component;
     expect(() => validateScenarioTemplateReferences(template, [component])).toThrow(/不支持 install/);
     const verifiedTemplate: any = structuredClone(template);

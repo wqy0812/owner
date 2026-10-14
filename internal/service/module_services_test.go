@@ -125,7 +125,7 @@ func TestPlanBuilderLocksSelectedActionWithOnlyReadDependencies(t *testing.T) {
 		t.Fatalf("selected action expanded unexpectedly: %+v", prepared.steps)
 	}
 	step := prepared.steps[0]
-	if step.ReleaseID != data.release.ID || step.ActionID != input.ActionID || step.Limit != "workers" || step.Playbook != "tasks/check.yml" || step.ReleaseSpecDigest != componentReleaseSpecDigest(data.release) || step.NeedsApproval || !step.RetrySafe {
+	if step.ReleaseID != data.release.ID || step.ActionID != input.ActionID || step.Limit != "workers" || step.Playbook != "tasks/check.yml" || step.ReleaseSpecDigest != componentReleaseSpecDigest(data.release) || step.HighRisk || !step.RetrySafe {
 		t.Fatalf("wrong locked action: %+v", step)
 	}
 }

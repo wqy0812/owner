@@ -12,9 +12,8 @@ import (
 )
 
 var activeWorkRunStatuses = map[domain.RunStatus]bool{
-	domain.RunAwaitingApproval: true,
-	domain.RunQueued:           true,
-	domain.RunRunning:          true,
+	domain.RunQueued:  true,
+	domain.RunRunning: true,
 }
 
 func (p *ReadModelService) Workbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
@@ -151,45 +150,7 @@ func (p *ReadModelService) workbench(ctx context.Context, user domain.User) (dom
 }
 
 func (p *ReadModelService) platformAdminWorkbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
-	subjects, err := p.store.WorkbenchSubjects(ctx, user)
-	if err != nil {
-		return domain.Workbench{}, err
-	}
-	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
-	workbench.Items = platformAdminComponentWork(subjects.Components)
-	workbench.Summary.ActionRequired = len(workbench.Items)
-	return workbench, nil
-}
-
-func platformAdminComponentWork(components []domain.Component) []domain.WorkItem {
-	items := []domain.WorkItem{}
-	for _, component := range components {
-		for _, release := range component.Releases {
-			if release.Status != domain.ReleaseDraft || release.Review.Status != domain.ReleaseReviewPending {
-				continue
-			}
-			updatedAt := release.CreatedAt
-			if release.Review.SubmittedAt != nil {
-				updatedAt = *release.Review.SubmittedAt
-			}
-			digest := release.Review.ContractDigest
-			if len(digest) > 16 {
-				digest = digest[:16] + "…"
-			}
-			items = append(items, domain.WorkItem{
-				ID: "component_review:" + release.ID, Kind: "component_review", Priority: domain.WorkPriorityHigh,
-				Status: domain.WorkStatusActionRequired, Title: component.Name + " " + release.Version + " 等待合同审核",
-				Subject: domain.WorkSubject{Type: "component_release", ID: release.ID, ParentID: component.ID, Name: component.Name, Version: release.Version},
-				Reasons: []domain.WorkReason{{
-					Code: "component_release.review_pending", Message: "组件 Owner 已提交当前 Release 合同",
-					Cause: &domain.WorkCause{Kind: "review_submission", Summary: release.LineName + " · 合同摘要 " + digest, At: &updatedAt},
-				}},
-				PrimaryAction: domain.WorkAction{Label: "预览并审核", Href: "/?review=" + release.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: updatedAt,
-			})
-		}
-	}
-	sortWorkItems(items)
-	return items
+	return domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}, nil
 }
 
 func catalogBackupWorkItem(health domain.CatalogBackupHealth, healthErr error) []domain.WorkItem {
@@ -361,7 +322,7 @@ func (p *ReadModelService) scenarioOwnerWork(ctx context.Context, user domain.Us
 			if len(issues) == 0 {
 				status, priority = domain.WorkStatusInProgress, domain.WorkPriorityNormal
 				title = fmt.Sprintf("%s r%d 正在测试", scenario.Name, revision.Revision)
-				reason := domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在等待审批、排队或执行", Cause: ruleCause("当前版本已由活动测试 Run 锁定"), NextAction: testAction}
+				reason := domain.WorkReason{Code: "scenario.test_in_progress", Message: "完整场景测试正在排队或执行", Cause: ruleCause("当前版本已由活动测试 Run 锁定"), NextAction: testAction}
 				if latest != nil {
 					reason.EvidenceRunID = latest.ID
 					reason.Cause = runCause(*latest)
@@ -560,19 +521,14 @@ func (p *ReadModelService) runWork(ctx context.Context, user domain.User, runs [
 		title := name + " " + runStatusMessage(run.Status)
 		runHref := "/runs?selected=" + run.ID
 		reason := domain.WorkReason{Code: "run.in_progress", Message: runStatusMessage(run.Status), EvidenceRunID: run.ID, Cause: runCause(run), NextAction: workAction("查看运行", runHref)}
-		if run.Status == domain.RunAwaitingApproval {
-			canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
-			priority, status = domain.WorkPriorityCritical, domain.WorkStatusActionRequired
-			reason = domain.WorkReason{Code: "run.awaiting_approval", Message: "危险作业等待环境 Owner 审批", EvidenceRunID: run.ID, Cause: &domain.WorkCause{Kind: "approval_rule", Summary: "锁定计划包含 destructive 动作或跨站传输"}, NextAction: workAction(runActionLabel(run.Status, canApprove), runHref)}
-		} else if failed {
+		if failed {
 			priority, status = domain.WorkPriorityCritical, domain.WorkStatusBlocked
 			reason = domain.WorkReason{Code: "run.failed", Message: valueOr(run.Error, "最近一次有效运行失败"), EvidenceRunID: run.ID, Cause: runCause(run), NextAction: workAction("查看失败运行", runHref)}
 		}
-		canApprove := user.Role == domain.RoleEnvironmentOwner && environments[run.EnvironmentID].OwnerID == user.ID
 		items = append(items, domain.WorkItem{
 			ID: "run:" + run.ID, Kind: "run", Priority: priority, Status: status, Title: title,
 			Subject: domain.WorkSubject{Type: "run", ID: run.ID, ParentID: run.EnvironmentID, Name: name, Environment: environmentName(run.EnvironmentID, environments)},
-			Reasons: []domain.WorkReason{reason}, PrimaryAction: domain.WorkAction{Label: runActionLabel(run.Status, canApprove), Href: "/runs?selected=" + run.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: run.CreatedAt,
+			Reasons: []domain.WorkReason{reason}, PrimaryAction: domain.WorkAction{Label: runActionLabel(run.Status), Href: "/runs?selected=" + run.ID}, SecondaryActions: []domain.WorkAction{}, UpdatedAt: run.CreatedAt,
 		})
 	}
 	return items, nil
@@ -694,8 +650,6 @@ func environmentName(id string, environments map[string]domain.Environment) stri
 
 func runStatusMessage(status domain.RunStatus) string {
 	switch status {
-	case domain.RunAwaitingApproval:
-		return "等待审批"
 	case domain.RunQueued:
 		return "正在排队"
 	case domain.RunRunning:
@@ -709,13 +663,7 @@ func runStatusMessage(status domain.RunStatus) string {
 	}
 }
 
-func runActionLabel(status domain.RunStatus, canApprove bool) string {
-	if status == domain.RunAwaitingApproval {
-		if canApprove {
-			return "复核并审批"
-		}
-		return "查看审批状态"
-	}
+func runActionLabel(status domain.RunStatus) string {
 	if status == domain.RunFailed || status == domain.RunInterrupted {
 		return "查看失败诊断"
 	}

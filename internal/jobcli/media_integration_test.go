@@ -43,6 +43,11 @@ func TestStandaloneRealMediaWaitsForSourceVerification(t *testing.T) {
 					transferred.Store(true)
 					w.WriteHeader(http.StatusCreated)
 					fmt.Fprintf(w, `{"relativePath":"a","sha256":"%s"}`, checksum)
+				case "/files/a":
+					if !transferred.Load() {
+						t.Error("target content requested before transfer")
+					}
+					fmt.Fprint(w, "payload")
 				default:
 					t.Errorf("unexpected media request %s", r.URL.Path)
 					w.WriteHeader(500)
@@ -68,8 +73,10 @@ func TestStandaloneRealMediaWaitsForSourceVerification(t *testing.T) {
 				t.Fatal(err)
 			}
 			plan := ansible.JobPlan{Inventory: "[nodes]\nlocal ansible_connection=local\n", Metadata: map[string]any{
-				"steps":             []any{map[string]any{"id": "install"}},
-				"artifactTransfers": []any{map[string]any{"requirementId": "a", "sourceUrl": "https://source.test/a", "targetStation": strings.TrimPrefix(station.URL, "http://"), "relativePath": "a", "sha256": checksum}},
+				"steps":                []any{map[string]any{"id": "install"}},
+				"deliveryRequirements": []any{map[string]any{"id": "a", "kind": "artifact", "source": "https://source.test/a", "target": station.URL + "/files/a", "identity": "sha256:" + checksum}},
+				"deliveryDecisions":    []any{map[string]any{"requirementId": "a", "mode": "transfer", "policy": "transfer_to_target"}},
+				"artifactTransfers":    []any{map[string]any{"requirementId": "a", "sourceUrl": "https://source.test/a", "targetStation": strings.TrimPrefix(station.URL, "http://"), "relativePath": "a", "sha256": checksum}},
 			}}
 			for i, name := range []string{"checks/source.yml", "install.yml"} {
 				digest, err := ansible.FileDigest(filepath.Join(role, "tasks", name))
@@ -91,7 +98,7 @@ func TestStandaloneRealMediaWaitsForSourceVerification(t *testing.T) {
 			var out bytes.Buffer
 			err = Run([]string{"run", bundle.Path, "--results", t.TempDir(), "--ansible", binary}, &out, &out)
 			if pass {
-				if err != nil || calls.Load() != 3 || !transferred.Load() {
+				if err != nil || calls.Load() != 4 || !transferred.Load() {
 					t.Fatalf("source passed: calls=%d transferred=%v error=%v\n%s", calls.Load(), transferred.Load(), err, out.String())
 				}
 				if _, err := os.Stat(filepath.Join(target, "installed")); err != nil {

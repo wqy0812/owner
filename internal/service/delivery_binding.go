@@ -33,6 +33,9 @@ func (p *DeliveryService) bindComponentArtifacts(ctx context.Context, revision d
 		if len(release.Artifacts) == 0 {
 			continue
 		}
+		if targetStation == "" {
+			return deliveryTargetMissingError(revision.EnvironmentID, fileStationVariable)
+		}
 		component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 		if err != nil {
 			return err
@@ -98,6 +101,9 @@ func (p *DeliveryService) bindComponentImages(ctx context.Context, revision doma
 		}
 		if len(release.Images) == 0 {
 			continue
+		}
+		if targetRegistry == "" {
+			return deliveryTargetMissingError(revision.EnvironmentID, imageRegistryVariable)
 		}
 		component, err := p.store.GetComponent(ctx, release.ComponentID, false)
 		if err != nil {
@@ -185,4 +191,10 @@ func appendDeliveryRequirement(plan *domain.RunExecutionPlan, requirement domain
 func deliverySourceError(component domain.Component, release domain.ComponentRelease, item, source, actionURL string, cause error) error {
 	base := fmt.Errorf("%w: %s %s %s 的当前来源 %s 不可读（组件 Owner: %s）: %v", domain.ErrConflict, component.Name, release.Version, item, source, component.OwnerID, cause)
 	return actionableExistingError(base, "delivery.source_unreadable", "内容来源不可读；请由组件 Owner 修复同一内容身份的来源地址", "更新内容来源", actionURL)
+}
+
+func deliveryTargetMissingError(environmentID, variable string) error {
+	base := fmt.Errorf("%w: 目标环境缺少 %s，无法将介质或镜像交付到环境目标", domain.ErrInvalid, variable)
+	return actionableExistingError(base, "delivery.target_missing", "请由环境 Owner 配置目标环境变量后重新预览；交付不会回退到来源地址", "配置 "+variable,
+		"/environments?selected="+url.QueryEscape(environmentID)+"&tab=variables&focus="+variable)
 }

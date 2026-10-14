@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -96,10 +95,6 @@ func releaseFixture(id, component, version string, status domain.ReleaseStatus) 
 	if status == domain.ReleaseReleased {
 		r.ReleasedAt = ptr(testNow)
 	}
-	r.Review = domain.ReleaseReview{
-		Status:         domain.ReleaseReviewApproved,
-		ContractDigest: domain.ComponentReleaseSpecDigest(r),
-	}
 	return r
 }
 
@@ -109,7 +104,6 @@ func releasePublicationGuard(release domain.ComponentRelease) ReleasePublication
 	return ReleasePublicationGuard{
 		ReleaseID: release.ID, PublicationGeneration: release.PublicationGeneration,
 		SpecDigest: domain.ComponentReleaseSpecDigest(release), Status: release.Status, Candidate: release.Candidate,
-		ReviewStatus: release.Review.Status, ReviewContractDigest: release.Review.ContractDigest,
 	}
 }
 
@@ -640,16 +634,16 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 		return revision
 	}
 	active := func(id string, kind domain.RunKind, revision domain.EnvironmentRevision) domain.Run {
-		return domain.Run{ID: id, Kind: kind, Status: domain.RunAwaitingApproval, RequestedBy: "environment-owner-a", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow}
+		return domain.Run{ID: id, Kind: kind, Status: domain.RunQueued, RequestedBy: "environment-owner-a", EnvironmentID: revision.EnvironmentID, EnvironmentRevisionID: revision.ID, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow}
 	}
 
 	t.Run("rollback blocks another active run", func(t *testing.T) {
 		s := newTestStore(t)
 		revision := newEnvironment(t, s, "rollback-fence-first")
-		if err := s.CreateRun(ctx, active("rollback-fence", domain.RunEnvironmentRollback, revision), nil); err != nil {
+		if err := s.CreateRun(ctx, active("rollback-fence", domain.RunEnvironmentRollback, revision)); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.CreateRun(ctx, active("other-run", domain.RunComponentTest, revision), nil); !errors.Is(err, domain.ErrConflict) {
+		if err := s.CreateRun(ctx, active("other-run", domain.RunComponentTest, revision)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("active Run entered rollback-fenced environment: %v", err)
 		}
 	})
@@ -657,52 +651,13 @@ func TestEnvironmentRollbackFenceIsEnforcedByDatabase(t *testing.T) {
 	t.Run("active run blocks rollback", func(t *testing.T) {
 		s := newTestStore(t)
 		revision := newEnvironment(t, s, "rollback-fence-second")
-		if err := s.CreateRun(ctx, active("other-first", domain.RunComponentTest, revision), nil); err != nil {
+		if err := s.CreateRun(ctx, active("other-first", domain.RunComponentTest, revision)); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.CreateRun(ctx, active("rollback-second", domain.RunEnvironmentRollback, revision), nil); !errors.Is(err, domain.ErrConflict) {
+		if err := s.CreateRun(ctx, active("rollback-second", domain.RunEnvironmentRollback, revision)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("rollback entered environment with active Run: %v", err)
 		}
 	})
-}
-
-func TestBatchApprovalIsAtomicAndPreservesFIFOOrder(t *testing.T) {
-	ctx := context.Background()
-	s := newTestStore(t)
-	inventory, _ := json.Marshal(map[string]any{"hosts": []any{}})
-	environment := domain.Environment{ID: "batch-env", Name: "Batch", OwnerID: "environment-owner-a", CreatedAt: testNow, UpdatedAt: testNow}
-	revision := domain.EnvironmentRevision{ID: "batch-env-r1", EnvironmentID: environment.ID, Revision: 1, Facts: map[string]any{"architecture": "amd64"}, Inventory: inventory, Variables: map[string]string{}, CredentialRefs: []domain.CredentialRef{}, CreatedAt: testNow}
-	if err := s.CreateEnvironment(ctx, environment, revision); err != nil {
-		t.Fatal(err)
-	}
-	for index := 1; index <= 2; index++ {
-		run := domain.Run{ID: fmt.Sprintf("batch-run-%d", index), Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow.Add(time.Duration(index) * time.Second)}
-		approval := domain.Approval{ID: fmt.Sprintf("batch-approval-%d", index), RunID: run.ID, Status: "pending", RequestedAt: run.CreatedAt}
-		if err := s.CreateRun(ctx, run, &approval); err != nil {
-			t.Fatal(err)
-		}
-	}
-	runs, err := s.BatchDecideApprovals(ctx, []string{"batch-approval-1", "batch-approval-2"}, "environment-owner-a", "approved", "window", testNow.Add(time.Minute))
-	if err != nil || len(runs) != 2 || runs[0].Status != domain.RunQueued || runs[1].Status != domain.RunQueued {
-		t.Fatalf("batch approval runs=%+v err=%v", runs, err)
-	}
-	claimed, err := s.ClaimNextRun(ctx, environment.ID, testNow.Add(2*time.Minute))
-	if err != nil || claimed.ID != "batch-run-1" {
-		t.Fatalf("batch FIFO claim=%+v err=%v", claimed, err)
-	}
-
-	stale := domain.Run{ID: "batch-stale-run", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, Destructive: true, Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node"}}}), CreatedAt: testNow.Add(3 * time.Minute)}
-	staleApproval := domain.Approval{ID: "batch-stale-approval", RunID: stale.ID, Status: "pending", RequestedAt: stale.CreatedAt}
-	if err := s.CreateRun(ctx, stale, &staleApproval); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.BatchDecideApprovals(ctx, []string{"batch-stale-approval", "missing"}, "environment-owner-a", "approved", "window", testNow.Add(4*time.Minute)); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("stale batch error=%v", err)
-	}
-	unchanged, _ := s.GetRun(ctx, stale.ID)
-	if unchanged.Status != domain.RunAwaitingApproval {
-		t.Fatalf("stale batch partially consumed run: %s", unchanged.Status)
-	}
 }
 
 func TestComponentLayerDatabaseConstraint(t *testing.T) {
@@ -826,7 +781,7 @@ func TestIsSQLiteBusyRecognizesSnapshotAndLockErrors(t *testing.T) {
 	}
 }
 
-func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
+func TestScenarioEnvironmentDirectRunAndFIFO(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 	if err := s.CreateComponent(ctx, componentFixture("runtime", "component-owner-a")); err != nil {
@@ -860,9 +815,8 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 		t.Fatalf("stored environment variables=%+v err=%v", storedEnvironment.Revision, err)
 	}
 
-	approval := domain.Approval{ID: "approval-1", RunID: "run-1", Status: "pending", RequestedAt: testNow}
-	run1 := domain.Run{ID: "run-1", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ComponentReleaseID: "runtime-1", Destructive: true, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "runtime-1"}}}), CreatedAt: testNow}
-	if err := s.CreateRun(ctx, run1, &approval); err != nil {
+	run1 := domain.Run{ID: "run-1", Kind: domain.RunComponentTest, Status: domain.RunQueued, RequestedBy: "scenario-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID, ComponentReleaseID: "runtime-1", Destructive: true, Snapshot: runfixture.Snapshot(map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "runtime-1"}}}), CreatedAt: testNow}
+	if err := s.CreateRun(ctx, run1); err != nil {
 		t.Fatal(err)
 	}
 	for index, message := range []string{"one", "two", "three", "four", "five"} {
@@ -889,15 +843,12 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 			t.Fatalf("CanViewRun(%s)=%v err=%v, want %v", test.userID, visible, err, test.want)
 		}
 	}
-	if err := s.DecideApproval(ctx, approval.ID, "environment-owner-a", "approved", "safe lab", testNow.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
 	run2 := run1
 	run2.ID = "run-2"
 	run2.Status = domain.RunQueued
 	run2.Destructive = false
 	run2.CreatedAt = testNow.Add(time.Minute)
-	if err := s.CreateRun(ctx, run2, nil); err != nil {
+	if err := s.CreateRun(ctx, run2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -921,21 +872,13 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 
 	cancelledRun := run1
 	cancelledRun.ID = "run-cancelled"
-	cancelledRun.Status = domain.RunAwaitingApproval
+	cancelledRun.Status = domain.RunQueued
 	cancelledRun.CreatedAt = testNow.Add(10 * time.Minute)
-	cancelledApproval := domain.Approval{ID: "approval-cancelled", RunID: cancelledRun.ID, Status: "pending", RequestedAt: cancelledRun.CreatedAt}
-	if err := s.CreateRun(ctx, cancelledRun, &cancelledApproval); err != nil {
+	if err := s.CreateRun(ctx, cancelledRun); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateRunStatus(ctx, cancelledRun.ID, []domain.RunStatus{domain.RunAwaitingApproval}, domain.RunCancelled, "cancelled", testNow.Add(11*time.Minute)); err != nil {
+	if err := s.UpdateRunStatus(ctx, cancelledRun.ID, []domain.RunStatus{domain.RunQueued}, domain.RunCancelled, "cancelled", testNow.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
-	}
-	if err := s.DecideApproval(ctx, cancelledApproval.ID, "environment-owner-a", "approved", "too late", testNow.Add(12*time.Minute)); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("approval of cancelled run = %v, want conflict", err)
-	}
-	gotApproval, err := s.GetApproval(ctx, cancelledApproval.ID)
-	if err != nil || gotApproval.Status != "pending" {
-		t.Fatalf("cancelled approval mutated despite rollback: %+v err=%v", gotApproval, err)
 	}
 	if err := s.UpdateRunStatus(ctx, run2.ID, []domain.RunStatus{domain.RunRunning}, domain.RunSucceeded, "", testNow.Add(19*time.Minute)); err != nil {
 		t.Fatal(err)
@@ -945,7 +888,7 @@ func TestScenarioEnvironmentRunApprovalAndFIFO(t *testing.T) {
 		RequestedBy: "component-owner-a", EnvironmentID: env.ID, EnvironmentRevisionID: envRev.ID,
 		ComponentReleaseID: "runtime-1", Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "step", NodeID: "node", ReleaseID: "runtime-1"}}}), CreatedAt: testNow.Add(20 * time.Minute),
 	}
-	if err := s.CreateRun(ctx, componentTest, nil); err != nil {
+	if err := s.CreateRun(ctx, componentTest); err != nil {
 		t.Fatal(err)
 	}
 	if active, err := s.HasActiveComponentTest(ctx, componentTest.ComponentReleaseID); err != nil || !active {
@@ -986,25 +929,27 @@ func TestFailInvalidActiveRunsKeepsCorruptEntriesOutOfQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := map[string]any{"steps": []any{map[string]any{"id": "step", "nodeId": "node", "releaseId": "reconcile-release"}}}
-	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunAwaitingApproval, RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, Snapshot: runfixture.Snapshot(plan), CreatedAt: testNow}
-	if err := s.CreateRun(ctx, invalid, nil); err != nil {
+	invalid := domain.Run{ID: "invalid-awaiting", Kind: domain.RunComponentTest, Status: domain.RunQueued, RequestedBy: "component-owner-a", EnvironmentID: environment.ID, EnvironmentRevisionID: revision.ID, ComponentReleaseID: "reconcile-release", Destructive: true, Snapshot: runfixture.Snapshot(plan), CreatedAt: testNow}
+	if err := s.CreateRun(ctx, invalid); err != nil {
 		t.Fatal(err)
 	}
 	valid := invalid
 	valid.ID = "valid-awaiting"
 	valid.CreatedAt = testNow.Add(time.Second)
-	approval := domain.Approval{ID: "valid-approval", RunID: valid.ID, Status: "pending", RequestedAt: valid.CreatedAt}
-	if err := s.CreateRun(ctx, valid, &approval); err != nil {
+	if err := s.CreateRun(ctx, valid); err != nil {
 		t.Fatal(err)
 	}
 
+	if _, err := runfixture.CorruptSnapshot(ctx, s.DB(), `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.plan.steps',json('[]')) WHERE id=?`, invalid.ID); err != nil {
+		t.Fatal(err)
+	}
 	count, err := s.FailInvalidActiveRuns(ctx, testNow.Add(time.Minute))
 	if err != nil || count != 1 {
 		t.Fatalf("reconciled count=%d err=%v", count, err)
 	}
 	failed, _ := s.GetRun(ctx, invalid.ID)
 	kept, _ := s.GetRun(ctx, valid.ID)
-	if failed.Status != domain.RunFailed || !strings.Contains(failed.Error, "invalid active run") || kept.Status != domain.RunAwaitingApproval {
+	if failed.Status != domain.RunFailed || !strings.Contains(failed.Error, "invalid active run") || kept.Status != domain.RunQueued {
 		t.Fatalf("reconciled invalid=%+v valid=%+v", failed, kept)
 	}
 }

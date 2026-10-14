@@ -65,49 +65,6 @@ func TestInvalidClaimFailsAtomicallyWithoutBlockingNextRun(t *testing.T) {
 		})
 	}
 }
-func TestApprovalFinalizesSnapshotAndReferencesInOneTransaction(t *testing.T) {
-	s := evidenceHistoryStore(t, 0)
-	ctx := context.Background()
-	source := evidenceRun("source", "digest", "install_verify", "", "", testNow)
-	source.Status = domain.RunFailed
-	if e := s.CreateRun(ctx, source, nil); e != nil {
-		t.Fatal(e)
-	}
-	run := evidenceRun("approval-snapshot", "digest", "install_verify", "", "", testNow)
-	run.Status = domain.RunAwaitingApproval
-	run.FinishedAt = nil
-	a := domain.Approval{ID: "snapshot-approval", RunID: run.ID, Status: "pending", RequestedAt: testNow}
-	if e := s.CreateRun(ctx, run, &a); e != nil {
-		t.Fatal(e)
-	}
-	snapshot, e := run.Snapshot.Clone()
-	if e != nil {
-		t.Fatal(e)
-	}
-	snapshot.Plan.Steps[0].Backup = &domain.BackupMetadata{InstallRunID: "missing"}
-	if e = s.DecideApprovalWithSnapshot(ctx, a.ID, "environment-owner-a", "approved", "window", &snapshot, nil, testNow); e == nil {
-		t.Fatal("missing reference approved")
-	}
-	before, e := s.GetApproval(ctx, a.ID)
-	if e != nil || before.Status != "pending" {
-		t.Fatal("approval partially committed", e)
-	}
-	snapshot.Plan.Steps[0].Backup.InstallRunID = source.ID
-	if e = s.DecideApprovalWithSnapshot(ctx, a.ID, "environment-owner-a", "approved", "window", &snapshot, []domain.RunDeliveryResult{}, testNow); e != nil {
-		t.Fatal(e)
-	}
-	got, e := s.GetRun(ctx, run.ID)
-	if e != nil || got.Status != domain.RunQueued || got.Snapshot.Plan.Steps[0].Backup.InstallRunID != source.ID {
-		t.Fatal("snapshot lost", e)
-	}
-	var ref string
-	if e = s.DB().QueryRow(`SELECT referenced_run_id FROM run_snapshot_references WHERE run_id=?`, run.ID).Scan(&ref); e != nil || ref != source.ID {
-		t.Fatal("reference missing", e)
-	}
-	if e = s.DecideApprovalWithSnapshot(ctx, a.ID, "environment-owner-a", "approved", "late", &snapshot, nil, testNow); e == nil {
-		t.Fatal("approval consumed twice")
-	}
-}
 
 func TestInvalidDeliveryResultsDoNotStrandClaimedRun(t *testing.T) {
 	s := newTestStore(t)
@@ -198,7 +155,7 @@ func TestWorkbenchSelectsIdentityBeforeReadingSnapshotProjection(t *testing.T) {
 	older := evidenceRun("older-unselected", "digest", "install_verify", "", "", testNow)
 	current := evidenceRun("latest-selected", "digest", "install_verify", "", "", testNow.Add(time.Hour))
 	for _, r := range []domain.Run{older, current} {
-		if err := s.CreateRun(ctx, r, nil); err != nil {
+		if err := s.CreateRun(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 	}

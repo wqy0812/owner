@@ -12,6 +12,7 @@
 | 读者或目的 | 首选文档 | 内容边界 |
 | --- | --- | --- |
 | 开展开发或交接任务 | [开发与文档维护指南](development-guide.md) | 按任务定位代码和测试、隔离启动、验证选择与维护规则 |
+| AI 通过 MCP 使用平台 | [MCP 接入](mcp.md)、[工具清单](mcp-tools.md) | Bearer 令牌、完整业务操作、文件传输、执行前置条件和覆盖测试 |
 | 理解平台功能 | [平台功能与核心概念](platform-capabilities.md) | 功能、对象关系和职责；与前端功能章节共用内容源 |
 | 第一次接触仓库 | [项目结构说明](project-structure.md) | 目录、运行架构、开发入口与常用命令 |
 | 后端开发、测试与设计 | [平台设计文档](backend-design.md) | 领域模型、权限、状态机、数据结构、API 与安全边界 |
@@ -31,7 +32,7 @@
 | 查阅测试节点快照 | [2026-08-30 测试环境节点快照](deployment-snapshot-2026-08-30.md) | 2026-08-30 Registry、Inventory、Revision 与连通性证据 |
 | 查阅原始节点历史 | [2026-08-20 测试环境节点快照](deployment-snapshot-2026-08-20.md) | 2026-08-20 的静态节点记录，不代表实时状态 |
 | 判断版本和兼容策略 | [首版与环境策略](version-policy.md) | V1 数据库、API 和测试环境解释规则 |
-| 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、审批、清理顺序、恢复与验收边界 |
+| 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、清理顺序、恢复与验收边界 |
 | 查阅列表优化测量 | [2026-09-03 性能记录](records/2026-09-03-read-performance.md) | 旧实现及测量，不代表当前读取合同 |
 | 查阅本轮分批审核 | [2026-09-07 分批审核](records/2026-09-07-batched-code-review.md) | 提交边界、复现修复、验证结果和未执行事项 |
 | 查阅前次分批审核 | [2026-09-05 代码审核](records/2026-09-05-code-review.md) | 提交批次、已修复问题、用户决定与本地验证边界 |

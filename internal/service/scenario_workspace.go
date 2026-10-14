@@ -430,7 +430,7 @@ func (p *WorkspaceVerifier) verifyScenarioAcceptanceStep(ctx context.Context, st
 	}
 	for _, job := range revision.AcceptanceJobs {
 		if job.ID == step.AcceptanceJobID {
-			if step.Playbook != job.Playbook || step.Action != "acceptance" || step.ActionID != job.ID || step.Limit != job.HostGroup || step.TimeoutSeconds != job.TimeoutSeconds || step.Become != job.Become || step.MayMutate != job.MayMutate || !reflect.DeepEqual(step.RequiredCredentials, job.RequiredCredentials) || step.NeedsApproval != (job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive) {
+			if step.Playbook != job.Playbook || step.Action != "acceptance" || step.ActionID != job.ID || step.Limit != job.HostGroup || step.TimeoutSeconds != job.TimeoutSeconds || step.Become != job.Become || step.MayMutate != job.MayMutate || !reflect.DeepEqual(step.RequiredCredentials, job.RequiredCredentials) || step.HighRisk != (job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive) {
 				return fmt.Errorf("%w: scenario acceptance job changed after planning", domain.ErrConflict)
 			}
 			digester := p.inspector

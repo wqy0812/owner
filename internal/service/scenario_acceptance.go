@@ -373,7 +373,7 @@ func (p *PlanBuilder) lockScenarioAcceptanceSteps(ctx context.Context, revision 
 				return nil, fmt.Errorf("%w: acceptance job %s requires CredentialRef %s", domain.ErrInvalid, job.Name, name)
 			}
 		}
-		steps = append(steps, domain.RunPlanStep{ID: "acceptance-" + job.ID, NodeID: "acceptance:" + job.ID, Name: job.Name, SourceType: "scenario_acceptance", ScenarioRevisionID: revision.ID, AcceptanceJobID: job.ID, Stage: "acceptance", Phase: "acceptance", Action: domain.ActionKind("acceptance"), ActionID: job.ID, Playbook: job.Playbook, PlaybookDigest: job.PlaybookSHA256, WorkspaceDigest: revision.AcceptanceTreeSHA256, Variables: variables, RequiredCredentials: job.RequiredCredentials, Limit: job.HostGroup, TimeoutSeconds: job.TimeoutSeconds, Become: job.Become, MayMutate: job.MayMutate, NeedsApproval: job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive, RetrySafe: !job.MayMutate})
+		steps = append(steps, domain.RunPlanStep{ID: "acceptance-" + job.ID, NodeID: "acceptance:" + job.ID, Name: job.Name, SourceType: "scenario_acceptance", ScenarioRevisionID: revision.ID, AcceptanceJobID: job.ID, Stage: "acceptance", Phase: "acceptance", Action: domain.ActionKind("acceptance"), ActionID: job.ID, Playbook: job.Playbook, PlaybookDigest: job.PlaybookSHA256, WorkspaceDigest: revision.AcceptanceTreeSHA256, Variables: variables, RequiredCredentials: job.RequiredCredentials, Limit: job.HostGroup, TimeoutSeconds: job.TimeoutSeconds, Become: job.Become, MayMutate: job.MayMutate, HighRisk: job.RiskLevel == domain.RiskHigh || job.RiskLevel == domain.RiskDestructive, RetrySafe: !job.MayMutate})
 	}
 	return steps, nil
 }

@@ -300,6 +300,6 @@ func ValidateEnvironmentValues(values map[string]any, variables map[string]strin
 	return err
 }
 
-func (r ComponentRelease) IsApprovedCandidate() bool {
-	return r.Status == ReleaseDraft && r.Candidate && r.Review.Status == ReleaseReviewApproved && r.Review.ContractDigest == ComponentReleaseSpecDigest(r)
+func (r ComponentRelease) IsSharedCandidate() bool {
+	return r.Status == ReleaseDraft && r.Candidate
 }

@@ -81,12 +81,12 @@ internal/service
 - API 层不取得 Store/DB，只调用对应模块应用服务；`Platform` 仅负责装配、配置、访问器和生命周期，模块不反向依赖它。
 - Service 层是权限、状态转换、参数合同和调度规则的权威实现。
 - Scenario 只维护 Revision/DAG/测试状态，联合发布由 `ReleaseCoordinator` 完成。
-- Run 规划、创建、调度、执行、证据记录、回滚规划和审批各有独立对象与文件。
+- Run 规划、创建、调度、执行、证据记录、回滚规划和取消各有独立对象与文件。
 - Store 层负责持久化、事务和并发状态抢占，不决定业务权限。
 - Readiness 的一次读取复用一份目录定义；管理页面的历史引用统计单独读取，写入仍在事务内重新校验。
 - Domain 层保存跨层共享的数据结构、枚举、通用错误和纯领域校验。
 - Run 在创建时锁定组件 Release、场景 Revision、环境 Revision、解析后的结构化参数和 Playbook 摘要。
-- 同一环境中的 Run 按 FIFO 串行执行；破坏性动作先等待环境 Owner 审批。
+- 同一环境中的 Run 按 FIFO 串行执行；破坏性动作保留风险提示，确认提交后直接排队。
 - SSE 只提示前端重新拉取数据，SQLite 中的状态才是最终事实来源。
 
 ## 3. Go 后端
@@ -129,7 +129,7 @@ FSS 使用独立配置前缀 `CLUSTERFORGE_FSS_*`，不直接连接平台 SQLite
 - Component、ComponentRelease、Readiness、候选交接、依赖、幂等动作、介质与镜像内容身份。
 - Scenario、ScenarioRevision、DAG 节点和边。
 - Environment、EnvironmentRevision、Inventory、变量和 CredentialRef。
-- Run（含整集群 `environment_rollback`）、RunStep、RunLog、Approval、Notification 和 AuditEvent。
+- Run（含整集群 `environment_rollback`）、RunStep、RunLog、Notification 和 AuditEvent。
 - 组件层级/标签、生命周期状态、动作类型、风险等级与通用领域错误。
 
 新增跨层字段时，先更新这里的领域结构，再同步 Store、Service、API 和前端类型。不要仅在 API DTO 或前端中维护另一套业务状态。
@@ -141,6 +141,7 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | 文件 | 职责 |
 | --- | --- |
 | `handler.go` | 路由注册、Cookie 会话、统一响应和错误映射 |
+| `mcp.go` / `mcp_catalog_generated.go` | MCP 与业务 Handler 的固定映射、操作元信息和由请求 DTO 生成的参数 Schema |
 | `workbench.go` | 按角色派生“我的工作”和阻断入口 |
 | `components.go` | 组件与 Release 接口 |
 | `component_usage.go` | 组件精确版本的直接引用查询与摘要权限 |
@@ -161,13 +162,18 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `environment_transfer.go` | 环境 Revision 导入、导出和差异预检 |
 | `environment_revision_deletion.go` | 环境历史版本删除影响预览与 Owner 删除入口 |
 | `catalog_repository.go` | 私有 Catalog 仓库接入、备份和空库恢复 |
-| `runs.go` | Run 查询、审批、取消和日志 |
+| `runs.go` | Run 查询、取消和日志 |
 | `run_logs.go` | Run 诊断、轻量 activity 和日志包下载 |
 | `preparation.go` | 执行器健康与执行准备任务 |
 | `events.go` | SSE 事件通道 |
 | `notifications.go` | 站内通知和审计查询 |
 
-除身份列表和身份切换外，`/api/v1/*` 请求都需要 Demo Session Cookie。API 动态响应设置 `Cache-Control: no-store`，避免审批和运行状态被浏览器缓存。
+除身份列表和身份切换外，`/api/v1/*` 请求都需要 Demo Session Cookie。API 动态响应设置 `Cache-Control: no-store`，避免运行状态被浏览器缓存。
+
+MCP 协议、独立 Bearer 认证、文件暂存和限额位于 `internal/mcpserver`；
+`internal/mcpcatalog` 分析已注册 REST 路由与请求 DTO，`cmd/mcp-catalog` 生成工具注册表和清单，
+API 测试检查生成结果是否过期。`cmd/mcp-token` 生成私密令牌文件及只含摘要的配置。
+MCP 从 API 层复用业务 Handler，不访问 Store、不开放演示身份切换。配置见 [MCP 接入](mcp.md)。
 
 ### 3.5 `internal/service`
 
@@ -179,7 +185,7 @@ Service 是业务核心，主要职责包括：
 - 解析组件固定值、节点 parameterValues、环境参数、上游映射、受治理变量和 CredentialRef。
 - 生成组件测试、回滚测试、场景测试和正式运行计划。
 - 按环境维护 FIFO Worker，恢复异常中断的 Run。
-- 执行审批、取消、通知、审计和日志脱敏。
+- 执行取消、通知、审计和日志脱敏。
 - 管理镜像构建权限、记录、审计和状态，通过 `ImageBuildBackend` 调用隔离构建实现。
 - 维护介质/镜像内容身份与可变来源；规划目标优先、来源回退和逐项交付选择，执行时由目标 FSS/Registry 拉取或平移。
 
@@ -189,11 +195,11 @@ Service 是业务核心，主要职责包括：
 | --- | --- |
 | `platform.go` / `module_dependencies.go` | 组合根、模块结构和实际使用的依赖接口 |
 | `runner_dependencies.go` | 三个显式 Runner 端口和装配期缺失检查 |
-| `components.go` / `release_drafts.go` / `release_review.go` | Catalog 业务实现和 Readiness 装饰 |
+| `components.go` / `release_drafts.go` | Catalog 业务实现和 Readiness 装饰 |
 | `scenarios.go` / `scenario_lifecycle.go` / `scenario_acceptance.go` | Scenario 定义、生命周期与验收工作区 |
 | `environments.go` / `identity.go` / `workbench.go` | Environment、Identity 与 ReadModel 实现 |
 | `release_coordinator.go` / `readiness*.go` | 发布协调与统一 ReleaseRules |
-| `run_creation.go` / `run_creator.go` | Execution 提交编排，以及 RunCreator 的快照/审批持久化 |
+| `run_creation.go` / `run_creator.go` | Execution 提交编排，以及 RunCreator 的快照持久化 |
 | `plan_builder.go` / `rollback_planner.go` / `action_steps.go` | 锁定计划、回滚规划和动作展开 |
 | `workspace_verifier.go` / `playbook_workspace.go` | 冻结工作区验证和共享文件锁 |
 | `run_scheduler.go` / `execution_control.go` | FIFO Worker 与执行取消注册 |
@@ -201,7 +207,7 @@ Service 是业务核心，主要职责包括：
 | `execution_recording.go` / `lifecycle_recorder.go` | 阶段记录、回执、安装基线、终态和事件 |
 | `delivery_execution.go` / `delivery_planner.go` / `delivery_binding.go` | DeliveryService 交付规划、来源绑定和逐 Run 的传输记录 |
 | `image_builds.go` / `media_observation.go` | 构建业务记录，以及平台准备检查、请求内探测去重和观测值回传 |
-| `approval_service.go` / `run_archive.go` | 审批/取消、独立归档工作线程 |
+| `run_cancellation.go` / `run_archive.go` | 取消、独立归档工作线程 |
 
 旧的 `application_services.go`、`application_commands.go`、`execution_components.go`
 转发层已删除。新增业务逻辑直接放入所属模块；依赖通过具名接口声明，组合根负责提供实现。
@@ -224,7 +230,7 @@ Store 基于 `modernc.org/sqlite`，包含：
 - `schema.go`：嵌入首版结构并校验唯一 `schema_contract` 标识。
 - `schema.sql`：当前首版的完整数据库结构。
 
-数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20260908-typed-run-snapshot`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
+数据库以 `schemaContract` 严格识别结构。当前且唯一接受的合同为 `clusterforge-v1-20261014-owner-direct-execution`；运行时代码不做历史迁移、模糊兼容、双读或双写。其他合同在常规启动和部署时失败关闭；明确授权的基础目录重置仅写新库，边界见 `internal/deploydb/foundation.go`。
 
 分支范围由 `branch_scope.go` 统一规范化，在发布线及场景父对象创建时固定；Store 对版本写入复核范围，SQLite 触发器保护父对象范围。`contract_patch.go` 按编辑分区提交，`environment_credential_sources.go` 聚合有权限的凭据声明来源。`scripts/inspect-branch-scopes.py` 只读盘点旧数据；`examples/components/host-foundation-example.json` 与 `scripts/test-host-foundation-example.py` 提供目录归属样板及隔离验证。
 
@@ -293,7 +299,7 @@ web/src/
 | `/environments` | `EnvironmentsPage` | Inventory、Facts、变量和凭据引用 |
 | `/reference-rebuild` | 重定向入口 | 跳转到组件目录，不执行数据重建 |
 | `/disaster-recovery` | `DisasterRecoveryPage` | Catalog 仓库接入、备份状态和空库恢复 |
-| `/runs` | `RunsPage` | 队列、审批、步骤和实时日志 |
+| `/runs` | `RunsPage` | 队列、步骤和实时日志 |
 | `/notifications` | `NotificationsPage` | 发布影响通知 |
 | `/manual` | `PlatformManualPage` | 平台功能与核心概念（共享 Markdown 内容源） |
 | `/manual/:section` | `PlatformManualPage` | `features` 功能、`workflow` 工作流、`role` 角色操作、`deployment` 交接 |
@@ -391,11 +397,11 @@ make build
 | 新增 API | `internal/api` 路由与 Handler，同时在 Service 层实现规则并补 API 测试 |
 | 修改权限或状态机 | `internal/service`，必要时同步 Domain；前端只展示结果 |
 | 修改数据库结构 | 更新 `internal/store/schema.sql` 与 `schemaContract`；首版测试库在备份后显式重建，不保留历史迁移代码 |
-| 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`approval_service.go` 及相关测试 |
+| 修改 Run 规划或调度 | `plan_builder.go`、`run_creator.go`、`run_scheduler.go`、`run_executor.go`、`lifecycle_recorder.go`、`rollback_planner.go`、`run_cancellation.go` 及相关测试 |
 | 修改 Ansible 安全行为 | `internal/ansible`，同时补单元和集成测试 |
 | 新增组件示例 | `examples/components`、导入合同与本地隔离验证；`examples/ansible` 参考不会自动进入业务目录 |
 | 新增前端页面 | `web/src/pages`、`App.tsx`、API Client、类型和测试 |
-| 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`internal/delivery/`、`internal/store/artifacts.go`、`internal/fss`、运行审批页和组件页 |
+| 修改介质交付或文件站 | `delivery_binding.go`、`delivery_planner.go`、`internal/delivery/`、`internal/store/artifacts.go`、`internal/fss`、运行详情页和组件页 |
 | 修改镜像身份、交付或构建 | `internal/service/images.go`、`image_builds.go`、`internal/imagebuild/`、`internal/delivery/`、Store/API 和组件页 |
 | 修改测试部署 | `deploy` 与 `scripts`，并执行实际测试环境验证 |
 
@@ -406,7 +412,7 @@ make build
 3. Released Release 和 Released Scenario Revision 不可原地修改，应克隆新 Draft。
 4. Secret 只能通过 CredentialRef 进入运行时，不能写入普通参数、日志、Seed 或 Run 快照。
 5. 分开报告代码测试、Ansible 门禁、构建、部署和真实环境验收，它们不能互相替代。
-6. 对数据库、Run 调度、审批、回滚、介质平移和部署脚本的修改应优先采用失败关闭策略。
+6. 对数据库、Run 调度、回滚、介质平移和部署脚本的修改应优先采用失败关闭策略。
 
 文档导航和维护职责参见 [文档中心](README.md)；更详细的业务模型和运行规则参见 [平台设计文档](backend-design.md)，面向平台使用者的操作流程参见 [平台说明书](platform-manual.md)。
 
@@ -414,7 +420,7 @@ make build
 
 组件导航读取 `component_summaries.go` 的轻量摘要；选中组件后读取详情和 `component_read_context.go` 提供的上下文。完整合同查询仍使用 `component_reads.go` 的事务内批量装配，发布线仅通过 `releaseIds` 引用版本；工作区文件清单按需请求。
 
-Run 列表从 `run_summaries.go` 分页查询摘要，详情才读取步骤及末尾最多 200 行日志。Release 证据和批量审批候选使用独立接口；筛选、分页或身份变化会重新读取正确范围。API 的 `compression.go` 为接受 gzip 的 JSON 请求压缩响应。
+Run 列表从 `run_summaries.go` 分页查询摘要，详情才读取步骤及末尾最多 200 行日志。Release 证据使用独立接口；筛选、分页或身份变化会重新读取正确范围。API 的 `compression.go` 为接受 gzip 的 JSON 请求压缩响应。
 
 `useApiData` 按查询范围隔离数据，合并进行中请求的刷新信号；身份/查询切换及卸载会取消旧请求。Readiness 在单次读取中复用目录定义和文件检查，最终发布、计划提交和执行仍独立验证当前合同。证据索引使用当前合同摘要、证据类型和证据时间三个生成列。
 
@@ -439,4 +445,4 @@ Catalog 与 Delivery 共享一个包装实例。底层 Probe 自带三分钟上�
 `internal/jobcli/media.go` 只读取现有 Metadata 的介质投影，不回写或重新构造完整元数据。
 完整 JobPlan 摘要统一由 `ansible.PlanDigest` 计算；CLI 依赖图不再包含 service、store、api 或 SQLite。
 
-Run 执行合同与最小读取类型位于 `internal/domain/run_*.go`，离线转换位于 `internal/runmigration`（旧解析器不进入服务器依赖图）。切换设计见 [Run 快照合同](design/run-snapshot-contract.md)。
+Run 执行合同与最小读取类型位于 `internal/domain/run_*.go`；旧离线转换工具已退役。切换设计见 [Run 快照合同](design/run-snapshot-contract.md)。

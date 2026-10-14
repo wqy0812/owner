@@ -52,9 +52,9 @@ describe("ComponentVerification", () => {
 
     renderApp('/components');
     const readiness = await screen.findByLabelText('Draft v2.2.0-rc1 发布就绪度');
-    expect(readiness).toHaveTextContent('5/5');
+    expect(readiness).toHaveTextContent('4/4');
     expect(within(readiness).queryByRole('link', { name: /Six node lab/ })).not.toBeInTheDocument();
-    expect(within(readiness).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '5');
+    expect(within(readiness).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '4');
     await userEvent.click(within(readiness).getByRole('button', { name: '安装与验证 · 已完成' }));
     expect(within(readiness).getByRole('link', { name: /Six node lab/ })).toHaveAttribute('href', '/runs?selected=run-install');
     await userEvent.click(within(readiness).getByRole('button', { name: '回退与回退后验证 · 已完成' }));
@@ -156,7 +156,7 @@ describe("ComponentVerification", () => {
 
     renderApp('/components');
     const readiness = await screen.findByLabelText('Draft v2.2.0-rc2 发布就绪度');
-    expect(readiness).toHaveTextContent('4/5');
+    expect(readiness).toHaveTextContent('3/4');
     expect(within(readiness).getByRole('button', { name: '预览影响并发布' })).toBeDisabled();
   });
 
@@ -238,14 +238,14 @@ describe("ComponentVerification", () => {
       if (url.endsWith('/component-releases/release-runtime-draft/test-plan') && init?.method === 'POST') {
         previews.push(JSON.parse(String(init.body)));
         return json({
-          environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, requiresApproval: true, planDigest: 'digest-bound-rollback', deliveryRequirements: [], steps: [
+          environmentId: 'environment-test', environmentRevisionId: 'environment-test-r1', destructive: true, highRisk: true, planDigest: 'digest-bound-rollback', deliveryRequirements: [], steps: [
             { phase: 'pre', action: 'check', actionId: 'check-before' }, { phase: 'execute', action: 'rollback', actionId: 'rollback-runtime' }, { phase: 'post', action: 'check', actionId: 'check-restored' },
-          ].map((step, index) => ({ ...step, order: index + 1, componentId: 'component-runtime', componentName: 'Runtime', releaseId: draft.id, releaseVersion: draft.version, playbook: `tasks/${step.actionId}.yml`, limit: 'runtime_nodes', needsApproval: true }))
+          ].map((step, index) => ({ ...step, order: index + 1, componentId: 'component-runtime', componentName: 'Runtime', releaseId: draft.id, releaseVersion: draft.version, playbook: `tasks/${step.actionId}.yml`, limit: 'runtime_nodes', highRisk: true }))
         });
       }
       if (url.endsWith('/component-releases/release-runtime-draft/test-runs') && init?.method === 'POST') {
         submitted = JSON.parse(String(init.body));
-        return json({ id: 'run-rollback-draft', kind: 'component_test', status: 'awaiting_approval', environmentId: 'environment-test', destructive: true });
+        return json({ id: 'run-rollback-draft', kind: 'component_test', status: 'queued', environmentId: 'environment-test', destructive: true });
       }
       if (url.endsWith('/components')) return json([{ id: 'component-runtime', name: 'Runtime', slug: 'runtime', ownerId: alice.id, layer: 'runtime_state', tags: [], latestRelease: draft, releases: [draft] }]);
       if (url.endsWith('/environments')) return json([{ id: 'environment-test', name: 'Six node test', ownerId: dave.id, status: 'ready' }]);

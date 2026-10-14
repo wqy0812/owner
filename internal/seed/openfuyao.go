@@ -335,7 +335,7 @@ func (s Seeder) seedOpenFuyaoScenarios(ctx context.Context, now time.Time) error
 		revision domain.ScenarioRevision
 	}{
 		{
-			scenario: domain.Scenario{ID: "scenario-openfuyao", Slug: "openfuyao-management-cluster", Name: "OpenFuyao Management Cluster Build", Description: "构建 OpenFuyao 管理集群；包含恢复步骤，执行前必须审批。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
+			scenario: domain.Scenario{ID: "scenario-openfuyao", Slug: "openfuyao-management-cluster", Name: "OpenFuyao Management Cluster Build", Description: "构建 OpenFuyao 管理集群；包含恢复步骤，提交前请核对风险与恢复基线。", OwnerID: ScenarioOwnerID, CreatedAt: now, UpdatedAt: now},
 			revision: domain.ScenarioRevision{ID: "scenario-openfuyao-r1", ScenarioID: "scenario-openfuyao", Revision: 1, Status: domain.RevisionDraft, EnvironmentConstraints: map[string]any{"architecture": []any{"amd64"}, "operatingSystem": []any{"Kylin"}, "ipFamily": []any{"IPv4"}}, Graph: domain.ScenarioGraph{Nodes: managerNodes, Edges: chainEdges("open-manager", managerNodes)}, CreatedAt: now},
 		},
 		{

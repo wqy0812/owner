@@ -146,8 +146,17 @@ func run() error {
 	}
 
 	address := envOr("NEWPLATFORM_ADDR", "127.0.0.1:8080")
+	handler := api.NewHandler(platform, ui.Handler(), catalogRepositories)
+	if configPath := strings.TrimSpace(os.Getenv("CLUSTERFORGE_MCP_CONFIG")); configPath != "" {
+		mcpServer, err := handler.EnableMCP(ctx, configPath, envOr("CLUSTERFORGE_MCP_TRANSFER_DIR", "./data/mcp-transfers"))
+		if err != nil {
+			return fmt.Errorf("configure MCP: %w", err)
+		}
+		defer mcpServer.Close()
+		log.Printf("ClusterForge MCP enabled at /mcp")
+	}
 	server := &http.Server{
-		Addr: address, Handler: api.NewHandler(platform, ui.Handler(), catalogRepositories),
+		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second,
 	}
 	shutdownContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

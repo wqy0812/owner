@@ -10,7 +10,7 @@ import (
 func archiveFixture(t *testing.T, logs string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for name, content := range map[string]string{"run.json": `{"id":"run-1"}`, "run_steps.json": `[]`, "approvals.json": `[]`, "logs.ndjson": logs} {
+	for name, content := range map[string]string{"run.json": `{"id":"run-1"}`, "run_steps.json": `[]`, "logs.ndjson": logs} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}

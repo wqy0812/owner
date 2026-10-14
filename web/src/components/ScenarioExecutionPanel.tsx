@@ -53,7 +53,7 @@ export function ScenarioExecutionPanel({ revision, environments, editable, canLa
                 await api.testScenario(revision.id, environmentId, input);
             else
                 await api.runScenario(revision.id, environmentId, input);
-            notify('success', `${MODE_LABELS[mode]}${testOnly ? '测试' : ''}已提交`, '运行中心可查看审批、步骤与验收结果。');
+            notify('success', `${MODE_LABELS[mode]}${testOnly ? '测试' : ''}已提交`, '运行中心可查看步骤与验收结果。');
             setPlan(undefined);
             signalRefresh(['scenarios', 'runs', 'environments', 'workbench']);
             onSubmitted?.();
@@ -95,7 +95,8 @@ export function ScenarioExecutionPanel({ revision, environments, editable, canLa
     <ModalFooter>{canLaunch && <Button className="button button--primary" disabled={busy || !plan?.ready || constraintsDirty || !!blockedReason} onClick={() => void execute()} htmlType={"button"} type="primary"><Beaker size={15}/> {testOnly ? `提交${mode === 'upgrade' ? '升级' : '安装'}测试` : mode === 'baseline_verify' ? '开始基线复核' : mode === 'upgrade' ? '提交正式升级' : '提交正式安装'}</Button>}</ModalFooter>
     {blockedReason && <p className="inline-warning" role="alert">{blockedReason}</p>}
     <StatusExplanationPanel explanation={explanation} title="场景执行被阻断"/>
-    {plan && <div className="scenario-execution-preview"><header><strong>{plan.ready ? '计划已就绪' : '计划存在阻塞'}</strong>{plan.baselineRunId && <span>环境基线 Run：{plan.baselineRunId}</span>}</header>{plan.needsApproval && <p className="inline-warning">本次执行需经环境 Owner 审批，提交后进入审批队列。</p>}<ScenarioEvidence revision={revision} installationTest={plan.installationTest} upgradeTest={plan.upgradeTest}/>{plan.issues.map((issue, index) => <p className="inline-warning" role="alert" key={`${issue.code}-${index}`}>{issue.nodeId ? `${allNodes.find(([id]) => id === issue.nodeId)?.[1] ?? issue.nodeId}：` : ''}{issue.message}</p>)}
+    {plan && <div className="scenario-execution-preview"><header><strong>{plan.ready ? '计划已就绪' : '计划存在阻塞'}</strong>{plan.baselineRunId && <span>环境基线 Run：{plan.baselineRunId}</span>}</header>{plan.highRisk && <p className="inline-warning">本次执行包含高风险操作，请核对执行计划，确认提交后直接排队。</p>}<ScenarioEvidence revision={revision} installationTest={plan.installationTest} upgradeTest={plan.upgradeTest}/>{plan.issues.map((issue, index) => <p className="inline-warning" role="alert" key={`${issue.code}-${index}`}>{issue.nodeId ? `${allNodes.find(([id]) => id === issue.nodeId)?.[1] ?? issue.nodeId}：` : ''}{issue.message}</p>)}
+      {!!plan.deliveryRequirements?.length && <section aria-label="自动交付计划"><strong>介质与镜像自动平移到环境目标</strong>{plan.deliveryRequirements.map(item => <p key={item.id}>{item.name}：{item.source} → {item.target}</p>)}</section>}
       {plan.operations.length > 0 && <div className="table-wrap"><Table dataSource={plan.operations} rowKey={op => op.nodeId + '-' + op.change} pagination={false} scroll={{x: 680}} columns={[
 {title:'节点',dataIndex:'name',key:'name'}, {title:'变化',key:'change',render:(_,op)=>CHANGE_LABELS[op.change] ?? op.change},
 {title:'来源 Release',key:'from',render:(_,op)=>op.fromReleaseId ?? '—'}, {title:'目标 Release',key:'to',render:(_,op)=>op.toReleaseId ?? '—'}

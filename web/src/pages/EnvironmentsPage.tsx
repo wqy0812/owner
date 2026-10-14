@@ -27,7 +27,7 @@ type EnvironmentVariableRow = {
     value: string;
 };
 const SCHEDULING_LABELS: Record<string, string> = {
-    idle: '调度空闲', queued: '队列等待', awaiting_approval: '等待审批', running: '执行中',
+    idle: '调度空闲', queued: '队列等待', running: '执行中',
 };
 function stable(value: unknown): string {
     if (Array.isArray(value))
@@ -341,7 +341,7 @@ export function EnvironmentsPage() {
         setRollbackExplanation(undefined);
         try {
             const run = await api.startEnvironmentRollback(selected.id, { expectedPlanDigest: rollbackPlan.planDigest, confirmEnvironmentName });
-            notify('success', '集群重置 Run 已创建', '当前处于待审批状态；请在运行中心复核风险后批准。');
+            notify('success', '集群重置 Run 已创建', '已进入执行队列；可在运行中心查看进度。');
             setRollbackOpen(false);
             setRollbackPlan(undefined);
             signalRefresh(['runs', 'environments', 'workbench']);
@@ -591,7 +591,7 @@ function ClusterRollbackModal({ environment, plan, error, explanation, busy, onR
     const [confirmation, setConfirmation] = useState('');
     const confirmed = confirmation === environment.name;
     const empty = !busy && !error && plan?.componentCount === 0;
-    return <Modal size="wide" title="重置环境" description={`目标环境：${environment.name}。恢复全部集群节点，保留 File Station 和镜像仓库。`} onClose={onClose} footer={<footer className="modal-actions"><Button className="button button--quiet" disabled={busy !== undefined} onClick={onClose} htmlType={"button"} type="default">{empty ? '关闭' : '取消'}</Button>{!empty && <Button className="button button--danger" disabled={!plan || !plan.planDigest || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)} htmlType={"button"} type="default" danger>{busy === 'submit' ? '正在锁定计划…' : '创建重置 Run（待审批）'}</Button>}</footer>}>
+    return <Modal size="wide" title="重置环境" description={`目标环境：${environment.name}。恢复全部集群节点，保留 File Station 和镜像仓库。`} onClose={onClose} footer={<footer className="modal-actions"><Button className="button button--quiet" disabled={busy !== undefined} onClick={onClose} htmlType={"button"} type="default">{empty ? '关闭' : '取消'}</Button>{!empty && <Button className="button button--danger" disabled={!plan || !plan.planDigest || !confirmed || busy !== undefined} onClick={() => onConfirm(confirmation)} htmlType={"button"} type="default" danger>{busy === 'submit' ? '正在锁定计划…' : '创建重置 Run'}</Button>}</footer>}>
     <div className="modal-body cluster-rollback-preview">
       {!empty && <div className="warning-callout"><AlertTriangle size={19}/><div><strong>重置会修改集群节点</strong><p>平台按组件安装主机组的当前成员恢复全部待恢复组件，依次执行回滚和回滚后检查。新增组成员纳入，已移出节点排除。File Station 的介质文件和镜像仓库中的镜像会保留。</p></div></div>}
       {busy === 'preview' ? <LoadingBlock label="正在校验安装来源、备份基线和 Playbook 指纹…"/> : error ? <><ErrorBlock message={error} onRetry={onRetry}/><StatusExplanationPanel explanation={explanation} title="重置操作被阻断"/></> : empty ? <EmptyState title="暂无需要重置的集群组件" description="平台没有记录需要恢复的集群安装基线或未完成操作，无需创建重置 Run。"/> : plan ? <>

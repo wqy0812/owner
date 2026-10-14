@@ -159,23 +159,6 @@ export interface PlaybookWorkspace {
   files: PlaybookWorkspaceFile[];
 }
 
-export interface ReleaseReviewPreview {
-  componentId: string;
-  componentName: string;
-  ownerId: string;
-  ownerName: string;
-  release: ComponentRelease;
-  playbooks: Array<{
-    actionId: string;
-    actionName: string;
-    actionKind: ActionDefinition['type'];
-    path: string;
-    filename: string;
-    content: string;
-    sha256: string;
-  }>;
-  previewDigest: string;
-}
 
 export interface ComponentRelease {
   definitionGeneration?: number;
@@ -188,14 +171,6 @@ export interface ComponentRelease {
   version: string;
   state: ReleaseState;
   candidate?: boolean;
-  review: {
-    status: 'not_submitted' | 'pending' | 'approved' | 'rejected';
-    contractDigest?: string;
-    submittedAt?: string;
-    reviewedBy?: string;
-    reviewedAt?: string;
-    comment?: string;
-  };
   readiness: ReleaseReadiness;
   compatibility: 'not_applicable' | 'compatible' | 'breaking';
   releaseNotes?: string;
@@ -355,7 +330,6 @@ export interface RunSummary {
   startedAt?: string;
   finishedAt?: string;
   queuePosition?: number;
-  approvalId?: string;
 }
 
 export interface RunPage {
@@ -449,8 +423,9 @@ export interface ScenarioExecutionRequest {
   idempotencyKey?: string; testOnly?: boolean;
 }
 export interface ScenarioExecutionPreview {
+  deliveryRequirements?: DeliveryRequirement[];
   scenarioRevisionId: string; environmentId: string; executionMode: ScenarioExecutionMode;
-  planDigest: string; sourceRevisionId?: string; baselineRunId?: string; ready: boolean; needsApproval?: boolean;
+  planDigest: string; sourceRevisionId?: string; baselineRunId?: string; ready: boolean; highRisk?: boolean;
   operations: Array<{ nodeId: string; name: string; change: string; fromReleaseId?: string; toReleaseId?: string }>;
   steps: Array<{ nodeId?: string; name?: string; action?: string; phase?: string; kind?: string; playbook?: string; hostGroup?: string }>;
   issues: Array<{ code: string; message: string; nodeId?: string }>;
@@ -577,7 +552,7 @@ export interface Environment {
   ownerId: string;
   ownerName?: string;
   status?: 'ready' | 'locked' | 'offline';
-  schedulingStatus?: 'idle' | 'queued' | 'awaiting_approval' | 'running';
+  schedulingStatus?: 'idle' | 'queued' | 'running';
   activeRunId?: string;
   currentRevision?: EnvironmentRevision;
   revisions?: EnvironmentRevision[];
@@ -722,7 +697,7 @@ export interface WorkExplanation {
 
 export interface WorkItem {
   id: string;
-  kind: 'component_draft' | 'component_review' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact' | 'catalog_backup';
+  kind: 'component_draft' | 'scenario_revision' | 'environment' | 'run' | 'upstream_impact' | 'catalog_backup';
   priority: WorkPriority;
   status: WorkStatus;
   title: string;
@@ -751,13 +726,11 @@ export interface Workbench {
 
 export type RunStatus =
   | 'queued'
-  | 'awaiting_approval'
   | 'running'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
-  | 'interrupted'
-  | 'rejected';
+  | 'interrupted';
 
 export interface RunStep {
  hostGroup?:string;
@@ -791,17 +764,6 @@ export interface RunBackup {
   playbookSha256: string;
 }
 
-export interface Approval {
-  id: string;
-  runId: string;
-  status: 'pending' | 'approved' | 'rejected';
-  riskReason?: string;
-  requestedAt?: string;
-  decidedAt?: string;
-  decidedBy?: string;
-  decision?: string;
-  reason?: string;
-}
 
 export interface DeliveryRequirement {
   id: string;
@@ -818,15 +780,14 @@ export interface DeliveryRequirement {
 
 export interface DeliveryDecision {
   requirementId: string;
-  mode: 'direct' | 'transfer';
-  decidedBy?: string;
-  decidedAt?: string;
+  mode: 'transfer';
+  policy?: string;
 }
 
 export interface DeliveryResult {
   requirementId: string;
-  mode: 'direct' | 'transfer';
-  status: 'pending' | 'direct' | 'reused_target' | 'transferred' | 'failed';
+  mode: 'transfer';
+  status: 'pending' | 'reused_target' | 'transferred' | 'failed';
   actualLocation?: string;
   message?: string;
   completedAt?: string;
@@ -878,7 +839,6 @@ export interface Run {
   queuePosition?: number;
   progress?: number;
   steps?: RunStep[];
-  approval?: Approval;
   purposeCounts?: {components:number;finalVerification:number;acceptance:number;total:number};
 
   resolvedParametersByNode?: Record<string, Record<string, ResolvedParameter>>;
@@ -900,7 +860,7 @@ export interface RunRetryPlan {
   startStep: number;
   skippedSteps: number;
   remainingSteps: ComponentTestPlanStep[];
-  requiresApproval: boolean;
+  highRisk: boolean;
   planDigest: string;
 }
 
@@ -935,7 +895,7 @@ export interface ComponentTestPlanStep {
   action: ActionDefinition['type'] | 'acceptance';
   playbook: string;
   limit?: string;
-  needsApproval: boolean;
+  highRisk: boolean;
   fromReleaseId?: string;
   fromReleaseVersion?: string;
   toReleaseId?: string;
@@ -950,7 +910,7 @@ export interface ComponentTestPlan {
   environmentId: string;
   environmentRevisionId: string;
   destructive: boolean;
-  requiresApproval: boolean;
+  highRisk: boolean;
   planDigest: string;
   steps: ComponentTestPlanStep[];
   deliveryRequirements: DeliveryRequirement[];
@@ -1064,15 +1024,12 @@ export const STATUS_LABELS: Record<string, string> = {
   test_passed: '测试通过',
   failed: '失败',
   queued: '排队中',
-  awaiting_approval: '等待审批',
   running: '执行中',
   succeeded: '成功',
   cancelled: '已取消',
   interrupted: '已中断',
-  rejected: '已拒绝',
   pending: '待执行',
   skipped: '已跳过',
-  approved: '已批准',
   ready: '可用',
   locked: '占用中',
   offline: '离线',

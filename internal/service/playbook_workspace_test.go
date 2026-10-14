@@ -45,7 +45,7 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 		t.Fatalf("workspace=%+v", workspace)
 	}
 	before := workspace.TreeSHA256
-	if _, err := database.DB().ExecContext(ctx, `UPDATE component_releases SET candidate=1,review_status='approved',review_contract_digest='old' WHERE id=?`, release.ID); err != nil {
+	if _, err := database.DB().ExecContext(ctx, `UPDATE component_releases SET candidate=1 WHERE id=?`, release.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := platform.catalog.SavePlaybookWorkspaceFile(ctx, owner, release.ID, "roles/helper/tasks/main.yml", []byte("---\n[]\n")); err != nil {
@@ -55,7 +55,7 @@ func TestPlaybookWorkspaceFilesAreGovernedAsOneDraftContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.PlaybookTreeSHA256 == before || updated.Candidate || updated.Review.Status != domain.ReleaseReviewNotSubmitted {
+	if updated.PlaybookTreeSHA256 == before || updated.Candidate {
 		t.Fatalf("workspace edit did not invalidate contract: %+v", updated)
 	}
 	if _, err := platform.catalog.RenamePlaybookWorkspaceFile(ctx, owner, release.ID, "templates/config.j2", "templates/runtime.conf.j2"); err != nil {

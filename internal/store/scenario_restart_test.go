@@ -68,7 +68,7 @@ func TestScenarioRestartPreservesPartialAndInvalidatesUnmutatedBaseline(t *testi
 			db, scenario, revision := scenarioLifecycleFixture(t)
 			insertScenarioSourceRun(t, db, revision, "baseline", "scenario_run", "succeeded", "install")
 			insertScenarioSourceRun(t, db, revision, "running", "scenario_test", "running", "upgrade")
-			if _, err := runfixture.CorruptSnapshot(context.Background(), db.db, `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.contract','clusterforge-run-v1') WHERE id='running'`); err != nil {
+			if _, err := runfixture.CorruptSnapshot(context.Background(), db.db, `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.contract','clusterforge-run-v2') WHERE id='running'`); err != nil {
 				t.Fatal(err)
 			}
 			mutating := ""

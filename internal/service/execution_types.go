@@ -10,11 +10,6 @@ type digestRunner interface {
 	Digest(string) (playbookSHA256, treeSHA256 string, err error)
 }
 
-type DeliveryDecisionInput struct {
-	RequirementID string `json:"requirementId"`
-	Mode          string `json:"mode"`
-}
-
 type ComponentTestMode string
 
 type RollbackVerificationKind string
@@ -58,7 +53,7 @@ type ComponentTestPlanStep struct {
 	Action                 domain.ActionKind `json:"action"`
 	Playbook               string            `json:"playbook"`
 	Limit                  string            `json:"limit,omitempty"`
-	NeedsApproval          bool              `json:"needsApproval"`
+	HighRisk               bool              `json:"highRisk"`
 	FromReleaseID          string            `json:"fromReleaseId,omitempty"`
 	FromReleaseVersion     string            `json:"fromReleaseVersion,omitempty"`
 	ToReleaseID            string            `json:"toReleaseId,omitempty"`
@@ -73,7 +68,7 @@ type ComponentTestPlan struct {
 	EnvironmentID         string                          `json:"environmentId"`
 	EnvironmentRevisionID string                          `json:"environmentRevisionId"`
 	Destructive           bool                            `json:"destructive"`
-	RequiresApproval      bool                            `json:"requiresApproval"`
+	HighRisk              bool                            `json:"highRisk"`
 	PlanDigest            string                          `json:"planDigest"`
 	Steps                 []ComponentTestPlanStep         `json:"steps"`
 	DeliveryRequirements  []domain.RunDeliveryRequirement `json:"deliveryRequirements"`

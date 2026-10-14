@@ -55,7 +55,7 @@ func TestCleanedRunLinkPreservesOriginalPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := domain.Run{ID: "cleaned-http", Kind: domain.RunComponentTest, Status: domain.RunFailed, ComponentReleaseID: "release-test-runtime-1.0.0", EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.ComponentOwnerRuntimeID, Action: domain.ActionInstall, CreatedAt: now, FinishedAt: &now, Snapshot: runfixture.Snapshot(map[string]any{})}
-	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run, nil); err != nil {
+	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run); err != nil {
 		t.Fatal(err)
 	}
 	response := f.request(http.MethodPost, "/api/v1/runs/cleanup", map[string]any{"runIds": []string{run.ID}}, f.session(seed.PlatformAdminID))

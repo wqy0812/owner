@@ -366,18 +366,16 @@ export function ScenariosPage() {
         }
     }
     const [jobPlan, setJobPlan] = useState<ComponentTestPlan>();
-    const [jobMedia, setJobMedia] = useState<Record<string, string>>({});
     const [exportReady, setExportReady] = useState(false);
-    const jobChoices = Object.entries(jobMedia).map(([requirementId, mode]) => ({ requirementId, mode }));
-    useEffect(() => { setJobPlan(undefined); setJobMedia({}); setExportReady(false); }, [testEnvironment, revision?.id]);
+    useEffect(() => { setJobPlan(undefined); setExportReady(false); }, [testEnvironment, revision?.id]);
     async function previewJob() {
         if (!revision || !testEnvironment)
             return;
         setBusy('job-preview');
         try {
-            const plan = await api.previewScenarioJob(revision.id, testEnvironment, jobChoices);
+            const plan = await api.previewScenarioJob(revision.id, testEnvironment);
             setJobPlan(plan);
-            setExportReady(plan.deliveryRequirements.every(item => !!jobMedia[item.id]));
+            setExportReady(true);
         }
         catch (reason) {
             notify('error', '计划预览失败', displayError(reason));
@@ -391,7 +389,7 @@ export function ScenariosPage() {
             return;
         setBusy('job-export');
         try {
-            const blob = await api.exportScenarioJob(revision.id, testEnvironment, jobPlan.planDigest, jobChoices);
+            const blob = await api.exportScenarioJob(revision.id, testEnvironment, jobPlan.planDigest);
             const href = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = href;
@@ -721,7 +719,7 @@ export function ScenariosPage() {
         </aside>
       </div></> : <div className="panel"><EmptyState title="暂无场景" description="请先由集群 Owner 创建一个场景。"/></div>}</div>
     </>}
-    {testOpen && revision && <Modal busy={Boolean(busy)} size="wide" title={revision.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="先预览锁定的组件、参数、环境基线与验收作业，再提交执行。" onClose={() => setTestOpen(false)}><div className="modal-body"><ScenarioExecutionPanel revision={revision} environments={environments ?? []} editable={editable} canLaunch={canLaunchRevision && !graphDirty} blockedReason={graphDirty ? '请先保存目标集群修改。' : undefined} environmentIssues={environmentIssues} onSubmitted={() => setTestOpen(false)} onSaved={() => signalRefresh('scenarios')}/><details className="scenario-job-export"><summary>独立安装作业包</summary><Field label={"导出目标环境"}><Select value={testEnvironment} onChange={(selectedValue) => setTestEnvironment(selectedValue)} popupMatchSelectWidth={true}><Select.Option value="">请选择</Select.Option>{environments?.map(environment => <Select.Option key={environment.id} value={environment.id} disabled={environmentIssues(environment).length > 0}>{environment.name}</Select.Option>)}</Select></Field>{jobPlan && <><JobPlanPreview plan={jobPlan}/>{jobPlan.deliveryRequirements.map(item => <Field key={item.id} label={<>导出介质来源：{item.name}</>}><Select value={jobMedia[item.id] ?? ''} onChange={(selectedValue) => { setJobMedia(current => ({ ...current, [item.id]: selectedValue })); setExportReady(false); }} popupMatchSelectWidth={true}><Select.Option value="">请选择后重新预览</Select.Option><Select.Option value="direct">直接使用锁定来源</Select.Option>{item.transferAvailable && <Select.Option value="transfer">平移到环境目标并校验</Select.Option>}</Select></Field>)}</>}<div className="scenario-inline-actions"><Button className="button button--secondary" disabled={orderBlocked || !testEnvironment || !!busy} onClick={() => void previewJob()} htmlType={"button"} type="default">预览导出作业</Button><Button className="button button--quiet" disabled={!jobPlan || !exportReady || !!busy} onClick={() => void exportJob()} htmlType={"button"} type="default">导出独立作业包</Button></div></details></div></Modal>}
+    {testOpen && revision && <Modal busy={Boolean(busy)} size="wide" title={revision.state === 'released' ? '运行已发布场景' : '场景完整测试'} description="先预览锁定的组件、参数、环境基线与验收作业，再提交执行。" onClose={() => setTestOpen(false)}><div className="modal-body"><ScenarioExecutionPanel revision={revision} environments={environments ?? []} editable={editable} canLaunch={canLaunchRevision && !graphDirty} blockedReason={graphDirty ? '请先保存目标集群修改。' : undefined} environmentIssues={environmentIssues} onSubmitted={() => setTestOpen(false)} onSaved={() => signalRefresh('scenarios')}/><details className="scenario-job-export"><summary>独立安装作业包</summary><Field label={"导出目标环境"}><Select value={testEnvironment} onChange={(selectedValue) => setTestEnvironment(selectedValue)} popupMatchSelectWidth={true}><Select.Option value="">请选择</Select.Option>{environments?.map(environment => <Select.Option key={environment.id} value={environment.id} disabled={environmentIssues(environment).length > 0}>{environment.name}</Select.Option>)}</Select></Field>{jobPlan && <JobPlanPreview plan={jobPlan}/>}<div className="scenario-inline-actions"><Button className="button button--secondary" disabled={orderBlocked || !testEnvironment || !!busy} onClick={() => void previewJob()} htmlType={"button"} type="default">预览导出作业</Button><Button className="button button--quiet" disabled={!jobPlan || !exportReady || !!busy} onClick={() => void exportJob()} htmlType={"button"} type="default">导出独立作业包</Button></div></details></div></Modal>}
     {createOpen && <ScenarioCreateModal scenarios={scenarios ?? []} initialSourceRevisionId={forkSource} onClose={() => setCreateOpen(false)} onDone={scenario => { setCreateOpen(false); setSection('target'); setSearchParams({ selected: scenario.id }); signalRefresh('scenarios'); }}/>}
     {clonePlan && <Modal busy={Boolean(busy)} title="新增版本预览" description="仅从本场景已发布且正式运行、业务验收均成功的版本创建。" onClose={() => setClonePlan(undefined)} footer={<footer className="modal-actions"><Button className="button button--quiet" onClick={() => setClonePlan(undefined)} htmlType={"button"} type="default">取消</Button><Button className="button button--primary" disabled={busy === 'clone'} onClick={() => void createVersion()} htmlType={"button"} type="primary">确认新增版本</Button></footer>}><div className="modal-body"><p>r{clonePlan.sourceRevision} → r{clonePlan.nextRevision} 草稿</p><BranchScope scope={revision?.environmentConstraints} full/><p>新版本沿用当前分支的适配范围。</p><p>{clonePlan.nodeCount} 个节点 · {clonePlan.edgeCount} 条依赖与编排顺序</p><p>锁定来源正式 Run：{clonePlan.sourceRunId}</p><p>新版本需分别通过安装测试、升级测试及完整业务验收。</p></div></Modal>}
     {importOpen && <ScenarioTemplateModal onClose={() => setImportOpen(false)} onImport={importTemplate}/>}

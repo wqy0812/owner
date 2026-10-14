@@ -138,11 +138,10 @@ type runLogSummary struct {
 	CreatedAt             time.Time         `json:"createdAt"`
 	StartedAt             *time.Time        `json:"startedAt,omitempty"`
 	FinishedAt            *time.Time        `json:"finishedAt,omitempty"`
-	Approval              *domain.Approval  `json:"approval,omitempty"`
 }
 
 func summarizeRunLogs(r domain.RunReadModel) runLogSummary {
-	return runLogSummary{ID: r.ID, Kind: r.Kind, Status: r.Status, RequestedBy: r.RequestedBy, EnvironmentID: r.EnvironmentID, EnvironmentRevisionID: r.EnvironmentRevisionID, ComponentReleaseID: r.ComponentReleaseID, ScenarioRevisionID: r.ScenarioRevisionID, Action: r.Action, Destructive: r.Destructive, ArtifactDigest: r.ArtifactDigest, RetryOfRunID: r.RetryOfRunID, RetryRootRunID: r.RetryRootRunID, RetryAttempt: r.RetryAttempt, RetryStartStep: r.RetryStartStep, Error: r.Error, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Approval: r.Approval}
+	return runLogSummary{ID: r.ID, Kind: r.Kind, Status: r.Status, RequestedBy: r.RequestedBy, EnvironmentID: r.EnvironmentID, EnvironmentRevisionID: r.EnvironmentRevisionID, ComponentReleaseID: r.ComponentReleaseID, ScenarioRevisionID: r.ScenarioRevisionID, Action: r.Action, Destructive: r.Destructive, ArtifactDigest: r.ArtifactDigest, RetryOfRunID: r.RetryOfRunID, RetryRootRunID: r.RetryRootRunID, RetryAttempt: r.RetryAttempt, RetryStartStep: r.RetryStartStep, Error: r.Error, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt}
 }
 
 type RunLogBundle struct {

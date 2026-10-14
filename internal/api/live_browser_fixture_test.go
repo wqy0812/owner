@@ -92,7 +92,7 @@ func TestLiveAPIComponentFixture(t *testing.T) {
 		if status == domain.RunFailed {
 			run.Error = "浏览器测试数据：后置检查未通过，请检查完整日志和诊断信息。"
 		}
-		if err := testutil.InsertRunRecord(ctx, db.DB(), run, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, db.DB(), run); err != nil {
 			t.Fatal(err)
 		}
 		for j := 0; j < 3; j++ {

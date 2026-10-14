@@ -2,7 +2,6 @@ import { Button } from 'antd';
 import { Archive, CheckCircle2, Container, Rocket } from 'lucide-react';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { formatTime, StatusPill } from '../../../components/Primitives';
 import { useApp } from '../../../context/AppContext';
 import type { ComponentRelease, ReleaseEvidenceSummary } from '../../../types/domain';
 import { environmentConstraintDimensions, environmentConstraintGroups } from '../../../types/environmentConstraints';
@@ -14,30 +13,10 @@ export function CompatibilityBadge({ release }: {
     const label = release.compatibility === 'not_applicable' ? '全新基线' : release.compatibility === 'compatible' ? '兼容升级' : '破坏性升级';
     return <span className={release.compatibility === 'breaking' ? 'breaking-badge' : 'release-line-badge'}>{label}</span>;
 }
-export function ReleaseReviewDetails({ release }: {
-    release: ComponentRelease;
-}) {
-    const { users } = useApp();
-    const { review } = release;
-    if (review.status !== 'rejected')
-        return null;
-    const reviewer = users.find((item) => item.id === review.reviewedBy)?.name ?? review.reviewedBy;
-    return <section className="contract-section release-review-details" aria-label="平台合同审批意见">
-    <h3>平台合同审批意见</h3>
-    <div className="release-detail-grid">
-      <div><span>审核结果</span><StatusPill status={review.status}>已驳回</StatusPill></div>
-      <div><span>审批人</span><strong>{reviewer || '—'}</strong></div>
-      <div><span>提交时间</span><strong>{review.submittedAt ? formatTime(review.submittedAt) : '—'}</strong></div>
-      <div><span>审批时间</span><strong>{review.reviewedAt ? formatTime(review.reviewedAt) : '—'}</strong></div>
-    </div>
-    <p className="release-review-comment">{review.comment?.trim() ? review.comment : '平台 Owner 未填写审批意见。'}</p>
-  </section>;
-}
-export function DraftReadiness({ release, evidence, onContract, onReview, onLifecycle, onImage, onArtifact, onValidate, onPublish }: {
+export function DraftReadiness({ release, evidence, onContract, onLifecycle, onImage, onArtifact, onValidate, onPublish }: {
     release: ComponentRelease;
     evidence?: ReleaseEvidenceSummary;
     onContract: () => void;
-    onReview: () => void;
     onLifecycle: () => void;
     onImage: () => void;
     onArtifact: () => void;
@@ -56,7 +35,7 @@ export function DraftReadiness({ release, evidence, onContract, onReview, onLife
             : blocker.code === 'rollback_evidence_missing' ? 'rollback'
                 : blocker.code === 'evolution_evidence_missing' ? 'transition'
                     : blocker.actionUrl.includes('action=lifecycle') || ['lifecycle_action_missing', 'action_checks_invalid', 'playbook_workspace_invalid'].includes(blocker.code) ? 'lifecycle'
-                        : blocker.code.includes('review') ? 'review' : 'contract';
+                        : 'contract';
         blockersByStep.set(step, [...(blockersByStep.get(step) ?? []), blocker]);
     }
     const steps: Array<{
@@ -69,7 +48,6 @@ export function DraftReadiness({ release, evidence, onContract, onReview, onLife
     }> = [
         { id: 'contract', name: 'Release 合同', done: true, detail: <p>{release.dependencies?.length ?? 0} 项依赖 · {release.parameters?.length ?? 0} 个参数</p>, action: '编辑合同', onAction: onContract },
         { id: 'lifecycle', name: '生命周期动作', done: true, detail: <p>{lifecycle.completed}/{lifecycle.total}：{lifecycle.labels}{evolution ? '；升级能力与回退目标以当前合同检查为准。' : ''}</p>, action: '配置动作', onAction: onLifecycle },
-        { id: 'review', name: '平台合同审核', done: release.review.status === 'approved', detail: <p>{release.review.status === 'approved' ? '当前参数、Action 与环境绑定已批准' : release.review.status === 'pending' ? '等待平台 Owner 审核' : release.review.status === 'rejected' ? `已驳回：${release.review.comment || '请修改后重提'}` : '请在版本列表提交审核'}</p>, ...(release.review.status === 'rejected' ? { action: '查看审批意见', onAction: onReview } : {}) },
         ...(evolution ? [
             { id: 'transition', name: '升级与回退闭环', done: Boolean(release.readiness.transitionEvidenceRunId), detail: <EvidenceLink run={transition}/>, action: '环境验证', onAction: onValidate },
         ] : [

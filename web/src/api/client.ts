@@ -5,7 +5,6 @@ import type { ComponentUsage } from '../types/componentUsage';
 import type {
   ComponentSummary, EvidenceSummary, ReleaseEvidenceSummary, RunPage, RunSummary,
   ActionDefinition,
-  Approval,
   AuditEvent,
   CandidateReleaseSet,
   CatalogBackupResult,
@@ -42,7 +41,6 @@ import type {
   PlaybookFile,
   PlaybookWorkspace,
   PlaybookWorkspaceFile,
-  ReleaseReviewPreview,
   PlatformOption,
   PlatformOptionCategory,
   Run,
@@ -173,7 +171,7 @@ type LooseRecord = Record<string, unknown>;
 const RELEASE_STATES = ['draft', 'released', 'deprecated'] as const;
 const COMPONENT_LAYERS = ['host_foundation', 'runtime_state', 'orchestration_core', 'cluster_service', 'observability_management', 'platform_extension'] as const;
 const ACTION_TYPES = ['check', 'inspect', 'preflight', 'install', 'configure', 'upgrade', 'verify', 'rollback', 'uninstall'] as const;
-const RUN_STATUSES = ['queued', 'awaiting_approval', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted', 'rejected'] as const;
+const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'] as const;
 const STEP_STATUSES = [...RUN_STATUSES, 'pending', 'skipped'] as const;
 const CREDENTIAL_TYPES = ['sshKeyPath', 'envVarRef'] as const;
 const IMAGE_BUILD_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'] as const;
@@ -392,17 +390,6 @@ function normalizeRelease(raw: LooseRecord): ComponentRelease {
     state,
     definitionGeneration: optionalNumber(raw, "definitionGeneration"),
     candidate: optionalBoolean(raw, 'candidate'),
-    review: (() => {
-      const review = requireRecord(raw.review, 'review');
-      return {
-        status: requireEnum(review, ['not_submitted', 'pending', 'approved', 'rejected'] as const, 'status'),
-        contractDigest: optionalString(review, 'contractDigest'),
-        submittedAt: optionalString(review, 'submittedAt'),
-        reviewedBy: optionalString(review, 'reviewedBy'),
-        reviewedAt: optionalString(review, 'reviewedAt'),
-        comment: optionalString(review, 'comment'),
-      };
-    })(),
     readiness: normalizeReadiness(requireRecord(raw.readiness, 'readiness')),
     compatibility: requireEnum(raw, ['not_applicable', 'compatible', 'breaking'] as const, 'compatibility'),
     releaseNotes: optionalString(raw, 'releaseNotes'),
@@ -558,7 +545,7 @@ function normalizeEvidenceGroup(raw: LooseRecord): ReleaseEvidenceSummary {
 }
 function normalizeRunSummary(raw: LooseRecord): RunSummary {
   return {
-    archiveStatus: optionalString(raw,'archiveStatus'), archivedAt: optionalString(raw,'archivedAt'), archiveSizeBytes: optionalNumber(raw,'archiveSizeBytes'), id: requireString(raw, 'id'), kind: optionalEnum(raw, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'), name: requireString(raw, 'name'), status: requireEnum(raw, RUN_STATUSES, 'status'), environmentId: requireString(raw, 'environmentId'), environmentName: requireString(raw, 'environmentName'), createdAt: requireString(raw, 'createdAt'), startedAt: optionalString(raw, 'startedAt'), finishedAt: optionalString(raw, 'finishedAt'), queuePosition: optionalNumber(raw, 'queuePosition'), approvalId: optionalString(raw, 'approvalId'), action: optionalString(raw, 'action') ? optionalEnum(raw, ACTION_TYPES, 'action') : undefined, componentReleaseId: optionalString(raw, 'componentReleaseId'), componentName: optionalString(raw, 'componentName'), scenarioId: optionalString(raw, 'scenarioId'), scenarioName: optionalString(raw, 'scenarioName') };
+    archiveStatus: optionalString(raw,'archiveStatus'), archivedAt: optionalString(raw,'archivedAt'), archiveSizeBytes: optionalNumber(raw,'archiveSizeBytes'), id: requireString(raw, 'id'), kind: optionalEnum(raw, ['component_test', 'scenario_test', 'scenario_run', 'environment_rollback'] as const, 'kind'), name: requireString(raw, 'name'), status: requireEnum(raw, RUN_STATUSES, 'status'), environmentId: requireString(raw, 'environmentId'), environmentName: requireString(raw, 'environmentName'), createdAt: requireString(raw, 'createdAt'), startedAt: optionalString(raw, 'startedAt'), finishedAt: optionalString(raw, 'finishedAt'), queuePosition: optionalNumber(raw, 'queuePosition'), action: optionalString(raw, 'action') ? optionalEnum(raw, ACTION_TYPES, 'action') : undefined, componentReleaseId: optionalString(raw, 'componentReleaseId'), componentName: optionalString(raw, 'componentName'), scenarioId: optionalString(raw, 'scenarioId'), scenarioName: optionalString(raw, 'scenarioName') };
 }
 
 function normalizePosition(raw: LooseRecord): { x: number; y: number } {
@@ -622,9 +609,10 @@ function normalizeScenarioAcceptance(raw: LooseRecord): ScenarioAcceptance {
     bindings: requireRecords(raw, 'bindings').map(normalizeScenarioBinding), workspace: normalizeWorkspace(requireRecord(raw.workspace, 'acceptance workspace')) };
 }
 function normalizeScenarioExecution(raw: LooseRecord): ScenarioExecutionPreview {
-  return { scenarioRevisionId: requireString(raw, 'scenarioRevisionId'), environmentId: requireString(raw, 'environmentId'),
+  return {
+    deliveryRequirements: optionalRecords(raw, 'deliveryRequirements')?.map(normalizeDeliveryRequirement), scenarioRevisionId: requireString(raw, 'scenarioRevisionId'), environmentId: requireString(raw, 'environmentId'),
     executionMode: requireEnum(raw, ['install', 'upgrade', 'baseline_verify'] as const, 'executionMode'),
-    planDigest: requireString(raw, 'planDigest'), sourceRevisionId: optionalString(raw, 'sourceRevisionId'), baselineRunId: optionalString(raw, 'baselineRunId'), ready: requireBoolean(raw, 'ready'), needsApproval: optionalBoolean(raw, 'needsApproval'),
+    planDigest: requireString(raw, 'planDigest'), sourceRevisionId: optionalString(raw, 'sourceRevisionId'), baselineRunId: optionalString(raw, 'baselineRunId'), ready: requireBoolean(raw, 'ready'), highRisk: optionalBoolean(raw, 'highRisk'),
     operations: (optionalRecords(raw, 'operations') ?? []).map(item => ({ nodeId: requireString(item, 'nodeId'), name: requireString(item, 'name'), change: requireString(item, 'change'), fromReleaseId: optionalString(item, 'fromReleaseId'), toReleaseId: optionalString(item, 'toReleaseId') })),
     steps: (optionalRecords(raw, 'steps') ?? []).map(item => ({ nodeId: optionalString(item, 'nodeId'), name: optionalString(item, 'name'), action: optionalString(item, 'action'), phase: optionalString(item, 'stage') || optionalString(item, 'phase'), kind: optionalString(item, 'sourceType'), playbook: optionalString(item, 'playbook'), hostGroup: optionalString(item, 'limit') || optionalString(item, 'hostGroup') })),
     issues: (optionalRecords(raw, 'issues') ?? []).map(item => ({ code: requireString(item, 'code'), message: requireString(item, 'message'), nodeId: optionalString(item, 'nodeId') })),
@@ -773,7 +761,7 @@ function normalizeEnvironment(raw: LooseRecord): Environment {
     ownerId: requireString(raw, 'ownerId'),
     ownerName: optionalString(raw, 'ownerName'),
     status: optionalEnum(raw, ['ready', 'locked', 'offline'] as const, 'status'),
-    schedulingStatus: optionalEnum(raw, ['idle', 'queued', 'awaiting_approval', 'running'] as const, 'schedulingStatus'),
+    schedulingStatus: optionalEnum(raw, ['idle', 'queued', 'running'] as const, 'schedulingStatus'),
     activeRunId: optionalString(raw, 'activeRunId'),
     currentRevision: revision ? normalizeEnvironmentRevision(revision) : undefined,
     revisions,
@@ -826,19 +814,6 @@ function normalizeRunStep(raw: LooseRecord): RunStep {
   };
 }
 
-function normalizeApproval(raw: LooseRecord): Approval {
-  return {
-    id: requireString(raw, 'id'),
-    runId: requireString(raw, 'runId'),
-    status: requireEnum(raw, ['pending', 'approved', 'rejected'] as const, 'status'),
-    riskReason: optionalString(raw, 'riskReason'),
-    requestedAt: optionalString(raw, 'requestedAt'),
-    decidedAt: optionalString(raw, 'decidedAt'),
-    decidedBy: optionalString(raw, 'decidedBy'),
-    decision: optionalString(raw, 'decision'),
-    reason: optionalString(raw, 'reason'),
-  };
-}
 
 function normalizeDeliveryRequirement(raw: LooseRecord): DeliveryRequirement {
   return {
@@ -852,15 +827,15 @@ function normalizeDeliveryRequirement(raw: LooseRecord): DeliveryRequirement {
 
 function normalizeDeliveryDecision(raw: LooseRecord): DeliveryDecision {
   return {
-    requirementId: requireString(raw, 'requirementId'), mode: requireEnum(raw, ['direct', 'transfer'] as const, 'mode'),
-    decidedBy: optionalString(raw, 'decidedBy'), decidedAt: optionalString(raw, 'decidedAt'),
+    requirementId: requireString(raw, 'requirementId'), mode: requireEnum(raw, ['transfer'] as const, 'mode'),
+    policy: optionalString(raw, 'policy'),
   };
 }
 
 function normalizeDeliveryResult(raw: LooseRecord): DeliveryResult {
   return {
-    requirementId: requireString(raw, 'requirementId'), mode: requireEnum(raw, ['direct', 'transfer'] as const, 'mode'),
-    status: requireEnum(raw, ['pending', 'direct', 'reused_target', 'transferred', 'failed'] as const, 'status'),
+    requirementId: requireString(raw, 'requirementId'), mode: requireEnum(raw, ['transfer'] as const, 'mode'),
+    status: requireEnum(raw, ['pending', 'reused_target', 'transferred', 'failed'] as const, 'status'),
     actualLocation: optionalString(raw, 'actualLocation'), message: optionalString(raw, 'message'), completedAt: optionalString(raw, 'completedAt'),
   };
 }
@@ -870,7 +845,6 @@ function normalizeRun(raw: LooseRecord): Run {
   const counts = optionalRecord(source,'purposeCounts');
   const purposeCounts = counts ? {components:requireNumber(counts,'components'),finalVerification:requireNumber(counts,'finalVerification'),acceptance:requireNumber(counts,'acceptance'),total:requireNumber(counts,'total')} : undefined;
   const steps = optionalRecords(source, 'steps')?.map(normalizeRunStep);
-  const approval = optionalRecord(source, 'approval');
   const backups = optionalRecords(source, 'backups')?.map((backup) => ({
     nodeId: optionalString(backup, 'nodeId'),
     componentId: requireString(backup, 'componentId'),
@@ -921,7 +895,6 @@ function normalizeRun(raw: LooseRecord): Run {
     queuePosition: optionalNumber(source, 'queuePosition'),
     progress: optionalNumber(source, 'progress'),
     steps,
-    approval: approval ? normalizeApproval(approval) : undefined,
     resolvedParametersByNode: optionalRecord(source, 'resolvedParametersByNode') as Run['resolvedParametersByNode'],
     backups,
     artifactTransfers,
@@ -948,7 +921,7 @@ function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
     action: requireEnum(step, [...ACTION_TYPES, 'acceptance'] as const, 'action'),
     playbook: requireString(step, 'playbook'),
     limit: optionalString(step, 'limit'),
-    needsApproval: requireBoolean(step, 'needsApproval'),
+    highRisk: requireBoolean(step, 'highRisk'),
     fromReleaseId: optionalString(step, 'fromReleaseId'),
     fromReleaseVersion: optionalString(step, 'fromReleaseVersion'),
     toReleaseId: optionalString(step, 'toReleaseId'),
@@ -962,7 +935,7 @@ function normalizeComponentTestPlan(raw: LooseRecord): ComponentTestPlan {
     environmentId: requireString(source, 'environmentId'),
     environmentRevisionId: requireString(source, 'environmentRevisionId'),
     destructive: requireBoolean(source, 'destructive'),
-    requiresApproval: requireBoolean(source, 'requiresApproval'),
+    highRisk: requireBoolean(source, 'highRisk'),
     planDigest: requireString(source, 'planDigest'),
     steps,
     deliveryRequirements: requireRecords(source, 'deliveryRequirements').map(normalizeDeliveryRequirement),
@@ -1060,7 +1033,7 @@ function normalizeWorkItem(item: LooseRecord): Workbench['items'][number] {
       const subject = requireRecord(field(item, 'subject'), 'work item subject');
       return {
         id: requireString(item, 'id'),
-        kind: requireEnum(item, ['component_draft', 'component_review', 'scenario_revision', 'environment', 'run', 'upstream_impact', 'catalog_backup'] as const, 'kind'),
+        kind: requireEnum(item, ['component_draft', 'scenario_revision', 'environment', 'run', 'upstream_impact', 'catalog_backup'] as const, 'kind'),
         priority: requireEnum(item, ['critical', 'high', 'normal', 'info'] as const, 'priority'),
         status: requireEnum(item, ['blocked', 'action_required', 'in_progress', 'attention'] as const, 'status'),
         title: requireString(item, 'title'),
@@ -1456,26 +1429,6 @@ export const api = {
   async setReleaseCandidate(releaseId: string, candidate: boolean) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/candidate`, { candidate }));
   },
-  async submitReleaseReview(releaseId: string) {
-    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/review-submission`));
-  },
-  async previewReleaseReview(releaseId: string, signal?: AbortSignal): Promise<ReleaseReviewPreview> {
-    const raw = requireRecord(unwrap(await get<unknown>(`/component-releases/${releaseId}/review-preview`, signal)), 'release review preview');
-    return {
-      componentId: requireString(raw, 'componentId'), componentName: requireString(raw, 'componentName'),
-      ownerId: requireString(raw, 'ownerId'), ownerName: requireString(raw, 'ownerName'),
-      release: normalizeRelease(requireRecord(field(raw, 'release'), 'release')),
-      playbooks: requireRecords(raw, 'playbooks').map((playbook) => ({
-        actionId: requireString(playbook, 'actionId'), actionName: requireString(playbook, 'actionName'),
-        actionKind: requireEnum(playbook, ACTION_TYPES, 'actionKind'), path: requireString(playbook, 'path'),
-        filename: requireString(playbook, 'filename'), content: requireString(playbook, 'content'), sha256: requireString(playbook, 'sha256'),
-      })),
-      previewDigest: requireString(raw, 'previewDigest'),
-    };
-  },
-  async decideReleaseReview(releaseId: string, decision: 'approve' | 'reject', comment: string, expectedPreviewDigest: string) {
-    return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/review-decision`, { decision, comment, expectedPreviewDigest }));
-  },
   async deprecateRelease(releaseId: string) {
     return normalizeReleaseActionResponse(await post<unknown>(`/component-releases/${releaseId}/deprecate`));
   },
@@ -1591,11 +1544,11 @@ export const api = {
       })),
     };
   },
-  async previewScenarioJob(revisionId:string,environmentId:string,deliveryDecisions:Array<{requirementId:string;mode:string}>=[]):Promise<ComponentTestPlan> {
-    return normalizeComponentTestPlan(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/job-plan`,{environmentId,deliveryDecisions})),'Job plan'));
+  async previewScenarioJob(revisionId:string,environmentId:string):Promise<ComponentTestPlan> {
+    return normalizeComponentTestPlan(requireRecord(unwrap(await post<unknown>(`/scenario-revisions/${revisionId}/job-plan`,{environmentId})),'Job plan'));
   },
-  async exportScenarioJob(revisionId:string,environmentId:string,expectedPlanDigest:string,deliveryDecisions:Array<{requirementId:string;mode:string}>=[]) {
-    return download(`/scenario-revisions/${revisionId}/job-bundle`,{environmentId,expectedPlanDigest,deliveryDecisions});
+  async exportScenarioJob(revisionId:string,environmentId:string,expectedPlanDigest:string) {
+    return download(`/scenario-revisions/${revisionId}/job-bundle`,{environmentId,expectedPlanDigest});
   },
   runJobDownloadURL(runId:string, verified = false) { return `${API_ROOT}/runs/${encodeURIComponent(runId)}/job-bundle${verified ? "?verified=true" : ""}`; },
   async testScenario(revisionId: string, environmentId: string, execution?: Omit<ScenarioExecutionRequest, 'environmentId'>) {
@@ -1724,9 +1677,6 @@ export const api = {
     const raw = requireRecord(await get<unknown>(`/runs?${query}`, signal), 'run page');
     return { items: requireRecords(raw, 'items').map(normalizeRunSummary), page: requireNumber(raw, 'page'), pageSize: requireNumber(raw, 'pageSize'), total: requireNumber(raw, 'total') };
   },
-  async batchApprovalCandidates(signal?: AbortSignal): Promise<RunSummary[]> {
-    return unwrapList(await get<unknown>('/approvals/batch-candidates', signal)).map((item) => normalizeRunSummary(requireRecord(item, 'approval candidate')));
-  },
   async run(id: string, signal?: AbortSignal) {
     return normalizeRun(requireRecord(unwrap(await get<unknown>(`/runs/${id}`, signal)), 'run'));
   },
@@ -1756,17 +1706,6 @@ export const api = {
   },
   async retryRun(id: string, expectedPlanDigest: string) {
     return normalizeRun(requireRecord(unwrap(await post<unknown>(`/runs/${id}/retry-runs`, { expectedPlanDigest })), 'run'));
-  },
-  async approve(id: string, reason = '', deliveryDecisions: Array<Pick<DeliveryDecision, 'requirementId' | 'mode'>> = []) {
-	return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/approve`, { reason, deliveryDecisions })), 'run'));
-  },
-  async reject(id: string, reason = '') {
-	return normalizeRun(requireRecord(normalizeOptionalData(await post<unknown>(`/approvals/${id}/reject`, { reason })), 'run'));
-  },
-  async batchDecideApprovals(approvalIds: string[], decision: 'approved' | 'rejected', reason: string) {
-    const value = unwrap(await post<unknown>('/approvals/batch', { approvalIds, decision, reason }));
-    if (!Array.isArray(value)) throw invalidResponse(200, '平台 API 返回了无效的批量审批结果。');
-    return value.map((item) => normalizeRun(requireRecord(item, 'run')));
   },
   async notifications(signal?: AbortSignal) {
     return unwrapList(await get<unknown>('/notifications', signal)).map((item) => normalizeNotification(requireRecord(item, 'notification')));

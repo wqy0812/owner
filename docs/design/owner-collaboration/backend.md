@@ -12,11 +12,11 @@
 
 | 当前代码入口 | 当前职责 | 目标调整 |
 | --- | --- | --- |
-| [release_review.go](../../../internal/service/release_review.go) | 组件合同人工审核 | 停止新审核写入，解除候选和发布的人工审核条件 |
+| [release_review.go](../../../internal/service/components.go) | 组件合同人工审核 | 停止新审核写入，解除候选和发布的人工审核条件 |
 | [components.go](../../../internal/service/components.go)、[logic.go](../../../internal/service/logic.go) | 发布／废弃影响和精确依赖遍历 | 扩展为可追溯的变更范围、在用历史覆盖及验证目标 |
 | [release_coordinator.go](../../../internal/service/release_coordinator.go) | 组件和场景候选联合发布 | 接入统一变更门禁，校验全部影响方及借用归还 |
 | [plan_builder.go](../../../internal/service/plan_builder.go)、[run_creator.go](../../../internal/service/run_creator.go) | 预览、计划锁定及创建 | 校验环境使用权，入队前完成介质决定和授权回执 |
-| [approval_service.go](../../../internal/service/approval_service.go) | Run 批准／拒绝及取消 | 退役新执行审批；取消仍作为独立执行控制保留 |
+| [run_cancellation.go](../../../internal/service/run_cancellation.go) | Run 批准／拒绝及取消 | 退役新执行审批；取消仍作为独立执行控制保留 |
 | [lifecycle_recorder.go](../../../internal/service/lifecycle_recorder.go)、[scenario_execution.go](../../../internal/store/scenario_execution.go) | 安装及场景基线维护 | 加入借用前基线保护、受控恢复和归还复核 |
 | [image_builds.go](../../../internal/service/image_builds.go)、[job_exports.go](../../../internal/service/job_exports.go) | 环境镜像构建和独立作业导出 | 覆盖授权及占用检查，关闭非 Run 执行旁路 |
 | [schema.sql](../../../internal/store/schema.sql) | 关系、快照冻结及并发约束 | 新增协作事实表和原子约束，保留历史证据 |

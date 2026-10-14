@@ -143,8 +143,8 @@ func (b *ActionPlanner) lockAction(component domain.Component, nodeID string, re
 		Playbook: action.Playbook, Tags: append([]string(nil), action.Tags...),
 		Limit: action.HostGroup, Variables: cloneMap(variables),
 		RequiredCredentials: append([]string(nil), action.RequiredCredentials...), TimeoutSeconds: action.TimeoutSeconds,
-		NeedsApproval: action.NeedsApproval(),
-		RetrySafe:     action.Kind == domain.ActionCheck || action.Idempotent, Become: action.Become,
+		HighRisk:  action.HighRisk(),
+		RetrySafe: action.Kind == domain.ActionCheck || action.Idempotent, Become: action.Become,
 	}
 	return step, nil
 }

@@ -8,55 +8,7 @@ import (
 	"time"
 
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/seed"
 )
-
-func TestReleaseReviewIncludesParameterlessReleaseAndInvalidatesOnContractChange(t *testing.T) {
-	ctx := context.Background()
-	platform, database := readinessTestPlatform(t)
-	owner := domain.User{ID: "component-owner", Name: "Owner", Role: domain.RoleComponentOwner}
-	admin := domain.User{ID: seed.PlatformAdminID, Name: "Platform Admin", Role: domain.RolePlatformAdmin}
-	now := time.Now().UTC()
-	release := domain.ComponentRelease{
-		ID: "release-review", ComponentID: "component-1", LineID: "line-review", LineName: "Review",
-		Version: "1.0.0", Status: domain.ReleaseDraft, Compatibility: domain.CompatibilityNotApplicable,
-		RiskLevel: domain.RiskLow, EnvironmentConstraints: map[string]any{}, CreatedAt: now,
-	}
-	if err := database.CreateComponentRelease(ctx, release); err != nil {
-		t.Fatal(err)
-	}
-	pending, err := platform.Catalog().SubmitReleaseReview(ctx, owner, release.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pending.Review.Status != domain.ReleaseReviewPending || pending.Review.ContractDigest == "" {
-		t.Fatalf("submitted review=%+v", pending.Review)
-	}
-	if _, err := platform.Catalog().DecideReleaseReview(ctx, owner, release.ID, true, "", ""); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("component owner review decision error=%v", err)
-	}
-	preview, err := platform.Catalog().PreviewReleaseReview(ctx, admin, release.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	approved, err := platform.Catalog().DecideReleaseReview(ctx, admin, release.ID, true, "contract checked", preview.PreviewDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if approved.Review.Status != domain.ReleaseReviewApproved || approved.Review.ReviewedBy != admin.ID {
-		t.Fatalf("approved review=%+v", approved.Review)
-	}
-	changed, err := platform.catalog.updateReleaseContract(ctx, owner, release.ID, []domain.ParameterDefinition{{
-		Name: "installRoot", Description: "install root", Type: domain.ParameterTypeString,
-		Visibility: domain.ParameterInternal, ValueProvider: domain.ParameterProviderComponentOwner, FixedValue: "/opt/runtime",
-	}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed.Review.Status != domain.ReleaseReviewNotSubmitted || changed.Review.ContractDigest != "" || changed.Candidate {
-		t.Fatalf("contract change retained review=%+v candidate=%t", changed.Review, changed.Candidate)
-	}
-}
 
 func TestScenarioParameterOverviewGroupsRepeatedNodesAndGraphSaveIsAtomic(t *testing.T) {
 	ctx := context.Background()

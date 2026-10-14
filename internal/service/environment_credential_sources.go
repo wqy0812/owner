@@ -25,7 +25,7 @@ type CredentialDeclarationSource struct {
 }
 
 func configurationSourceVisible(viewer domain.User, component domain.Component, release domain.ComponentRelease) bool {
-	return viewer.Role == domain.RolePlatformAdmin || (viewer.Role == domain.RoleComponentOwner && component.OwnerID == viewer.ID) || release.Status == domain.ReleaseReleased || release.IsApprovedCandidate()
+	return viewer.Role == domain.RolePlatformAdmin || (viewer.Role == domain.RoleComponentOwner && component.OwnerID == viewer.ID) || release.Status == domain.ReleaseReleased || release.IsSharedCandidate()
 }
 
 // Declaration provenance is catalog metadata, not proof that an environment ran

@@ -58,7 +58,7 @@ func TestRunSnapshotRejectsMissingNullTypesAndUnknownControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ name, from, to string }{
-		{"contract", `"clusterforge-run-v1"`, `"clusterforge-run-v2"`},
+		{"contract", `"clusterforge-run-v2"`, `"clusterforge-run-unsupported"`},
 		{"unknown", `"plan":{`, `"plan":{"future":true,`},
 		{"wrong-case", `"contract":`, `"Contract":`},
 		{"generation missing", `"generation":0,`, ``},

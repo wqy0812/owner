@@ -77,7 +77,7 @@ func TestScenarioCancellationPersistsMutationBeforeStopping(t *testing.T) {
 				if !mutating && !errors.Is(err, domain.ErrNotFound) {
 					return errors.New("read-only precheck marked a clean environment as changed")
 				}
-				_, err = p.approvals.CancelRun(ctx, owner, run.ID)
+				_, err = p.cancellation.CancelRun(ctx, owner, run.ID)
 				return err
 			}
 			if err := db.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{domain.RunQueued}, domain.RunRunning, "", time.Now().UTC()); err != nil {
@@ -207,7 +207,7 @@ func TestScenarioCancellationDuringBundleBuildKeepsCleanEnvironment(t *testing.T
 	invoked := false
 	runner.onBuild = func() error {
 		invoked = true
-		_, err := p.approvals.CancelRun(ctx, owner, run.ID)
+		_, err := p.cancellation.CancelRun(ctx, owner, run.ID)
 		return err
 	}
 	if err := db.UpdateRunStatus(ctx, run.ID, []domain.RunStatus{domain.RunQueued}, domain.RunRunning, "", time.Now().UTC()); err != nil {

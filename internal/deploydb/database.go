@@ -56,7 +56,7 @@ func ActiveRuns(ctx context.Context, path string) ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id,status,created_at FROM runs WHERE status IN ('running','queued','awaiting_approval') ORDER BY created_at,id`)
+	rows, err := db.QueryContext(ctx, `SELECT id,status,created_at FROM runs WHERE status IN ('running','queued') ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}

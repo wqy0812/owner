@@ -5,37 +5,13 @@ import { act, screen, waitFor, within } from './render';
 import { EventSourceMock } from './setup';
 
 import { RunsPage } from '../pages/RunsPage';
-import { admin, alice, dave, installFetch, json } from './fixtures/appFixtures';
+import { admin, alice, installFetch, json } from './fixtures/appFixtures';
 import { pageRenderer } from './pageRenderer';
 const renderApp = pageRenderer(RunsPage, '/runs');
 
 beforeEach(() => { installFetch(); });
 
 describe("scoped lightweight read models", () => {
-  it('shows candidates beyond all list pages while preserving the 100-item atomic approval limit', async () => {
-    const fallback = installFetch({ initialUser: dave });
-    const candidates = Array.from({ length: 120 }, (_, i) => ({ id: `candidate-${i}`, approvalId: `approval-${i}`, name: `Candidate ${i}`, environmentId: 'environment-test', environmentName: 'Test', status: 'awaiting_approval', createdAt: '' }));
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input), 'http://test');
-      if (url.pathname === '/api/v1/approvals/batch-candidates') return json(candidates);
-      if (url.pathname === '/api/v1/approvals/batch') return json([]);
-      if (url.pathname === '/api/v1/runs') return new Response(JSON.stringify({ items: [], page: 1, pageSize: 50, total: 0 }), { headers: { 'Content-Type': 'application/json' } });
-      return fallback(input, init);
-    }); vi.stubGlobal('fetch', fetchMock);
-    renderApp('/runs', true);
-    await userEvent.click(await screen.findByRole('button', { name: '批量审批 120' }));
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getAllByRole('checkbox')).toHaveLength(120);
-    expect(within(dialog).getAllByRole('checkbox').filter((box) => (box as HTMLInputElement).checked)).toHaveLength(100);
-    expect(within(dialog).getByRole('checkbox', { name: '审批候选 candidate-119' })).toBeDisabled();
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: '审批候选 candidate-0' }));
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: '审批候选 candidate-119' }));
-    await userEvent.click(within(dialog).getByRole('button', { name: '确认批量批准' }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/v1/approvals/batch')).toBe(true));
-    const call = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/approvals/batch')!;
-    const ids = JSON.parse(String(call[1]?.body)).approvalIds;
-    expect(ids).toHaveLength(100); expect(ids).toContain('approval-119'); expect(ids).not.toContain('approval-0');
-  });
 
   it('loads a cross-page deep link, preserves detail on summary refresh and clamps an empty last page', async () => {
     const fallback = installFetch(); let total = 105;
@@ -54,7 +30,7 @@ describe("scoped lightweight read models", () => {
     total = 51;
     act(() => EventSourceMock.instances.at(-1)?.emit('run.updated'));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=2&'))).toBe(true));
-    expect(screen.getByText('Preserved full step')).toBeInTheDocument();
+    expect(await screen.findByText('Preserved full step')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '已结束' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1&') && String(input).includes('filter=finished'))).toBe(true));
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/runs')).toHaveLength(0);

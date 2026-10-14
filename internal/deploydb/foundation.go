@@ -61,7 +61,7 @@ func currentFoundationSnapshot(ctx context.Context, source, target string) (err 
 		return fmt.Errorf("unsupported foundation source contract %q", contract)
 	}
 	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM source.runs WHERE status IN ('queued','running','awaiting_approval')) + (SELECT COUNT(*) FROM source.component_image_builds WHERE status IN ('queued','running'))`).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM source.runs WHERE status IN ('queued','running')) + (SELECT COUNT(*) FROM source.component_image_builds WHERE status IN ('queued','running'))`).Scan(&active); err != nil {
 		return err
 	}
 	if active != 0 {

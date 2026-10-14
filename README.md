@@ -10,12 +10,13 @@
 
 - 组件 Owner：按 L1-L6 维护组件分类、结构化合同、不可变发布版本和当前交付证据；Draft 可共享到候选集，Playbook 支持上传和在线编辑。
 - 集群 Owner：使用 DAG 组合精确 Released/候选组件版本，完整测试后原子发布场景 Revision 与全部候选 Release。
-- 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，执行整集群回滚预览并单条或批量审批高风险作业。
-- 平台 Owner：维护平台目录、在工作台审核当前组件合同并管理 Run 归档与保留策略。
+- 环境 Owner：管理 Inventory、`IMAGE_REGISTRY` / `FILE_STATION` 等非敏感环境变量与凭据引用，预览并执行整集群回滚，监控和取消本环境运行。
+- 平台 Owner：维护平台目录、管理 Run 归档与保留策略。
 - 共享测试环境：单环境 FIFO 执行、日志搜索/流筛选/复制/下载、取消、审计和站内通知。
 - 当前参考 Playbook：[Kubernetes 1.17.5 原生组件与场景](examples/ansible/kubernetes-1.17.5/README.md)，依据 2026-09-08 测试平台发布的 15 个组件与一个场景整理；固定 Ansible 2.8.8，来源证据与重构后验证分开记录。
 - 测试目录历史快照（2026-08-30）：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；使用前需重新核对，精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
+- AI 接入：可选 [MCP 服务](docs/mcp.md)，提供完整业务工具及分块文件传输，令牌绑定平台用户并复用原有权限和执行校验。
 
 ## 文档
 
@@ -120,7 +121,7 @@ make test-deploy-local-docker                 # 脚本的隔离门禁测试
 
 只有明确接受中断活动 Run 时才使用 `--allow-active-runs`。
 
-当前合同为 `clusterforge-v1-20260908-typed-run-snapshot`。服务、业务导出和基础目录重置只接受该精确合同；运行时不兼容旧 Run 快照。上一合同的数据通过 `database migrate-run-snapshot` 一次性离线转换到独立新库并验证，完整流程及受保护切换见 [Run 快照合同与离线迁移](docs/design/run-snapshot-contract.md)。转换保留 Run、基线、证据与归档，不需要清空业务库。`database foundation-snapshot` 只把当前合同的账号与基础目录复制到新库，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎。
+当前合同为 `clusterforge-v1-20261014-owner-direct-execution`。服务、业务导出和基础目录重置只接受该精确合同；运行时不兼容旧 Run 快照。本版本用于全新搭建，不迁移旧审批数据；旧离线转换命令已移除。详见 [Run 快照合同](docs/design/run-snapshot-contract.md)。`database foundation-snapshot` 只把当前合同的账号与基础目录复制到新库，见[业务重置流程](docs/catalog-backup-and-restore.md#业务清空专用备份不含-run-历史)。部署检查与 SQLite 文件备份使用 `clusterforge-backup database` 内置的 Go SQLite 引擎。
 
 只有明确需要重建不兼容测试库时才使用 `--rebuild-v1-db`：重建不允许存在活动 Run，脚本会先保存二进制、环境配置，并生成经过完整性与外键检查的一致 SQLite 备份；已配置 Catalog 仓库时还要求部署前快照成功。启动、HTTP、结构合同、外键、静态资源摘要或重建后快照检查失败会恢复原二进制和数据库。不要在生产或需要保留历史的环境使用该开关。
 
@@ -146,14 +147,14 @@ make test-deploy-local-docker                 # 脚本的隔离门禁测试
 - 只执行 `NEWPLATFORM_ALLOWED_ANSIBLE_ROOTS` 下的相对 Playbook，拒绝路径穿越。
 - 平台按 `managed/<component-slug>/<release-line-key>/<version-key>--<release-id>/` 建立版本级 Ansible 工作区；完整 Release ID 防止规范化后同名版本发生目录碰撞。Action 入口固定为 `<actionKind>.yml`，组件 Owner 不填写服务器路径或文件名。
 - 工作区可包含 `roles/`、`templates/`、`files/` 和其他辅助目录。单文件 10 MiB、单版本 50 MiB、1000 文件、16 层；UTF-8 文本不超过 1 MiB 时可在线编辑，符号链接、设备文件和路径穿越一律拒绝。安装包、离线包等大型介质仍走 FSS。
-- Release 合同锁定工作区全量文件清单和树摘要；任意模板、Role、脚本或小型二进制变化都会撤销 Draft 审核/候选状态并使旧测试证据失效。Runner 每次只复制目标 Release 工作区。
+- Release 合同锁定工作区全量文件清单和树摘要；任意模板、Role、脚本或小型二进制变化都会撤销 Draft 候选状态并使旧测试证据失效。Runner 每次只复制目标 Release 工作区。
 - Action 保存和删除同时提交完整动作元数据、固定入口文件、工作区清单与合同失效；数据库事务失败时恢复原入口字节，进程中断后启动恢复日志也会完成回滚，不留下半个 Action。
 - 变更类动作逐步骤使用隔离快照；同一 Release 的只读 Verify/Inspect 可在一次 Run 内复用已校验快照。每步结束后重新核对目录树摘要；Inventory/变量文件保持 0600，并使用独立 `ANSIBLE_LOCAL_TEMP`。
 - Secret 运行时解析并脱敏，不写入数据库、快照或保留日志。
 - 每个环境同时只有一个活动执行；其他请求 FIFO 排队。
 - 安装备份按环境、组件、Release 和安装 Run 隔离；回滚只消费环境当前安装记录
   的 `backup_ref`，拒绝元数据或 Playbook 哈希不匹配的旧基线。
-- `recovery`、`clean`、`destroy`、`uninstall` 以及显式 destructive 动作必须由环境 Owner 审批。
+- `recovery`、`clean`、`destroy`、`uninstall` 以及显式 destructive 动作保留高风险提示与提交确认，通过技术校验后直接排队。
 
 ## 主要配置
 

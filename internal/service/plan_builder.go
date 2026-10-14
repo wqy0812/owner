@@ -445,15 +445,12 @@ func (b *PlanBuilder) prepareLockedPlan(ctx context.Context, environment domain.
 		plan.InstallationBaseline = installationBaselineFromSteps(plan.Steps)
 		plan.InstallationBaselineDigest = installationBaselineDigest(plan.InstallationBaseline)
 	}
-	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
-	destructive := len(plan.DeliveryRequirements) > 0 || len(plan.ArtifactTransfers) > 0 || len(plan.ImageTransfers) > 0
-	for _, step := range plan.Steps {
-		if step.NeedsApproval {
-			destructive = true
-			break
-		}
+	plan, err = b.delivery.finalizeDeliveryPlan(ctx, plan, capturedAt)
+	if err != nil {
+		return domain.RunExecutionPlan{}, "", false, err
 	}
-	return plan, planDigest, destructive, nil
+	planDigest := componentTestPlanDigest(environment.CurrentRevisionID, plan)
+	return plan, planDigest, plan.HighRisk(), nil
 }
 
 // bindVerifiedWorkspaceDigests joins the immutable Release contract, its
@@ -482,7 +479,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan domain.RunExecut
 		Variables                     map[string]any
 		RequiredCredentials           []string
 		TimeoutSeconds                int
-		NeedsApproval                 bool
+		HighRisk                      bool
 		BackupRef                     string
 		BackupInstallRunID            string
 		BackupPlaybookSHA             string
@@ -521,7 +518,7 @@ func componentTestPlanDigest(environmentRevisionID string, plan domain.RunExecut
 			ActionID: step.ActionID, Action: step.Action, FromReleaseID: step.FromReleaseID, ToReleaseID: step.ToReleaseID,
 			Playbook: step.Playbook, PlaybookDigest: step.PlaybookDigest, WorkspaceDigest: step.WorkspaceDigest, Tags: step.Tags, Limit: step.Limit,
 			Variables: variables, RequiredCredentials: step.RequiredCredentials,
-			TimeoutSeconds: step.TimeoutSeconds, NeedsApproval: step.NeedsApproval,
+			TimeoutSeconds: step.TimeoutSeconds, HighRisk: step.HighRisk,
 			BackupRef: backupRef, BackupInstallRunID: backupInstallRunID,
 			BackupPlaybookSHA: backupPlaybookSHA, BackupCapturedAt: backupCapturedAt,
 		})
@@ -538,10 +535,11 @@ func componentTestPlanDigest(environmentRevisionID string, plan domain.RunExecut
 		ArtifactTransfers          []domain.RunArtifactTransfer
 		ImageTransfers             []domain.RunImageTransfer
 		DeliveryRequirements       []domain.RunDeliveryRequirement
+		DeliveryPolicy             string
 		InstallationBaselineDigest string
 		RecoveryEnvironmentDigest  string
 		ResetBoundaryDigest        string `json:",omitempty"`
-	}{Runtime: plan.Runtime, EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, DeliveryRequirements: digestRequirements, InstallationBaselineDigest: plan.InstallationBaselineDigest, RecoveryEnvironmentDigest: plan.RecoveryEnvironmentDigest, ResetBoundaryDigest: plan.ResetBoundaryDigest})
+	}{Runtime: plan.Runtime, EnvironmentRevisionID: environmentRevisionID, TreeDigest: plan.TreeDigest, Steps: digestSteps, ArtifactTransfers: plan.ArtifactTransfers, ImageTransfers: plan.ImageTransfers, DeliveryRequirements: digestRequirements, DeliveryPolicy: domain.DeliveryPolicyTransferToTarget, InstallationBaselineDigest: plan.InstallationBaselineDigest, RecoveryEnvironmentDigest: plan.RecoveryEnvironmentDigest, ResetBoundaryDigest: plan.ResetBoundaryDigest})
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest[:])
 }
@@ -575,7 +573,7 @@ func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment doma
 			Name: step.Name, Stage: step.Stage, SourceType: step.SourceType,
 			RollbackSourceActionID: step.RollbackSourceActionID, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Order: index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName,
 			ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Action: step.Action,
-			Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval,
+			Playbook: step.Playbook, Limit: step.Limit, HighRisk: step.HighRisk,
 			FromReleaseID: step.FromReleaseID, FromReleaseVersion: version(step.FromReleaseID),
 			ToReleaseID: step.ToReleaseID, ToReleaseVersion: version(step.ToReleaseID),
 			BackupRef: step.BackupRef, BackupInstallRunID: backupInstallRunID,
@@ -584,7 +582,7 @@ func (b *PlanBuilder) componentTestPlanDTO(ctx context.Context, environment doma
 	}
 	return ComponentTestPlan{
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
-		Destructive: destructive, RequiresApproval: destructive, PlanDigest: digest, Steps: steps,
+		Destructive: destructive, HighRisk: destructive, PlanDigest: digest, Steps: steps,
 		DeliveryRequirements: append([]domain.RunDeliveryRequirement{}, plan.DeliveryRequirements...),
 	}
 }

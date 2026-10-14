@@ -17,7 +17,7 @@ beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); notify.mockClea
 afterEach(() => vi.unstubAllGlobals());
 const revision: ScenarioRevision = { id: 'revision-new', scenarioId: 'scenario', revision: 2, state: 'draft', nodes: [{ id: 'n', type: 'component', position: { x: 0, y: 0 }, data: { label: 'component', componentId: 'component', releaseId: 'target' } }], edges: [], revisionDigest: 'revision-digest', sourceRevisionId: 'revision-old', sourceRunId: 'formal-source' };
 const environment: Environment = { id: 'env', name: '隔离环境', ownerId: 'env-owner' };
-const targetRelease: ComponentRelease = { id: 'target', componentId: 'component', lineId: 'line', lineName: 'line', version: '2', compatibility: 'compatible', state: 'released', readiness: { status: 'ready', blockers: [] }, review: { status: 'approved' }, parameters: [
+const targetRelease: ComponentRelease = { id: 'target', componentId: 'component', lineId: 'line', lineName: 'line', version: '2', compatibility: 'compatible', state: 'released', readiness: { status: 'ready', blockers: [] }, parameters: [
   { name: 'retained', type: 'string', description: 'retained', visibility: 'public', modifiable: true, valueProvider: 'scenario_owner' },
   { name: 'changed', type: 'integer', description: 'changed', visibility: 'internal', modifiable: true, valueProvider: 'scenario_owner' },
 ] };

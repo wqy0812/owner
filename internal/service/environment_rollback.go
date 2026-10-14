@@ -26,7 +26,7 @@ type EnvironmentRollbackPlan struct {
 	ComponentCount        int                             `json:"componentCount"`
 	NodeCount             int                             `json:"nodeCount"`
 	Destructive           bool                            `json:"destructive"`
-	RequiresApproval      bool                            `json:"requiresApproval"`
+	HighRisk              bool                            `json:"highRisk"`
 	PlanDigest            string                          `json:"planDigest"`
 	Steps                 []ComponentTestPlanStep         `json:"steps"`
 	DeliveryRequirements  []domain.RunDeliveryRequirement `json:"deliveryRequirements"`
@@ -294,7 +294,7 @@ func (p *PlanBuilder) environmentRollbackPlanDTO(ctx context.Context, prepared p
 		EnvironmentRevisionID: prepared.environment.CurrentRevisionID,
 		Sources:               environmentRollbackSources(prepared),
 		ComponentCount:        countStepComponents(prepared.steps), NodeCount: len(prepared.steps),
-		Destructive: true, RequiresApproval: true, PlanDigest: base.PlanDigest, Steps: base.Steps,
+		Destructive: true, HighRisk: true, PlanDigest: base.PlanDigest, Steps: base.Steps,
 		DeliveryRequirements: base.DeliveryRequirements,
 	}
 }
@@ -418,7 +418,7 @@ func (r *RollbackPlanner) validateLockedRollbackPlan(ctx context.Context, run do
 			return err
 		}
 		if installation.BackupRef != step.BackupRef || installation.InstallRunID != step.Backup.InstallRunID || installation.Backup.PlaybookSHA256 != step.Backup.PlaybookSHA256 {
-			return fmt.Errorf("%w: rollback baseline changed after approval; preview again", domain.ErrConflict)
+			return fmt.Errorf("%w: rollback baseline changed after submission; preview again", domain.ErrConflict)
 		}
 		if err := r.validateCurrentInstallEvidence(ctx, installation); err != nil {
 			return err

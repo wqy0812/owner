@@ -124,7 +124,7 @@ func TestRunPaginationAPIRejectsInvalidAndKeepsHistoricalDetail(t *testing.T) {
 	for _, u := range users {
 		if u.Role != domain.RoleEnvironmentOwner {
 			response = f.request("GET", "/api/v1/approvals/batch-candidates", nil, f.session(u.ID))
-			if response.Code != 403 {
+			if response.Code != 404 {
 				t.Fatal(fmt.Sprintf("%s candidates=%d", u.Role, response.Code))
 			}
 		}

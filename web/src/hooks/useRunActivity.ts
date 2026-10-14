@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import { displayError, useApp } from '../context/AppContext';
 import type { RunActivity } from '../types/domain';
 
-const active = (status?: string) => status === 'running' || status === 'queued' || status === 'awaiting_approval';
+const active = (status?: string) => status === 'running' || status === 'queued';
 
 export function useRunActivity(runId: string | undefined, status?: string) {
   const { user, runActivityEvents, scheduleRefresh } = useApp();

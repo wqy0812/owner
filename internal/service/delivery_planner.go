@@ -12,72 +12,47 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (domain.RunExecutionPlan, error) {
+func (p *DeliveryService) finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, at time.Time) (domain.RunExecutionPlan, error) {
 	if len(plan.DeliveryRequirements) == 0 {
-		if len(inputs) != 0 {
-			return plan, fmt.Errorf("%w: run has no delivery requirements", domain.ErrInvalid)
-		}
 		return plan, nil
 	}
-	// A safe retry carries the original immutable delivery requirements and
-	// approved per-item choices. The new approval confirms that locked choice;
-	// the executor still probes the target again before any transfer.
-	if len(inputs) == 0 && len(plan.DeliveryDecisions) == len(plan.DeliveryRequirements) {
-		inputs = make([]DeliveryDecisionInput, 0, len(plan.DeliveryDecisions))
-		for _, decision := range plan.DeliveryDecisions {
-			inputs = append(inputs, DeliveryDecisionInput{RequirementID: decision.RequirementID, Mode: decision.Mode})
+	// Automatic target transfer is the platform policy. No Owner decision is needed.
+	seen := make(map[string]bool, len(plan.DeliveryRequirements))
+	for _, requirement := range plan.DeliveryRequirements {
+		if strings.TrimSpace(requirement.ID) == "" || seen[requirement.ID] {
+			return plan, fmt.Errorf("%w: delivery requirements must have unique nonempty ids", domain.ErrInvalid)
 		}
-	}
-	byID := make(map[string]DeliveryDecisionInput, len(inputs))
-	for _, input := range inputs {
-		input.RequirementID = strings.TrimSpace(input.RequirementID)
-		input.Mode = strings.TrimSpace(input.Mode)
-		if input.RequirementID == "" || (input.Mode != "direct" && input.Mode != "transfer") || byID[input.RequirementID].RequirementID != "" {
-			return plan, fmt.Errorf("%w: delivery decisions must contain unique requirement ids and direct/transfer modes", domain.ErrInvalid)
-		}
-		byID[input.RequirementID] = input
-	}
-	if len(byID) != len(plan.DeliveryRequirements) {
-		return plan, fmt.Errorf("%w: every delivery requirement must be decided explicitly", domain.ErrInvalid)
+		seen[requirement.ID] = true
 	}
 	plan.DeliveryDecisions = nil
 	plan.DeliveryResults = nil
 	plan.ArtifactTransfers = nil
 	plan.ImageTransfers = nil
 	for _, requirement := range plan.DeliveryRequirements {
-		input, ok := byID[requirement.ID]
-		if !ok {
-			return plan, fmt.Errorf("%w: delivery requirement %s has no decision", domain.ErrInvalid, requirement.ID)
-		}
-		decision := domain.RunDeliveryDecision{RequirementID: requirement.ID, Mode: input.Mode, DecidedBy: user.ID, DecidedAt: at}
+		decision := domain.RunDeliveryDecision{RequirementID: requirement.ID, Mode: "transfer", Policy: domain.DeliveryPolicyTransferToTarget}
 		plan.DeliveryDecisions = append(plan.DeliveryDecisions, decision)
-		result := domain.RunDeliveryResult{RequirementID: requirement.ID, Mode: input.Mode, Status: "pending"}
-		location := requirement.Source
-		if input.Mode == "transfer" {
-			if !requirement.TransferAvailable || requirement.Target == "" {
-				return plan, fmt.Errorf("%w: delivery requirement %s has no environment target for transfer", domain.ErrInvalid, requirement.ID)
-			}
-			present, err := p.deliveryTargetPresent(ctx, requirement)
-			if err != nil {
-				return plan, err
-			}
-			location = requirement.Target
-			if present {
-				result.Status, result.ActualLocation, result.CompletedAt = "reused_target", location, &at
-			} else if requirement.Kind == "artifact" {
-				plan.ArtifactTransfers = append(plan.ArtifactTransfers, domain.RunArtifactTransfer{
-					RequirementID: requirement.ID, Alias: requirement.Name, SourceURL: requirement.Source,
-					TargetStation: requirement.TargetStation, RelativePath: requirement.RelativePath,
-					SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes,
-				})
-			} else {
-				plan.ImageTransfers = append(plan.ImageTransfers, domain.RunImageTransfer{
-					RequirementID: requirement.ID, SourceRegistry: requirement.SourceRegistry, TargetRegistry: requirement.TargetRegistry,
-					SourceDigest: requirement.Source, TargetRef: requirement.TargetRef, TargetDigest: requirement.Target,
-				})
-			}
+		result := domain.RunDeliveryResult{RequirementID: requirement.ID, Mode: "transfer", Status: "pending"}
+		location := requirement.Target
+		if !requirement.TransferAvailable || requirement.Target == "" {
+			return plan, fmt.Errorf("%w: delivery requirement %s has no environment target for transfer", domain.ErrInvalid, requirement.ID)
+		}
+		present, err := p.deliveryTargetPresent(ctx, requirement)
+		if err != nil {
+			return plan, err
+		}
+		if present {
+			result.Status, result.ActualLocation, result.CompletedAt = "reused_target", location, &at
+		} else if requirement.Kind == "artifact" {
+			plan.ArtifactTransfers = append(plan.ArtifactTransfers, domain.RunArtifactTransfer{
+				RequirementID: requirement.ID, Alias: requirement.Name, SourceURL: requirement.Source,
+				TargetStation: requirement.TargetStation, RelativePath: requirement.RelativePath,
+				SHA256: strings.TrimPrefix(requirement.Identity, "sha256:"), SizeBytes: requirement.SizeBytes,
+			})
 		} else {
-			result.Status, result.ActualLocation, result.CompletedAt = "direct", location, &at
+			plan.ImageTransfers = append(plan.ImageTransfers, domain.RunImageTransfer{
+				RequirementID: requirement.ID, SourceRegistry: requirement.SourceRegistry, TargetRegistry: requirement.TargetRegistry,
+				SourceDigest: requirement.Source, TargetRef: requirement.TargetRef, TargetDigest: requirement.Target,
+			})
 		}
 		if err := bindDeliveryRequirementVariables(&plan, requirement, location); err != nil {
 			return plan, err

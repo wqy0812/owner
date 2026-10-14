@@ -52,7 +52,7 @@ func TestPrepareWithDockerImageDelivery(t *testing.T) {
 			plan := Plan{
 				ImageTransfers:       []domain.RunImageTransfer{{RequirementID: "image", SourceDigest: source, TargetRef: tag, TargetDigest: target}},
 				DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "image", Kind: "image", Source: source, Target: target, Identity: digest}},
-				DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "image", Mode: "transfer"}},
+				DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "image", Mode: "transfer", Policy: domain.DeliveryPolicyTransferToTarget}},
 			}
 			err := Prepare(context.Background(), plan, nil, adapter)
 			if (err != nil) != tc.wantError || errors.Is(err, ErrDeliveryTargetMissing) {
