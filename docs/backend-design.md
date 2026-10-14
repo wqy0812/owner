@@ -141,6 +141,20 @@ Executor 中止后续阶段，作业包保存失败不会调用 `RunBundle`。�
 现有业务回归和本地真实 Ansible 作业门禁共同覆盖。
 
 
+### 3.3 MCP 业务入口
+
+设置 `CLUSTERFORGE_MCP_CONFIG` 后，同一 HTTP 服务提供 `/mcp`（官方 Go SDK、无状态 Streamable HTTP）。
+令牌摘要和用户绑定由部署配置管理，每次请求验证有效期、Origin 和当前用户；网页 Cookie 不用于 MCP。
+未启用时 `/mcp` 返回 404。第一版不增加数据库表或改变 schema contract。
+
+MCP 将 138 个现有业务接口映射为有 Schema 的工具，通过固定 Handler 复用可见性、Owner 权限、计划摘要、
+工作区校验与服务层执行，不提供任意 URL 调用。演示身份切换、身份列表和网页 SSE 路由明确排除。
+另提供 5 个文件工具，通过绑定客户端及用户的临时引用分块传输。长任务继续返回业务 ID，以增量活动查询跟踪。
+原有业务审计保持不变，调用层新增 `mcp.tool_called` 的来源、客户端、工具、请求标识、状态和耗时记录。
+
+配置、限额、工具输入输出与接入步骤见 [MCP 接入](mcp.md)，逐项覆盖见 [工具清单](mcp-tools.md)。
+新增或修改 REST 请求 DTO 后运行 `go run ./cmd/mcp-catalog`；覆盖测试拒绝遗漏或过期的注册表。
+
 ## 4. 领域模型
 
 ```mermaid

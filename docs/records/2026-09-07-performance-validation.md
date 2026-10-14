@@ -71,7 +71,9 @@
 | 断网时追加 2300 条日志和终态，不发送终态 SSE | 恢复后按 324、826、1326、1826、2326 游标分 5 页补拉；ID 不要求连续，因为其他 Run 共用自增序列 |
 | 补拉完成 | 顺序正确、无重复、最近 2000 条保留，Run 显示成功，等待项消失 |
 
-截图：[场景保存基线](../../output/playwright/performance-review/scenario-clean.png)、[当前等待与日志](../../output/playwright/performance-review/run-activity.png)、[断线恢复](../../output/playwright/performance-review/run-reconnected.png)、[组件证据](../../output/playwright/performance-review/component-evidence.png)。临时浏览器及服务已停止。
+以下截图路径指向当时未纳入版本控制的工作区产物，当前检出不包含这些文件，不能作为当前版本的复验依据。
+
+截图：场景保存基线（`output/playwright/performance-review/scenario-clean.png`）、当前等待与日志（`output/playwright/performance-review/run-activity.png`）、断线恢复（`output/playwright/performance-review/run-reconnected.png`）、组件证据（`output/playwright/performance-review/component-evidence.png`）。临时浏览器及服务已停止。
 
 ## 复测入口
 

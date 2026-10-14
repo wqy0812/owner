@@ -43,15 +43,17 @@
 
 ## 截图与原始证据
 
+以下是当时工作区的产物路径，文件未纳入版本控制，当前检出不包含这些截图与日志；此处保留路径供历史追溯，不能作为当前版本的复验依据。
+
 前后同为 1920×1080 的“新增环境维度类别”对比：
 
-- [改造前](../../output/playwright/frontend-redesign-plan/create-category-before-1920.png)
-- [改造后](../../output/playwright/frontend-redesign/after/create-category.png)
+- 改造前（`output/playwright/frontend-redesign-plan/create-category-before-1920.png`）
+- 改造后（`output/playwright/frontend-redesign/after/create-category.png`）
 
 另存有改造前新建组件截图（1440px 宽，作为旧控件外观参考，不用于 1920 尺寸对比）。最终共有 39 张 1920×1080 截图，覆盖主页面、页内标签及代表性弹窗。
 
-- [全部截图与本地验收记录](../../output/playwright/frontend-redesign/acceptance.md)
-- [改造前资源清单](../../output/playwright/frontend-redesign/bundle-before.json)、[改造后资源清单](../../output/playwright/frontend-redesign/bundle-after.json)
-- [前端测试日志](../../output/playwright/frontend-redesign/logs/frontend-tests.log)、[弹窗定向回归](../../output/playwright/frontend-redesign/logs/modal-regression.log)、[E2E 日志](../../output/playwright/frontend-redesign/logs/live-e2e.log)、[构建日志](../../output/playwright/frontend-redesign/logs/build.log)
+- 全部截图与本地验收记录（`output/playwright/frontend-redesign/acceptance.md`）
+- 改造前资源清单（`output/playwright/frontend-redesign/bundle-before.json`）、改造后资源清单（`output/playwright/frontend-redesign/bundle-after.json`）
+- 前端测试日志（`output/playwright/frontend-redesign/logs/frontend-tests.log`）、弹窗定向回归（`output/playwright/frontend-redesign/logs/modal-regression.log`）、E2E 日志（`output/playwright/frontend-redesign/logs/live-e2e.log`）、构建日志（`output/playwright/frontend-redesign/logs/build.log`）
 
 本次未做部署、Git 提交或推送，也未进行真实主机执行、灾备恢复或生产性能验收。

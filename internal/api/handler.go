@@ -28,6 +28,7 @@ type Handler struct {
 	platform        *service.Platform
 	router          *http.ServeMux
 	static          http.Handler
+	mcp             http.Handler
 	catalogRepos    *backup.RepositoryController
 	visibilityMu    sync.Mutex
 	visibilityCache map[string]runVisibility
@@ -48,6 +49,14 @@ func NewHandler(platform *service.Platform, static http.Handler, catalogRepos ..
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/mcp" {
+		if h.mcp == nil {
+			http.NotFound(w, r)
+			return
+		}
+		h.mcp.ServeHTTP(w, r)
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		if h.static == nil {
 			http.NotFound(w, r)

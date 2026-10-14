@@ -16,6 +16,7 @@
 - 当前参考 Playbook：[Kubernetes 1.17.5 原生组件与场景](examples/ansible/kubernetes-1.17.5/README.md)，依据 2026-09-08 测试平台发布的 15 个组件与一个场景整理；固定 Ansible 2.8.8，来源证据与重构后验证分开记录。
 - 测试目录历史快照（2026-08-30）：15 个已发布组件 Release、1 个已发布 Kubernetes 1.17.5 场景 Revision 和 2 个测试环境；使用前需重新核对，精确清单及复现方法见 [测试环境资产目录](docs/demo-catalog.md)。
 - API 错误统一为 `{error:{code,message,details}}`；运行锁定组件、场景、环境 Revision 与 Playbook 树摘要。
+- AI 接入：可选 [MCP 服务](docs/mcp.md)，提供完整业务工具及分块文件传输，令牌绑定平台用户并复用原有权限和执行校验。
 
 ## 文档
 

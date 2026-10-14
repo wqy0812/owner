@@ -9,6 +9,7 @@
 | 要开展的工作 | 先读什么 | 代码入口 | 验证入口 |
 | --- | --- | --- | --- |
 | 页面、表单、导航 | 平台说明书、项目结构第 4 节 | `web/src/App.tsx`、`components/AppShell.tsx`、对应 `pages/`、`api/client.ts`、`types/domain.ts` | `web/src/test/`、`web/e2e/critical-flows.spec.ts`、桌面浏览器 |
+| MCP 工具、认证与文件传输 | [MCP 接入](mcp.md)、[工具清单](mcp-tools.md) | `internal/mcpserver`、`internal/api/mcp.go`、`internal/mcpcatalog` | `go run ./cmd/mcp-catalog`；MCP 协议、角色权限、文件与执行流程测试 |
 | 参数权限、公开引用和环境填写 | 后端设计第 4、7.2 节 | `internal/domain/component_parameters.go`、`internal/service/parameters.go`、`parameter_graph.go`、`environment_parameters.go` | `parameter_ownership_test.go`、`parameter_graph_test.go`、前端 `ParameterEditors.test.tsx` |
 | 适配标签 | 功能说明、运行历史与适配专项 | `internal/domain/adaptation.go`、`internal/service/scenarios.go`、`internal/store/scenario_adaptation.go`、`web/src/types/adaptation.ts` | Domain/Service 适配测试、前端 `adaptation.test.ts` |
 | 发布线、审核、候选与联合发布 | 后端设计第 4、6、7.1 节 | `internal/service/release_drafts.go`、`readiness.go`、`release_coordinator.go`、`internal/store/release_coordinator.go` | Release Draft、Readiness、Coordinator 测试与 `internal/api/api_test.go` |

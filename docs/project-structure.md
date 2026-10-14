@@ -141,6 +141,7 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | 文件 | 职责 |
 | --- | --- |
 | `handler.go` | 路由注册、Cookie 会话、统一响应和错误映射 |
+| `mcp.go` / `mcp_catalog_generated.go` | MCP 与业务 Handler 的固定映射、操作元信息和由请求 DTO 生成的参数 Schema |
 | `workbench.go` | 按角色派生“我的工作”和阻断入口 |
 | `components.go` | 组件与 Release 接口 |
 | `component_usage.go` | 组件精确版本的直接引用查询与摘要权限 |
@@ -168,6 +169,11 @@ API 使用 Go 标准库 `net/http` 和方法感知的 `ServeMux`。主要文件�
 | `notifications.go` | 站内通知和审计查询 |
 
 除身份列表和身份切换外，`/api/v1/*` 请求都需要 Demo Session Cookie。API 动态响应设置 `Cache-Control: no-store`，避免运行状态被浏览器缓存。
+
+MCP 协议、独立 Bearer 认证、文件暂存和限额位于 `internal/mcpserver`；
+`internal/mcpcatalog` 分析已注册 REST 路由与请求 DTO，`cmd/mcp-catalog` 生成工具注册表和清单，
+API 测试检查生成结果是否过期。`cmd/mcp-token` 生成私密令牌文件及只含摘要的配置。
+MCP 从 API 层复用业务 Handler，不访问 Store、不开放演示身份切换。配置见 [MCP 接入](mcp.md)。
 
 ### 3.5 `internal/service`
 
