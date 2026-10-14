@@ -215,7 +215,7 @@ describe("platform shell and RBAC UI", () => {
   it('opens the shared platform capabilities and navigates to the workflow', async () => {
     renderApp('/manual');
     expect(await screen.findByRole('heading', { name: '平台功能与核心概念' })).toBeInTheDocument();
-    for (const heading of ['核心对象与关系', '组件与版本管理', '场景编排与发布', '环境与主机管理', '运行、审批与日志', '平台治理与审核', '灾备与恢复']) {
+    for (const heading of ['核心对象与关系', '组件与版本管理', '场景编排与发布', '环境与主机管理', '运行与日志', '平台治理', '灾备与恢复']) {
       expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
     }
     await userEvent.click(screen.getByRole('link', { name: /工作流总览/ }));
@@ -271,7 +271,7 @@ describe("platform shell and RBAC UI", () => {
     expect(screen.getByRole('heading', { name: '环境 Owner 操作路径' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '集群 Owner 操作路径' })).not.toBeInTheDocument();
     buttonDirectory = screen.getByRole('region', { name: '环境 Owner 按钮操作目录' });
-    for (const label of ['新建环境 / 创建环境', '添加节点 / 编辑节点 / 移除节点', '主机组管理 / 应用更改', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新版本', '确认创建版本', '基于此恢复', '拒绝', '批准执行', '批量审批 / 确认批量批准', '创建私有仓库 / 创建并接入', '立即备份', '从恢复点恢复空库 / 预览恢复 / 确认恢复空库']) {
+    for (const label of ['新建环境 / 创建环境', '添加节点 / 编辑节点 / 移除节点', '主机组管理 / 应用更改', '立即检查', '一键回滚至干净状态', '移除环境 / 永久删除环境 / 确认归档环境', '恢复环境', '放弃本页更改', '保存新版本', '确认创建版本', '基于此恢复', '创建私有仓库 / 创建并接入', '立即备份', '从恢复点恢复空库 / 预览恢复 / 确认恢复空库']) {
       expect(buttonDirectory).toHaveTextContent(label);
     }
   });

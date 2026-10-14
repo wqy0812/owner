@@ -14,7 +14,7 @@ func TestArchiveBoundaryLeaseAndLogSafety(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	r := evidenceRun("archive-test", "digest", "install_verify", "", "", now.Add(-100*24*time.Hour))
-	if err := s.CreateRun(ctx, r, nil); err != nil {
+	if err := s.CreateRun(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendRunLog(ctx, domain.RunLog{RunID: r.ID, Stream: "stdout", Message: "first", CreatedAt: now}); err != nil {
@@ -84,10 +84,10 @@ func TestRetentionStateDeadlineAndBatchGuards(t *testing.T) {
 	s := evidenceHistoryStore(t, 0)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
-	for _, status := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed, domain.RunCancelled, domain.RunRejected, domain.RunInterrupted, domain.RunQueued, domain.RunRunning, domain.RunAwaitingApproval} {
+	for _, status := range []domain.RunStatus{domain.RunSucceeded, domain.RunFailed, domain.RunCancelled, domain.RunInterrupted, domain.RunQueued, domain.RunRunning} {
 		r := evidenceRun(string(status), "digest", "install_verify", "", "", now.Add(-91*24*time.Hour))
 		r.Status = status
-		if err := s.CreateRun(ctx, r, nil); err != nil {
+		if err := s.CreateRun(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 		_, err := s.EnqueueRunArchives(ctx, []string{r.ID}, "manual", "component-owner-a", now)
@@ -102,7 +102,7 @@ func TestRetentionStateDeadlineAndBatchGuards(t *testing.T) {
 	for _, offset := range []time.Duration{-90 * 24 * time.Hour, -90*24*time.Hour - time.Second} {
 		r := evidenceRun(fmt.Sprint(offset), "digest", "install_verify", "", "", now.Add(offset))
 		r.Status = domain.RunFailed
-		if err := s.CreateRun(ctx, r, nil); err != nil {
+		if err := s.CreateRun(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 		preview, err := s.PreviewRunCleanup(ctx, []string{r.ID}, now)
@@ -112,7 +112,7 @@ func TestRetentionStateDeadlineAndBatchGuards(t *testing.T) {
 	}
 	r := evidenceRun("missing-finish", "digest", "install_verify", "", "", now)
 	r.FinishedAt = nil
-	if err := s.CreateRun(ctx, r, nil); err != nil {
+	if err := s.CreateRun(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.EnqueueRunArchives(ctx, []string{r.ID}, "manual", "component-owner-a", now); err == nil {
@@ -133,7 +133,7 @@ func TestArchiveExpiredLeaseAndTransactionFailureKeepLogs(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	r := evidenceRun("recover", "digest", "install_verify", "", "", now)
-	if err := s.CreateRun(ctx, r, nil); err != nil {
+	if err := s.CreateRun(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendRunLog(ctx, domain.RunLog{RunID: r.ID, Message: "retained", Stream: "stdout", CreatedAt: now}); err != nil {
@@ -186,7 +186,7 @@ func TestCleanupConcurrentReferenceAndRetainedLifecycle(t *testing.T) {
 		now := time.Now().UTC()
 		r := evidenceRun("parent", "digest", "install_verify", "", "", now.Add(-91*24*time.Hour))
 		r.Status = domain.RunFailed
-		if err := s.CreateRun(ctx, r, nil); err != nil {
+		if err := s.CreateRun(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 		child := evidenceRun("child", "digest", "install_verify", "", "", now)
@@ -194,7 +194,7 @@ func TestCleanupConcurrentReferenceAndRetainedLifecycle(t *testing.T) {
 		start := make(chan struct{})
 		result := make(chan error, 2)
 		go func() { <-start; result <- s.CleanupRuns(ctx, []string{r.ID}, "component-owner-a", "manual", now) }()
-		go func() { <-start; result <- s.CreateRun(ctx, child, nil) }()
+		go func() { <-start; result <- s.CreateRun(ctx, child) }()
 		close(start)
 		a, b := <-result, <-result
 		if (a == nil) == (b == nil) {
@@ -221,7 +221,7 @@ func TestCleanupAtomicHistoryAndReferences(t *testing.T) {
 	create := func(id string, at time.Time) domain.Run {
 		r := evidenceRun(id, "digest", "install_verify", "", "", at)
 		r.Status = domain.RunFailed
-		if err := s.CreateRun(ctx, r, nil); err != nil {
+		if err := s.CreateRun(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 		return r
@@ -237,7 +237,7 @@ func TestCleanupAtomicHistoryAndReferences(t *testing.T) {
 	child := evidenceRun("child", "digest", "install_verify", "", "", now.Add(-91*24*time.Hour))
 	child.Status = domain.RunFailed
 	child.Snapshot.Plan.Steps[0].Backup = &domain.BackupMetadata{InstallRunID: old.ID}
-	if err := s.CreateRun(ctx, child, nil); err != nil {
+	if err := s.CreateRun(ctx, child); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := s.PreviewRunCleanup(ctx, []string{old.ID}, now)
@@ -265,7 +265,7 @@ func TestCleanupAtomicHistoryAndReferences(t *testing.T) {
 	retry.ID = "retry-new"
 	retry.RetryOfRunID = old.ID
 	retry.Snapshot.Retry.RecoveryStateDigest = "state"
-	if err = s.CreateRun(ctx, retry, nil); !errors.Is(err, domain.ErrConflict) {
+	if err = s.CreateRun(ctx, retry); !errors.Is(err, domain.ErrConflict) {
 		t.Fatal("dangling retry accepted", err)
 	}
 }
@@ -276,7 +276,7 @@ func TestRunReferencesDoNotInterpretBusinessParameterNames(t *testing.T) {
 	now := time.Now().UTC()
 	old := evidenceRun("old-business-reference", "digest", "install_verify", "", "", now.Add(-91*24*time.Hour))
 	old.Status = domain.RunFailed
-	if err := s.CreateRun(ctx, old, nil); err != nil {
+	if err := s.CreateRun(ctx, old); err != nil {
 		t.Fatal(err)
 	}
 	r := evidenceRun("business-parameters", "digest", "install_verify", "", "", now)
@@ -287,7 +287,7 @@ func TestRunReferencesDoNotInterpretBusinessParameterNames(t *testing.T) {
 		"runId":  {Value: "external-job-42"},
 		"config": {Value: map[string]any{"sourceRunId": old.ID}},
 	}}
-	if err := s.CreateRun(ctx, r, nil); err != nil {
+	if err := s.CreateRun(ctx, r); err != nil {
 		t.Fatalf("ordinary business parameters treated as platform Run references: %v", err)
 	}
 	preview, err := s.PreviewRunCleanup(ctx, []string{old.ID}, now)

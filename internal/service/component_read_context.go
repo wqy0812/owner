@@ -87,9 +87,6 @@ func (s *CatalogService) ReadContext(ctx context.Context, user domain.User, comp
 			return result, err
 		}
 	}
-	if user.Role == domain.RolePlatformAdmin {
-		result.WorkItems = platformAdminComponentWork([]domain.Component{component})
-	}
 	// Visibility includes digest-bound candidate checks; no Readiness recomputation
 	// is needed to format incoming parameter references.
 	visible, err := s.store.ListComponents(ctx, user)

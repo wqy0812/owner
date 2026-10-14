@@ -15,7 +15,7 @@
 | Playbook 工作区 | 平台说明书第 3 节、后端设计第 8 节 | `internal/service/playbooks.go`、`playbook_workspace.go`、`internal/store/playbook_files.go`、`internal/ansible/` | `playbook_workspace_test.go`、Runner 测试与 `make test-ansible` |
 | 场景依赖连线和参数来源 | 后端设计第 7 节 | `internal/service/scenario_graph.go`、`parameter_graph.go`、`plan_builder.go`、`web/src/pages/scenarioGraph.ts` | `scenario_graph_test.go`、`parameter_graph_test.go`、前端 `scenarioGraph.test.ts` |
 | Inventory 与 Revision | 平台说明书第 5 节 | `internal/service/environments.go`、`internal/api/environment_transfer.go`、`web/src/components/EnvironmentInventoryEditor.tsx` | Environment/导入权限测试、前端 `EnvironmentInventoryEditor.test.tsx` |
-| Run 计划、审批、取消与续跑 | 后端设计第 7 节 | `internal/service/plan_builder.go`、`run_creator.go`、`run_executor.go`、`approval_service.go`、`run_retry.go` | Run/审批/重试测试；真实执行另按授权验收 |
+| Run 计划、取消与续跑 | 后端设计第 7 节 | `internal/service/plan_builder.go`、`run_creator.go`、`run_executor.go`、`run_cancellation.go`、`run_retry.go` | Run/取消/重试测试；真实执行另按授权验收 |
 | 组件页面编辑和版本操作 | [项目结构](project-structure.md) | `web/src/features/components/`，页面负责组合，草稿属于相应流程 | `App.test.tsx`、`ReleaseLifecycleActions.test.tsx`、`PlaybookWorkspaceEditor.test.tsx`、live API 浏览器验收 |
 | 镜像构建与独立介质交付 | [后端设计](backend-design.md)、[独立作业](standalone-role-job.md) | `internal/imagebuild/`、`internal/delivery/`、`internal/service/media_observation.go`、`internal/jobcli/media.go` | 构建/交付/观测测试、JSON 与摘要基线、`make test-role-job` |
 | 组件直接引用、列表性能 | 后端设计第 9.6 节、项目结构第 10 节 | `internal/service/component_usage.go`、`component_read_context.go`、`internal/store/component_summaries.go`、`run_summaries.go` | `internal/api/read_models_test.go`、`history_usage_test.go`、对应基准 |

@@ -12,7 +12,6 @@ import (
 
 type ScenarioJobRequest struct {
 	ExecutionMode      domain.ScenarioExecutionMode `json:"executionMode"`
-	DeliveryDecisions  []DeliveryDecisionInput      `json:"deliveryDecisions"`
 	EnvironmentID      string                       `json:"environmentId"`
 	ExpectedPlanDigest string                       `json:"expectedPlanDigest"`
 }
@@ -32,16 +31,9 @@ func (s *ExecutionService) scenarioJob(ctx context.Context, user domain.User, re
 	if err != nil {
 		return ComponentTestPlan{}, nil, err
 	}
-	prepared, plan, digest, destructive := lifecycle.prepared, lifecycle.plan, lifecycle.preview.PlanDigest, lifecycle.preview.NeedsApproval
-	if len(input.DeliveryDecisions) > 0 {
-		plan, err = s.delivery.finalizeDeliveryPlan(ctx, plan, input.DeliveryDecisions, user, time.Time{})
-		if err != nil {
-			return ComponentTestPlan{}, nil, err
-		}
-		digest = digestValue(struct{ Lifecycle, Plan string }{lifecycle.preview.PlanDigest, componentTestPlanDigest(prepared.environment.CurrentRevisionID, plan)})
-	}
+	prepared, plan, digest, destructive := lifecycle.prepared, lifecycle.plan, lifecycle.preview.PlanDigest, lifecycle.preview.HighRisk
 	if export && len(plan.DeliveryRequirements) != len(plan.DeliveryDecisions) {
-		return ComponentTestPlan{}, nil, fmt.Errorf("%w: choose the locked source or target for each media requirement and preview again before export", domain.ErrInvalid)
+		return ComponentTestPlan{}, nil, fmt.Errorf("%w: automatic delivery plan is incomplete; preview again before export", domain.ErrInvalid)
 	}
 	dto := s.planner.componentTestPlanDTO(ctx, prepared.environment, plan, digest, destructive)
 	if !export {

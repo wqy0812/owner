@@ -27,7 +27,7 @@ type EnvironmentLifecycleImpact struct {
 // Environment Store port instead of duplicating SQL in the HTTP layer.
 func (s *Store) GetActiveEnvironmentRun(ctx context.Context, environmentID string) (ActiveEnvironmentRun, error) {
 	var result ActiveEnvironmentRun
-	err := s.db.QueryRowContext(ctx, `SELECT id,status FROM runs WHERE environment_id=? AND status IN ('running','awaiting_approval','queued') ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'awaiting_approval' THEN 1 ELSE 2 END, created_at LIMIT 1`, environmentID).Scan(&result.ID, &result.Status)
+	err := s.db.QueryRowContext(ctx, `SELECT id,status FROM runs WHERE environment_id=? AND status IN ('running','queued') ORDER BY CASE status WHEN 'running' THEN 0 ELSE 2 END, created_at LIMIT 1`, environmentID).Scan(&result.ID, &result.Status)
 	if err == sql.ErrNoRows {
 		return result, domain.ErrNotFound
 	}
@@ -58,7 +58,7 @@ func environmentLifecycleImpact(ctx context.Context, q queryer, environmentID st
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_revisions WHERE environment_id=?`, environmentID).Scan(&impact.RevisionCount); err != nil {
 		return impact, err
 	}
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('running','awaiting_approval','queued') THEN 1 ELSE 0 END),0) FROM retained_run_history WHERE environment_id=?`, environmentID).Scan(&impact.RunCount, &impact.ActiveRunCount); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('running','queued') THEN 1 ELSE 0 END),0) FROM retained_run_history WHERE environment_id=?`, environmentID).Scan(&impact.RunCount, &impact.ActiveRunCount); err != nil {
 		return impact, err
 	}
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END),0) FROM component_image_builds WHERE environment_id=?`, environmentID).Scan(&impact.ImageBuildCount, &impact.ActiveImageBuildCount); err != nil {

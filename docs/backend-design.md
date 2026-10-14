@@ -26,9 +26,9 @@
 - 用精确 Release ID 表达组件依赖，避免“自动漂移到最新版本”。
 - 用 DAG 表达组件执行顺序，并在运行前校验依赖和拓扑。
 - 用环境 Revision 固化 Inventory、环境事实和参数。
-- 对破坏性动作执行环境 Owner 审批。
+- 对破坏性动作保留风险提示与提交确认。
 - 同一环境按照 FIFO 串行执行，避免多个作业同时改写目标环境。
-- 持久化运行、步骤、日志、审批、通知和审计记录。
+- 持久化运行、步骤、日志、通知和审计记录。
 - 对路径、凭据、运行快照和日志执行后端安全控制。
 
 ### 2.2 当前非目标
@@ -108,11 +108,11 @@ Scenario 验收编辑的活动 Run 查询也通过 Store 的具名接口完成�
 | --- | --- |
 | `ExecutionService` | 预览/提交入口、权限和幂等性校验，协调规划与创建 |
 | `PlanBuilder` / `RollbackPlanner` | 读取合同、环境和证据，生成计划、摘要、回滚绑定；不写 Run |
-| `RunCreator` | 保存锁定快照和审批，成功保存后通知并入队 |
+| `RunCreator` | 保存完整锁定快照，成功保存后通知并入队 |
 | `RunScheduler` | 启动恢复、按环境 FIFO 抢占、Worker 令牌/心跳及看门狗 |
 | `RunExecutor` | 校验锁定执行输入、交付介质、构建并保存作业包、调用执行后端及取消 |
 | `LifecycleRecorder` | 阶段、日志、回执、安装基线、Run 终态与事件 |
-| `ApprovalService` | 审批决策、批准后的调度和运行取消 |
+| `RunCancellationService` | 发起人及所属环境 Owner 的运行取消 |
 
 场景联合发布和组件单独发布统一由 `ReleaseCoordinator` 复核门禁；Scenario 模块不能
 直接更新 Component Release。`ReleaseRules` 统一合同与 Readiness 规则，一次响应仍复用
@@ -159,7 +159,6 @@ erDiagram
     SCENARIO_REVISION o|--o{ RUN : scenario_run
     RUN ||--o{ RUN_STEP : contains
     RUN ||--o{ RUN_LOG : produces
-    RUN ||--o| APPROVAL : may_require
     USER ||--o{ NOTIFICATION : receives
     USER ||--o{ AUDIT_EVENT : acts
 ```
@@ -170,8 +169,8 @@ erDiagram
 
 - `component_owner`：维护自己拥有的组件和 Release。
 - `scenario_owner`：维护自己拥有的场景和 Revision。
-- `environment_owner`：维护自己拥有的环境，审批该环境上的危险运行。
-- `platform_admin`：维护平台选项目录和环境变量字段，审核 Component Release 合同；对业务资源全局只读。
+- `environment_owner`：维护自己拥有的环境，监控该环境上的运行。
+- `platform_admin`：维护平台选项目录和环境变量字段，对业务资源全局只读。
 
 全局环境参数治理已停用。组件 Owner 定义参数与公开性、修改权限及值提供方；环境填写型字段按 Release ID 与参数名保存，其他组件通过公开参数映射引用。当前参数合同只接受组件所属绑定；旧全局字段接口、默认值回填和运行解析均已删除。已删除停用的全局参数表、默认值校验及 Catalog 备份恢复逻辑。
 
@@ -192,7 +191,7 @@ erDiagram
 - 关系：`parentReleaseId` 只表示同一发布线的升级来源；`templateSourceReleaseId` 只表示复制来源，不建立升级关系。
 - 兼容性：新发布线根版本固定为 `not_applicable`；演进版本必须选择 `compatible` 或 `breaking`。兼容性与 Action 的 `riskLevel` 独立。
 - 属性：发布说明、风险等级、环境约束和结构化参数合同。
-- 审核与候选交接：所有 Draft（包括无参数 Release）先由组件 Owner 提交审核；平台 Owner 批准的摘要必须仍与当前合同一致，才能设置 `candidate=true` 或发布。参数、依赖映射、Action、环境绑定或 Playbook 内容发生变化时，审核和候选状态立即失效。
+- 候选交接：组件 Owner 满足 Readiness 后主动共享 Draft；共享不需要其他 Owner 审批。参数、依赖映射、动作或工作区变化会撤销候选并使相关证据失效。
 - 参数：每个参数必须声明 `name`、`description`、`type`、`visibility`、`modifiable` 和 `valueProvider`。`visibility` 只决定能否被下游映射；`valueProvider` 才决定由组件、场景、环境或上游映射提供值。敏感值继续使用 CredentialRef。
 - 依赖：锁定上游 `componentId + releaseId`，并可声明 `parameterMappings`，下游只能引用上游公开参数。Draft 编辑期可锁定同一组件 Owner 的私有 Draft，便于按 DAG 导入；跨 Owner 只能锁定 Released 或已共享且 Readiness 未阻断的候选 Draft。候选交接和发布仍会重新执行更严格的状态检查。
 - 动作：`inspect`、`preflight`、`install`、`configure`、`verify`、`upgrade`、`rollback`、`uninstall`。
@@ -202,7 +201,7 @@ Released Release 不可修改。创建 Draft 必须先预览并提交 `expectedP
 
 每个 Release 保存不可变的 `playbook_workspace_root` 和全树摘要。新目录由组件 slug、发布线业务名称和版本业务名称规范化生成，并在版本段追加完整、不可变的 Release ID；数据库唯一索引提供第二道碰撞防线。Draft 改版本号或发布线名称时先验证并移动目录，再提交数据库引用，失败时恢复原目录；Released/Deprecated 根目录保持冻结。已保存 Action 的 Kind 不可修改，平台把入口固定为 `<kind>.yml`。运行按 Release 验证并复制工作区；Verify/Inspect 可在同一 Run 内复用只读快照，其他动作使用隔离快照，每步后重新校验全树摘要。
 
-当前结构合同 `clusterforge-v1-20260908-typed-run-snapshot` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节或整目录文件快照（`kind=file/directory`，每个 Release 最多一条记录）。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期同样只维护当前合同，详见[场景生命周期](scenario-lifecycle.md)。
+当前结构合同 `clusterforge-v1-20261014-owner-direct-execution` 为 `component_playbook_files` 增加唯一 Release 工作区身份与执行证据锁定，并用 `playbook_action_mutations` 保存跨 SQLite/文件系统提交期间的旧入口字节或整目录文件快照（`kind=file/directory`，每个 Release 最多一条记录）。Catalog Git 导出工作区所有文件，包括小型二进制；FSS 仅负责大型部署介质。运行时只接受当前精确结构合同；场景生命周期同样只维护当前合同，详见[场景生命周期](scenario-lifecycle.md)。
 
 未发布 Draft 可随时废弃，即使已经产生或正在产生验证 Run；废弃只关闭编辑与候选共享，不删除合同或证据。未发布的 Deprecated Release 可恢复为 Draft，但同一发布线已有其他 Draft、或同一父版本已有其他有效后继时恢复失败关闭。永久删除仅接受从未发布且已废弃的 Release；事务内再次确认不存在组件/场景 Run、镜像构建、下游依赖、场景 Revision 引用、其他 Release/Action 合同引用或环境安装记录，然后删除 Release 自有合同数据及空发布线，并保留 `component_release.deleted` 审计。已发布版本永不物理删除。
 
@@ -245,7 +244,7 @@ CredentialRef 名称并进入 Release 规格摘要；不保存引用目标或凭
 `verify` 节点观察的是环境中已存在的 Release，不要求在同一场景中重新执行该
 Release 的安装期依赖；后续写动作仍可通过 DAG 边依赖这个只读验证节点。
 
-只有当前 Revision 可以编辑和测试。完整测试成功后，Recorder 会在同一事务中重读 Run 锁定步骤，只有 DAG 摘要以及每个 `releaseSpecDigest` 都仍匹配当前定义时才进入 `test_passed`；否则回到 Draft。发布前再次计算候选集并复核各 Release 合同与证据。场景 Revision 和引用的全部候选 Release 在同一事务中发布，任一候选变化都会整体失败。未发布 Revision 可以继续编辑同一版本并使测试证据失效；待审批、排队或执行中的相关 Run 禁止编辑。Released 与 Deprecated 保持不可变。同场景新建版本要求已发布来源及含业务验收的成功正式 Run；跨场景分支只要求来源已发布，生成独立首版并重新完成安装测试。详见[场景生命周期](scenario-lifecycle.md)。
+只有当前 Revision 可以编辑和测试。完整测试成功后，Recorder 会在同一事务中重读 Run 锁定步骤，只有 DAG 摘要以及每个 `releaseSpecDigest` 都仍匹配当前定义时才进入 `test_passed`；否则回到 Draft。发布前再次计算候选集并复核各 Release 合同与证据。场景 Revision 和引用的全部候选 Release 在同一事务中发布，任一候选变化都会整体失败。未发布 Revision 可以继续编辑同一版本并使测试证据失效；排队或执行中的相关 Run 禁止编辑。Released 与 Deprecated 保持不可变。同场景新建版本要求已发布来源及含业务验收的成功正式 Run；跨场景分支只要求来源已发布，生成独立首版并重新完成安装测试。详见[场景生命周期](scenario-lifecycle.md)。
 
 ### 4.4 环境与 Revision
 
@@ -265,7 +264,7 @@ V1 固定每个环境一个活跃 Run、FIFO 串行，不保存可配置并发�
 
 环境 Owner 可以从一个入口对当前 Revision 发起两类只读健康检查。TCP 检查并发探测 Inventory 主机 SSH 端口以及 `IMAGE_REGISTRY`、`FILE_STATION`；SSH 检查使用 Go SSH 客户端严格校验 `known_hosts`、完成显式凭据认证、创建 Session 并执行 `true`。检查不读取 SSH agent、默认私钥或 `~/.ssh/config`，也不依赖 Ansible Runner。两类结果分开持久化、锁定同一个来源 Revision 并写入审计；它们不调用 Registry API、不下载文件、不验证 sudo，也不能替代组件预检和真实环境验收。
 
-### 4.5 Run、Step、Approval 与 Log
+### 4.5 Run、Step 与 Log
 
 Run 类型：
 
@@ -278,11 +277,7 @@ Run 状态：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> awaiting_approval: 危险动作
     [*] --> queued: 普通动作
-    awaiting_approval --> queued: 环境 Owner 批准
-    awaiting_approval --> rejected: 环境 Owner 拒绝
-    awaiting_approval --> cancelled: 发起人或环境 Owner 取消
     queued --> running: 环境 Worker FIFO 抢占
     queued --> cancelled: 取消
     running --> succeeded: 全部步骤成功
@@ -318,7 +313,6 @@ SQLite 主要表如下：
 | `run_steps` | 实际执行步骤 | Run 删除时级联；Run 外键索引，保持插入顺序读取 |
 | `run_logs` | 持久日志 | 按 Run 和自增 ID 查询 |
 | `run_waiting_observations` | 当前等待观测 | 主键为 Run、step、host、task；与日志同事务维护，终态清除 |
-| `approvals` | 危险运行审批 | 每个 Run 最多一条 |
 | `notifications` | 用户站内通知 | 用户维度查询和已读时间 |
 | `audit_events` | 审计记录 | 数据库触发器禁止更新和删除 |
 | `component_image_builds` / `component_image_build_logs` | Dockerfile 构建记录和日志 | 锁定环境 Revision 与目标镜像 |
@@ -348,13 +342,12 @@ Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`comp
 | 能力 | 组件 Owner | 集群 Owner | 环境 Owner | 平台 Owner |
 | --- | --- | --- | --- | --- |
 | 创建/修改组件 | 仅本人组件 | 否 | 否 | 否 |
-| 创建/配置/发布组件 Release | 仅本人组件 | 否 | 否 | 仅审核合同 |
+| 创建/配置/发布组件 Release | 仅本人组件 | 否 | 否 | 否 |
 | 发起组件测试 | 仅本人组件 | 否 | 可以 | 否 |
 | 创建/编排/发布场景 | 否 | 仅本人场景 | 否 | 否 |
 | 发起场景测试或运行 | 否 | 仅本人场景 | 可以 | 否 |
 | 创建/修改环境 Revision | 否 | 否 | 仅本人环境 | 否 |
 | 维护平台字段目录 | 否 | 否 | 否 | 可以 |
-| 审批危险 Run | 否 | 否 | 仅本人环境上的 Run | 否 |
 | 取消 Run | 本人发起 | 本人发起 | 本人环境上的 Run | 否 |
 | 成功 Run 归档、失败清理和保留策略 | 否 | 否 | 否 | 可以 |
 | 全局读取业务对象和审计 | 否 | 否 | 审计可读 | 可以，敏感值仍脱敏 |
@@ -368,7 +361,7 @@ Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`comp
 - 所有登录角色可浏览环境；CredentialRef 只有对应环境 Owner 能看到引用字符串，其他角色只看到是否已配置。
 - Run 对发起人、环境 Owner、相关集群 Owner 以及锁定步骤涉及的组件 Owner 可见。
 - 通知仅对接收用户可见。
-- Run/Approval SSE 事件按相同 Run 可见性过滤。
+- Run SSE 事件按相同 Run 可见性过滤。
 
 ## 7. 关键后端流程
 
@@ -376,7 +369,7 @@ Run 的证据读取使用三个虚拟生成列：`component_spec_digest`、`comp
 
 1. 组件 Owner 预览并创建全新发布线 Draft，或基于现有发布线最新 Released 版本创建演进 Draft。
 2. 后端校验版本、发布线线性约束、参数提供方、依赖、动作、环境绑定、敏感参数和平台生成的工作区入口。
-3. 组件 Owner 提交合同审核，平台 Owner 按当前规格摘要批准或驳回；任何合同变化都会要求重新审核。
+3. 组件 Owner 满足合同与测试条件后自行发布；合同修改会使候选状态和相关测试证据失效。
 4. 新基线校验 Install、Verify、清理型 Rollback 和相应证据；演进版本校验 Upgrade 能力、精确父版本 Rollback 和完整升级回退闭环证据。
 5. 直接发布的上游依赖必须已经 Released，且不能形成依赖环。
 6. 全部门禁通过后，演进版本才从父 Release ID 沿精确依赖链计算直接和传递影响，并查找锁定相关 Release 的场景。
@@ -406,10 +399,9 @@ CredentialRef 重名，Run 在排队前失败，不做静默覆盖。
 Environment Revision 的结构化 Parameters 只参与其声明的组件参数解析；Variables 不参与参数提供方优先级。`IMAGE_REGISTRY` 与 `FILE_STATION`
 是两个受平台目录治理的目标仓库入口变量。Planner 先探测环境目标，再探测组件 Owner 维护的
 来源；目标已有同内容时直接使用，目标缺失但来源可读时生成
-`DeliveryRequirement`。环境 Owner 审批时逐项选择“直接使用来源”或“平移到
-目标”，要求、选择、传输计划和实际结果全部写入 Run 快照。介质平移由目标 FSS
+`DeliveryRequirement`。Planner 自动选择平移到目标，交付策略与传输计划在创建 Run 前锁定；实际结果独立记录。介质平移由目标 FSS
 调用 `/api/v1/fetch` 主动获取来源并校验 SHA-256，平台主服务不代理二进制；镜像由
-OCI 适配器按 digest 平移。Executor 在审批后重新探测目标，内容已经出现时记录
+OCI 适配器按 digest 平移。Executor 在提交后重新探测目标，内容已经出现时记录
 `reused_target`，不重复传输。
 
 ### 7.3 环境锁定的镜像构建
@@ -422,7 +414,7 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 
 ### 7.4 Run 规划与不可变快照
 
-组件测试提交前可通过 `/component-releases/{id}/test-plan` 生成只读计划。该接口复用下列规划与校验，但不创建 Run、Approval 或审计执行事件；响应仅包含步骤版本、动作、Playbook、派生主机组和审批要求等脱敏元数据。正式提交携带 `expectedPlanDigest`，后端重新规划并在摘要不一致时返回 Conflict。
+组件测试提交前可通过 `/component-releases/{id}/test-plan` 生成只读计划。该接口复用下列规划与校验，但不创建 Run 或审计执行事件；响应仅包含步骤版本、动作、Playbook、派生主机组和风险提示等脱敏元数据。正式提交携带 `expectedPlanDigest`，后端重新规划并在摘要不一致时返回 Conflict。
 
 创建 Run 时，后端执行：
 
@@ -434,7 +426,7 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 - 锁定每个步骤的 Release ID、动作、Playbook、tags、由 Action 主机组派生的 limit、变量和超时。
 - 计算 Playbook 文件 SHA-256 和允许目录树摘要。
 - 记录 Component Release 规格摘要、环境 Revision ID、步骤所需凭据名称和脱敏 CredentialRefs。
-- 判断是否需要审批并持久化 Run。
+- 完整锁定计划并持久化排队 Run。
 
 ### 7.5 安装备份与回滚绑定
 
@@ -457,15 +449,9 @@ Environment ID 与 Revision ID；异步执行只使用已经锁定的 `imageRef`
 安装记录，Playbook 应同步删除远端测试备份。正式安装记录保留到后续安装替换
 或卸载/回滚消费它。
 
-### 7.6 危险动作审批
+### 7.6 风险提示与直接执行
 
-满足任一条件即需要审批：
-
-- 动作显式 `destructive=true`。
-- 风险等级为 `destructive`。
-- 动作类型、名称或 Playbook 路径包含 recovery、clean、destroy、uninstall、`rcv` 等标记。
-
-危险 Run 初始为 `awaiting_approval`。只有目标环境的 Owner 能批准或拒绝；批准后进入 `queued`，拒绝后进入 `rejected`。审批记录与审计记录都会持久化。
+动作风险继续由 Action、业务验收及回滚语义决定，计划通过 `highRisk` 提示提交人核对。技术校验成功的 Run 创建为 `queued`，不创建审批记录。快照在创建时冻结，执行前继续校验环境、工作区、内容指纹及恢复基线。
 
 ### 7.7 环境 FIFO 调度
 
@@ -498,7 +484,7 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - Inventory、Facts、Variables 和 CredentialRefs 分区独立保存；每次保存都由前台要求填写变更原因并创建新 Revision。
 - 历史 Revision 只读。“基于此恢复”复制其完整快照生成新 Revision，不移动旧记录、不删除历史，也不修改已经提交的 Run。
 - Revision 导入从实际非空 CredentialRef `reference` 推导敏感确认要求，不信任文件中的摘要布尔值；预览摘要和正式落库共用同一份规范化快照。
-- 环境存在 `running`、`queued` 或 `awaiting_approval` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
+- 环境存在 `running` 或 `queued` Run 时仍可创建新 Revision，但活动 Run 保持锁定旧 Revision；前台会明确提示该边界。
 - 健康检查最多并发探测 8 个目标，总超时 15 秒；主机默认检查 SSH 22 端口，仓库和文件站必须提供可解析端口。
 - Go SSH 检查最多并发连接 8 台主机，单机超时 10 秒、整体超时 30 秒；远端主机必须显式填写用户和 SSH CredentialRef。
 - TCP `healthy` 仅表示本次列出的端点全部可达；SSH `healthy` 表示主机指纹、SSH 认证、Session 创建与 `true` 执行成功。两者都不证明提权、介质完整性、镜像推送或组件 Playbook 一定可执行。
@@ -510,24 +496,23 @@ DAG 在依赖满足后执行，任一步骤失败即停止。
 - 安装来源确定主机组名称，当前 Inventory 确定成员；允许成员和连接信息相对安装时变化。预览锁定当前成员、Inventory 和共享服务边界，提交核对摘要，执行与续跑使用本次锁定环境版本。共享服务组保留，混合组和归属冲突阻断。
 - 所有回滚统一执行主体和必需的后检查；主体成功但后检查失败时保留恢复基线。连续续跑使用保留的父动作身份，已完成回滚的检查不重放。
 - 每项都重新校验安装记录、`backup_ref`、来源 Run、Release rollback 动作与安装 Playbook 指纹；任一证据缺失或漂移都会阻断。
-- 预览不创建 Run。提交必须携带当前 `planDigest` 并完整输入环境名称，创建的破坏性 Run 固定进入 `awaiting_approval`。
 - `environment_rollback` 从提交到终态独占目标环境；数据库同时阻止该环境创建其他活动 Run，也阻止在已有活动 Run 时创建整环境回滚。
-- 锁定计划保存完整安装集合摘要。审批等待期间新增、删除或替换任何安装记录、备份引用、来源 Run 或 Playbook 指纹，执行都会失败关闭并要求重新预览。
+- 锁定计划保存完整安装集合摘要。排队期间新增、删除或替换任何安装记录、备份引用、来源 Run 或 Playbook 指纹，执行都会失败关闭并要求重新预览。
 - Run 成功后消费相应安装与备份基线；部分失败时只移除已成功回滚的组件记录，剩余项可修复后重新规划。
 
-### 7.11 批量审批
+### 7.11 自动交付策略
 
-环境 Owner 可以把当前可见的多条 Awaiting Approval 记录连同统一理由提交。Service 会裁剪理由并拒绝空白值，然后在一个事务内重新校验所有 Approval 的状态、归属和目标 Run；任一项失效则整批失败。批准成功后各 Run 进入 `queued`，仍由各环境 FIFO 调度，不因批量批准而并行占用同一环境。批量拒绝同样原子写入决定。
+计划生成时将介质和镜像固定为平移到目标，写入交付策略与目标地址并绑定计划摘要。目标已有匹配内容时复用；缺少目标或来源不可读时返回阻断，不支持自动直用来源。运行创建即包含完整交付计划。
 
 ### 7.12 安全续跑
 
-失败或中断的组件测试、场景测试和场景运行只有在环境 Revision、资源定义、Playbook、目录树和内容指纹均未漂移，且首个未完成动作明确可重试时才生成续跑计划。续跑只复制未完成步骤并重新绑定备份元数据，同时保留原 Run 锁定的 DeliveryRequirement 和逐项选择；新的环境审批确认这些选择，Executor 仍会再次探测目标并按锁定来源安全直用或平移。同一根 Run 由数据库唯一索引限制为最多一个活动续跑，`retryAttempt` 从根链历史最大值递增，另一唯一索引禁止重复编号。
+失败或中断的组件测试、场景测试和场景运行只有在环境 Revision、资源定义、Playbook、目录树和内容指纹均未漂移，且首个未完成动作明确可重试时才生成续跑计划。续跑只复制未完成步骤并重新绑定备份元数据，同时保留原 Run 锁定的 DeliveryRequirement 和逐项选择；Executor 再次探测目标并按锁定策略复用或平移。同一根 Run 由数据库唯一索引限制为最多一个活动续跑，`retryAttempt` 从根链历史最大值递增，另一唯一索引禁止重复编号。
 
 所有新活动 Run 在最终插入事务中重新检查锁定 Release 的生命周期。场景测试引用的 Draft 必须仍是候选且当前 Readiness 未阻断，正式场景运行只能引用已发布过的保留版本；候选在预检后被撤回、Readiness 变为阻断、或从未发布的 Draft 被废弃时，旧提交会以冲突拒绝。
 
 ### 7.13 运行历史管理
 
-成功 Run 的日志可归档到独立目录，业务 Run、快照、步骤、审批和证据引用保留。只允许清理超过保留期限且无受保护引用的失败 Run；执行时在事务内重新校验整批资格并保留审计及最小历史标记。自动归档和清理均初始关闭，策略与每日扫描由平台 Owner 管理。下载、备份目录及恢复步骤见 [运行历史管理](run-history-and-adaptation.md)。
+成功 Run 的日志可归档到独立目录，业务 Run、快照、步骤和证据引用保留。只允许清理超过保留期限且无受保护引用的失败 Run；执行时在事务内重新校验整批资格并保留审计及最小历史标记。自动归档和清理均初始关闭，策略与每日扫描由平台 Owner 管理。下载、备份目录及恢复步骤见 [运行历史管理](run-history-and-adaptation.md)。
 
 ## 8. Ansible 与凭据安全
 
@@ -601,9 +586,6 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | PUT | `/component-releases/{id}` | 更新 Draft；必须携带 `expectedDefinitionGeneration`，遗漏合同数组保留当前值 |
 | PUT | `/component-releases/{id}/contract` | 显式替换完整参数与依赖合同；必须携带 `expectedDefinitionGeneration` |
 | PATCH | `/component-releases/{id}/contract` | 按 `section=parameters|dependencies` 原子保存当前分区，校验定义代次，保留另一分区 |
-| POST | `/component-releases/{id}/review-submission` | 组件 Owner 按当前合同摘要提交平台 Owner 审核 |
-| GET | `/component-releases/{id}/review-preview` | 平台 Owner 读取待审合同、全部托管 Playbook 正文与实际 SHA-256，并生成防漂移预览摘要 |
-| POST | `/component-releases/{id}/review-decision` | 平台 Owner 按必填 `expectedPreviewDigest` 批准或驳回当前待审合同 |
 | POST | `/component-imports/plan` | 完整预检批量组件导入，不写入 |
 | POST | `/component-imports` | 按预检指纹原子导入组件、Draft、Playbook 和审计记录 |
 | GET | `/component-releases/{id}/impact?operation=publish|deprecate` | 发布或废弃影响预览；发布线演进按父 Release 精确计算 |
@@ -696,12 +678,11 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | POST | `/environments/{id}/health-checks` | 对当前 Revision 执行只读 TCP 连通性检查 |
 | POST | `/environments/{id}/connectivity-checks` | 从一个入口执行 TCP 与 Go SSH 两类只读检查 |
 | POST | `/environments/{id}/cluster-rollback-plan` | 只读预览整集群逆序回滚计划 |
-| POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建待审批整集群回滚 Run |
+| POST | `/environments/{id}/cluster-rollback-runs` | 按摘要创建排队整集群回滚 Run |
 | POST | `/environments/{id}/revisions/{revisionId}/restore` | 复制历史快照并创建新 Revision |
 | GET | `/environments/{id}/revisions/{revisionId}/deletion-impact` | 环境 Owner 按需核对历史版本的 Run、构建引用与检查删除数量 |
 | DELETE | `/environments/{id}/revisions/{revisionId}` | 环境 Owner 删除未归档环境中非当前且未被 Run 或构建引用的版本；检查清理与审计同事务提交 |
 | GET | `/runs` | 按当前身份、环境、状态、归档范围分页返回摘要 |
-| GET | `/approvals/batch-candidates` | 环境 Owner 批量审批候选，独立于运行列表分页 |
 | POST | `/runs/archive` | 平台 Owner 提交成功 Run 归档任务 |
 | POST | `/runs/cleanup-preview` | 平台 Owner 预览选定失败 Run 的清理资格及阻断原因 |
 | POST | `/runs/cleanup` | 重新校验全部条件后原子清理选定失败 Run |
@@ -711,7 +692,7 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | PATCH / DELETE | `/platform-option-categories/{id}` | 平台 Owner 修改类别或在无保护引用时删除 |
 | POST | `/platform-option-categories/{id}/options` | 平台 Owner 创建类别选项 |
 | PATCH / DELETE | `/platform-options/{id}` | 平台 Owner 修改选项或在无保护引用时删除 |
-| GET | `/runs/{id}` | Run 步骤、审批和执行快照详情 |
+| GET | `/runs/{id}` | Run 步骤和执行快照详情 |
 | GET | `/runs/{id}/activity` | 同一快照的状态、增量日志与当前等待观测 |
 | GET | `/runs/{id}/diagnostics` | 按 Run 查看权限提供故障定位摘要 |
 | GET | `/runs/{id}/log-bundle` | 按 Run 查看权限下载日志包 |
@@ -725,9 +706,6 @@ Activity 完整字段、场景保存基线和工作台专用查询规则见 [Run
 | POST | `/runs/{id}/retry-runs` | 创建关联 Run，从安全的未完成步骤继续 |
 | GET / POST | `/environment-variable-definitions` | 登录用户读取、平台 Owner 新增环境变量字段 |
 | DELETE | `/environment-variable-definitions/{id}` | 平台 Owner 删除未受引用保护的变量字段 |
-| POST | `/approvals/{id}/approve` | 批准危险 Run |
-| POST | `/approvals/{id}/reject` | 拒绝危险 Run |
-| POST | `/approvals/batch` | 原子批量批准或拒绝危险 Run |
 | GET | `/notifications` | 当前用户通知 |
 | PATCH | `/notifications/{id}` | 标记已读；不能恢复未读 |
 | GET | `/audit-events` | 最近 500 条审计，环境 Owner 或平台 Owner |
@@ -745,8 +723,8 @@ Release 返回 `definitionGeneration`；更新时使用 `expectedDefinitionGener
 - `GET /components` 返回摘要，不携带完整 Release、Action、参数和工作区。编排确需完整合同时显式使用 `view=contracts`。`GET /components/{id}` 返回选中组件及 `readContext`；`releaseLines` 用 `releaseIds` 引用版本，不重复序列化完整 Release。详情提供 `playbookFileCount`，文件清单单独从工作区接口读取。
 - 组件详情的 `canDelete` 表示当前用户是否可以删除组件；仅本人组件 Owner 且所有状态版本数为零、无依赖/环境安装/执行回执引用时为 true。前端仅在该值为 true 时显示删除入口，字段缺失时隐藏。删除接口在 Catalog 写事务内重新核对同一组条件，将组件、空发布线删除与 `component.deleted` 审计、目录纪元递增一并提交；提交后才发送同名 SSE。成功返回 `200 {data:{deleted:true}}`，无权限返回 403，不存在返回 404，状态或引用冲突返回可解释的 409。
 - `GET /runs` 接受 `page`（默认 1）、`pageSize`（默认 50，1–100）、`archive=unarchived|archived|all`、`filter=all|active|finished` 和 `environmentId`。返回 `{items, page, pageSize, total}`；摘要不包含执行快照、步骤和日志，详情独立请求。
-- `GET /runs/{id}` 在执行快照或交付结果损坏时返回带 `snapshotError` 的诊断详情，保留实际步骤及故障信息；日志诊断与下载仍可用。诊断投影不包含可执行输入，不能用于审批或续跑。失败记录的清理独立提取保留身份，继续校验期限和受保护引用。
-- `GET /component-releases/{id}/run-evidence` 使用不可变 Run 快照判断引用并返回摘要；批量审批从独立候选接口加载，不受当前列表分页限制。
+- `GET /runs/{id}` 在执行快照或交付结果损坏时返回带 `snapshotError` 的诊断详情，保留实际步骤及故障信息；日志诊断与下载仍可用。诊断投影不包含可执行输入，不能用于续跑。失败记录的清理独立提取保留身份，继续校验期限和受保护引用。
+- `GET /component-releases/{id}/run-evidence` 使用不可变 Run 快照判断引用并返回摘要，独立于运行列表分页。
 - 已按策略清理的 Run：原有查看权限用户访问详情返回 HTTP 410、错误码 `run.cleaned`；无权限用户仍返回 403。归档包缺失或校验不通过时下载报错，不能伪装成空日志。
 - JSON 响应支持协商 gzip 压缩；SSE、下载和请求体不采用该压缩包装。
 
@@ -772,7 +750,6 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 
 - `run.updated`
 - `run.log`：仅含 `runId`、`logId`，数据库提交成功后发布
-- `approval.updated`
 - `release.published`
 - `scenario.published`
 - `notification`
@@ -804,7 +781,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 | `CLUSTERFORGE_RUN_ARCHIVE_DIR` | 未配置 | 独立持久化归档目录的绝对路径；未配置时归档不可用，普通 Run 可执行 |
 | `NEWPLATFORM_K8S1175_ENCRYPTION_KEY` | 无 | K8s 1.17.5 示例执行时动态注入的 secret |
 
-启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20260908-typed-run-snapshot` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。Run 快照仅通过独立的 `database migrate-run-snapshot` 离线工具从精确的上一合同一次性转换，运行时不导入旧解析器；步骤、快照、结果及读取边界见 [Run 快照合同与离线迁移](design/run-snapshot-contract.md)。分支范围必须按当前规则声明。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅复制当前精确合同的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
+启动过程：加载 `.env`（不覆盖已有进程环境变量）→ 初始化空数据库或精确校验 `clusterforge-v1-20261014-owner-direct-execution` → 幂等 seed（平台治理目录只在新库创建一次，恢复的当前合同选项目录不改写，首次启动单独初始化空的环境变量字段目录）→ 初始化 Runner → 恢复未完成的 Action 文件事务、运行状态和队列 → 启动 HTTP 服务。任何其他合同均在启动前失败关闭；运行时代码不包含历史合同迁移、双读或旧 API 兼容。不匹配的测试库须先备份。当前版本不提供旧审批数据的离线转换；步骤、快照、结果及读取边界见 [Run 快照合同](design/run-snapshot-contract.md)。分支范围必须按当前规则声明。明确授权的 `database foundation-snapshot` 用当前 schema 新建空业务库，仅复制当前精确合同的账号、分类/选项和环境变量字段；它不迁移源库，也不恢复旧业务或 Run。
 
 ### 11.1 发布目录灾备
 
@@ -824,7 +801,7 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 - 排队 Run 使用锁定的 Environment Revision，不切换到最新环境。
 - Playbook 摘要不匹配时阻断执行，不自动接受新内容。
 - 取消 Running Run 使用 context 取消并终止 Ansible 进程组；不保证撤销已经对目标主机完成的变更。
-- Run 领取使用单条条件 `UPDATE ... RETURNING`，在同一写入快照内选择最早的排队项并确认环境没有运行项，避免并发事务先读后写的锁升级冲突。审批决策和 Revision 指针更新继续使用 SQLite 事务。
+- Run 领取使用单条条件 `UPDATE ... RETURNING`，在同一写入快照内选择最早的排队项并确认环境没有运行项，避免并发事务先读后写的锁升级冲突。Revision 指针更新继续使用 SQLite 事务。
 - 调度器仅对最后一次空领取后的入队窗口立即交接；存储错误由 watchdog 再次调度，避免持续失败时立即重建 worker。动作回执只允许相同环境、组件、Release、动作、节点及备份身份下的幂等或前向状态推进。
 - 组件发布、影响通知和审计目前不是一个跨表强事务：Release 状态先更新，后续通知失败时接口可能返回错误但 Release 已发布；进入生产环境前应把发布、通知 outbox 和审计纳入一致性设计。
 
@@ -850,7 +827,6 @@ EventHub 提供进程内、非阻塞、尽力而为的 SSE fan-out。客户端�
 - 从 SQLite/单实例 Worker 演进为数据库锁或消息队列驱动的多实例调度。
 - 接入 Vault/KMS，避免用后端进程环境变量或本地路径承载 secret 引用。
 - 将执行策略真正接入 Planner，例如并行分支、失败策略和最大不可用节点。
-- 增加多人审批、超时和审批策略模板；当前批量审批已要求统一理由，但仍是单个环境 Owner 决策。
 - 增加审计强事务、导出、保留期和不可抵赖存储。
 - 在现有安全续跑和显式回退基础上，增加更细的节点恢复策略与人工确认门禁。
 - Kubernetes 1.17.5 样例 Action 尚未把 `K8S_ENCRYPTION_KEY` 声明为 `requiredCredentials`；补齐前只能依赖环境 Owner 人工核对和 Playbook 自身预检，通用 Planner 不会因缺少该引用而提前拒绝。

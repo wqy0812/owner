@@ -19,7 +19,7 @@ func activityFixture(t testing.TB) (*Store, domain.Run) {
 	r := evidenceRun("activity", "digest", "install_verify", "", "", testNow)
 	r.Status = domain.RunRunning
 	r.FinishedAt = nil
-	if err := s.CreateRun(context.Background(), r, nil); err != nil {
+	if err := s.CreateRun(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
 	return s, r

@@ -31,7 +31,7 @@
 - 发布代次：`3/3`
 - 备份时间：2026-08-29 21:38:05（Asia/Shanghai）
 
-该恢复点是复制已发布 Component、Release、Action、Scenario Revision 和托管 Playbook 的权威入口。它不包含 Environment、Run、Approval、Notification、CredentialRef 实际值、FSS 大型介质或 Registry 镜像层。
+该恢复点是复制已发布 Component、Release、Action、Scenario Revision 和托管 Playbook 的权威入口。它不包含 Environment、Run、Notification、CredentialRef 实际值、FSS 大型介质或 Registry 镜像层。
 
 ## 2. 演示身份
 
@@ -39,7 +39,7 @@
 | --- | --- | --- | --- |
 | `component-alice` | 林晓 | 组件 Owner | 本文 15 个 Component |
 | `scenario-carol` | 陈晨 | 集群 Owner | Kubernetes 1.17.5 六节点场景 |
-| `environment-dave` | 王维 | 环境 Owner | 两个 Kubernetes 测试环境和危险 Run 审批 |
+| `environment-dave` | 王维 | 环境 Owner | 两个 Kubernetes 测试环境 |
 
 身份切换是 Demo 会话功能，不包含密码、SSO、OIDC 或生产授权。
 

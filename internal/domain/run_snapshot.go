@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const RunSnapshotContract = "clusterforge-run-v1"
+const RunSnapshotContract = "clusterforge-run-v2"
 
 // RunSnapshot is the persisted execution contract. Run identity lives in Run;
 // observations and delivery results are deliberately stored outside this value.
@@ -313,7 +313,7 @@ func ValidateRunSnapshot(r Run) error {
 	}
 	decisions := map[string]string{}
 	for _, v := range s.Delivery.Decisions {
-		if requirements[v.RequirementID].ID == "" || decisions[v.RequirementID] != "" || (v.Mode != "direct" && v.Mode != "transfer") {
+		if requirements[v.RequirementID].ID == "" || decisions[v.RequirementID] != "" || v.Mode != "transfer" {
 			return bad("delivery.decisions", "invalid or contradictory selection")
 		}
 		decisions[v.RequirementID] = v.Mode
@@ -332,13 +332,13 @@ func ValidateRunSnapshot(r Run) error {
 		transfers[v.RequirementID] = true
 	}
 	if (r.Status == RunQueued || r.Status == RunRunning) && len(requirements) != len(decisions) {
-		return bad("delivery.decisions", "queued delivery requires complete approval")
+		return bad("delivery.decisions", "queued delivery requires a complete automatic transfer plan")
 	}
 	return nil
 }
 
 // ReferencedRunIDs walks authoritative identities only, never user variables or
-// parameter provenance. It is shared by creation, approval and offline migration.
+// parameter provenance. It is shared by creation and history reads.
 func (s RunSnapshot) ReferencedRunIDs() []string {
 	ids := map[string]bool{}
 	add := func(id string) {

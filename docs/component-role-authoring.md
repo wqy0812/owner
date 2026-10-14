@@ -4,7 +4,7 @@
 
 ## 动作与入口
 
-Release 必须定义 install 和 rollback。configure、upgrade、uninstall 为可选执行动作。同一种执行动作只能有一个。部署、配置、升级、卸载通过 `preCheckActionId`、`postCheckActionId` 绑定本 Release 的 check 动作；回滚只执行主体和回滚后检查，禁止绑定回滚前检查。回滚后检查默认复用实际被撤销动作的前置检查，也可以显式绑定专用检查。检查可以复用，不能继续绑定检查。Draft 允许尚未绑定，执行、评审和发布要求完整。
+Release 必须定义 install 和 rollback。configure、upgrade、uninstall 为可选执行动作。同一种执行动作只能有一个。部署、配置、升级、卸载通过 `preCheckActionId`、`postCheckActionId` 绑定本 Release 的 check 动作；回滚只执行主体和回滚后检查，禁止绑定回滚前检查。回滚后检查默认复用实际被撤销动作的前置检查，也可以显式绑定专用检查。检查可以复用，不能继续绑定检查。Draft 允许尚未绑定，执行和发布要求完整。
 
 平台生成入口：
 
@@ -73,7 +73,7 @@ Role 工作区/
 
 组件工作区由平台按组件、版本线和完整 Release ID 分配，组件依赖不会改变目录层级。不同组件的根目录不得相同或互为父子；打包后的 Role 并列存放。辅助任务、模板和本地文件使用当前 Role 内的相对路径，禁止通过父目录、符号链接或跨 Role 引用复用其他组件文件。`copy`、`template`、`unarchive` 使用 YAML 映射参数声明 `src`，本地文件查询使用固定相对路径；目标主机上的源文件需显式声明 `remote_src: true`。
 
-组件动作不再录入资源管理范围，平台不根据声明限制宿主机文件操作或判断组件间路径冲突；文件操作、归属和残留检查由组件 YAML 负责。Action、验收定义及执行计划均不包含 `resourceContract`、`gatherFacts` 或 `runtimeChecks`。采集与探测由 Owner 直接写入 YAML，接口拒绝旧字段及迁移确认参数；源码与当前元数据共同提交。定义变更后重新测试、评审，已发布版本通过新 Draft 修订。
+组件动作不再录入资源管理范围，平台不根据声明限制宿主机文件操作或判断组件间路径冲突；文件操作、归属和残留检查由组件 YAML 负责。Action、验收定义及执行计划均不包含 `resourceContract`、`gatherFacts` 或 `runtimeChecks`。采集与探测由 Owner 直接写入 YAML，接口拒绝旧字段及迁移确认参数；源码与当前元数据共同提交。定义变更后重新测试，已发布版本通过新 Draft 修订。
 
 ## 共享目录与公开路径
 

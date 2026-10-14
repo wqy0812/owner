@@ -123,13 +123,12 @@ func TestRecorderDoesNotPublishUnstoredOutput(t *testing.T) {
 
 type runCreationStore struct {
 	creatorStore
-	fail     bool
-	saved    domain.Run
-	approval *domain.Approval
+	fail  bool
+	saved domain.Run
 }
 
-func (s *runCreationStore) CreateRun(_ context.Context, run domain.Run, approval *domain.Approval) error {
-	s.saved, s.approval = run, approval
+func (s *runCreationStore) CreateRun(_ context.Context, run domain.Run) error {
+	s.saved = run
 	if s.fail {
 		return errors.New("create failed")
 	}
@@ -140,7 +139,7 @@ type recordingScheduler struct{ environments []string }
 
 func (s *recordingScheduler) schedule(id string) { s.environments = append(s.environments, id) }
 
-func TestRunCreatorPersistsBeforeSchedulingAndHonorsApproval(t *testing.T) {
+func TestRunCreatorPersistsBeforeSchedulingAndQueuesEveryRiskLevel(t *testing.T) {
 	for _, tc := range []struct{ destructive, fail bool }{{false, false}, {true, false}, {false, true}} {
 		data, scheduler, audit := &runCreationStore{fail: tc.fail}, &recordingScheduler{}, &creationAudit{}
 		creator := &RunCreator{store: data, scheduler: scheduler, audit: audit, hub: NewEventHub()}
@@ -150,11 +149,11 @@ func TestRunCreatorPersistsBeforeSchedulingAndHonorsApproval(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantSchedule := 1
-		if tc.destructive || tc.fail {
+		if tc.fail {
 			wantSchedule = 0
 		}
-		if len(scheduler.environments) != wantSchedule || (data.approval != nil) != tc.destructive {
-			t.Fatalf("approval=%v scheduled=%v", data.approval, scheduler.environments)
+		if len(scheduler.environments) != wantSchedule || run.Status != domain.RunQueued || run.Destructive != tc.destructive {
+			t.Fatalf("run=%+v scheduled=%v", run, scheduler.environments)
 		}
 		if tc.fail && len(audit.actions) != 0 {
 			t.Fatal("failed creation emitted audit")

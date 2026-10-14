@@ -15,7 +15,7 @@ func TestRunLogsSurviveTransientWriterContention(t *testing.T) {
 	defer cancel()
 	seed := evidenceHistoryStore(t, 0)
 	run := evidenceRun("log-contention", "digest", "install_verify", "", "", testNow)
-	if err := seed.CreateRun(ctx, run, nil); err != nil {
+	if err := seed.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "logs.db")

@@ -37,7 +37,7 @@ type RunPlanStep struct {
 	Variables               map[string]any  `json:"variables"`
 	RequiredCredentials     []string        `json:"requiredCredentials"`
 	TimeoutSeconds          int             `json:"timeoutSeconds"`
-	NeedsApproval           bool            `json:"needsApproval"`
+	HighRisk                bool            `json:"highRisk"`
 	RetrySafe               bool            `json:"retrySafe"`
 	BackupRef               string          `json:"backupRef,omitempty"`
 	Backup                  *BackupMetadata `json:"backup,omitempty"`
@@ -92,11 +92,12 @@ type RunDeliveryRequirement struct {
 	TargetRef         string   `json:"targetRef,omitempty"`
 }
 
+const DeliveryPolicyTransferToTarget = "transfer_to_target"
+
 type RunDeliveryDecision struct {
-	RequirementID string    `json:"requirementId"`
-	Mode          string    `json:"mode"`
-	DecidedBy     string    `json:"decidedBy"`
-	DecidedAt     time.Time `json:"decidedAt"`
+	RequirementID string `json:"requirementId"`
+	Mode          string `json:"mode"`
+	Policy        string `json:"policy"`
 }
 
 type RunDeliveryResult struct {

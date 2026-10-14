@@ -389,46 +389,6 @@ func (h *Handler) setReleaseCandidate(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, release)
 }
 
-func (h *Handler) submitReleaseReview(w http.ResponseWriter, r *http.Request) {
-	release, err := h.platform.Catalog().SubmitReleaseReview(r.Context(), currentUser(r), r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, release)
-}
-
-func (h *Handler) previewReleaseReview(w http.ResponseWriter, r *http.Request) {
-	preview, err := h.platform.Catalog().PreviewReleaseReview(r.Context(), currentUser(r), r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, preview)
-}
-
-func (h *Handler) decideReleaseReview(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Decision              string `json:"decision"`
-		Comment               string `json:"comment"`
-		ExpectedPreviewDigest string `json:"expectedPreviewDigest"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	if input.Decision != "approve" && input.Decision != "reject" {
-		writeError(w, fmt.Errorf("%w: decision must be approve or reject", domain.ErrInvalid))
-		return
-	}
-	release, err := h.platform.Catalog().DecideReleaseReview(r.Context(), currentUser(r), r.PathValue("id"), input.Decision == "approve", input.Comment, input.ExpectedPreviewDigest)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, release)
-}
-
 func (h *Handler) testRelease(w http.ResponseWriter, r *http.Request) {
 	var input service.ComponentTestRequest
 	if err := decodeJSON(r, &input); err != nil {

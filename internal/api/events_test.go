@@ -127,8 +127,8 @@ func TestEventVisibilityEnforcesRunOwnershipAndWorkerErrorRole(t *testing.T) {
 	if handler.eventVisible(request, alice, service.Event{Type: "run.worker_error", Data: map[string]any{"error": "worker stopped"}}) {
 		t.Fatal("component owner could see a global worker error")
 	}
-	if handler.eventVisible(request, alice, service.Event{Type: "approval.updated", Data: "invalid"}) {
-		t.Fatal("malformed approval event was visible")
+	if handler.eventVisible(request, alice, service.Event{Type: "run.updated", Data: "invalid"}) {
+		t.Fatal("malformed run event was visible")
 	}
 	if !handler.eventVisible(request, carol, service.Event{Type: "scenario_revision.updated", Data: map[string]any{"scenarioRevisionId": "revision-1"}}) {
 		t.Fatal("non-Run workflow event was hidden")

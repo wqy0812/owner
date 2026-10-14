@@ -12,35 +12,16 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-func TestRetryApprovalCarriesLockedDeliveryChoices(t *testing.T) {
-	platform := &DeliveryService{}
-	plan := domain.RunExecutionPlan{
-		DeliveryRequirements: []domain.RunDeliveryRequirement{{ID: "artifact:runtime", Kind: "artifact", Source: "https://source.test/runtime.tgz"}},
-		DeliveryDecisions:    []domain.RunDeliveryDecision{{RequirementID: "artifact:runtime", Mode: "direct", DecidedBy: "environment-owner"}},
-	}
-	approvedAt := time.Now().UTC()
-	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, nil, domain.User{ID: "environment-owner"}, approvedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(finalized.DeliveryDecisions) != 1 || finalized.DeliveryDecisions[0].Mode != "direct" || finalized.DeliveryDecisions[0].DecidedAt != approvedAt {
-		t.Fatalf("carried retry delivery decision=%+v", finalized.DeliveryDecisions)
-	}
-	if len(finalized.DeliveryResults) != 1 || finalized.DeliveryResults[0].Status != "direct" || finalized.DeliveryResults[0].ActualLocation != "https://source.test/runtime.tgz" {
-		t.Fatalf("carried retry delivery result=%+v", finalized.DeliveryResults)
-	}
-}
-
 type presentArtifactDelivery struct{}
 
 func (presentArtifactDelivery) Probe(context.Context, mediadelivery.ArtifactLocation, mediadelivery.ArtifactIdentity) error {
 	return nil
 }
 func (presentArtifactDelivery) Transfer(context.Context, mediadelivery.ArtifactTransfer) error {
-	return errors.New("transfer must not run during approval finalization")
+	return errors.New("transfer must not run during plan preparation")
 }
 
-func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
+func TestAutomaticDeliveryReusesTargetThatAppearedDuringPreparation(t *testing.T) {
 	platform := &DeliveryService{artifactDelivery: presentArtifactDelivery{}}
 	plan := domain.RunExecutionPlan{
 		Steps: []domain.RunPlanStep{{ID: "step-1", Variables: map[string]any{}}},
@@ -50,7 +31,7 @@ func TestDeliveryApprovalReusesTargetThatAppearedWhilePending(t *testing.T) {
 			TransferAvailable: true, TargetStation: "target.test", RelativePath: "components/runtime.tgz", StepIDs: []string{"step-1"},
 		}},
 	}
-	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, []DeliveryDecisionInput{{RequirementID: "artifact:runtime", Mode: "transfer"}}, domain.User{ID: "environment-owner"}, time.Now().UTC())
+	finalized, err := platform.finalizeDeliveryPlan(context.Background(), plan, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

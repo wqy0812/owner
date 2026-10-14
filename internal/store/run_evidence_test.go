@@ -41,7 +41,7 @@ func TestIndexedEvidenceMatchesSnapshotQueries(t *testing.T) {
 		if item.noFinish {
 			run.FinishedAt = nil
 		}
-		if err := s.CreateRun(ctx, run, nil); err != nil {
+		if err := s.CreateRun(ctx, run); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,7 +71,7 @@ func TestEvidenceProjectionsTrackSourceAndCannotBeWritten(t *testing.T) {
 	ctx := context.Background()
 	run := evidenceRun("projection", "current", "install_verify", "runtime-a", "version-a", testNow)
 	run.Status, run.FinishedAt = domain.RunRunning, nil
-	if err := s.CreateRun(ctx, run, nil); err != nil {
+	if err := s.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
 	if id, err := s.lookupComponentEvidence(ctx, run.ComponentReleaseID, "current", "install_verify"); err != nil || id != "" {
@@ -143,7 +143,7 @@ func TestRunEvidenceQueriesUseSearchIndexes(t *testing.T) {
 	}
 	check(`SELECT id FROM run_steps WHERE run_id=? ORDER BY rowid`, []any{"run"}, "idx_run_steps_run", true)
 	check(`SELECT id FROM action_definitions WHERE release_id=? ORDER BY kind,name`, []any{"release"}, "idx_actions_release", true)
-	check(`SELECT COUNT(*) FROM runs WHERE kind='component_test' AND component_release_id=? AND status IN ('awaiting_approval','queued','running')`, []any{"release"}, "idx_runs_active_component", true)
+	check(`SELECT COUNT(*) FROM runs WHERE kind='component_test' AND component_release_id=? AND status IN ('queued','running')`, []any{"release"}, "idx_runs_active_component", true)
 }
 
 func evidenceHistoryStore(t testing.TB, count int) *Store {

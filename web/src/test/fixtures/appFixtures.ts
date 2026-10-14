@@ -52,7 +52,6 @@ export function json(data: unknown, status = 200) {
       result.lineName ??= `${result.componentId} baseline`;
       result.compatibility ??= result.parentReleaseId ? 'compatible' : 'not_applicable';
       result.readiness ??= { status: 'ready', blockers: [] };
-      result.review ??= { status: 'approved' };
       result.dependencies ??= [];
       const mappedTargets = new Set((result.dependencies as any[]).flatMap((dependency) => (dependency.parameterMappings ?? []).map((mapping: any) => mapping.targetParameter)));
       result.parameters = Array.isArray(result.parameters) ? result.parameters.map((parameter: any) => {
@@ -254,13 +253,9 @@ export function installReadModelFixtures() {
     if ((!init?.method || init.method === 'GET') && url.pathname === '/api/v1/runs' && url.search) {
       const response = await currentFetch('/api/v1/runs', init); if (!response.ok) return response;
       const body = await response.json(); const page = Number(url.searchParams.get('page')); const pageSize = Number(url.searchParams.get('pageSize'));
-      const active = new Set(['running', 'queued', 'awaiting_approval']);
+      const active = new Set(['running', 'queued']);
       const items = (body.items ?? []).filter((run: any) => (!url.searchParams.get('environmentId') || run.environmentId === url.searchParams.get('environmentId')) && (url.searchParams.get('filter') === 'active' ? active.has(run.status) : url.searchParams.get('filter') === 'finished' ? !active.has(run.status) : true));
       return new Response(JSON.stringify({ items: items.slice((page - 1) * pageSize, page * pageSize).map((run: any) => ({ ...run, name: run.name ?? run.componentName ?? run.scenarioName ?? run.id, environmentName: run.environmentName ?? 'Test Environment', createdAt: run.createdAt ?? '' })), page, pageSize, total: items.length }), { headers: { 'Content-Type': 'application/json' } });
-    }
-    if ((!init?.method || init.method === 'GET') && url.pathname === '/api/v1/approvals/batch-candidates') {
-      const response = await currentFetch('/api/v1/runs', init); const body = await response.json();
-      return json((body.items ?? []).filter((run: any) => run.status === 'awaiting_approval' && run.approval?.id && !run.deliveryRequirements?.length).map((run: any) => ({ ...run, name: run.name ?? run.id, environmentName: run.environmentName ?? 'Test Environment', createdAt: run.createdAt ?? '', approvalId: run.approval.id })));
     }
     return currentFetch(input, init);
   }));

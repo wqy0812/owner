@@ -12,12 +12,12 @@ import (
 )
 
 func TestCreateScenarioRunRejectsMissingAndHistoricalExecutionContracts(t *testing.T) {
-	for _, version := range []string{"", "2", "clusterforge-run-v0", "clusterforge-run-v2"} {
+	for _, version := range []string{"", "2", "clusterforge-run-v0", "clusterforge-run-v1"} {
 		t.Run(version, func(t *testing.T) {
 			db, _, revision := scenarioLifecycleFixture(t)
 			ctx := context.Background()
 			run := domain.Run{ID: "unsupported-contract", Kind: domain.RunScenarioTest, Status: domain.RunQueued, RequestedBy: "owner", EnvironmentID: "env", EnvironmentRevisionID: "env-rev", ScenarioRevisionID: revision.ID, Snapshot: domain.RunSnapshot{Contract: version}, CreatedAt: time.Now().UTC()}
-			err := db.CreateRun(ctx, run, nil)
+			err := db.CreateRun(ctx, run)
 			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unsupported contract") {
 				t.Fatalf("unsupported contract: %v", err)
 			}
@@ -140,7 +140,7 @@ func TestScenarioDefinitionCASAndActiveRunGuard(t *testing.T) {
 	if err = db.SaveScenarioRevisionDefinition(ctx, revision, digest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale save=%v", err)
 	}
-	for _, status := range []string{"awaiting_approval", "queued", "running"} {
+	for _, status := range []string{"queued", "running"} {
 		insertScenarioSourceRun(t, db, saved, status, "scenario_test", status, "install")
 		if err = db.SaveScenarioRevisionDefinition(ctx, saved, domain.ScenarioRevisionSpecDigest(saved)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("%s edit=%v", status, err)

@@ -207,7 +207,7 @@ component mutation. Credentials and registry authentication are supplied by the
 operator; the package does not contain or retrieve platform secrets.
 
 The package is bound to the recorded inventory. Independent execution does not
-write platform approvals, test evidence or installation state. Inspect the
+write platform test evidence or installation state. Inspect the
 verification field in manifest.json: its absence means this is a diagnostic or
 unverified package, not a verified complete cluster delivery.
 `

@@ -72,7 +72,7 @@ func TestValidateGraphEnforcesTypedEdgeContractsAndUniqueEndpoints(t *testing.T)
 	}
 }
 
-func TestActionNeedsApprovalUsesExplicitAndDefensiveMarkers(t *testing.T) {
+func TestActionHighRiskUsesExplicitAndDefensiveMarkers(t *testing.T) {
 	for _, action := range []ActionDefinition{
 		{Kind: ActionUninstall},
 		{Kind: ActionRollback},
@@ -81,12 +81,12 @@ func TestActionNeedsApprovalUsesExplicitAndDefensiveMarkers(t *testing.T) {
 		{RiskLevel: RiskDestructive},
 		{Destructive: true},
 	} {
-		if !action.NeedsApproval() {
-			t.Fatalf("action should require approval: %#v", action)
+		if !action.HighRisk() {
+			t.Fatalf("action should be marked high risk: %#v", action)
 		}
 	}
-	if (ActionDefinition{Kind: ActionVerify, Playbook: "verify.yml"}).NeedsApproval() {
-		t.Fatal("verify action unexpectedly requires approval")
+	if (ActionDefinition{Kind: ActionVerify, Playbook: "verify.yml"}).HighRisk() {
+		t.Fatal("check action unexpectedly marked high risk")
 	}
 }
 

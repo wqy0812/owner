@@ -23,19 +23,14 @@ type actionsStore interface {
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 }
 
-type ApprovalService struct {
-	audit     auditPort
-	control   *executionControl
-	delivery  deliveryPort
-	hub       *EventHub
-	scheduler schedulerPort
-	store     approvalsStore
+type RunCancellationService struct {
+	audit   auditPort
+	control *executionControl
+	hub     *EventHub
+	store   runCancellationStore
 }
 
-type approvalsStore interface {
-	BatchDecideApprovals(ctx context.Context, ids []string, ownerID, decision, reason string, at time.Time) ([]domain.Run, error)
-	DecideApprovalWithSnapshot(ctx context.Context, id, userID, decision, reason string, snapshot *domain.RunSnapshot, results []domain.RunDeliveryResult, at time.Time) error
-	GetApproval(ctx context.Context, id string) (domain.Approval, error)
+type runCancellationStore interface {
 	GetEnvironment(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error)
 	GetRun(ctx context.Context, id string) (domain.Run, error)
 	SetScenarioRevisionStatus(ctx context.Context, id string, from []domain.RevisionStatus, to domain.RevisionStatus, at time.Time) error
@@ -87,7 +82,6 @@ type catalogStore interface {
 	CreateComponentImageBuild(ctx context.Context, build domain.ComponentImageBuild) error
 	CreateComponentImport(ctx context.Context, components []domain.Component, releases []domain.ComponentRelease, audits []domain.AuditEvent) error
 	CreatePendingActionFileMutation(ctx context.Context, mutation store.PendingActionFileMutation) error
-	DecideComponentReleaseReview(ctx context.Context, id string, status domain.ReleaseReviewStatus, reviewer, comment, digest string, reviewedAt time.Time) error
 	DeleteComponentRelease(ctx context.Context, id string, audit domain.AuditEvent) error
 	CanDeleteComponent(ctx context.Context, id, ownerID string) (bool, error)
 	DeleteEmptyComponent(ctx context.Context, id, ownerID string, audit domain.AuditEvent) error
@@ -121,7 +115,6 @@ type catalogStore interface {
 	ReplaceDraftPlaybookFilesAndUpsertAction(ctx context.Context, releaseID, workspaceRoot, treeSHA string, files []domain.ComponentPlaybookFile, actionDigests map[string]string, action domain.ActionDefinition, mutationID string) error
 	RestoreDeprecatedComponentRelease(ctx context.Context, id string) error
 	SetReleaseCandidate(ctx context.Context, id string, candidate bool, expectedGeneration int64, expectedDigest string) error
-	SubmitComponentReleaseReview(ctx context.Context, id, digest string, expectedGeneration int64, submittedAt time.Time) error
 	UpdateComponent(ctx context.Context, c domain.Component) error
 	UpdateComponentArtifactSource(ctx context.Context, releaseID, alias, sourceURL, actorID string, at time.Time) (domain.ComponentArtifact, error)
 	UpdateComponentImageBuildStatus(ctx context.Context, id string, from []domain.ImageBuildStatus, to domain.ImageBuildStatus, digest, errorText string, at time.Time) error
@@ -183,7 +176,7 @@ type environmentsStore interface {
 }
 
 type ExecutionService struct {
-	approvals         approvalsPort
+	cancellation      runCancellationPort
 	archives          *RunArchives
 	audit             auditPort
 	creator           creatorPort
@@ -203,11 +196,9 @@ type executionStore interface {
 	GetRunDiagnosticRecord(context.Context, string) (domain.RunReadModel, error)
 	ReadRunActivity(context.Context, string, *int64, int) (store.RunActivity, error)
 	StreamRunLogSnapshot(context.Context, string, func(domain.RunLog) error) (store.RunLogSnapshot, error)
-	BatchApprovalCandidates(ctx context.Context, viewer domain.User) ([]store.RunSummary, error)
 	CanViewRun(ctx context.Context, viewer domain.User, runID string) (bool, error)
 	CleanupRuns(ctx context.Context, ids []string, actor, source string, now time.Time) error
 	EnqueueRunArchives(ctx context.Context, ids []string, source, actor string, now time.Time) ([]domain.RunArchive, error)
-	GetApprovalByRun(ctx context.Context, runID string) (domain.Approval, error)
 	GetComponent(ctx context.Context, id string, includeReleases bool) (domain.Component, error)
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 	GetEnvironment(ctx context.Context, id string, includeRevisions bool) (domain.Environment, error)
@@ -446,7 +437,7 @@ type RunCreator struct {
 }
 
 type creatorStore interface {
-	CreateRun(ctx context.Context, r domain.Run, approval *domain.Approval) error
+	CreateRun(ctx context.Context, r domain.Run) error
 	GetComponentRelease(ctx context.Context, id string) (domain.ComponentRelease, error)
 	GetScenarioInstallation(ctx context.Context, environmentID, scenarioID string) (domain.ScenarioInstallation, error)
 	GetScenarioRevision(ctx context.Context, id string) (domain.ScenarioRevision, error)
@@ -551,10 +542,8 @@ type actionsPort interface {
 	lockAction(component domain.Component, nodeID string, release domain.ComponentRelease, action domain.ActionDefinition, variables map[string]any) (domain.RunPlanStep, error)
 }
 
-type approvalsPort interface {
-	BatchDecideApprovals(ctx context.Context, user domain.User, approvalIDs []string, decision, reason string) ([]domain.Run, error)
+type runCancellationPort interface {
 	CancelRun(ctx context.Context, user domain.User, runID string) (domain.Run, error)
-	DecideApproval(ctx context.Context, user domain.User, approvalID, decision, reason string, deliveryDecisions []DeliveryDecisionInput) (domain.Run, error)
 }
 
 type auditPort interface {
@@ -580,7 +569,7 @@ type deliveryPort interface {
 	verifyRunMedia(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
 	bindComponentArtifacts(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error
 	bindComponentImages(ctx context.Context, revision domain.EnvironmentRevision, plan *domain.RunExecutionPlan) error
-	finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, inputs []DeliveryDecisionInput, user domain.User, at time.Time) (domain.RunExecutionPlan, error)
+	finalizeDeliveryPlan(ctx context.Context, plan domain.RunExecutionPlan, at time.Time) (domain.RunExecutionPlan, error)
 	mirrorRunArtifacts(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
 	mirrorRunImages(ctx context.Context, runID string, plan *domain.RunExecutionPlan) error
 }

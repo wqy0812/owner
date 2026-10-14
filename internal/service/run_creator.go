@@ -42,19 +42,13 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 
 	snapshot.Inputs.CredentialRefs = redactedRefs
 	status := domain.RunQueued
-	var approval *domain.Approval
 	run := domain.Run{
 		ID: runID, Kind: kind, Status: status, RequestedBy: user.ID,
 		EnvironmentID: environment.ID, EnvironmentRevisionID: environment.CurrentRevisionID,
 		ComponentReleaseID: releaseID, ScenarioRevisionID: revisionID, Action: action,
 		Destructive: destructive, Snapshot: snapshot, DeliveryResults: plan.DeliveryResults, ArtifactDigest: plan.TreeDigest, CreatedAt: now,
 	}
-	if destructive {
-		run.Status = domain.RunAwaitingApproval
-		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: now}
-		run.Approval = approval
-	}
-	if err := c.store.CreateRun(ctx, run, approval); err != nil {
+	if err := c.store.CreateRun(ctx, run); err != nil {
 		return run, err
 	}
 	c.audit.Record(ctx, user, "run.created", "run", run.ID, map[string]any{
@@ -62,7 +56,7 @@ func (c *RunCreator) createRun(ctx context.Context, user domain.User, environmen
 		"componentReleaseId": releaseID, "scenarioRevisionId": revisionID, "artifactDigest": plan.TreeDigest, "destructive": destructive,
 	})
 	c.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
-	if !destructive {
+	if run.Status == domain.RunQueued {
 		c.scheduler.schedule(environment.ID)
 	}
 	return run, nil

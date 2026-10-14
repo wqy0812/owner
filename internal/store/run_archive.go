@@ -172,8 +172,8 @@ func archiveRecords(ctx context.Context, q queryer, id string, write func(string
 	if err = emit("run.json", run); err != nil {
 		return boundary, err
 	}
-	// Typed row maps preserve every column, including future optional approval fields.
-	for _, table := range []string{"run_steps", "approvals", "action_execution_receipts", "run_jobs"} {
+	// Typed row maps preserve every column, including optional step fields.
+	for _, table := range []string{"run_steps", "action_execution_receipts", "run_jobs"} {
 		rows, e := q.QueryContext(ctx, "SELECT * FROM "+table+" WHERE run_id=? ORDER BY rowid", id)
 		if e != nil {
 			return boundary, e

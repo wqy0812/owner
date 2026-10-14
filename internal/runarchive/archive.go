@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-const FormatVersion = "clusterforge-run-archive-v1"
+const FormatVersion = "clusterforge-run-archive-v2"
 
 type Entry struct {
 	Name   string `json:"name"`
@@ -64,7 +64,7 @@ func Path(root, relative string) (string, error) {
 }
 func Pack(ctx context.Context, dir, target, runID string, count int64) (err error) {
 	manifest := Manifest{FormatVersion: FormatVersion, RunID: runID, LogCount: count, Files: []Entry{}}
-	for _, name := range []string{"run.json", "run_steps.json", "approvals.json", "logs.ndjson"} {
+	for _, name := range []string{"run.json", "run_steps.json", "logs.ndjson"} {
 		hash, size, e := HashFile(filepath.Join(dir, name))
 		if e != nil {
 			return e
@@ -144,12 +144,12 @@ func Verify(path, expectedRunID string) error {
 	if err = json.NewDecoder(io.LimitReader(tr, 1<<20)).Decode(&m); err != nil {
 		return err
 	}
-	if m.FormatVersion != FormatVersion || m.RunID != expectedRunID || len(m.Files) != 4 {
+	if m.FormatVersion != FormatVersion || m.RunID != expectedRunID || len(m.Files) != 3 {
 		return errors.New("archive identity or file list mismatch")
 	}
 	expected := map[string]Entry{}
 	for _, e := range m.Files {
-		if e.Name != "run.json" && e.Name != "run_steps.json" && e.Name != "approvals.json" && e.Name != "logs.ndjson" {
+		if e.Name != "run.json" && e.Name != "run_steps.json" && e.Name != "logs.ndjson" {
 			return errors.New("unexpected archive entry")
 		}
 		if _, exists := expected[e.Name]; exists {

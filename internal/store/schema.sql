@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_contract (
 );
 
 INSERT OR IGNORE INTO schema_contract(id, version)
-VALUES(1, 'clusterforge-v1-20260908-typed-run-snapshot');
+VALUES(1, 'clusterforge-v1-20261014-owner-direct-execution');
 
 CREATE TABLE IF NOT EXISTS publication_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -104,12 +104,6 @@ CREATE TABLE IF NOT EXISTS component_releases (
   release_notes TEXT NOT NULL DEFAULT '',
   compatibility TEXT NOT NULL CHECK (compatibility IN ('not_applicable','compatible','breaking')),
   candidate INTEGER NOT NULL DEFAULT 0 CHECK (candidate IN (0,1)),
-  review_status TEXT NOT NULL DEFAULT 'not_submitted' CHECK (review_status IN ('not_submitted','pending','approved','rejected')),
-  review_contract_digest TEXT NOT NULL DEFAULT '',
-  review_submitted_at TEXT,
-  reviewed_by TEXT REFERENCES users(id),
-  reviewed_at TEXT,
-  review_comment TEXT NOT NULL DEFAULT '',
   publication_generation INTEGER NOT NULL DEFAULT 1 CHECK (publication_generation > 0),
   risk_level TEXT NOT NULL DEFAULT 'low',
   environment_constraints_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(environment_constraints_json)),
@@ -308,10 +302,7 @@ CREATE TABLE IF NOT EXISTS run_snapshot_references (
 CREATE INDEX IF NOT EXISTS idx_run_snapshot_references_target ON run_snapshot_references(referenced_run_id);
 CREATE TRIGGER IF NOT EXISTS runs_snapshot_frozen
 BEFORE UPDATE OF execution_snapshot_json ON runs
-WHEN NEW.execution_snapshot_json<>OLD.execution_snapshot_json AND (
- OLD.status<>'awaiting_approval' OR NEW.status<>'queued' OR
- NOT EXISTS(SELECT 1 FROM approvals WHERE run_id=OLD.id AND status='approved')
-)
+WHEN NEW.execution_snapshot_json<>OLD.execution_snapshot_json
 BEGIN SELECT RAISE(ABORT,'queued Run execution snapshot is immutable'); END;
 
 CREATE INDEX IF NOT EXISTS idx_runs_environment_status ON runs(environment_id, status, created_at);
@@ -321,7 +312,7 @@ ON runs(component_release_id, component_spec_digest, component_evidence_kind, ev
 WHERE kind='component_test' AND status='succeeded';
 CREATE INDEX IF NOT EXISTS idx_runs_active_component
 ON runs(component_release_id,status)
-WHERE kind='component_test' AND status IN ('awaiting_approval','queued','running');
+WHERE kind='component_test' AND status IN ('queued','running');
 
 CREATE INDEX IF NOT EXISTS idx_runs_workbench_component ON runs(component_release_id,component_spec_digest,created_at DESC,id DESC) WHERE kind='component_test';
 CREATE INDEX IF NOT EXISTS idx_runs_workbench_scenario ON runs(scenario_revision_id,scenario_spec_digest,created_at DESC,id DESC) WHERE kind='scenario_test';
@@ -337,29 +328,29 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS runs_active_environment_update
 BEFORE UPDATE OF status,environment_id ON runs
-WHEN NEW.status IN ('running','awaiting_approval','queued')
+WHEN NEW.status IN ('running','queued')
 AND EXISTS (SELECT 1 FROM environments WHERE id=NEW.environment_id AND archived_at IS NOT NULL)
 BEGIN
   SELECT RAISE(ABORT, 'archived environment cannot receive runs');
 END;
 CREATE INDEX IF NOT EXISTS idx_runs_retry_root ON runs(retry_root_run_id, retry_attempt);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_retry_attempt ON runs(retry_root_run_id, retry_attempt) WHERE retry_root_run_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_retry_root ON runs(retry_root_run_id) WHERE retry_root_run_id IS NOT NULL AND status IN ('awaiting_approval','queued','running');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_retry_root ON runs(retry_root_run_id) WHERE retry_root_run_id IS NOT NULL AND status IN ('queued','running');
 
 CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_insert
 BEFORE INSERT ON runs
-WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+WHEN NEW.status IN ('queued','running') AND (
   (NEW.kind='environment_rollback' AND EXISTS (
     SELECT 1 FROM runs r
     WHERE r.environment_id=NEW.environment_id
-      AND r.status IN ('awaiting_approval','queued','running')
+      AND r.status IN ('queued','running')
   ))
   OR
   (NEW.kind<>'environment_rollback' AND EXISTS (
     SELECT 1 FROM runs r
     WHERE r.environment_id=NEW.environment_id
       AND r.kind='environment_rollback'
-      AND r.status IN ('awaiting_approval','queued','running')
+      AND r.status IN ('queued','running')
   ))
 )
 BEGIN
@@ -368,12 +359,12 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS runs_environment_rollback_fence_update
 BEFORE UPDATE OF status,environment_id,kind ON runs
-WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
+WHEN NEW.status IN ('queued','running') AND (
   (NEW.kind='environment_rollback' AND EXISTS (
     SELECT 1 FROM runs r
     WHERE r.id<>NEW.id
       AND r.environment_id=NEW.environment_id
-      AND r.status IN ('awaiting_approval','queued','running')
+      AND r.status IN ('queued','running')
   ))
   OR
   (NEW.kind<>'environment_rollback' AND EXISTS (
@@ -381,7 +372,7 @@ WHEN NEW.status IN ('awaiting_approval','queued','running') AND (
     WHERE r.id<>NEW.id
       AND r.environment_id=NEW.environment_id
       AND r.kind='environment_rollback'
-      AND r.status IN ('awaiting_approval','queued','running')
+      AND r.status IN ('queued','running')
   ))
 )
 BEGIN
@@ -459,21 +450,11 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS run_terminal_waiting_cleanup
 AFTER UPDATE OF status ON runs
-WHEN NEW.status NOT IN ('running','queued','awaiting_approval')
+WHEN NEW.status NOT IN ('running','queued')
 BEGIN
   DELETE FROM run_waiting_observations WHERE run_id=NEW.id;
 END;
 
-CREATE TABLE IF NOT EXISTS approvals (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'pending',
-  requested_at TEXT NOT NULL,
-  decided_by TEXT REFERENCES users(id),
-  decision TEXT NOT NULL DEFAULT '',
-  reason TEXT NOT NULL DEFAULT '',
-  decided_at TEXT
-);
 
 CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY,
@@ -677,79 +658,79 @@ ON environment_ssh_checks(environment_id, checked_at DESC);
 CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_insert
 AFTER INSERT ON component_dependencies
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_update
 AFTER UPDATE ON component_dependencies
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_dependencies_publication_delete
 AFTER DELETE ON component_dependencies
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS action_definitions_publication_insert
 AFTER INSERT ON action_definitions
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS action_definitions_publication_update
 AFTER UPDATE ON action_definitions
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS action_definitions_publication_delete
 AFTER DELETE ON action_definitions
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_insert
 AFTER INSERT ON component_release_artifacts
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_update
 AFTER UPDATE OF release_id,alias,filename,sha256 ON component_release_artifacts
 WHEN OLD.release_id<>NEW.release_id OR OLD.alias<>NEW.alias OR OLD.filename<>NEW.filename OR OLD.sha256<>NEW.sha256
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_artifacts_publication_delete
 AFTER DELETE ON component_release_artifacts
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_images_publication_insert
 AFTER INSERT ON component_release_images
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_images_publication_update
 AFTER UPDATE OF release_id,logical_name,digest ON component_release_images
 WHEN OLD.release_id<>NEW.release_id OR OLD.logical_name<>NEW.logical_name OR OLD.digest<>NEW.digest
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=NEW.release_id AND NEW.release_id<>OLD.release_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS component_images_publication_delete
 AFTER DELETE ON component_release_images
 BEGIN
-  UPDATE component_releases SET publication_generation=publication_generation+1,review_status=CASE WHEN status='draft' THEN 'not_submitted' ELSE review_status END,review_contract_digest=CASE WHEN status='draft' THEN '' ELSE review_contract_digest END,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
+  UPDATE component_releases SET publication_generation=publication_generation+1,candidate=CASE WHEN status='draft' THEN 0 ELSE candidate END WHERE id=OLD.release_id;
 END;
 
 CREATE TABLE IF NOT EXISTS run_retention_policy (
@@ -781,7 +762,7 @@ CREATE TRIGGER IF NOT EXISTS archived_run_no_log_insert BEFORE INSERT ON run_log
 CREATE TRIGGER IF NOT EXISTS archived_run_no_update BEFORE UPDATE ON runs WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.id) BEGIN SELECT RAISE(ABORT,'archived Run core is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_step_update BEFORE UPDATE ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS archived_run_no_step_insert BEFORE INSERT ON run_steps WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=NEW.run_id) BEGIN SELECT RAISE(ABORT,'archived Run steps are immutable'); END;
-CREATE TRIGGER IF NOT EXISTS archived_run_no_approval_update BEFORE UPDATE ON approvals WHEN EXISTS(SELECT 1 FROM run_archive_files WHERE run_id=OLD.run_id) BEGIN SELECT RAISE(ABORT,'archived Run approvals are immutable'); END;
+
 
 CREATE TABLE IF NOT EXISTS run_jobs (
  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,

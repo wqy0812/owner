@@ -13,10 +13,6 @@ func (s *ExecutionService) ListRunSummaries(ctx context.Context, user domain.Use
 	return s.store.ListRunSummaries(ctx, user, options)
 }
 
-func (s *ExecutionService) BatchApprovalCandidates(ctx context.Context, user domain.User) ([]store.RunSummary, error) {
-	return s.store.BatchApprovalCandidates(ctx, user)
-}
-
 func (s *ExecutionService) ReleaseRunSummaries(ctx context.Context, user domain.User, releaseID string) ([]store.RunSummary, error) {
 	release, err := s.store.GetComponentRelease(ctx, releaseID)
 	if err != nil {
@@ -53,10 +49,6 @@ func (s *ExecutionService) ListRunsForComponentRelease(ctx context.Context, user
 
 func (s *ExecutionService) ListRunSteps(ctx context.Context, runID string) ([]domain.RunStep, error) {
 	return s.store.ListRunSteps(ctx, runID)
-}
-
-func (s *ExecutionService) GetApprovalByRun(ctx context.Context, runID string) (domain.Approval, error) {
-	return s.store.GetApprovalByRun(ctx, runID)
 }
 
 func (s *ExecutionService) GetRun(ctx context.Context, id string) (domain.Run, error) {

@@ -34,15 +34,6 @@ func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(runs)
 }
 
-func (h *Handler) batchApprovalCandidates(w http.ResponseWriter, r *http.Request) {
-	items, err := h.platform.Execution().BatchApprovalCandidates(r.Context(), currentUser(r))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeItems(w, items)
-}
-
 func (h *Handler) listComponentReleaseRunEvidence(w http.ResponseWriter, r *http.Request) {
 	runs, err := h.platform.Execution().ReleaseRunSummaries(r.Context(), currentUser(r), r.PathValue("id"))
 	if err != nil {
@@ -115,55 +106,6 @@ func (h *Handler) retryRun(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusAccepted, h.runDTO(r, run))
 }
 
-func (h *Handler) approveRun(w http.ResponseWriter, r *http.Request) {
-	h.decideRun(w, r, "approved")
-}
-
-func (h *Handler) rejectRun(w http.ResponseWriter, r *http.Request) {
-	h.decideRun(w, r, "rejected")
-}
-
-func (h *Handler) decideRun(w http.ResponseWriter, r *http.Request, decision string) {
-	var input struct {
-		Reason            string                          `json:"reason"`
-		DeliveryDecisions []service.DeliveryDecisionInput `json:"deliveryDecisions"`
-	}
-	if r.ContentLength > 0 {
-		if err := decodeJSON(r, &input); err != nil {
-			writeError(w, err)
-			return
-		}
-	}
-	run, err := h.platform.Execution().DecideApproval(r.Context(), currentUser(r), r.PathValue("id"), decision, input.Reason, input.DeliveryDecisions)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, h.runDTO(r, run))
-}
-
-func (h *Handler) batchDecideRuns(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		ApprovalIDs []string `json:"approvalIds"`
-		Decision    string   `json:"decision"`
-		Reason      string   `json:"reason"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, err)
-		return
-	}
-	runs, err := h.platform.Execution().BatchDecideApprovals(r.Context(), currentUser(r), input.ApprovalIDs, input.Decision, input.Reason)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	output := make([]map[string]any, 0, len(runs))
-	for _, run := range runs {
-		output = append(output, h.runDTO(r, run))
-	}
-	writeData(w, http.StatusOK, output)
-}
-
 func (h *Handler) canViewRun(r *http.Request, user domain.User, runID string) bool {
 	visible, err := h.platform.Execution().CanViewRun(r.Context(), user, runID)
 	return err == nil && visible
@@ -225,9 +167,6 @@ func (h *Handler) runDiagnosticDTO(r *http.Request, run domain.RunReadModel) map
 		steps = append(steps, runStepDTO(step))
 	}
 	output["steps"] = steps
-	if run.Approval != nil {
-		output["approval"] = run.Approval
-	}
 	return output
 }
 
@@ -295,28 +234,6 @@ func (h *Handler) runDTO(r *http.Request, run domain.Run) map[string]any {
 		output["progress"] = 100
 	} else if total := len(locked); total > 0 {
 		output["progress"] = succeeded * 100 / total
-	}
-	if run.Approval != nil {
-		riskReason := "动作声明为 destructive，或包含 recovery / clean / destroy / uninstall。"
-		artifactTransfers := run.Snapshot.Delivery.ArtifactTransfers
-		imageTransfers := run.Snapshot.Delivery.ImageTransfers
-		deliveryRequirements := run.Snapshot.Delivery.Requirements
-		if run.Kind == domain.RunEnvironmentRollback {
-			riskReason = "按依赖逆序回滚所选组件，恢复后检查通过才确认完成；原始备份与恢复记录保留。"
-			if digest := run.Snapshot.Recovery.ResetBoundaryDigest; digest != "" {
-				riskReason = "根据来源 Run 恢复全部待恢复的集群组件，保留 File Station 和镜像仓库；恢复检查通过且无剩余待恢复项后才确认完成。"
-			}
-		} else if len(deliveryRequirements) > 0 {
-			riskReason = fmt.Sprintf("有 %d 项内容未命中环境目标；请逐项选择直接使用来源或平移到环境目标。", len(deliveryRequirements))
-		} else if len(artifactTransfers) > 0 || len(imageTransfers) > 0 {
-			riskReason = fmt.Sprintf("目标环境与版本来源不一致：需平移 %d 个镜像、%d 个介质。", len(imageTransfers), len(artifactTransfers))
-		}
-		output["approval"] = map[string]any{
-			"id": run.Approval.ID, "runId": run.Approval.RunID, "status": run.Approval.Status,
-			"riskReason":  riskReason,
-			"requestedAt": run.Approval.RequestedAt, "decidedAt": run.Approval.DecidedAt,
-			"decidedBy": run.Approval.DecidedBy, "decision": run.Approval.Decision, "reason": run.Approval.Reason,
-		}
 	}
 	if v := run.Snapshot.Delivery.ArtifactTransfers; v != nil {
 		output["artifactTransfers"] = v

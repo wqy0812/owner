@@ -11,7 +11,7 @@ export function StatusPill({ status, children }: {
     children?: ReactNode;
 }) {
     const normalized = status?.toLowerCase().replaceAll('-', '_') ?? 'unknown';
-    const color = /failed|error|rejected|blocked|destructive/.test(normalized) ? 'error' : /^(succeeded|test_passed|passed|ready|approved|released|active|completed)$/.test(normalized) ? 'success' : /waiting|pending|draft|queued|warning/.test(normalized) ? 'warning' : /running|testing|processing/.test(normalized) ? 'processing' : 'default';
+    const color = /failed|error|blocked|destructive/.test(normalized) ? 'error' : /^(succeeded|test_passed|passed|ready|released|active|completed)$/.test(normalized) ? 'success' : /waiting|pending|draft|queued|warning/.test(normalized) ? 'warning' : /running|testing|processing/.test(normalized) ? 'processing' : 'default';
     return <Tag className={`status-pill status-pill--${normalized}`} color={color}>{children ?? STATUS_LABELS[normalized] ?? status}</Tag>;
 }
 export function InfoNote({ title, children }: {

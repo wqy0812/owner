@@ -123,28 +123,6 @@ export function useReleaseLifecycleActions({ scopeKey, onRestored, onDeleted }: 
                 setBusy(false);
         }
     }
-    async function submitReview(release: ComponentRelease) {
-        const generation = scopeGeneration.current;
-        setBusy(true);
-        try {
-            await api.submitReleaseReview(release.id);
-            if (generation !== scopeGeneration.current) {
-                signalRefresh(['components', 'notifications', 'workbench']);
-                return;
-            }
-            notify('success', '参数合同已提交平台审核', '审核绑定当前参数、Action 和环境字段契约；后续修改会自动失效。');
-            signalRefresh(['components', 'workbench']);
-        }
-        catch (reason) {
-            if (generation !== scopeGeneration.current)
-                return;
-            notify('error', '提交审核失败', displayError(reason));
-        }
-        finally {
-            if (generation === scopeGeneration.current)
-                setBusy(false);
-        }
-    }
     async function confirmDeprecate() {
         if (!deprecateRelease)
             return;
@@ -238,7 +216,7 @@ export function useReleaseLifecycleActions({ scopeKey, onRestored, onDeleted }: 
         setOperationExplanation(undefined);
     }
     return {
-        busy, previewPublish, previewDeprecate, toggleCandidate, submitReview, restoreRelease, deleteRelease,
+        busy, previewPublish, previewDeprecate, toggleCandidate, restoreRelease, deleteRelease,
         dialogs: <>
       {publishRelease && <Modal busy={Boolean(busy)} title={`发布 ${publishRelease.version}`} description={publishRelease.parentReleaseId ? '发布后版本不可修改；只通知精确锁定父 Release 的下游 Owner。' : '这是全新发布线，不替换现有锁定 Release，也不发送影响通知。'} onClose={closeDialogs} footer={<footer className="modal-actions"><Button className="button button--quiet" onClick={closeDialogs} htmlType={"button"} type="default">取消</Button><Button disabled={busy || !impact} className="button button--primary" onClick={() => void confirmPublish()} htmlType={"button"} type="primary">{busy ? '发布中…' : impact?.changeKind === 'new_line' ? '确认发布新线' : '确认发布并通知'}</Button></footer>}>
         <div className="modal-body">

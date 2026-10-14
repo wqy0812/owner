@@ -56,7 +56,7 @@ func validateScenarioAdaptationTx(ctx context.Context, tx *sql.Tx, revision doma
 
 // Recheck at the actual write boundary, including JSON-locked identities.
 func validateRunAdaptationTx(ctx context.Context, tx *sql.Tx, run domain.Run) error {
-	if run.Status != domain.RunQueued && run.Status != domain.RunAwaitingApproval && run.Status != domain.RunRunning {
+	if run.Status != domain.RunQueued && run.Status != domain.RunRunning {
 		return nil
 	}
 	env, err := environmentRevisionTx(ctx, tx, run.EnvironmentRevisionID)

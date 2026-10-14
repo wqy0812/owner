@@ -17,7 +17,7 @@ type RunRetryPlan struct {
 	StartStep             int                     `json:"startStep"`
 	SkippedSteps          int                     `json:"skippedSteps"`
 	RemainingSteps        []ComponentTestPlanStep `json:"remainingSteps"`
-	RequiresApproval      bool                    `json:"requiresApproval"`
+	HighRisk              bool                    `json:"highRisk"`
 	PlanDigest            string                  `json:"planDigest"`
 	RecoveryStateDigest   string                  `json:"recoveryStateDigest"`
 }
@@ -153,11 +153,11 @@ func (p *ExecutionService) PreviewRetry(ctx context.Context, user domain.User, s
 		}
 	}
 	for index, step := range remaining {
-		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, NeedsApproval: step.NeedsApproval})
-		result.RequiresApproval = result.RequiresApproval || step.NeedsApproval
+		result.RemainingSteps = append(result.RemainingSteps, ComponentTestPlanStep{Order: start + index + 1, ComponentID: step.ComponentID, ComponentName: step.ComponentName, ReleaseID: step.ReleaseID, ReleaseVersion: step.ReleaseVersion, Phase: step.Phase, ParentActionID: step.ParentActionID, ActionID: step.ActionID, NodeID: step.SourceNodeID, Action: step.Action, Playbook: step.Playbook, Limit: step.Limit, HighRisk: step.HighRisk})
+		result.HighRisk = result.HighRisk || step.HighRisk
 	}
 	if len(locked.ArtifactTransfers) > 0 || len(locked.ImageTransfers) > 0 {
-		result.RequiresApproval = true
+		result.HighRisk = true
 	}
 	result.PlanDigest = digestValue(struct {
 		SourceID, Status, EnvironmentRevisionID, ArtifactDigest, RecoveryStateDigest string

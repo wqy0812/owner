@@ -8,7 +8,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-const releaseSelect = `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.review_status,r.review_contract_digest,r.review_submitted_at,r.reviewed_by,r.reviewed_at,r.review_comment,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.playbook_tree_sha256,r.playbook_workspace_root,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id`
+const releaseSelect = `SELECT r.id,r.component_id,r.line_id,l.name,r.parent_release_id,r.template_source_release_id,r.version,r.status,r.release_notes,r.compatibility,r.candidate,r.publication_generation,r.risk_level,r.environment_constraints_json,r.parameters_json,r.playbook_tree_sha256,r.playbook_workspace_root,r.created_at,r.released_at,r.deprecated_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id`
 
 // Lists hydrate a complete contract within one read snapshot. No write lock or
 // cross-request cache is needed, and child cursors never hold a second connection.
@@ -64,7 +64,7 @@ func listComponents(ctx context.Context, q queryer, viewer domain.User) ([]domai
 	releaseQuery := releaseSelect + ` JOIN components c ON c.id=r.component_id`
 	var releaseArgs []any
 	if viewer.Role != domain.RolePlatformAdmin {
-		releaseQuery += ` WHERE (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.review_status='approved'))`
+		releaseQuery += ` WHERE (r.status='released' OR (r.status='draft' AND r.candidate=1))`
 		if viewer.Role == domain.RoleComponentOwner {
 			releaseQuery += ` OR c.owner_id=?`
 			releaseArgs = append(releaseArgs, viewer.ID)
@@ -82,9 +82,8 @@ func listComponents(ctx context.Context, q queryer, viewer domain.User) ([]domai
 	for _, component := range out {
 		ownerView := viewer.Role == domain.RolePlatformAdmin || (viewer.Role == domain.RoleComponentOwner && component.OwnerID == viewer.ID)
 		for _, release := range byComponent[component.ID] {
-			// Approval is bound to the fully loaded current contract, never just
-			// to the candidate flag or the persisted review status.
-			if ownerView || release.Status == domain.ReleaseReleased || release.IsApprovedCandidate() {
+			// Only explicitly shared Drafts are visible outside their owner.
+			if ownerView || release.Status == domain.ReleaseReleased || release.IsSharedCandidate() {
 				component.Releases = append(component.Releases, release)
 			}
 		}

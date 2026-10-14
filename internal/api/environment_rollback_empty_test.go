@@ -53,7 +53,7 @@ func TestEnvironmentRollbackEmptyPreviewDoesNotCreateRun(t *testing.T) {
 			t.Fatalf("empty preview %s must be an empty array, got %#v", key, plan[key])
 		}
 	}
-	if plan["componentCount"] != float64(0) || plan["nodeCount"] != float64(0) || plan["planDigest"] != "" || plan["destructive"] != false || plan["requiresApproval"] != false {
+	if plan["componentCount"] != float64(0) || plan["nodeCount"] != float64(0) || plan["planDigest"] != "" || plan["destructive"] != false || plan["highRisk"] != false {
 		t.Fatalf("empty preview contains executable plan metadata: %#v", plan)
 	}
 	// Neither an empty preview digest nor a stale previously valid digest may

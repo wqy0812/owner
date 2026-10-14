@@ -30,8 +30,8 @@ describe('API response contract', () => {
   });
   it('previews a scenario job containing component checks and business acceptance', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify({ data: {
-      environmentId: 'env', environmentRevisionId: 'env-r1', destructive: false, requiresApproval: false, planDigest: 'locked', deliveryRequirements: [],
-      steps: [{ order: 1, name: 'Business API', phase: 'acceptance', stage: 'acceptance', sourceType: 'scenario_acceptance', actionId: 'business', componentId: '', componentName: '', releaseId: '', releaseVersion: '', action: 'acceptance', playbook: 'tasks/acceptance/business.yml', needsApproval: false }],
+      environmentId: 'env', environmentRevisionId: 'env-r1', destructive: false, highRisk: false, planDigest: 'locked', deliveryRequirements: [],
+      steps: [{ order: 1, name: 'Business API', phase: 'acceptance', stage: 'acceptance', sourceType: 'scenario_acceptance', actionId: 'business', componentId: '', componentName: '', releaseId: '', releaseVersion: '', action: 'acceptance', playbook: 'tasks/acceptance/business.yml', highRisk: false }],
     } }), 'application/json')));
     await expect(api.previewScenarioJob('revision', 'env')).resolves.toMatchObject({ steps: [{ name: 'Business API', action: 'acceptance', phase: 'acceptance' }] });
   });
@@ -54,7 +54,6 @@ describe('API response contract', () => {
       id: 'component-1', name: 'Runtime', slug: 'runtime', ownerId: 'owner-1', layer: 'runtime_state', tags: ['runtime'],
       releases: [{
         id: 'release-1', componentId: 'component-1', lineId: 'line-1', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', status: 'draft',
-        review: { status: 'not_submitted' },
         readiness: { status: 'blocked', blockers: [{ code: 'install_evidence_missing', message: '缺少安装证据', actionUrl: '/components?selected=component-1&action=validate' }], installEvidenceRunId: 'run-install', rollbackEvidenceRunId: 'run-rollback' },
         parameters: [], dependencies: [], actions: [], artifacts: [], images: [],
       }],
@@ -147,7 +146,6 @@ describe('API response contract', () => {
     const fetchMock = vi.fn().mockResolvedValue(response(JSON.stringify({
       data: {
         id: 'release-1', componentId: 'component-1', lineId: 'line-1', lineName: 'Runtime 1.0', compatibility: 'not_applicable', version: '1.0.0', status: 'draft',
-        review: { status: 'not_submitted' },
         riskLevel: 'high', readiness: { status: 'blocked', blockers: [] }, parameters: [], dependencies: [], actions: [], artifacts: [], images: [],
       },
     }), 'application/json'));
@@ -182,7 +180,7 @@ describe('API response contract', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ logicalName: 'main', sourceRef: image.sourceRef, digest: image.digest });
   });
 
-  it('carries approval reason and per-item delivery decisions and validates the response', async () => {
+  it('reads automatic delivery policy and validates the run response', async () => {
     const run = {
       id: 'run-1', status: 'running', environmentId: 'environment-1',
       deliveryRequirements: [{
@@ -190,7 +188,7 @@ describe('API response contract', () => {
         source: 'https://source.test/runtime.tgz', target: 'http://fss.test/components/runtime.tgz', sourceReadable: true,
         targetPresent: false, transferAvailable: true, componentName: 'Runtime',
       }],
-      deliveryDecisions: [{ requirementId: 'artifact:release-1:runtime', mode: 'transfer', decidedBy: 'environment-owner', decidedAt: '2026-08-28T10:00:00Z' }],
+      deliveryDecisions: [{ requirementId: 'artifact:release-1:runtime', mode: 'transfer', policy: 'transfer_to_target' }],
       deliveryResults: [{ requirementId: 'artifact:release-1:runtime', mode: 'transfer', status: 'pending' }],
       artifactTransfers: [{
         alias: 'runtime', sourceUrl: 'https://source.test/runtime.tgz', targetStation: 'fss.test',
@@ -200,14 +198,12 @@ describe('API response contract', () => {
     const fetchMock = vi.fn().mockResolvedValue(response(JSON.stringify({ data: run }), 'application/json'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.approve('approval-1', '允许复制到环境侧', [{ requirementId: 'artifact:release-1:runtime', mode: 'transfer' }])).resolves.toMatchObject({
+    await expect(api.run('run-1')).resolves.toMatchObject({
       id: 'run-1', deliveryRequirements: [{ kind: 'artifact', transferAvailable: true }],
-      deliveryDecisions: [{ mode: 'transfer', decidedBy: 'environment-owner' }], deliveryResults: [{ status: 'pending' }],
+      deliveryDecisions: [{ mode: 'transfer', policy: 'transfer_to_target' }], deliveryResults: [{ status: 'pending' }],
       artifactTransfers: [{ sourceUrl: 'https://source.test/runtime.tgz', targetStation: 'fss.test' }],
     });
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
-      reason: '允许复制到环境侧', deliveryDecisions: [{ requirementId: 'artifact:release-1:runtime', mode: 'transfer' }],
-    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/runs/run-1');
   });
 
   it('rejects malformed Release readiness and delivery result enums', async () => {

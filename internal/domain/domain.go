@@ -86,24 +86,6 @@ const (
 	ReleaseDeprecated ReleaseStatus = "deprecated"
 )
 
-type ReleaseReviewStatus string
-
-const (
-	ReleaseReviewNotSubmitted ReleaseReviewStatus = "not_submitted"
-	ReleaseReviewPending      ReleaseReviewStatus = "pending"
-	ReleaseReviewApproved     ReleaseReviewStatus = "approved"
-	ReleaseReviewRejected     ReleaseReviewStatus = "rejected"
-)
-
-type ReleaseReview struct {
-	Status         ReleaseReviewStatus `json:"status"`
-	ContractDigest string              `json:"contractDigest,omitempty"`
-	SubmittedAt    *time.Time          `json:"submittedAt,omitempty"`
-	ReviewedBy     string              `json:"reviewedBy,omitempty"`
-	ReviewedAt     *time.Time          `json:"reviewedAt,omitempty"`
-	Comment        string              `json:"comment,omitempty"`
-}
-
 type ComponentLayer string
 
 const (
@@ -169,7 +151,6 @@ type ComponentRelease struct {
 	// a candidate may be composed and tested by a scenario owner, then released
 	// atomically with that scenario revision.
 	Candidate                     bool                    `json:"candidate"`
-	Review                        ReleaseReview           `json:"review"`
 	PublicationGeneration         int64                   `json:"definitionGeneration"`
 	ExpectedPublicationGeneration *int64                  `json:"-"`
 	Readiness                     ReleaseReadiness        `json:"readiness"`
@@ -492,7 +473,7 @@ type ComponentPlaybookFile struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-func (a ActionDefinition) NeedsApproval() bool {
+func (a ActionDefinition) HighRisk() bool {
 	if a.Destructive || a.RiskLevel == RiskDestructive || a.Kind == ActionRollback {
 		return true
 	}
@@ -815,14 +796,12 @@ func RedactCredentialRefs(refs []CredentialRef, privileged bool) []CredentialRef
 type RunStatus string
 
 const (
-	RunAwaitingApproval RunStatus = "awaiting_approval"
-	RunQueued           RunStatus = "queued"
-	RunRunning          RunStatus = "running"
-	RunSucceeded        RunStatus = "succeeded"
-	RunFailed           RunStatus = "failed"
-	RunCancelled        RunStatus = "cancelled"
-	RunRejected         RunStatus = "rejected"
-	RunInterrupted      RunStatus = "interrupted"
+	RunQueued      RunStatus = "queued"
+	RunRunning     RunStatus = "running"
+	RunSucceeded   RunStatus = "succeeded"
+	RunFailed      RunStatus = "failed"
+	RunCancelled   RunStatus = "cancelled"
+	RunInterrupted RunStatus = "interrupted"
 )
 
 type RunKind string
@@ -857,7 +836,6 @@ type Run struct {
 	StartedAt             *time.Time          `json:"startedAt,omitempty"`
 	FinishedAt            *time.Time          `json:"finishedAt,omitempty"`
 	Steps                 []RunStep           `json:"steps,omitempty"`
-	Approval              *Approval           `json:"approval,omitempty"`
 }
 
 type RunStep struct {
@@ -879,17 +857,6 @@ type RunLog struct {
 	Stream    string    `json:"stream"`
 	Message   string    `json:"message"`
 	CreatedAt time.Time `json:"createdAt"`
-}
-
-type Approval struct {
-	ID          string     `json:"id"`
-	RunID       string     `json:"runId"`
-	Status      string     `json:"status"`
-	RequestedAt time.Time  `json:"requestedAt"`
-	DecidedBy   string     `json:"decidedBy,omitempty"`
-	Decision    string     `json:"decision,omitempty"`
-	Reason      string     `json:"reason,omitempty"`
-	DecidedAt   *time.Time `json:"decidedAt,omitempty"`
 }
 
 type Notification struct {

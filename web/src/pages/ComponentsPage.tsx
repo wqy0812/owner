@@ -6,11 +6,10 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { defaultContractRelease } from '../components/ParameterEditors';
-import { EmptyState, ErrorBlock, LoadingBlock, Modal, PageHeader, RefreshNotice } from '../components/Primitives';
+import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, RefreshNotice } from '../components/Primitives';
 import { useApp } from '../context/AppContext';
 import { ComponentCatalog } from '../features/components/catalog/ComponentCatalog';
 import { ReleaseDetail, type ReleaseAction } from '../features/components/catalog/ReleaseDetail';
-import { ReleaseReviewDetails } from '../features/components/catalog/ReleasePresentation';
 import { ReleaseContractEditor } from '../features/components/contract/ReleaseContractEditor';
 import { ComponentTemplateImportModal } from '../features/components/import/ComponentTemplateImportModal';
 import { ArtifactModal } from '../features/components/media/ArtifactModal';
@@ -43,7 +42,6 @@ export function ComponentsPage() {
     const [testRelease, setTestRelease] = useState<ComponentRelease>();
     const [evidenceRelease, setEvidenceRelease] = useState<ComponentRelease>();
     const [inspectRelease, setInspectRelease] = useState<ComponentRelease>();
-    const [reviewReleaseId, setReviewReleaseId] = useState<string>();
     const [imageRelease, setImageRelease] = useState<ComponentRelease>();
     const [artifactRelease, setArtifactRelease] = useState<ComponentRelease>();
     const [contractReleaseId, setContractReleaseId] = useState<string>();
@@ -95,7 +93,6 @@ export function ComponentsPage() {
     });
     const { data: editorComponents, error: editorComponentsError, loading: editorComponentsLoading, reload: reloadEditorComponents } = useApiData((signal) => editingContract ? api.components(signal) : Promise.resolve(undefined), [user.id, editingContract], 'components');
     const releases = selected?.releases?.length ? selected.releases : selected?.latestRelease ? [selected.latestRelease] : [];
-    const reviewRelease = releases.find((release) => release.id === reviewReleaseId && release.review.status === 'rejected');
     const contractRelease = releases.find((release) => release.id === (contractReleaseId ?? selectedReleaseId))
         ?? (pendingContractRelease?.id === contractReleaseId ? pendingContractRelease : undefined)
         ?? releases.find((release) => release.id === components?.find((component) => component.id === selected?.id)?.defaultReleaseId)
@@ -118,7 +115,7 @@ export function ComponentsPage() {
             }
         },
     });
-    const { busy, previewPublish, previewDeprecate, toggleCandidate, submitReview, restoreRelease, deleteRelease } = lifecycle;
+    const { busy, previewPublish, previewDeprecate, toggleCandidate, restoreRelease, deleteRelease } = lifecycle;
     useEffect(() => {
         setContractReleaseId(selectedReleaseId);
         setEvidenceRelease((current) => current?.id === selectedReleaseId ? current : undefined);
@@ -230,9 +227,6 @@ export function ComponentsPage() {
             case 'inspect':
                 setInspectRelease(release);
                 break;
-            case 'review':
-                setReviewReleaseId(release.id);
-                break;
             case 'publish':
                 void previewPublish(release);
                 break;
@@ -241,9 +235,6 @@ export function ComponentsPage() {
                 break;
             case 'candidate':
                 void toggleCandidate(release);
-                break;
-            case 'review-submit':
-                void submitReview(release);
                 break;
             case 'restore':
                 void restoreRelease(release);
@@ -310,10 +301,6 @@ export function ComponentsPage() {
                 setEditingContract(true);
             }}/>}
       {inspectRelease && <InspectReleaseModal release={inspectRelease} components={components ?? []} onClose={() => setInspectRelease(undefined)} onEdit={mine && inspectRelease.state === 'draft' ? () => { setInspectRelease(undefined); setContractReleaseId(inspectRelease.id); setEditingContract(true); } : undefined}/>}
-      {reviewRelease && <Modal busy={Boolean(busy)} title={`${reviewRelease.version} 审批意见`} description="查看当前版本合同的平台 Owner 审核结果与完整备注。" onClose={() => setReviewReleaseId(undefined)} footer={<footer className="modal-actions"><Button className="button button--quiet" onClick={() => setReviewReleaseId(undefined)} htmlType={"button"} type="default">关闭</Button></footer>}>
-        <div className="modal-body"><ReleaseReviewDetails release={reviewRelease}/></div>
-
-      </Modal>}
       {visibleEditRelease && <EditReleaseModal key={visibleEditRelease.id} release={visibleEditRelease} releases={releases} onClose={() => setEditRelease(undefined)} onDone={() => { setEditRelease(undefined); signalRefresh('components'); }}/>}
       {testRelease && <TestReleaseModal release={testRelease} onClose={() => setTestRelease(undefined)} onDone={() => { setTestRelease(undefined); signalRefresh(['components', 'runs']); }}/>}
       {evidenceRelease && <ReleaseRunEvidenceModal release={evidenceRelease} onClose={() => setEvidenceRelease(undefined)}/>}

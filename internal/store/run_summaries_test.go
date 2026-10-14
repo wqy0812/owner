@@ -2,7 +2,6 @@ package store
 
 import (
 	"codex/platform-demo/internal/domain"
-	"codex/platform-demo/internal/testutil/runfixture"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,7 +13,7 @@ func TestRunSummaryPaginationVisibilityAndFilters(t *testing.T) {
 	s := evidenceHistoryStore(t, 305)
 	ctx := context.Background()
 	// Equal timestamps exercise the stable ID tie-breaker across page boundaries.
-	if _, err := s.DB().Exec(`UPDATE runs SET created_at=?,status=CASE WHEN id>='history-000250' THEN 'awaiting_approval' ELSE status END`, timeText(testNow)); err != nil {
+	if _, err := s.DB().Exec(`UPDATE runs SET created_at=?,status=CASE WHEN id>='history-000250' THEN 'queued' ELSE status END`, timeText(testNow)); err != nil {
 		t.Fatal(err)
 	}
 	for _, user := range []domain.User{{ID: "admin", Role: domain.RolePlatformAdmin}, {ID: "component-owner-a", Role: domain.RoleComponentOwner}, {ID: "environment-owner-a", Role: domain.RoleEnvironmentOwner}} {
@@ -80,38 +79,5 @@ func TestRunSummaryQueryIsBatchedAndLight(t *testing.T) {
 				t.Fatalf("heavy field %s", field)
 			}
 		}
-	}
-}
-
-func TestBatchCandidatesCoverAllPagesAndExcludeDeliveryChoices(t *testing.T) {
-	s := evidenceHistoryStore(t, 120)
-	ctx := context.Background()
-	if _, err := s.DB().Exec(`UPDATE runs SET status='awaiting_approval'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DB().Exec(`INSERT INTO approvals(id,run_id,requested_at) SELECT 'approval-'||id,id,created_at FROM runs`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runfixture.CorruptSnapshot(context.Background(), s.DB(), `UPDATE runs SET execution_snapshot_json=json_set(execution_snapshot_json,'$.delivery.requirements',json('[{"key":"choice"}]')) WHERE id='history-000000'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DB().Exec(`UPDATE approvals SET status='approved' WHERE run_id='history-000001'`); err != nil {
-		t.Fatal(err)
-	}
-	items, err := s.BatchApprovalCandidates(ctx, domain.User{ID: "environment-owner-a", Role: domain.RoleEnvironmentOwner})
-	if err != nil || len(items) != 118 || items[len(items)-1].ID != "history-000002" {
-		t.Fatalf("candidates=%d err=%v", len(items), err)
-	}
-	for _, item := range items {
-		if item.ApprovalID == "" {
-			t.Fatal("missing approval ID")
-		}
-	}
-	items, err = s.BatchApprovalCandidates(ctx, domain.User{ID: "other", Role: domain.RoleEnvironmentOwner})
-	if err != nil || len(items) != 0 {
-		t.Fatal("candidate ownership leaked")
-	}
-	if _, err = s.BatchApprovalCandidates(ctx, domain.User{ID: "admin", Role: domain.RolePlatformAdmin}); err != domain.ErrForbidden {
-		t.Fatalf("admin: %v", err)
 	}
 }

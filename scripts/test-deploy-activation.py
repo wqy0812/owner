@@ -31,13 +31,10 @@ state['calls'].append([command, *args])
 if args and args[0] == 'database':
     operation = args[1]
     database = pathlib.Path(args[args.index('--db')+1])
-    if operation == 'contract': print('clusterforge-v1-20260908-typed-run-snapshot')
+    if operation == 'contract': print('clusterforge-v1-20261014-owner-direct-execution')
     elif operation == 'snapshot':
         if failure == 'backup': finish(19)
         target = pathlib.Path(args[args.index('--target')+1]); shutil.copy2(database, target)
-    elif operation == 'verify-run-migration':
-        state['migrationChecks'] = state.get('migrationChecks', 0) + 1
-        if failure == 'migration-report' or (failure == 'source-drift' and state['migrationChecks'] > 1): finish(25)
     elif operation == 'verify':
         if new and failure == 'database' and database.name == 'platform.db': finish(20)
     elif operation not in ('active-runs', 'active-work'): raise RuntimeError(operation)
@@ -81,7 +78,7 @@ finish()
 
 
 class ActivationTests(unittest.TestCase):
-    def run_activation(self, failure='', initialize=False, inactive=False, migration=False):
+    def run_activation(self, failure='', initialize=False, inactive=False):
         temporary = tempfile.TemporaryDirectory(prefix='clusterforge-activation-test-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -107,33 +104,20 @@ class ActivationTests(unittest.TestCase):
         digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
         text_digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
         args = [str(staged[0]), digest(staged[0]), str(staged[1]), digest(staged[1]), str(staged[2]), digest(staged[2]), '0', '0', text_digest('candidate index\n'), text_digest('candidate version\n'), '1', '', str(staged[3]), digest(staged[3]), '1' if initialize else '0']
-        if migration:
-            bundle = root/'var/lib/clusterforge/run-migrations/test'
-            bundle.mkdir(parents=True)
-            (bundle/'target.db').write_text('migrated database\n')
-            (bundle/'ready.json').write_text('{"status":"ready"}\n')
-            args.append(str(bundle))
         if failure == 'checksum': args[1] = '0'*64
         source = (ROOT/'scripts/deploy-test-88-55.sh').read_text().split("<<'REMOTE_SCRIPT'\n", 1)[1].split('\nREMOTE_SCRIPT', 1)[0]
         for prefix in ('/opt/clusterforge', '/var/lib/clusterforge', '/var/lock', '/etc/clusterforge', '/etc/systemd/system'):
             source = source.replace(prefix, str(root/prefix.lstrip('/')))
-        initial_state = 'inactive' if initialize or inactive or migration else 'active'
-        (root/'state.json').write_text(json.dumps({'failure': failure, 'service': initial_state, 'timer': not migration, 'calls': []}))
+        initial_state = 'inactive' if initialize or inactive else 'active'
+        (root/'state.json').write_text(json.dumps({'failure': failure, 'service': initial_state, 'timer': True, 'calls': []}))
         env = {**os.environ, 'PATH': str(commands)+os.pathsep+os.environ['PATH'], 'ACTIVATION_TEST_ROOT': str(root)}
         result = subprocess.run(['bash', '-s', '--', *args], input=source, text=True, capture_output=True, env=env, timeout=20)
         state = json.loads((root/'state.json').read_text())
-        after_open = migration and failure in ('start', 'ui', 'version', 'database', 'interrupt')
-        if after_open:
-            self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
-            self.assertEqual((live/'clusterforge-platform').read_text(), 'candidate platform\n')
-            self.assertEqual(database.read_text(), 'candidate database\n')
-            self.assertIn('automatic database rollback is disabled', result.stderr)
-            self.assertEqual(sum(call == ['systemctl', 'start', 'clusterforge-platform'] for call in state['calls']), 1)
-        elif failure:
+        if failure:
             self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
             for name, content in initial.items(): self.assertEqual((root/name).read_bytes(), content, name+'\n'+result.stderr)
             self.assertEqual(state['service'], initial_state, result.stderr)
-            self.assertEqual(state['timer'], not migration, result.stderr)
+            self.assertTrue(state['timer'], result.stderr)
             if initialize: self.assertFalse(database.exists(), result.stderr)
         else:
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
@@ -143,14 +127,6 @@ class ActivationTests(unittest.TestCase):
             self.assertFalse(state['timer'])
             self.assertIn('deployment succeeded', result.stdout)
         self.assertFalse(any(path.exists() for path in staged), 'staged binaries were not cleaned')
-
-    def test_migration_switch_success(self): self.run_activation(migration=True)
-    def test_migration_rejects_report_and_late_source_drift(self):
-        for failure in ('migration-report', 'source-drift', 'install'):
-            with self.subTest(failure=failure): self.run_activation(failure, migration=True)
-    def test_migration_never_restores_old_database_after_opening_writes(self):
-        for failure in ('start', 'ui', 'version', 'database', 'interrupt'):
-            with self.subTest(failure=failure): self.run_activation(failure, migration=True)
 
     def test_success(self): self.run_activation()
     def test_empty_database_initialization_success(self): self.run_activation(initialize=True)

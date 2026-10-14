@@ -108,10 +108,7 @@ func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 	if err := validateBranchScopeTx(ctx, tx, "component_release_lines", r.LineID, r.EnvironmentConstraints); err != nil {
 		return err
 	}
-	if r.Review.Status == "" {
-		r.Review.Status = domain.ReleaseReviewNotSubmitted
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,review_status,review_contract_digest,review_submitted_at,reviewed_by,reviewed_at,review_comment,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookTreeSHA256, r.PlaybookWorkspaceRoot, timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO component_releases(id,component_id,line_id,parent_release_id,template_source_release_id,version,status,release_notes,compatibility,candidate,risk_level,environment_constraints_json,parameters_json,playbook_tree_sha256,playbook_workspace_root,created_at,released_at,deprecated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.ComponentID, r.LineID, nullString(r.ParentReleaseID), nullString(r.TemplateSourceReleaseID), r.Version, r.Status, r.ReleaseNotes, r.Compatibility, r.Candidate, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookTreeSHA256, r.PlaybookWorkspaceRoot, timeText(r.CreatedAt), ptrTimeText(r.ReleasedAt), ptrTimeText(r.DeprecatedAt))
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -121,7 +118,7 @@ func insertComponentRelease(ctx context.Context, tx *sql.Tx, r domain.ComponentR
 	if err := insertComponentPlaybookFiles(ctx, tx, r.ID, r.PlaybookFiles); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE component_releases SET candidate=?,review_status=?,review_contract_digest=?,review_submitted_at=?,reviewed_by=?,reviewed_at=?,review_comment=? WHERE id=?`, r.Candidate, r.Review.Status, r.Review.ContractDigest, ptrTimeText(r.Review.SubmittedAt), nullString(r.Review.ReviewedBy), ptrTimeText(r.Review.ReviewedAt), r.Review.Comment, r.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE component_releases SET candidate=? WHERE id=?`, r.Candidate, r.ID)
 	return err
 }
 
@@ -165,7 +162,7 @@ func (s *Store) UpdateDraftRelease(ctx context.Context, r domain.ComponentReleas
 	if err := validateReleaseCatalogTx(ctx, tx, r, &previous); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',risk_level=?,environment_constraints_json=?,parameters_json=?,playbook_workspace_root=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookWorkspaceRoot, r.ID)
+	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET version=?,release_notes=?,compatibility=?,candidate=0,risk_level=?,environment_constraints_json=?,parameters_json=?,playbook_workspace_root=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft'`, r.Version, r.ReleaseNotes, r.Compatibility, r.RiskLevel, jsonText(domain.NormalizeEnvironmentConstraints(r.EnvironmentConstraints)), jsonText(r.Parameters), r.PlaybookWorkspaceRoot, r.ID)
 	if err != nil {
 		return mapSQLError(err)
 	}
@@ -287,14 +284,11 @@ func scanRelease(row scanner) (domain.ComponentRelease, error) {
 	var r domain.ComponentRelease
 	var candidate int
 	var constraints, parameters, created string
-	var parent, template, submitted, reviewedBy, reviewed, released, deprecated sql.NullString
-	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.Review.Status, &r.Review.ContractDigest, &submitted, &reviewedBy, &reviewed, &r.Review.Comment, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &r.PlaybookTreeSHA256, &r.PlaybookWorkspaceRoot, &created, &released, &deprecated)
+	var parent, template, released, deprecated sql.NullString
+	err := row.Scan(&r.ID, &r.ComponentID, &r.LineID, &r.LineName, &parent, &template, &r.Version, &r.Status, &r.ReleaseNotes, &r.Compatibility, &candidate, &r.PublicationGeneration, &r.RiskLevel, &constraints, &parameters, &r.PlaybookTreeSHA256, &r.PlaybookWorkspaceRoot, &created, &released, &deprecated)
 	r.ParentReleaseID = parent.String
 	r.TemplateSourceReleaseID = template.String
 	r.Candidate = candidate != 0
-	r.Review.SubmittedAt = parseNullTime(submitted)
-	r.Review.ReviewedBy = reviewedBy.String
-	r.Review.ReviewedAt = parseNullTime(reviewed)
 	r.EnvironmentConstraints = decodeJSON(constraints, map[string]any{})
 	r.Parameters = decodeJSON(parameters, []domain.ParameterDefinition{})
 	r.CreatedAt = parseTime(created)
@@ -567,7 +561,7 @@ func invalidateDraftReleaseDeliveryTx(ctx context.Context, tx *sql.Tx, id string
 	if status != domain.ReleaseDraft {
 		return fmt.Errorf("%w: release is no longer a mutable draft", domain.ErrConflict)
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=0,review_status='not_submitted',review_contract_digest='',review_submitted_at=NULL,reviewed_by=NULL,reviewed_at=NULL,review_comment='',publication_generation=publication_generation+1 WHERE id=?`, id)
+	_, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=0,publication_generation=publication_generation+1 WHERE id=?`, id)
 	return err
 }
 
@@ -612,9 +606,8 @@ func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bo
 	if err != nil {
 		return err
 	}
-	if release.PublicationGeneration != expectedGeneration || domain.ComponentReleaseSpecDigest(release) != expectedDigest ||
-		(candidate && (release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != expectedDigest)) {
-		return fmt.Errorf("%w: release or approval changed; refresh and retry", domain.ErrConflict)
+	if release.PublicationGeneration != expectedGeneration || domain.ComponentReleaseSpecDigest(release) != expectedDigest {
+		return fmt.Errorf("%w: release changed; refresh and retry", domain.ErrConflict)
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE component_releases SET candidate=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND publication_generation=?`, candidate, id, expectedGeneration)
 	if err != nil {
@@ -624,40 +617,6 @@ func (s *Store) SetReleaseCandidate(ctx context.Context, id string, candidate bo
 		return fmt.Errorf("%w: only a draft release can change candidate state", domain.ErrConflict)
 	}
 	return tx.Commit()
-}
-
-func (s *Store) SubmitComponentReleaseReview(ctx context.Context, id, digest string, expectedGeneration int64, submittedAt time.Time) error {
-	tx, err := s.beginCatalogWrite(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	release, err := getComponentRelease(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	if release.PublicationGeneration != expectedGeneration || domain.ComponentReleaseSpecDigest(release) != digest {
-		return fmt.Errorf("%w: release changed; refresh and retry", domain.ErrConflict)
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE component_releases SET review_status='pending',review_contract_digest=?,review_submitted_at=?,reviewed_by=NULL,reviewed_at=NULL,review_comment='',candidate=0,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND publication_generation=?`, digest, timeText(submittedAt), id, expectedGeneration)
-	if err != nil {
-		return mapSQLError(err)
-	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
-		return fmt.Errorf("%w: only a draft release can be submitted for review", domain.ErrConflict)
-	}
-	return tx.Commit()
-}
-
-func (s *Store) DecideComponentReleaseReview(ctx context.Context, id string, status domain.ReleaseReviewStatus, reviewer, comment, digest string, reviewedAt time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE component_releases SET review_status=?,reviewed_by=?,reviewed_at=?,review_comment=?,candidate=0,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND review_status='pending' AND review_contract_digest=?`, status, reviewer, timeText(reviewedAt), comment, id, digest)
-	if err != nil {
-		return mapSQLError(err)
-	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
-		return fmt.Errorf("%w: release review is no longer pending for this contract", domain.ErrConflict)
-	}
-	return nil
 }
 
 type DependencyLink struct{ DownstreamComponentID, DownstreamComponentName, DownstreamOwnerID, UpstreamComponentID string }

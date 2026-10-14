@@ -74,7 +74,7 @@ func TestEnvironmentRevisionDeletionAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Another version's run must not prohibit cleaning this unused version.
-	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "another-version-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[1], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}, nil); err != nil {
+	if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "another-version-run", Kind: domain.RunComponentTest, Status: domain.RunFailed, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[1], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}); err != nil {
 		t.Fatal(err)
 	}
 	preview := f.request(http.MethodGet, path+"/deletion-impact", nil, owner)
@@ -140,7 +140,7 @@ func TestEnvironmentRevisionDeletionAPI(t *testing.T) {
 }
 
 func TestEnvironmentRevisionDeletionRetainsEveryRunStatus(t *testing.T) {
-	for _, status := range []string{"queued", "awaiting_approval", "running", "succeeded", "failed", "cancelled", "rejected", "interrupted", "archived", "cleaned"} {
+	for _, status := range []string{"queued", "running", "succeeded", "failed", "cancelled", "rejected", "interrupted", "archived", "cleaned"} {
 		t.Run(status, func(t *testing.T) {
 			f, owner, id, ids := revisionDeletionFixture(t, 2)
 			ctx := context.Background()
@@ -155,7 +155,7 @@ func TestEnvironmentRevisionDeletionRetainsEveryRunStatus(t *testing.T) {
 				if status == "archived" {
 					runStatus = domain.RunFailed
 				}
-				if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "retained", Kind: domain.RunComponentTest, Status: runStatus, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[0], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}, nil); err != nil {
+				if err := testutil.InsertRunRecord(ctx, f.database.DB(), domain.Run{ID: "retained", Kind: domain.RunComponentTest, Status: runStatus, RequestedBy: seed.EnvironmentOwnerID, EnvironmentID: id, EnvironmentRevisionID: ids[0], Snapshot: runfixture.Snapshot(map[string]any{}), CreatedAt: now, FinishedAt: &now}); err != nil {
 					t.Fatal(err)
 				}
 				if status == "archived" {

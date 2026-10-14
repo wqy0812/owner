@@ -7,7 +7,6 @@ import { user as userEvent } from './interactions';
 import { render, screen } from './render';
 
 const readiness: ComponentRelease['readiness'] = { status: 'ready', blockers: [] };
-const review: ComponentRelease['review'] = { status: 'approved' };
 
 const kubeletRelease: ComponentRelease = {
   id: 'release-kubelet',
@@ -17,7 +16,7 @@ const kubeletRelease: ComponentRelease = {
   compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
-  readiness, review,
+  readiness,
   parameters: [
     { name: 'kubeInstallRoot', description: 'kubelet 安装根目录', type: 'string', visibility: 'public', modifiable: false, valueProvider: 'component_owner', fixedValue: '/opt/kube' },
     { name: 'K8S_VERSION', description: 'Kubernetes 版本', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'component_owner', fixedValue: '1.17.5' },
@@ -41,7 +40,7 @@ const proxyRelease: ComponentRelease = {
   compatibility: 'not_applicable',
   version: '1.17.5',
   state: 'released',
-  readiness, review,
+  readiness,
   parameters: [{ name: 'kubeRoot', description: '复用 kubelet 安装目录', type: 'string', visibility: 'internal', modifiable: false, valueProvider: 'upstream_mapping' }],
   dependencies: [{ kind: 'execution',
     componentId: 'component-kubelet',
@@ -137,7 +136,7 @@ describe('parameter contract editor', () => {
       ownerId: 'alice',
       layer: 'runtime_state',
       tags: ['runtime'],
-      releases: [{ id: 'release-containerd', componentId: 'component-containerd', lineId: 'line-containerd', lineName: 'containerd 2.1', compatibility: 'not_applicable', version: 'v2.1.1', state: 'released', readiness, review, parameters: [] }],
+      releases: [{ id: 'release-containerd', componentId: 'component-containerd', lineId: 'line-containerd', lineName: 'containerd 2.1', compatibility: 'not_applicable', version: 'v2.1.1', state: 'released', readiness, parameters: [] }],
     };
     const seen: ComponentRelease['dependencies'][] = [];
     const view = (dependencies: NonNullable<ComponentRelease['dependencies']>) => (
@@ -183,7 +182,7 @@ describe('parameter contract editor', () => {
   });
 
   it('defaults the contract view to a release that has mappings', () => {
-    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', lineId: 'line-kube-proxy-new', lineName: 'kube-proxy 1.34', compatibility: 'not_applicable', version: '1.34.3', state: 'released', readiness, review };
+    const empty: ComponentRelease = { id: 'new', componentId: 'component-kube-proxy', lineId: 'line-kube-proxy-new', lineName: 'kube-proxy 1.34', compatibility: 'not_applicable', version: '1.34.3', state: 'released', readiness };
     expect(defaultContractRelease([empty, proxyRelease], empty)?.id).toBe('release-kube-proxy');
   });
 

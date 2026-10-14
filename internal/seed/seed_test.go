@@ -286,7 +286,7 @@ func TestSeederIsIdempotentAndRegistersClassifiedModel(t *testing.T) {
 	}
 	for _, node := range open.Graph.Nodes {
 		release, releaseErr := database.GetComponentRelease(ctx, node.ReleaseID)
-		if releaseErr != nil || len(release.Actions) == 0 || !release.Actions[0].NeedsApproval() {
+		if releaseErr != nil || len(release.Actions) == 0 || !release.Actions[0].HighRisk() {
 			t.Fatalf("OpenFuyao node %s is not destructive: release=%+v err=%v", node.ID, release, releaseErr)
 		}
 		install := release.Actions[0]
@@ -448,7 +448,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 			t.Fatalf("scenario %s dependency issues=%+v err=%v", expectation.revisionID, issues, err)
 		}
 		run, err := platform.Execution().StartScenarioTest(ctx, owner, expectation.revisionID, cleanEnvironment.ID)
-		if err != nil || run.Status != domain.RunAwaitingApproval {
+		if err != nil || run.Status != domain.RunQueued {
 			t.Fatalf("scenario %s run=%+v err=%v", expectation.revisionID, run, err)
 		}
 		steps := runfixture.StepMaps(run.Snapshot.Plan.Steps)
@@ -529,7 +529,7 @@ func TestOpenFuyaoSeedDefinesCompleteContractsAndThreeIndependentDAGs(t *testing
 			EnvironmentID: environment.ID,
 			Mode:          service.ComponentTestInstallVerify,
 		})
-		if err != nil || componentRun.Status != domain.RunAwaitingApproval {
+		if err != nil || componentRun.Status != domain.RunQueued {
 			t.Fatalf("component test %s run=%+v err=%v", releaseID, componentRun, err)
 		}
 		steps := runfixture.StepMaps(componentRun.Snapshot.Plan.Steps)
@@ -574,13 +574,13 @@ func TestKubernetes1175SeedRegistersMinimalCatalogAndReusableDAGs(t *testing.T) 
 		}
 		primary, verify := release.Actions[0], release.Actions[1]
 		if primary.Kind == domain.ActionPreflight {
-			if primary.Destructive || primary.NeedsApproval() {
+			if primary.Destructive || primary.HighRisk() {
 				t.Fatalf("host preflight unexpectedly destructive: %+v", primary)
 			}
-		} else if !primary.Destructive || !primary.NeedsApproval() {
-			t.Fatalf("writing action does not require approval: %+v", primary)
+		} else if !primary.Destructive || !primary.HighRisk() {
+			t.Fatalf("writing action is not marked high risk: %+v", primary)
 		}
-		if verify.Kind != domain.ActionVerify || verify.Destructive || verify.NeedsApproval() {
+		if verify.Kind != domain.ActionVerify || verify.Destructive || verify.HighRisk() {
 			t.Fatalf("invalid verify action for %s: %+v", releaseID, verify)
 		}
 		for _, action := range release.Actions {

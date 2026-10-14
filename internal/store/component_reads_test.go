@@ -130,7 +130,7 @@ func TestComponentListUsesOneSnapshotDuringConcurrentEdit(t *testing.T) {
 	if err != nil || len(items) != 1 || len(items[0].Releases) != 1 {
 		t.Fatalf("mixed snapshot changed candidate visibility: %v %v", items, err)
 	}
-	if items[0].Releases[0].Actions[0].Playbook != "fixtures/install.yml" || !items[0].Releases[0].IsApprovedCandidate() {
+	if items[0].Releases[0].Actions[0].Playbook != "fixtures/install.yml" || !items[0].Releases[0].IsSharedCandidate() {
 		t.Fatal("candidate did not retain the approved contract within its snapshot")
 	}
 	if err := tx.Commit(); err != nil {

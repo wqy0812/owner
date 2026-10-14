@@ -40,7 +40,7 @@ ansible-playbook -i inventory.ini site.yml -e @/private/run-inputs.json
 
 Ansible 和控制端 Python 必须与清单中的精确版本一致，包含 Ansible 2.8.8 / Python 3.6.9 支持。目标机连接及其解释器由锁定 Inventory 和连接设置确定。插件使用 Python 3.6 兼容语法。
 
-介质及镜像使用锁定的来源、目标和摘要。执行器在组件变更前准备并校验；镜像平移需要控制端 Docker。凭据、私钥和镜像仓库认证由操作者在包外提供。独立运行不会连接平台获取凭据，也不会回写平台审批、测试或安装记录。
+介质及镜像使用锁定的来源、目标和摘要。执行器在组件变更前准备并校验；镜像平移需要控制端 Docker。凭据、私钥和镜像仓库认证由操作者在包外提供。独立运行不会连接平台获取凭据，也不会回写平台测试或安装记录。
 
 ## 完整交付与历史包
 
@@ -55,6 +55,6 @@ CLI 通过 `internal/jobcli/media.go` 读取 JobPlan.Metadata 的介质字段，
 每次底层 Probe 有三分钟上限并遵守父 context 取消；执行和回执仍由 CLI 管理。
 包含 `source_verify` 的升级作业仍在来源验证完成后才准备介质。
 
-平台与 CLI 共用介质类型及传输实现，平台另行记录准备进度、审批和逐 Run 交付结果。
+平台与 CLI 共用介质类型及传输实现，平台另行记录准备进度和逐 Run 交付结果。
 CLI 不导入 service、store、api 或 SQLite。完整计划使用 `ansible.PlanDigest` 的既有 JSON + SHA-256 算法；
 介质投影不得覆盖原 Metadata，也不得用于计算完整计划摘要。历史作业包和回执不因内部代码拆分而重写。

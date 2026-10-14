@@ -58,14 +58,8 @@ func (p *RunCreator) createScenarioRun(ctx context.Context, user domain.User, id
 	snapshot.ScenarioExecution.AcceptanceJobIDs = jobIDs
 	snapshot.Inputs.ResolvedParametersByNode = provenanceSnapshot(x.prepared.provenance)
 	snapshot.Inputs.CredentialRefs = domain.RedactCredentialRefs(x.prepared.environment.Revision.CredentialRefs, false)
-	run := domain.Run{ID: runID, Kind: kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: input.EnvironmentID, EnvironmentRevisionID: x.prepared.environment.CurrentRevisionID, ScenarioRevisionID: id, Snapshot: snapshot, DeliveryResults: x.plan.DeliveryResults, ArtifactDigest: x.plan.TreeDigest, Destructive: x.preview.NeedsApproval, CreatedAt: at}
-	var approval *domain.Approval
-	if run.Destructive {
-		run.Status = domain.RunAwaitingApproval
-		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: at}
-		run.Approval = approval
-	}
-	if err := p.store.CreateRun(ctx, run, approval); err != nil {
+	run := domain.Run{ID: runID, Kind: kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: input.EnvironmentID, EnvironmentRevisionID: x.prepared.environment.CurrentRevisionID, ScenarioRevisionID: id, Snapshot: snapshot, DeliveryResults: x.plan.DeliveryResults, ArtifactDigest: x.plan.TreeDigest, Destructive: x.preview.HighRisk, CreatedAt: at}
+	if err := p.store.CreateRun(ctx, run); err != nil {
 		if existing, e := p.store.GetScenarioSubmission(ctx, user.ID, input.IdempotencyKey, requestDigest); e == nil {
 			return existing, nil
 		}
@@ -73,7 +67,7 @@ func (p *RunCreator) createScenarioRun(ctx context.Context, user domain.User, id
 	}
 	p.audit.Record(ctx, user, "run.created", "run", run.ID, map[string]any{"executionMode": mode, "scenarioRevisionId": id, "planDigest": x.preview.PlanDigest})
 	p.hub.Publish("run.updated", map[string]any{"runId": run.ID, "status": run.Status})
-	if approval == nil {
+	if run.Status == domain.RunQueued {
 		p.scheduler.schedule(run.EnvironmentID)
 	}
 	return run, nil
@@ -91,13 +85,7 @@ func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, sourc
 	refreshed := domain.SnapshotFromExecutionPlan(locked)
 	snapshot := domain.RunSnapshot{Contract: domain.RunSnapshotContract, Subject: frozen.Subject, Inputs: frozen.Inputs, ScenarioExecution: frozen.ScenarioExecution, Plan: refreshed.Plan, Delivery: refreshed.Delivery, Recovery: refreshed.Recovery, Retry: domain.RunRetryContext{RecoveryStateDigest: preview.RecoveryStateDigest}}
 	results := retryDeliveryResults(locked.DeliveryDecisions)
-	run := domain.Run{ID: runID, Kind: source.Kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: source.EnvironmentID, EnvironmentRevisionID: source.EnvironmentRevisionID, ComponentReleaseID: source.ComponentReleaseID, ScenarioRevisionID: source.ScenarioRevisionID, Action: source.Action, Destructive: preview.RequiresApproval, Snapshot: snapshot, DeliveryResults: results, ArtifactDigest: source.ArtifactDigest, RetryOfRunID: source.ID, RetryRootRunID: preview.RetryRootRunID, RetryAttempt: retryAttempt, RetryStartStep: source.RetryStartStep + preview.StartStep, CreatedAt: now}
-	var approval *domain.Approval
-	if preview.RequiresApproval {
-		run.Status = domain.RunAwaitingApproval
-		approval = &domain.Approval{ID: newID("approval"), RunID: run.ID, Status: "pending", RequestedAt: now}
-		run.Approval = approval
-	}
+	run := domain.Run{ID: runID, Kind: source.Kind, Status: domain.RunQueued, RequestedBy: user.ID, EnvironmentID: source.EnvironmentID, EnvironmentRevisionID: source.EnvironmentRevisionID, ComponentReleaseID: source.ComponentReleaseID, ScenarioRevisionID: source.ScenarioRevisionID, Action: source.Action, Destructive: preview.HighRisk, Snapshot: snapshot, DeliveryResults: results, ArtifactDigest: source.ArtifactDigest, RetryOfRunID: source.ID, RetryRootRunID: preview.RetryRootRunID, RetryAttempt: retryAttempt, RetryStartStep: source.RetryStartStep + preview.StartStep, CreatedAt: now}
 	if source.Kind == domain.RunScenario || source.Kind == domain.RunScenarioTest {
 		baseline, err := p.store.GetScenarioInstallation(ctx, source.EnvironmentID, source.Snapshot.Subject.ScenarioID)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -109,7 +97,7 @@ func (p *RunCreator) createRetryRun(ctx context.Context, user domain.User, sourc
 		run.Snapshot.Submission.Digest = preview.PlanDigest
 		run.Snapshot.Submission.PlanDigest = preview.PlanDigest
 	}
-	if err := p.store.CreateRun(ctx, run, approval); err != nil {
+	if err := p.store.CreateRun(ctx, run); err != nil {
 		return run, err
 	}
 	p.audit.Record(ctx, user, "run.retry_created", "run", run.ID, map[string]any{"sourceRunId": source.ID, "retryRootRunId": run.RetryRootRunID, "retryAttempt": run.RetryAttempt, "retryStartStep": run.RetryStartStep, "planDigest": preview.PlanDigest})
@@ -161,8 +149,8 @@ func (p *ExecutionService) startScenario(ctx context.Context, user domain.User, 
 	return p.StartScenarioExecution(ctx, user, revisionID, input, kind)
 }
 
-// A new attempt starts without observations from an earlier Run. Approved
-// choices remain in the frozen delivery plan and are verified before execution.
+// A new attempt starts without observations from an earlier Run. Automatic
+// transfer decisions remain in the frozen delivery plan and are verified before execution.
 func retryDeliveryResults(decisions []domain.RunDeliveryDecision) []domain.RunDeliveryResult {
 	out := make([]domain.RunDeliveryResult, 0, len(decisions))
 	for _, d := range decisions {

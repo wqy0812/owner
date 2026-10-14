@@ -12,7 +12,6 @@ REBUILD_V1_DB=false
 INITIALIZE_EMPTY_DB=false
 DISABLE_CATALOG_BACKUP=false
 BUSINESS_RESET_DIR=""
-VERIFIED_RUN_MIGRATION=""
 
 usage() {
   cat <<'EOF'
@@ -29,7 +28,6 @@ Options:
   --initialize-empty-db    Initialize an absent database while the service is stopped
   --disable-catalog-backup Deploy with Git Catalog backup explicitly disabled
   --business-reset-dir DIR Use a verified, copied business-only reset bundle
-  --verified-run-migration DIR Use target.db and ready.json from an offline migration (remote directory; all writers must already be stopped)
   -h, --help               Show this help
 
 Environment variables:
@@ -75,12 +73,6 @@ while [[ $# -gt 0 ]]; do
       DISABLE_CATALOG_BACKUP=true
       shift 2
       ;;
-    --verified-run-migration)
-      [[ $# -ge 2 ]] || die "--verified-run-migration requires a remote directory"
-      VERIFIED_RUN_MIGRATION="$2"
-      [[ "$VERIFIED_RUN_MIGRATION" =~ ^/var/lib/clusterforge/run-migrations/[A-Za-z0-9_-]+$ ]] || die "invalid Run migration directory"
-      shift 2
-      ;;
     --rebuild-v1-db)
       REBUILD_V1_DB=true
       shift
@@ -102,11 +94,6 @@ done
 [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die "SSH port must be numeric"
 if [[ "$INITIALIZE_EMPTY_DB" == true && ( "$REBUILD_V1_DB" == true || "$ALLOW_ACTIVE_RUNS" == true ) ]]; then
   die "--initialize-empty-db cannot be combined with rebuild or active-Run overrides"
-fi
-
-
-if [[ -n "$VERIFIED_RUN_MIGRATION" && ( "$REBUILD_V1_DB" == true || "$INITIALIZE_EMPTY_DB" == true || "$ALLOW_ACTIVE_RUNS" == true ) ]]; then
-  die "verified migration cannot be combined with database rebuild, initialization or active-Run overrides"
 fi
 
 for command_name in git go make pnpm python3 scp ssh; do
@@ -220,7 +207,7 @@ command -v "$ansible_binary" >/dev/null 2>&1 || {
 }
 PREFLIGHT
 
-if [[ -n "$BUSINESS_RESET_DIR" || -n "$VERIFIED_RUN_MIGRATION" || "$INITIALIZE_EMPTY_DB" == true ]]; then
+if [[ -n "$BUSINESS_RESET_DIR" || "$INITIALIZE_EMPTY_DB" == true ]]; then
   ssh "${ssh_options[@]}" "$TARGET" '! systemctl is-active --quiet clusterforge-platform'
 else
   ssh "${ssh_options[@]}" "$TARGET" 'systemctl is-active --quiet clusterforge-platform'
@@ -244,7 +231,7 @@ echo "==> Activating release"
 # SSH sends one command string through the remote shell. Quote every argument
 # so the optional empty reset directory does not shift the following arguments.
 printf -v activate_command '%q ' bash -s -- \
-  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" "$remote_job_artifact" "$job_checksum" "$initialize_empty_db" "$VERIFIED_RUN_MIGRATION"
+  "$remote_artifact" "$checksum" "$remote_backup_artifact" "$backup_checksum" "$remote_helper" "$remote_helper_checksum" "$allow_active_runs" "$rebuild_v1_db" "$ui_index_checksum" "$ui_version_checksum" "$disable_catalog_backup" "$BUSINESS_RESET_DIR" "$remote_job_artifact" "$job_checksum" "$initialize_empty_db"
 ssh "${ssh_options[@]}" "$TARGET" "$activate_command" <<'REMOTE_SCRIPT'
 set -Eeuo pipefail
 
@@ -263,15 +250,12 @@ business_reset_dir="${12}"
 staged_job_artifact="${13}"
 expected_job_checksum="${14}"
 initialize_empty_db="${15}"
-verified_run_migration="${16:-}"
-migration_writes_open=0
-migration_database_stage=""
 service_name="clusterforge-platform"
 live_binary="/opt/clusterforge/platform/clusterforge-platform"
 live_backup_binary="/opt/clusterforge/platform/clusterforge-backup"
 live_job_binary="/opt/clusterforge/platform/clusterforge-job"
 database="/var/lib/clusterforge/platform.db"
-expected_schema_contract="clusterforge-v1-20260908-typed-run-snapshot"
+expected_schema_contract="clusterforge-v1-20261014-owner-direct-execution"
 backup_root="/var/lib/clusterforge/deploy-backups"
 health_url="http://127.0.0.1:8080/"
 service_touched=0
@@ -287,7 +271,6 @@ if systemctl is-enabled --quiet clusterforge-backup.timer 2>/dev/null; then
 fi
 
 cleanup_staged() {
-  if [[ -n "$migration_database_stage" ]]; then rm -f "$migration_database_stage"; fi
   rm -f "$staged_artifact" "$staged_backup_artifact" "$staged_remote_helper" "$staged_job_artifact"
 }
 
@@ -295,11 +278,6 @@ finish_failure() {
   rc="$1"
   trap - ERR EXIT INT TERM
   set +e
-  if [[ "$migration_writes_open" -eq 1 ]]; then
-    echo "migration activation failed after the new program was started; automatic database rollback is disabled. Preserve current data and investigate; backup=$backup_dir migration=$verified_run_migration" >&2
-    cleanup_staged
-    exit "$rc"
-  fi
   if [[ "$service_touched" -eq 1 ]]; then
     systemctl stop "$service_name"
     if [[ "$backup_ready" -eq 1 ]]; then
@@ -395,18 +373,8 @@ actual_remote_helper_checksum="$(sha256sum "$staged_remote_helper" | awk '{print
 source "$staged_remote_helper"
 CLUSTERFORGE_DEPLOY_DB_TOOL="$staged_backup_artifact"
 
-verify_migration_bundle() {
-  [[ -n "$verified_run_migration" && ! -L "$verified_run_migration" ]]
-  [[ "$rebuild_v1_db" -eq 0 && "$initialize_empty_db" -eq 0 && "$allow_active_runs" -eq 0 ]]
-  for unit in "$service_name" clusterforge-backup.timer clusterforge-backup.service; do
-    [[ "$(systemctl show "$unit" -p ActiveState --value)" == inactive ]] || { echo "offline migration requires stopped writer: $unit" >&2; return 1; }
-  done
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify-run-migration --db "$database" --target "$verified_run_migration/target.db" --report "$verified_run_migration/ready.json"
-}
 
-if [[ -n "$verified_run_migration" ]]; then
-  verify_migration_bundle
-elif [[ "$initialize_empty_db" -eq 1 ]]; then
+if [[ "$initialize_empty_db" -eq 1 ]]; then
   clusterforge_assert_empty_database "$database" "$(systemctl show "$service_name" -p ActiveState --value)"
 else
   active_runs="$(clusterforge_list_active_runs "$database")"
@@ -462,7 +430,7 @@ run_automation_snapshot() {
 predeploy_backup_enabled="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_ENABLED" {print tolower($2)}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_backup_dir="$(awk -F= '$1=="CLUSTERFORGE_BACKUP_DIR" {sub(/^[^=]*=/,""); print}' /etc/clusterforge/platform.env | tail -1)"
 predeploy_selection_file="${predeploy_backup_dir:-/var/lib/clusterforge/catalog-backups}/repository.json"
-if [[ -z "$verified_run_migration" && "$initialize_empty_db" -eq 0 && "$predeploy_backup_enabled" == "true" && "$disable_catalog_backup" -eq 0 ]]; then
+if [[ "$initialize_empty_db" -eq 0 && "$predeploy_backup_enabled" == "true" && "$disable_catalog_backup" -eq 0 ]]; then
   clusterforge_snapshot_if_configured "$predeploy_selection_file" "$live_backup_binary" run_automation_snapshot before-deploy
 fi
 
@@ -540,20 +508,6 @@ if [[ "$rebuild_v1_db" -eq 1 ]]; then
   if [[ -n "$business_reset_dir" ]]; then
     install -m 0600 "$business_reset_dir/foundation.db" "$database"
   fi
-fi
-if [[ -n "$verified_run_migration" ]]; then
-  # Check the source binding again immediately before switching the database.
-  verify_migration_bundle
-  install -m 0600 "$verified_run_migration/ready.json" "$backup_dir/run-migration.json"
-  migration_database_stage="$(mktemp "${database}.migrating.XXXXXX")"
-  install -m 0600 "$verified_run_migration/target.db" "$migration_database_stage"
-  "$CLUSTERFORGE_DEPLOY_DB_TOOL" database verify --db "$migration_database_stage" --expected-contract "$expected_schema_contract"
-  rm -f "${database}-wal" "${database}-shm" "${database}-journal"
-  mv "$migration_database_stage" "$database"
-  migration_database_stage=""
-  # Starting the server can create new data before HTTP readiness succeeds.
-  # From this point preserve the new database on every failure or interruption.
-  migration_writes_open=1
 fi
 systemctl start "$service_name"
 

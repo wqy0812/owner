@@ -90,7 +90,7 @@ func (s *Store) ComponentUsage(ctx context.Context, viewer domain.User, id, rele
 	if err != nil {
 		return out, err
 	}
-	// Digest-bound candidate approval uses the established predicate. Candidate
+	// Explicit candidate sharing uses the established predicate. Candidate
 	// contract loading is limited to the exact candidate that needs a detail link.
 	for i := range out.Components {
 		r := &out.Components[i]
@@ -99,7 +99,7 @@ func (s *Store) ComponentUsage(ctx context.Context, viewer domain.User, id, rele
 			if e != nil {
 				return out, e
 			}
-			r.CanViewDetails = release.IsApprovedCandidate()
+			r.CanViewDetails = release.IsSharedCandidate()
 		}
 	}
 	rows, err = tx.QueryContext(ctx, `SELECT s.id,s.name,sr.id,sr.revision,CASE WHEN sr.abandoned_at IS NOT NULL THEN 'abandoned' ELSE sr.status END,s.owner_id,u.name,r.id,r.version,s.current_revision_id=sr.id,COUNT(*) FROM scenario_revisions sr JOIN scenarios s ON s.id=sr.scenario_id JOIN users u ON u.id=s.owner_id JOIN json_each(sr.graph_json,'$.nodes') node JOIN component_releases r ON r.id=json_extract(node.value,'$.releaseId') WHERE r.component_id=? AND (?='' OR r.id=?) AND (? OR (s.current_revision_id=sr.id AND sr.status<>'deprecated' AND sr.abandoned_at IS NULL)) GROUP BY s.id,sr.id,r.id ORDER BY s.name,sr.revision DESC,r.version`, id, releaseID, releaseID, history)

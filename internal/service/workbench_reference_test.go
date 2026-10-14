@@ -116,12 +116,8 @@ func (p *ReadModelService) legacyWorkbench(ctx context.Context, user domain.User
 }
 
 func (p *ReadModelService) legacyPlatformAdminWorkbench(ctx context.Context, user domain.User) (domain.Workbench, error) {
-	components, err := p.store.ListComponents(ctx, user)
-	if err != nil {
-		return domain.Workbench{}, err
-	}
 	workbench := domain.Workbench{GeneratedAt: time.Now().UTC(), Role: user.Role, Items: []domain.WorkItem{}}
-	workbench.Items = platformAdminComponentWork(components)
+	workbench.Items = []domain.WorkItem{}
 	workbench.Summary.ActionRequired = len(workbench.Items)
 	return workbench, nil
 }

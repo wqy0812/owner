@@ -11,7 +11,7 @@ import (
 
 // InsertRunRecord arranges stored records for read, deletion and recovery tests.
 // Execution tests must use the service submission protocol instead.
-func InsertRunRecord(ctx context.Context, db *sql.DB, run domain.Run, approvals ...*domain.Approval) error {
+func InsertRunRecord(ctx context.Context, db *sql.DB, run domain.Run) error {
 	snapshot, err := json.Marshal(run.Snapshot)
 	if err != nil {
 		return err
@@ -49,14 +49,6 @@ func InsertRunRecord(ctx context.Context, db *sql.DB, run domain.Run, approvals 
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO run_snapshot_references(run_id,referenced_run_id) VALUES(?,?)`, run.ID, id); err != nil {
-			return err
-		}
-	}
-	for _, a := range approvals {
-		if a == nil {
-			continue
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO approvals(id,run_id,status,requested_at,decided_by,decision,reason,decided_at) VALUES(?,?,?,?,?,?,?,?)`, a.ID, run.ID, a.Status, a.RequestedAt.UTC().Format(time.RFC3339Nano), nullText(a.DecidedBy), a.Decision, a.Reason, nullTime(a.DecidedAt)); err != nil {
 			return err
 		}
 	}

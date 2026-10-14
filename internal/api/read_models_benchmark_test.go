@@ -86,12 +86,12 @@ func readModelScaleFixture(t *testing.T) *Handler {
 		at := now.Add(time.Duration(i) * time.Minute)
 		status := domain.RunSucceeded
 		if i >= 245 {
-			status = domain.RunAwaitingApproval
+			status = domain.RunQueued
 		} else if i%9 == 0 {
 			status = domain.RunFailed
 		}
 		run := domain.Run{ID: fmt.Sprintf("perf-run-%03d", i), Kind: domain.RunComponentTest, Status: status, RequestedBy: seed.ComponentOwnerRuntimeID, EnvironmentID: env.ID, EnvironmentRevisionID: rev.ID, ComponentReleaseID: r.ID, Action: domain.ActionInstall, CreatedAt: at, FinishedAt: &at, Snapshot: runfixture.Snapshot(map[string]any{"componentReleaseSpecDigest": domain.ComponentReleaseSpecDigest(r), "componentTestEvidence": "install_verify", "steps": []any{map[string]any{"variables": map[string]any{"payload": strings.Repeat("x", 16*1024)}}}})}
-		if err := testutil.InsertRunRecord(ctx, db.DB(), run, nil); err != nil {
+		if err := testutil.InsertRunRecord(ctx, db.DB(), run); err != nil {
 			t.Fatal(err)
 		}
 		for _, kind := range []string{"install", "verify"} {
@@ -101,11 +101,6 @@ func readModelScaleFixture(t *testing.T) *Handler {
 		}
 		if _, err := db.DB().Exec(`INSERT INTO run_logs(run_id,message,created_at) VALUES(?,?,?)`, run.ID, strings.Repeat("fixture log ", 1024), at.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
-		}
-		if status == domain.RunAwaitingApproval {
-			if _, err := db.DB().Exec(`INSERT INTO approvals(id,run_id,requested_at) VALUES(?,?,?)`, "approval-"+run.ID, run.ID, at.Format(time.RFC3339Nano)); err != nil {
-				t.Fatal(err)
-			}
 		}
 	}
 	p := newAPITestPlatform(t, db, &fakeRunner{}, service.NewEventHub())

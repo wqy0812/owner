@@ -13,7 +13,7 @@ func TestWaitingObservationsSurviveLogTailAndClearOnResult(t *testing.T) {
 	ctx := context.Background()
 	r := evidenceRun("waiting", "digest", "install_verify", "", "", time.Now())
 	r.Status, r.FinishedAt = domain.RunRunning, nil
-	if err := s.CreateRun(ctx, r, nil); err != nil {
+	if err := s.CreateRun(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	appendLog := func(stream, message string) {

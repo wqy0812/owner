@@ -9,9 +9,7 @@ import (
 	"codex/platform-demo/internal/domain"
 )
 
-// Golden files were emitted by lockedPlan and jobPlanFromLocked from the source
-// captured before this refactor (2026-09-08, old database contract). Do not refresh
-// them from current types: their byte order and fields are old digest inputs.
+// Golden files cover the current direct-execution plan and Native Job v4 execution structure with current delivery metadata.
 func TestRunSnapshotPreservesOriginalPlanAndNativeJobProjection(t *testing.T) {
 	original, err := os.ReadFile("testdata/run-snapshot/original-run-plan.json")
 	if err != nil {
@@ -42,6 +40,6 @@ func TestRunSnapshotPreservesOriginalPlanAndNativeJobProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(actual, native) {
-		t.Fatal("original Native Job v4 projection changed")
+		t.Fatalf("Native Job v4 projection changed: %s", actual)
 	}
 }

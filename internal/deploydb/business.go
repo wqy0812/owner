@@ -17,7 +17,7 @@ import (
 // business data or accidentally retaining execution history.
 var foundationTables = []string{"run_retention_policy", "schema_contract", "publication_state", "users", "platform_option_categories", "platform_options", "environment_variable_definitions"}
 var businessTables = []string{"components", "component_release_lines", "component_releases", "component_dependencies", "action_definitions", "component_playbook_files", "scenarios", "scenario_revisions", "environments", "environment_revisions", "component_release_artifacts", "component_release_images", "component_artifact_mirrors", "component_image_mirrors"}
-var historyTables = []string{"run_snapshot_references", "workflow_sessions", "scenario_installations", "scenario_execution_submissions", "action_execution_receipts", "run_jobs", "run_archive_tasks", "run_archive_files", "run_cleanup_history", "run_retention_cursors", "sessions", "playbook_action_mutations", "runs", "run_steps", "run_logs", "run_waiting_observations", "approvals", "notifications", "audit_events", "component_image_builds", "component_image_build_logs", "environment_component_installations", "environment_health_checks", "environment_ssh_checks"}
+var historyTables = []string{"run_snapshot_references", "workflow_sessions", "scenario_installations", "scenario_execution_submissions", "action_execution_receipts", "run_jobs", "run_archive_tasks", "run_archive_files", "run_cleanup_history", "run_retention_cursors", "sessions", "playbook_action_mutations", "runs", "run_steps", "run_logs", "run_waiting_observations", "notifications", "audit_events", "component_image_builds", "component_image_build_logs", "environment_component_installations", "environment_health_checks", "environment_ssh_checks"}
 
 func quoteIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
@@ -65,7 +65,7 @@ func BusinessSnapshot(ctx context.Context, source, target string, foundationOnly
 	}
 	defer tx.Rollback()
 	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM source.runs WHERE status IN ('queued','running','awaiting_approval')) + (SELECT COUNT(*) FROM source.component_image_builds WHERE status IN ('queued','running'))`).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM source.runs WHERE status IN ('queued','running')) + (SELECT COUNT(*) FROM source.component_image_builds WHERE status IN ('queued','running'))`).Scan(&active); err != nil {
 		return err
 	}
 	if active != 0 {
@@ -297,7 +297,7 @@ func ActiveWork(ctx context.Context, path string) ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT 'run',id,status FROM runs WHERE status IN ('running','queued','awaiting_approval') UNION ALL SELECT 'image-build',id,status FROM component_image_builds WHERE status IN ('running','queued')`)
+	rows, err := db.QueryContext(ctx, `SELECT 'run',id,status FROM runs WHERE status IN ('running','queued') UNION ALL SELECT 'image-build',id,status FROM component_image_builds WHERE status IN ('running','queued')`)
 	if err != nil {
 		return nil, err
 	}

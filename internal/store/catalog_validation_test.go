@@ -44,8 +44,8 @@ func catalogAudit(id, action string) domain.AuditEvent {
 
 // Both contenders use independent connection pools. Channels establish the
 // stale-read boundary and control either serial order without timing sleeps.
-func TestReleaseReviewAndCandidateCAS(t *testing.T) {
-	for _, operation := range []string{"candidate", "review"} {
+func TestCandidateCAS(t *testing.T) {
+	for _, operation := range []string{"candidate"} {
 		for _, first := range []string{"edit", "transition"} {
 			t.Run(operation+"/"+first, func(t *testing.T) {
 				a, b := catalogStorePair(t)
@@ -63,10 +63,7 @@ func TestReleaseReviewAndCandidateCAS(t *testing.T) {
 					t.Fatal(err)
 				}
 				transition := func() error {
-					if operation == "candidate" {
-						return a.SetReleaseCandidate(ctx, r.ID, true, captured.PublicationGeneration, domain.ComponentReleaseSpecDigest(captured))
-					}
-					return a.SubmitComponentReleaseReview(ctx, r.ID, domain.ComponentReleaseSpecDigest(captured), captured.PublicationGeneration, testNow)
+					return a.SetReleaseCandidate(ctx, r.ID, true, captured.PublicationGeneration, domain.ComponentReleaseSpecDigest(captured))
 				}
 				edit := func() error {
 					changed := captured
@@ -96,8 +93,8 @@ func TestReleaseReviewAndCandidateCAS(t *testing.T) {
 					}
 				}
 				current, err := a.GetComponentRelease(ctx, r.ID)
-				if err != nil || current.Candidate || current.Review.Status != domain.ReleaseReviewNotSubmitted {
-					t.Fatalf("stale approval persisted: %+v error=%v", current, err)
+				if err != nil || current.Candidate {
+					t.Fatalf("stale candidate sharing persisted: %+v error=%v", current, err)
 				}
 			})
 		}
@@ -381,7 +378,7 @@ func TestEnvironmentParameterFinalWriteRevalidatesContract(t *testing.T) {
 	}
 }
 
-func TestCandidateRejectsUnapprovedAndStaleDigest(t *testing.T) {
+func TestCandidateRejectsStaleDigestAndSharesWithoutReview(t *testing.T) {
 	a, _ := catalogStorePair(t)
 	ctx := context.Background()
 	c := componentFixture("visibility", "component-owner-a")
@@ -396,13 +393,11 @@ func TestCandidateRejectsUnapprovedAndStaleDigest(t *testing.T) {
 	if err := a.SetReleaseCandidate(ctx, r.ID, true, r.PublicationGeneration, "stale"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale digest=%v", err)
 	}
-	for _, status := range []domain.ReleaseReviewStatus{domain.ReleaseReviewNotSubmitted, domain.ReleaseReviewPending, domain.ReleaseReviewRejected, domain.ReleaseReviewApproved} {
-		if _, err := a.DB().ExecContext(ctx, "UPDATE component_releases SET candidate=1,review_status=?,review_contract_digest='stale' WHERE id=?", status, r.ID); err != nil {
-			t.Fatal(err)
-		}
-		visible, err := a.ListComponents(ctx, domain.User{ID: "scenario-owner-a", Role: domain.RoleScenarioOwner})
-		if err != nil || len(visible) != 0 {
-			t.Fatalf("invalid candidate visible=%+v err=%v", visible, err)
-		}
+	if err := a.SetReleaseCandidate(ctx, r.ID, true, r.PublicationGeneration, domain.ComponentReleaseSpecDigest(r)); err != nil {
+		t.Fatal(err)
+	}
+	visible, err := a.ListComponents(ctx, domain.User{ID: "scenario-owner-a", Role: domain.RoleScenarioOwner})
+	if err != nil || len(visible) != 1 {
+		t.Fatalf("candidate visibility=%+v err=%v", visible, err)
 	}
 }

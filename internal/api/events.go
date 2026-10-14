@@ -59,7 +59,7 @@ func (h *Handler) eventVisible(r *http.Request, user domain.User, event service.
 		_, err := h.platform.Preparations().Get(r.Context(), user, id)
 		return err == nil
 	}
-	if !strings.HasPrefix(event.Type, "run.") && !strings.HasPrefix(event.Type, "approval.") {
+	if !strings.HasPrefix(event.Type, "run.") {
 		return true
 	}
 	payload, ok := event.Data.(map[string]any)

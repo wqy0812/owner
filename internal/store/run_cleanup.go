@@ -120,7 +120,7 @@ func (s *Store) CleanupRuns(ctx context.Context, ids []string, actor, source str
 		if err != nil {
 			return err
 		}
-		for _, table := range []string{"run_logs", "run_steps", "approvals"} {
+		for _, table := range []string{"run_logs", "run_steps"} {
 			if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE run_id=?", id); err != nil {
 				return err
 			}

@@ -22,8 +22,6 @@ type ReleasePublicationGuard struct {
 	SpecDigest            string
 	Status                domain.ReleaseStatus
 	Candidate             bool
-	ReviewStatus          domain.ReleaseReviewStatus
-	ReviewContractDigest  string
 	Missing               bool
 }
 
@@ -69,7 +67,7 @@ func verifyReleasePublicationGuards(ctx context.Context, tx queryer, guards []Re
 		}
 		if release.PublicationGeneration != guard.PublicationGeneration ||
 			domain.ComponentReleaseSpecDigest(release) != guard.SpecDigest ||
-			release.Status != guard.Status || release.Candidate != guard.Candidate || release.Review.Status != guard.ReviewStatus || release.Review.ContractDigest != guard.ReviewContractDigest {
+			release.Status != guard.Status || release.Candidate != guard.Candidate {
 			return nil, fmt.Errorf("%w: release %s changed after publication validation", domain.ErrConflict, guard.ReleaseID)
 		}
 		current[guard.ReleaseID] = release
@@ -113,7 +111,7 @@ func (s *Store) PublishComponentRelease(ctx context.Context, id string, expected
 		return err
 	}
 	release, ok := current[id]
-	if !ok || release.Status != domain.ReleaseDraft || release.Review.Status != domain.ReleaseReviewApproved || release.Review.ContractDigest != domain.ComponentReleaseSpecDigest(release) {
+	if !ok || release.Status != domain.ReleaseDraft {
 		return fmt.Errorf("%w: only a guarded draft release can be published", domain.ErrConflict)
 	}
 	if err := advancePublicationEpoch(ctx, tx, expectedEpoch); err != nil {
@@ -267,7 +265,7 @@ func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionGuard Sc
 		if _, tested := evidenceReleases[node.ReleaseID]; !tested {
 			return fmt.Errorf("%w: graph release %s is missing current test evidence", domain.ErrConflict, node.ReleaseID)
 		}
-		if release.Status == domain.ReleaseDraft && release.Candidate && release.Review.Status == domain.ReleaseReviewApproved && release.Review.ContractDigest == domain.ComponentReleaseSpecDigest(release) {
+		if release.Status == domain.ReleaseDraft && release.Candidate {
 			graphCandidates[release.ID] = release
 		}
 	}
@@ -286,7 +284,7 @@ func (s *Store) PublishCandidateReleaseSet(ctx context.Context, revisionGuard Sc
 	sort.Strings(ordered)
 	for _, releaseID := range ordered {
 		release := graphCandidates[releaseID]
-		result, updateErr := tx.ExecContext(ctx, `UPDATE component_releases SET status='released',candidate=0,released_at=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND candidate=1 AND review_status='approved' AND review_contract_digest=? AND publication_generation=?`, timeText(at), releaseID, release.Review.ContractDigest, release.PublicationGeneration)
+		result, updateErr := tx.ExecContext(ctx, `UPDATE component_releases SET status='released',candidate=0,released_at=?,publication_generation=publication_generation+1 WHERE id=? AND status='draft' AND candidate=1 AND publication_generation=?`, timeText(at), releaseID, release.PublicationGeneration)
 		if updateErr != nil {
 			return publicationWriteError(updateErr)
 		}

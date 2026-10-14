@@ -8,7 +8,7 @@ import (
 )
 
 // Prepare reuses verified targets, performs planned transfers, then verifies the
-// selected media locations. Approval and execution timing belong to the caller.
+// selected media locations. Submission and execution timing belong to the caller.
 func Prepare(ctx context.Context, plan Plan, artifacts ArtifactDelivery, images ImageDelivery) error {
 	for _, transfer := range plan.ArtifactTransfers {
 		target := ArtifactLocation{FileStation: transfer.TargetStation, RelativePath: transfer.RelativePath}

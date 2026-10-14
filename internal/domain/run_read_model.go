@@ -28,7 +28,6 @@ type RunReadModel struct {
 	LockedSteps           []RunReadStep `json:"lockedSteps"`
 	ParentSteps           []RunReadStep `json:"parentSteps"`
 	Steps                 []RunStep     `json:"steps"`
-	Approval              *Approval     `json:"approval,omitempty"`
 	Cleaned               bool          `json:"cleaned"`
 }
 type RunReadStep struct {
@@ -50,7 +49,7 @@ type RunReadStep struct {
 }
 
 func ReadModelFromRun(r Run) RunReadModel {
-	out := RunReadModel{ID: r.ID, Kind: r.Kind, Status: r.Status, RequestedBy: r.RequestedBy, EnvironmentID: r.EnvironmentID, EnvironmentRevisionID: r.EnvironmentRevisionID, ComponentReleaseID: r.ComponentReleaseID, ScenarioRevisionID: r.ScenarioRevisionID, Action: r.Action, Destructive: r.Destructive, ArtifactDigest: r.ArtifactDigest, RetryOfRunID: r.RetryOfRunID, RetryRootRunID: r.RetryRootRunID, RetryAttempt: r.RetryAttempt, RetryStartStep: r.RetryStartStep, Error: r.Error, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Subject: r.Snapshot.Subject, Steps: r.Steps, Approval: r.Approval}
+	out := RunReadModel{ID: r.ID, Kind: r.Kind, Status: r.Status, RequestedBy: r.RequestedBy, EnvironmentID: r.EnvironmentID, EnvironmentRevisionID: r.EnvironmentRevisionID, ComponentReleaseID: r.ComponentReleaseID, ScenarioRevisionID: r.ScenarioRevisionID, Action: r.Action, Destructive: r.Destructive, ArtifactDigest: r.ArtifactDigest, RetryOfRunID: r.RetryOfRunID, RetryRootRunID: r.RetryRootRunID, RetryAttempt: r.RetryAttempt, RetryStartStep: r.RetryStartStep, Error: r.Error, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Subject: r.Snapshot.Subject, Steps: r.Steps}
 	out.LockedSteps = ReadSteps(r.Snapshot.Plan.Steps)
 	out.ParentSteps = ReadSteps(r.Snapshot.Plan.ParentSteps)
 	return out

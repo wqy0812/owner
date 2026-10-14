@@ -202,7 +202,7 @@ describe("EnvironmentsPage", () => {
       if (String(input).endsWith('/environments/environment-test/cluster-rollback-plan')) return json({
         environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
         targetHosts: [], sources: [], componentCount: 0, nodeCount: 0,
-        destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
+        destructive: false, highRisk: false, planDigest: '', steps: [], deliveryRequirements: [],
       });
       return baseFetch(input, init);
     });
@@ -216,7 +216,7 @@ describe("EnvironmentsPage", () => {
     }
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: '创建重置 Run（待审批）' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '创建重置 Run' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('textbox', { name: '确认重置环境名称' })).not.toBeInTheDocument();
     await userEvent.click(within(dialog.querySelector('footer')!).getByRole('button', { name: '关闭' }));
     expect(screen.queryByRole('dialog', { name: '重置环境' })).not.toBeInTheDocument();
@@ -234,7 +234,7 @@ describe("EnvironmentsPage", () => {
         return json({
           environmentId: 'environment-test', environmentName: 'Test Environment', environmentRevisionId: 'environment-test-r1',
           targetHosts: [], sources: [], componentCount: 0, nodeCount: 0,
-          destructive: false, requiresApproval: false, planDigest: '', steps: [], deliveryRequirements: [],
+          destructive: false, highRisk: false, planDigest: '', steps: [], deliveryRequirements: [],
         });
       }
       return baseFetch(input, init);
@@ -260,11 +260,11 @@ describe("EnvironmentsPage", () => {
       environmentId: environment.id, environmentName: environment.name, environmentRevisionId: 'environment-test-r6',
       targetHosts: [{ name: 'master-1', address: '192.0.2.10', groups: ['control_plane'] }, { name: 'node-1', address: '192.0.2.11', groups: ['workers'] }],
       sources: [{ runId: 'run-source-install', kind: 'scenario_test', scenarioRevisionId: 'scenario-clean-r1', componentCount: 15 }], componentCount: 15, nodeCount: 21,
-      destructive: true, requiresApproval: true, planDigest: 'rollback-plan-digest',
+      destructive: true, highRisk: true, planDigest: 'rollback-plan-digest',
       deliveryRequirements: [],
       steps: [{
         order: 1, componentId: 'component-coredns', componentName: 'CoreDNS', releaseId: 'release-coredns', releaseVersion: '1.6.5-u1',
-        action: 'rollback', playbook: 'managed/coredns/rollback.yml', limit: 'control_plane', needsApproval: true,
+        action: 'rollback', playbook: 'managed/coredns/rollback.yml', limit: 'control_plane', highRisk: true,
         backupRef: '/var/lib/clusterforge/backups/environment-test/component-coredns/release-coredns/run-source-install',
         backupInstallRunId: 'run-source-install', backupCapturedAt: '2026-08-24T12:00:00Z', backupPlaybookSha256: 'a'.repeat(64),
       }],
@@ -275,7 +275,7 @@ describe("EnvironmentsPage", () => {
       if (url.endsWith('/environments/environment-test/cluster-rollback-plan') && init?.method === 'POST') return json(plan);
       if (url.endsWith('/environments/environment-test/cluster-rollback-runs') && init?.method === 'POST') {
         submitted = JSON.parse(String(init.body));
-        return json({ id: 'run-cluster-rollback', kind: 'environment_rollback', status: 'awaiting_approval', environmentId: environment.id, scenarioRevisionId: 'scenario-clean-r1', destructive: true });
+        return json({ id: 'run-cluster-rollback', kind: 'environment_rollback', status: 'queued', environmentId: environment.id, scenarioRevisionId: 'scenario-clean-r1', destructive: true });
       }
       if (isEnvironmentList(url)) return json([environment]);
       if (url.endsWith('/components') || url.endsWith('/scenarios') || url.endsWith('/runs') || url.endsWith('/notifications')) return json([]);
@@ -296,7 +296,7 @@ describe("EnvironmentsPage", () => {
     expect(within(targetHosts).getByText('192.0.2.10')).toBeInTheDocument();
     expect(await within(rollbackDialog).findByRole('region', { name: '完整执行计划' })).toHaveTextContent('CoreDNS · 执行动作');
     const confirm = screen.getByRole('textbox', { name: '确认重置环境名称' });
-    const submit = screen.getByRole('button', { name: '创建重置 Run（待审批）' });
+    const submit = screen.getByRole('button', { name: '创建重置 Run' });
     expect(submit).toBeDisabled();
     await userEvent.type(confirm, environment.name);
     expect(submit).toBeEnabled();

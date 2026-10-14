@@ -24,11 +24,11 @@ func (s *Store) ListComponentSummaries(ctx context.Context, viewer domain.User) 
 }
 
 type componentDirectoryRelease struct {
-	id                    string
-	componentID           string
-	status                domain.ReleaseStatus
-	hasMappings           bool
-	requiresApprovalCheck bool
+	id                     string
+	componentID            string
+	status                 domain.ReleaseStatus
+	hasMappings            bool
+	requiresCandidateCheck bool
 }
 
 func listComponentSummaries(ctx context.Context, q queryer, viewer domain.User) ([]domain.ComponentSummary, error) {
@@ -40,7 +40,7 @@ func listComponentSummaries(ctx context.Context, q queryer, viewer domain.User) 
 FROM components c LEFT JOIN users u ON u.id=c.owner_id`
 	var args []any
 	if viewer.Role != domain.RolePlatformAdmin {
-		query += ` WHERE (EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.review_status='approved')))`
+		query += ` WHERE (EXISTS (SELECT 1 FROM component_releases r WHERE r.component_id=c.id AND (r.status='released' OR (r.status='draft' AND r.candidate=1)))`
 		if viewer.Role == domain.RoleComponentOwner {
 			query += ` OR c.owner_id=?`
 			args = append(args, viewer.ID)
@@ -83,7 +83,7 @@ EXISTS (SELECT 1 FROM component_dependencies d WHERE d.release_id=r.id AND json_
 FROM component_releases r JOIN components c ON c.id=r.component_id`
 	args = nil
 	if viewer.Role != domain.RolePlatformAdmin {
-		query += ` WHERE (r.status='released' OR (r.status='draft' AND r.candidate=1 AND r.review_status='approved')`
+		query += ` WHERE (r.status='released' OR (r.status='draft' AND r.candidate=1)`
 		if viewer.Role == domain.RoleComponentOwner {
 			query += ` OR c.owner_id=?`
 			args = append(args, viewer.ID)
@@ -106,8 +106,8 @@ FROM component_releases r JOIN components c ON c.id=r.component_id`
 		if _, exists := byID[release.componentID]; !exists {
 			continue
 		}
-		release.requiresApprovalCheck = !ownerView[release.componentID] && release.status != domain.ReleaseReleased
-		if release.requiresApprovalCheck {
+		release.requiresCandidateCheck = !ownerView[release.componentID] && release.status != domain.ReleaseReleased
+		if release.requiresCandidateCheck {
 			candidateIDs = append(candidateIDs, release.id)
 		}
 		releases = append(releases, release)
@@ -119,9 +119,9 @@ FROM component_releases r JOIN components c ON c.id=r.component_id`
 		return nil, err
 	}
 
-	// Do not substitute persisted approval flags for the current contract digest.
+	// Load candidate contracts through the same visibility predicate as detail reads.
 	// Hydrate only these candidates, in bounded batches in the same snapshot.
-	approved := make(map[string]bool, len(candidateIDs))
+	shared := make(map[string]bool, len(candidateIDs))
 	for start := 0; start < len(candidateIDs); start += releaseReadBatchSize {
 		batch := candidateIDs[start:min(start+releaseReadBatchSize, len(candidateIDs))]
 		placeholders, candidateArgs := releaseIDPlaceholders(batch)
@@ -130,12 +130,12 @@ FROM component_releases r JOIN components c ON c.id=r.component_id`
 			return nil, err
 		}
 		for _, candidate := range candidates {
-			approved[candidate.ID] = candidate.IsApprovedCandidate()
+			shared[candidate.ID] = candidate.IsSharedCandidate()
 		}
 	}
 	mappingSelected := map[string]bool{}
 	for _, release := range releases {
-		if release.requiresApprovalCheck && !approved[release.id] {
+		if release.requiresCandidateCheck && !shared[release.id] {
 			continue
 		}
 		item := &items[byID[release.componentID]]

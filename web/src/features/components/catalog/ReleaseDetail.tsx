@@ -15,7 +15,7 @@ import { lifecycleSummary, publicCount, releaseEvidence, releaseReadyForPublish,
 import { EvidenceLink } from '../verification/ReleaseVerification';
 import { CompatibilityBadge, DraftReadiness, EnvironmentConstraints } from './ReleasePresentation';
 import type { ReactNode } from 'react';
-export type ReleaseAction = 'edit' | 'image' | 'artifact' | 'test' | 'evidence' | 'inspect' | 'review' | 'publish' | 'deprecate' | 'candidate' | 'review-submit' | 'restore' | 'delete';
+export type ReleaseAction = 'edit' | 'image' | 'artifact' | 'test' | 'evidence' | 'inspect' | 'publish' | 'deprecate' | 'candidate' | 'restore' | 'delete';
 export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, showDefaultHint, contractEditor, selectContractRelease, onReleaseAction, onEditContract, onEditComponent, onNewVersion, onNewBranch, deletingComponent, onDeleteComponent }: {
     selected: Component;
     contractRelease?: ComponentRelease;
@@ -46,13 +46,11 @@ export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, 
               {canTest && <Button className="icon-text" onClick={async () => { if (await selectContractRelease(release.id)) onReleaseAction('test', release); }} htmlType={"button"} type="text"><Beaker size={15}/> 环境验证</Button>}
               {mine && <Button className="icon-text" onClick={() => onReleaseAction('evidence', release)} htmlType={"button"} type="text"><History size={15}/> Run 证据</Button>}
               <Button className="icon-text" onClick={async () => { if (await selectContractRelease(release.id)) onReleaseAction('inspect', release); }} htmlType={"button"} type="text">查看详情</Button>
-              {release.review.status === 'rejected' && <Button className="icon-text" onClick={() => onReleaseAction('review', release)} htmlType={"button"} type="text"><Shield size={15}/> 审批意见</Button>}
               {mine && release.state === 'draft' && <Button className="icon-text" onClick={() => onReleaseAction('edit', release)} htmlType={"button"} type="text"><FileCode2 size={15}/> Playbook</Button>}
               {mine && <Button className="icon-text" onClick={() => onReleaseAction('image', release)} htmlType={"button"} type="text"><Container size={15}/> 构建镜像</Button>}
               {mine && <Button className="icon-text" onClick={() => onReleaseAction('artifact', release)} htmlType={"button"} type="text"><Archive size={15}/> 组件介质</Button>}
-              {mine && release.state === 'draft' && release.review.status !== 'pending' && release.review.status !== 'approved' && <Button className="icon-text" disabled={busy} onClick={() => void onReleaseAction('review-submit', release)} htmlType={"button"} type="text"><Shield size={15}/> 提交合同审核</Button>}
-              {mine && release.state === 'draft' && <Button className="icon-text" disabled={busy || (!release.candidate && (!publishReady || release.review.status !== 'approved'))} onClick={() => void onReleaseAction('candidate', release)} htmlType={"button"} type="text">{release.candidate ? '撤回候选' : '加入候选集'}</Button>}
-              {mine && release.state === 'draft' && <Button className="icon-text icon-text--primary" disabled={!publishReady || release.review.status !== 'approved'} title={release.review.status !== 'approved' ? '请先通过平台 Owner 合同审核' : publishReady ? undefined : '请先完成生命周期、安装验证和回退验证'} onClick={() => void onReleaseAction('publish', release)} htmlType={"button"} type="text"><Rocket size={15}/> 发布</Button>}
+              {mine && release.state === 'draft' && <Button className="icon-text" disabled={busy || (!release.candidate && (!publishReady))} onClick={() => void onReleaseAction('candidate', release)} htmlType={"button"} type="text">{release.candidate ? '撤回候选' : '加入候选集'}</Button>}
+              {mine && release.state === 'draft' && <Button className="icon-text icon-text--primary" disabled={!publishReady} title={publishReady ? undefined : '请先完成生命周期、安装验证和回退验证'} onClick={() => void onReleaseAction('publish', release)} htmlType={"button"} type="text"><Rocket size={15}/> 发布</Button>}
 
 
               <ActionMenu items={[(mine && (release.state === 'draft' || release.state === 'released')) && {key:'action-0',label:<>{release.state === 'draft' ? '废弃草稿' : '废弃'}</>,onClick:() => void onReleaseAction('deprecate', release),danger:true},(mine && release.state === 'deprecated' && !release.releasedAt) && {key:'action-1',label:<><Undo2 size={15}/>恢复 Draft</>,onClick:() => void onReleaseAction('restore', release),disabled:busy},(mine && release.state === 'deprecated' && !release.releasedAt) && {key:'action-2',label:<><Trash2 size={15}/>永久删除</>,onClick:() => void onReleaseAction('delete', release),disabled:busy,danger:true}]} />
@@ -75,7 +73,7 @@ export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, 
 <StatusExplanationPanel item={releaseWorkItem}/>
 <div className="detail-release-selector"><span>当前版本</span><Select aria-label="当前组件版本" value={contractRelease?.id} onChange={async id => { if (await selectContractRelease(id)) setDetailTab("contract"); }} options={releases.map(release => ({value: release.id, label: `${release.lineName} · ${release.version}`}))} /></div>
 
-<WorkspaceTabs activeKey={detailTab} onChange={setDetailTab} items={[{key: 'contract', label: '版本与合同', children: <>{contractRelease && <div className="panel release-current-actions">{renderActions(contractRelease)}</div>}{mine && activeDraft ? <DraftReadiness key={`readiness:${activeDraft.id}`} release={activeDraft} evidence={selected.readContext?.evidence[activeDraft.id]} onContract={() => onEditContract('parameters', activeDraft)} onReview={() => onReleaseAction('review', activeDraft)} onLifecycle={() => onReleaseAction('edit', activeDraft)} onImage={() => onReleaseAction('image', activeDraft)} onArtifact={() => onReleaseAction('artifact', activeDraft)} onValidate={async () => { if (await selectContractRelease(activeDraft.id)) onReleaseAction('test', activeDraft); }} onPublish={() => void onReleaseAction('publish', activeDraft)}/> : null}
+<WorkspaceTabs activeKey={detailTab} onChange={setDetailTab} items={[{key: 'contract', label: '版本与合同', children: <>{contractRelease && <div className="panel release-current-actions">{renderActions(contractRelease)}</div>}{mine && activeDraft ? <DraftReadiness key={`readiness:${activeDraft.id}`} release={activeDraft} evidence={selected.readContext?.evidence[activeDraft.id]} onContract={() => onEditContract('parameters', activeDraft)} onLifecycle={() => onReleaseAction('edit', activeDraft)} onImage={() => onReleaseAction('image', activeDraft)} onArtifact={() => onReleaseAction('artifact', activeDraft)} onValidate={async () => { if (await selectContractRelease(activeDraft.id)) onReleaseAction('test', activeDraft); }} onPublish={() => void onReleaseAction('publish', activeDraft)}/> : null}
 <ComponentMappingOverview releases={releases} components={contractComponents}/>
 {showDefaultHint && selected.latestRelease && contractRelease ? <p className="mapping-empty contract-hint">当前展示 {contractRelease.lineName} · {contractRelease.version}，因为它有参数映射。默认版本 {selected.latestRelease.lineName} · {selected.latestRelease.version} 没有映射。</p> : null}
 {contractEditor ?? (<div className="detail-stack component-contracts">
@@ -103,7 +101,7 @@ export function ReleaseDetail({ selected, contractRelease, mine, canTest, busy, 
           columns={[
             {title:'版本',key:'version',width:300,render:(_,release)=><div className="release-version-cell">
               <Button type="link" onClick={async()=>{if(await selectContractRelease(release.id))setDetailTab('contract');}} aria-label={`查看 ${release.version} 的依赖和参数合同`} aria-pressed={release.id === contractRelease?.id}>{release.version}</Button>
-              <div className="row-actions"><StatusPill status={release.state}/>{release.candidate && <StatusPill status="candidate">候选集</StatusPill>}<StatusPill status={release.review.status}>{release.review.status === 'approved' ? '合同已审核' : release.review.status === 'pending' ? '合同审核中' : release.review.status === 'rejected' ? '合同已驳回' : '合同待提交'}</StatusPill><CompatibilityBadge release={release}/></div>
+              <div className="row-actions"><StatusPill status={release.state}/>{release.candidate && <StatusPill status="candidate">候选集</StatusPill>}<CompatibilityBadge release={release}/></div>
               <p>{release.releaseNotes ?? '未填写发布说明'}</p>
             </div>},
             {title:'适配标签',key:'constraints',width:180,render:(_,release)=><EnvironmentConstraints constraints={release.environmentConstraints}/>},

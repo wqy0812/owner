@@ -15,7 +15,7 @@ vi.mock('../context/AppContext', () => ({
 const release: ComponentRelease = {
   id: 'release', componentId: 'component', lineId: 'line', lineName: 'Kubernetes', version: '1.17.5', state: 'draft',
   compatibility: 'not_applicable', riskLevel: 'low', releaseNotes: 'PKI lifecycle', definitionGeneration: 3,
-  review: { status: 'not_submitted' }, readiness: { status: 'blocked', blockers: [] }, parameters: [],
+  readiness: { status: 'blocked', blockers: [] }, parameters: [],
   actions: [
     { id: 'install', name: '安装与配置', type: 'install', playbook: 'managed/test/tasks/install.yml', preCheckActionId: 'ready', postCheckActionId: 'ready' },
     { id: 'ready', name: '安装前检查', type: 'check', playbook: 'managed/test/tasks/checks/ready.yml' },

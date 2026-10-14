@@ -31,7 +31,7 @@
 | 查阅测试节点快照 | [2026-08-30 测试环境节点快照](deployment-snapshot-2026-08-30.md) | 2026-08-30 Registry、Inventory、Revision 与连通性证据 |
 | 查阅原始节点历史 | [2026-08-20 测试环境节点快照](deployment-snapshot-2026-08-20.md) | 2026-08-20 的静态节点记录，不代表实时状态 |
 | 判断版本和兼容策略 | [首版与环境策略](version-policy.md) | V1 数据库、API 和测试环境解释规则 |
-| 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、审批、清理顺序、恢复与验收边界 |
+| 重置或初始化测试环境 | [Kubernetes 重置与 Bootstrap 标准](kubernetes-reset-bootstrap-standard.md) | UI 优先、清理顺序、恢复与验收边界 |
 | 查阅列表优化测量 | [2026-09-03 性能记录](records/2026-09-03-read-performance.md) | 旧实现及测量，不代表当前读取合同 |
 | 查阅本轮分批审核 | [2026-09-07 分批审核](records/2026-09-07-batched-code-review.md) | 提交边界、复现修复、验证结果和未执行事项 |
 | 查阅前次分批审核 | [2026-09-05 代码审核](records/2026-09-05-code-review.md) | 提交批次、已修复问题、用户决定与本地验证边界 |

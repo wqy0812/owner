@@ -24,11 +24,8 @@ func (s *Store) WorkbenchSubjects(ctx context.Context, user domain.User) (out Wo
 		return out, err
 	}
 	defer tx.Rollback()
-	if user.Role == domain.RoleComponentOwner || user.Role == domain.RolePlatformAdmin {
+	if user.Role == domain.RoleComponentOwner {
 		where, args := `owner_id=?`, []any{user.ID}
-		if user.Role == domain.RolePlatformAdmin {
-			where, args = `EXISTS(SELECT 1 FROM component_releases r WHERE r.component_id=components.id AND r.status='draft' AND r.review_status='pending')`, nil
-		}
 		rows, e := tx.QueryContext(ctx, `SELECT id,name,owner_id,updated_at FROM components WHERE `+where+` ORDER BY name`, args...)
 		if e != nil {
 			return out, e
@@ -50,34 +47,7 @@ func (s *Store) WorkbenchSubjects(ctx context.Context, user domain.User) (out Wo
 		}
 		query, args := releaseSelect+` JOIN components c ON c.id=r.component_id WHERE r.status='draft' AND c.owner_id=? ORDER BY r.created_at DESC,r.id DESC`, []any{user.ID}
 		var releases []domain.ComponentRelease
-		if user.Role == domain.RolePlatformAdmin {
-			// Review cards use saved submission metadata, not executable contracts.
-			rows, e = tx.QueryContext(ctx, `SELECT r.id,r.component_id,r.version,l.name,r.review_contract_digest,r.review_submitted_at,r.created_at FROM component_releases r JOIN component_release_lines l ON l.id=r.line_id WHERE r.status='draft' AND r.review_status='pending' ORDER BY r.created_at DESC,r.id DESC`)
-			if e != nil {
-				return out, e
-			}
-			for rows.Next() {
-				var r domain.ComponentRelease
-				var submitted sql.NullString
-				var created string
-				x := rows.Scan(&r.ID, &r.ComponentID, &r.Version, &r.LineName, &r.Review.ContractDigest, &submitted, &created)
-				if x != nil {
-					rows.Close()
-					return out, x
-				}
-				r.Status, r.Review.Status = domain.ReleaseDraft, domain.ReleaseReviewPending
-				r.CreatedAt = parseTime(created)
-				if submitted.Valid {
-					at := parseTime(submitted.String)
-					r.Review.SubmittedAt = &at
-				}
-				releases = append(releases, r)
-			}
-			e = rows.Err()
-			rows.Close()
-		} else {
-			releases, e = listReleases(ctx, tx, query, args...)
-		}
+		releases, e = listReleases(ctx, tx, query, args...)
 		if e != nil {
 			return out, e
 		}
@@ -250,8 +220,8 @@ func (s *Store) WorkbenchRuns(ctx context.Context, user domain.User) ([]domain.R
 	query := `WITH visible AS MATERIALIZED (SELECT id,status,created_at,kind,environment_id,component_release_id,scenario_revision_id,action_kind FROM retained_run_history runs WHERE ` + where + `), ranked AS (
 SELECT id,status,ROW_NUMBER() OVER(PARTITION BY kind,environment_id,COALESCE(component_release_id,''),CASE WHEN component_release_id IS NOT NULL THEN '' ELSE COALESCE(scenario_revision_id,'') END,CASE WHEN component_release_id IS NOT NULL THEN action_kind ELSE '' END ORDER BY created_at DESC,id DESC) AS position FROM visible)
 `
-	selection := `SELECT ` + runReadColumns + `,CASE WHEN status IN ('running','queued','awaiting_approval','failed','interrupted') THEN ` + runReadStepsSQL + ` ELSE '[]' END,'[]' FROM retained_run_history runs`
-	query += selection + ` WHERE id IN (SELECT id FROM ranked WHERE position=1 OR status IN ('running','queued','awaiting_approval')) ORDER BY created_at DESC,id DESC`
+	selection := `SELECT ` + runReadColumns + `,CASE WHEN status IN ('running','queued','failed','interrupted') THEN ` + runReadStepsSQL + ` ELSE '[]' END,'[]' FROM retained_run_history runs`
+	query += selection + ` WHERE id IN (SELECT id FROM ranked WHERE position=1 OR status IN ('running','queued')) ORDER BY created_at DESC,id DESC`
 	return readWorkbenchRuns(ctx, s.db, query, args...)
 }
 
@@ -307,7 +277,7 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 	for ids := rangeChunks(releaseIDs); len(ids) > 0; ids = ids[1:] {
 		batch := ids[0]
 		args := stringArgs(batch)
-		rows, e := s.db.QueryContext(ctx, `SELECT r.id,r.component_id,r.version,r.status,r.candidate,r.review_status,c.id,c.name,c.owner_id FROM component_releases r JOIN components c ON c.id=r.component_id WHERE r.id IN (`+sqlPlaceholders(len(batch))+`)`, args...)
+		rows, e := s.db.QueryContext(ctx, `SELECT r.id,r.component_id,r.version,r.status,r.candidate,c.id,c.name,c.owner_id FROM component_releases r JOIN components c ON c.id=r.component_id WHERE r.id IN (`+sqlPlaceholders(len(batch))+`)`, args...)
 		if e != nil {
 			return out, e
 		}
@@ -315,7 +285,7 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 		for rows.Next() {
 			var r domain.ComponentRelease
 			var c domain.Component
-			if e = rows.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Status, &r.Candidate, &r.Review.Status, &c.ID, &c.Name, &c.OwnerID); e != nil {
+			if e = rows.Scan(&r.ID, &r.ComponentID, &r.Version, &r.Status, &r.Candidate, &c.ID, &c.Name, &c.OwnerID); e != nil {
 				rows.Close()
 				return out, e
 			}
@@ -323,7 +293,7 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 			if owner || r.Status == domain.ReleaseReleased {
 				out.Components[c.ID] = c
 				out.Releases[r.ID] = r
-			} else if r.Candidate && r.Review.Status == domain.ReleaseReviewApproved {
+			} else if r.Candidate {
 				out.Components[c.ID] = c
 				candidates = append(candidates, r.ID)
 			}
@@ -339,7 +309,7 @@ func (s *Store) WorkbenchMetadata(ctx context.Context, user domain.User, runs []
 				return out, e
 			}
 			for _, r := range releases {
-				if r.IsApprovedCandidate() {
+				if r.IsSharedCandidate() {
 					out.Releases[r.ID] = r
 				}
 			}

@@ -31,7 +31,7 @@ func queuedRunFixture(t *testing.T, s *Store, id, environmentID string, offset t
 		}
 	}
 	run := domain.Run{ID: id, Kind: domain.RunComponentTest, Status: domain.RunQueued, RequestedBy: "component-owner-a", EnvironmentID: environmentID, EnvironmentRevisionID: environmentID + "-r1", ComponentReleaseID: "queue-release", Snapshot: domain.SnapshotFromExecutionPlan(domain.RunExecutionPlan{Steps: []domain.RunPlanStep{{ID: "install", NodeID: "node", ComponentID: "queue-component", ReleaseID: "queue-release"}}}), CreatedAt: testNow.Add(offset)}
-	if err := s.CreateRun(ctx, run, nil); err != nil {
+	if err := s.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
 	return run

@@ -73,7 +73,7 @@ func TestRunLogEndpointsAndRemovedReferenceRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := domain.Run{ID: "run-api-logs", Kind: domain.RunScenario, Status: domain.RunFailed, EnvironmentID: env.ID, EnvironmentRevisionID: env.CurrentRevisionID, RequestedBy: seed.EnvironmentOwnerID, CreatedAt: now, FinishedAt: &now, Error: "executor timed out", Snapshot: runfixture.Snapshot(map[string]any{})}
-	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run, nil); err != nil {
+	if err = testutil.InsertRunRecord(ctx, f.database.DB(), run); err != nil {
 		t.Fatal(err)
 	}
 	r := f.request(http.MethodGet, "/api/v1/runs/"+run.ID+"/diagnostics", nil, owner)

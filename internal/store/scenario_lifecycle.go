@@ -14,7 +14,7 @@ import (
 // their transaction-level check in validateScenarioEditableTx.
 func (s *Store) HasActiveScenarioRevisionRun(ctx context.Context, revisionID string) (bool, error) {
 	var active bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE scenario_revision_id=? AND status IN ('awaiting_approval','queued','running'))`, revisionID).Scan(&active)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE scenario_revision_id=? AND status IN ('queued','running'))`, revisionID).Scan(&active)
 	return active, err
 }
 
@@ -45,7 +45,7 @@ func validateScenarioEditableTx(ctx context.Context, tx *sql.Tx, revision domain
 		return fmt.Errorf("%w: only the current revision may be edited", domain.ErrConflict)
 	}
 	var active int
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE scenario_revision_id=? AND status IN ('awaiting_approval','queued','running'))`, revision.ID).Scan(&active); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE scenario_revision_id=? AND status IN ('queued','running'))`, revision.ID).Scan(&active); err != nil {
 		return err
 	}
 	if active != 0 {
