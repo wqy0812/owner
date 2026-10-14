@@ -14,7 +14,7 @@ import (
 
 func TestGeneratePrivateFilesWithoutOverwriting(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credential")
-	if err := generate(dir, "agent", "component-alice", time.Hour); err != nil {
+	if err := generate(dir, "agent", "user-token-test", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "token"))
